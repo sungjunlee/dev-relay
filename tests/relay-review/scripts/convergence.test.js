@@ -206,6 +206,56 @@ test("progressive deepening flip is not semantic instability", () => {
   assert.deepEqual(summary.semantic_instability, []);
 });
 
+test("progressive new and newly_scoreable flips are not semantic instability", async (t) => {
+  for (const lineage of ["new", "newly_scoreable"]) {
+    await t.test(lineage, () => {
+      const runDir = tempRunDir();
+      writeVerdict(runDir, 1, { rubric_scores: [score("F1", 4, "fail")] });
+      writeVerdict(runDir, 2, { rubric_scores: [score("F1", 8, "pass")] });
+      const verdict = {
+        verdict: "changes_requested",
+        issues: [issue({ factor: "F1", category: "contract", lineage })],
+        rubric_scores: [score("F1", 5, "fail")],
+      };
+
+      const summary = buildSummary({ runDir, round: 3, verdict });
+      assert.deepEqual(summary.flip_candidates, [{ factor: "F1", trace: ["fail", "pass", "fail"] }]);
+      assert.deepEqual(summary.semantic_instability, []);
+    });
+  }
+});
+
+test("explicit factor linkage drives repeated-factor and instability matching", () => {
+  const runDir = tempRunDir();
+  const sharedIssue = { factor: "F1", category: "Other", title: "Shared semantic blocker" };
+  writeVerdict(runDir, 1, {
+    verdict: "changes_requested",
+    issues: [issue({ ...sharedIssue, lineage: "new" })],
+    rubric_scores: [score("F1", 4, "fail"), score("Behavior", 8, "pass")],
+  });
+  writeVerdict(runDir, 2, {
+    verdict: "changes_requested",
+    issues: [issue({ ...sharedIssue, lineage: "deepening" })],
+    rubric_scores: [score("F1", 8, "pass"), score("Behavior", 5, "fail")],
+  });
+  const verdict = {
+    verdict: "changes_requested",
+    issues: [issue({ ...sharedIssue, lineage: "new" })],
+    rubric_scores: [score("F1", 5, "fail"), score("Behavior", 8, "pass")],
+  };
+
+  const summary = buildSummary({ runDir, round: 3, verdict, repeatedIssueCount: 0 });
+
+  assert.deepEqual(summary.repeated_factors, ["F1"]);
+  assert.deepEqual(summary.flip_candidates, [
+    { factor: "F1", trace: ["fail", "pass", "fail"] },
+    { factor: "Behavior", trace: ["pass", "fail", "pass"] },
+  ]);
+  assert.equal(summary.semantic_instability.length, 1);
+  assert.equal(summary.semantic_instability[0].factor, "Behavior");
+  assert.match(summary.semantic_instability[0].reason, /no current tied issues/);
+});
+
 test("repeat and stale lineage issues surface in the round summary", () => {
   const verdict = {
     verdict: "changes_requested",

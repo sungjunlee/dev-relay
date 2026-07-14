@@ -1,10 +1,12 @@
 const {
   computeFactorStatusFlips,
   fingerprintIssue,
+  isProgressiveLineage,
   issueMatchesFactor,
   normalizeFingerprintPart,
   scanPriorVerdicts,
   summarizeLineage,
+  tiedIssuesForFactor,
 } = require("./redispatch");
 const { getRubricScoreNumber } = require("./score-utils");
 const { getAppliedVerdict } = require("./verdict");
@@ -93,14 +95,6 @@ function computeRepeatedFactors(runDir, round, verdict) {
   return [...repeated];
 }
 
-function tiedIssuesForFactor(issues, factor) {
-  return (Array.isArray(issues) ? issues : []).filter((issue) => issueMatchesFactor(issue, factor));
-}
-
-function isAllLineage(issues, lineage) {
-  return issues.length > 0 && issues.every((issue) => issue?.lineage === lineage);
-}
-
 function describeInstabilityReason(tiedIssues) {
   if (!tiedIssues.length) return "Flipped factor has no current tied issues to explain the status change.";
   const lineageCounts = summarizeLineage(tiedIssues);
@@ -108,14 +102,14 @@ function describeInstabilityReason(tiedIssues) {
     .filter((lineage) => lineageCounts[lineage] > 0)
     .map((lineage) => `${lineage}=${lineageCounts[lineage]}`)
     .join(", ");
-  return `Flipped factor has tied issues outside progressive deepening or newly scoreable lineage (${active}).`;
+  return `Flipped factor has tied issues outside progressive lineage (${active}).`;
 }
 
 function computeSemanticInstability(verdict, factorFlips) {
   const issues = Array.isArray(verdict?.issues) ? verdict.issues : [];
   return (Array.isArray(factorFlips) ? factorFlips : []).flatMap(({ factor, trace }) => {
     const tiedIssues = tiedIssuesForFactor(issues, factor);
-    if (isAllLineage(tiedIssues, "deepening") || isAllLineage(tiedIssues, "newly_scoreable")) return [];
+    if (tiedIssues.length > 0 && tiedIssues.every((issue) => isProgressiveLineage(issue?.lineage))) return [];
     if (verdict?.verdict === "pass" && tiedIssues.length === 0) return [];
     return [{
       factor,
