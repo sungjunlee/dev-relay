@@ -9,7 +9,8 @@
  * `terminal` subcommand. This is the restricted poison set D5 pins — "everything mutating
  * EXCEPT run-stop" — proving stop is coordinator-only.
  *
- * Behavior is scenario-driven (run-stop may succeed or fail); every invocation is logged.
+ * Behavior is scenario-driven with explicit success, no-active-run, and generic-failure
+ * modes; every invocation is logged.
  */
 const fs = require("node:fs");
 const os = require("node:os");
@@ -17,12 +18,12 @@ const path = require("node:path");
 
 function defaultStopScenario(overrides = {}) {
   return {
-    // run-stop outcome: ok envelope + result.stopped. `runStopOk:false` models a failed
-    // run-stop (coordinator_stopped:false); `stopped:false` models an ok envelope that
-    // reports the coordinator was not running.
-    runStopOk: overrides.runStopOk !== undefined ? overrides.runStopOk : true,
+    // `success` emits the existing ok envelope; `no-active-run` emits the real live-CLI
+    // error envelope on stdout; `generic-failure` emits a distinct error envelope.
+    mode: overrides.mode || "success",
     stopped: overrides.stopped !== undefined ? overrides.stopped : true,
     runId: overrides.runId || "coordinator-run-1",
+    exitCode: overrides.exitCode,
   };
 }
 
@@ -50,8 +51,17 @@ if (args[0] === "terminal") poison("TERMINAL_INVOKED", 96);
 const scenario = loadScenario();
 
 if (args[0] === "orchestration" && args[1] === "run-stop") {
-  if (!scenario.runStopOk) { process.stderr.write("run-stop failed\\n"); process.exit(1); }
-  emit({ id: "run-stop-1", ok: true, result: { stopped: scenario.stopped, run_id: scenario.runId } }, 0);
+  if (scenario.mode === "success") {
+    emit({ id: "run-stop-1", ok: true, result: { stopped: scenario.stopped, run_id: scenario.runId } }, typeof scenario.exitCode === "number" ? scenario.exitCode : 0);
+  }
+  if (scenario.mode === "no-active-run") {
+    emit({ id: "cb80f615-0000-4000-8000-000000001005", ok: false, error: { code: "runtime_error", message: "No active coordinator run" } }, typeof scenario.exitCode === "number" ? scenario.exitCode : 1);
+  }
+  if (scenario.mode === "generic-failure") {
+    emit({ id: "run-stop-failure", ok: false, error: { code: "runtime_error", message: "Coordinator stop failed" } }, typeof scenario.exitCode === "number" ? scenario.exitCode : 1);
+  }
+  process.stderr.write("Unsupported fake stop mode: " + scenario.mode + "\\n");
+  process.exit(2);
 }
 
 process.stderr.write("Unsupported fake orca (stop) invocation: " + args.join(" ") + "\\n");
@@ -84,6 +94,11 @@ function installFakeOrcaStop(scenarioOverrides = {}, options = {}) {
     readPoison() {
       if (!fs.existsSync(poisonPath)) return null;
       return fs.readFileSync(poisonPath, "utf-8");
+    },
+    writeScenario(next) {
+      const updated = defaultStopScenario(next);
+      fs.writeFileSync(scenarioPath, JSON.stringify(updated, null, 2), "utf-8");
+      return updated;
     },
     cleanup() {
       fs.rmSync(dir, { recursive: true, force: true });

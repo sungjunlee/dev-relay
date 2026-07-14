@@ -112,11 +112,12 @@ coordinator (a terminal session running relay-orca's CLI scripts)
 
 These are supervised limitations and open follow-ups surfaced by the pilot:
 
-- **`stop` cannot currently succeed in the v0 topology (#1005).** `stop`'s only mutation,
-  `orca orchestration run-stop`, assumes an always-on Orca coordinator loop that the stateless-CLI
-  v0 model never starts, so it exits 65 (`COORDINATOR_STOP_FAILED`) and writes no stop record. The
-  fail-closed behavior is honest, but the intent — durably recording an operator interruption — is
-  unreachable today.
+- **`stop` treats an already-not-running coordinator as the stopped condition in the v0 topology
+  (#1005).** `stop` still invokes its only Orca mutation, `orca orchestration run-stop`, exactly
+  once. When stateless-CLI v0 answers `No active coordinator run`, `stop` exits 0, reports that no
+  live coordinator was stopped, and writes the same durable `stopped_at`/`stop_reason` record as a
+  genuine active-run stop. Every other run-stop failure remains fail-closed with exit 65
+  (`COORDINATOR_STOP_FAILED`) and no stop-record write.
 - **Operator-driven outcomes need a supervised receipt-mapping reconcile before they classify
   complete (#1008).** `run` writes the receipt before the operator's relay run exists. The shipped
   supervised intake path is `resume --program-file <program> --map-relay-run

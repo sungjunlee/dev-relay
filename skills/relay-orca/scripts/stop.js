@@ -27,6 +27,7 @@ const { StopError, REASONS: STOP_REASONS } = require("./lib/stop-reasons");
 
 const RUN_TIMEOUT_MS = 15000;
 const RUN_MAX_BUFFER = 4 * 1024 * 1024;
+const ALREADY_NOT_RUNNING_NOTE = "coordinator run already not running; treated as stopped (stop record written)";
 
 function usageError(message) {
   process.stderr.write(`relay-orca stop: ${message}\n`);
@@ -73,16 +74,23 @@ function assertRunStopOnly(argv) {
 }
 
 // Invoke `orca orchestration run-stop --json` and normalize the result. `coordinator_stopped`
-// is true only on a well-formed ok envelope; an explicit `stopped:false` keeps it false.
+// is true only on a well-formed ok envelope; an explicit `stopped:false` keeps it false. The
+// one accepted failure classification keys only on the parsed live no-active-run envelope,
+// independently of the subprocess exit status.
 function runStop(orcaBin) {
   const argv = ["orchestration", "run-stop", "--json"];
   assertRunStopOnly(argv);
   let proc;
   try {
     const stdout = execFileSync(orcaBin, argv, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], timeout: RUN_TIMEOUT_MS, maxBuffer: RUN_MAX_BUFFER });
-    proc = { status: 0, stdout: String(stdout || ""), stderr: "" };
+    proc = { status: 0, stdout: String(stdout || ""), stderr: "", timedOut: false };
   } catch (error) {
-    proc = { status: typeof error.status === "number" ? error.status : 1, stdout: error.stdout ? String(error.stdout) : "", stderr: error.stderr ? String(error.stderr) : "" };
+    proc = {
+      status: typeof error.status === "number" ? error.status : 1,
+      stdout: error.stdout ? String(error.stdout) : "",
+      stderr: error.stderr ? String(error.stderr) : "",
+      timedOut: error.code === "ETIMEDOUT" || error.signal === "SIGTERM",
+    };
   }
   let value = null;
   try {
@@ -92,7 +100,20 @@ function runStop(orcaBin) {
   }
   const ok = proc.status === 0 && value && value.ok === true;
   const result = ok && value.result && typeof value.result === "object" ? value.result : {};
-  return { ok: Boolean(ok), coordinatorStopped: Boolean(ok) && result.stopped !== false, proc };
+  const alreadyNotRunning = Boolean(
+    !proc.timedOut
+      && value
+      && value.ok === false
+      && value.error
+      && typeof value.error.message === "string"
+      && value.error.message.includes("No active coordinator run"),
+  );
+  return {
+    ok: Boolean(ok),
+    coordinatorStopped: Boolean(ok) && result.stopped !== false,
+    classification: alreadyNotRunning ? "already_not_running" : null,
+    proc,
+  };
 }
 
 function loadReceipt(receiptPath, requestedProgramId) {
@@ -123,7 +144,7 @@ function recordStop(receipt, receiptPath, reason) {
   writeReceiptAtomic(receiptPath, serializeReceiptWithStop(receipt));
 }
 
-function buildReport({ opts, receiptPath, coordinatorStopped, stoppedAt, stopReason, blockingReasons }) {
+function buildReport({ opts, receiptPath, coordinatorStopped, stoppedAt, stopReason, note, blockingReasons }) {
   return {
     ok: blockingReasons.length === 0,
     program_id: opts.programId,
@@ -131,6 +152,7 @@ function buildReport({ opts, receiptPath, coordinatorStopped, stoppedAt, stopRea
     coordinator_stopped: coordinatorStopped,
     stopped_at: stoppedAt,
     stop_reason: stopReason,
+    note,
     blocking_reasons: blockingReasons,
   };
 }
@@ -173,13 +195,15 @@ function main() {
 
   const alreadyStopped = existingStop(receipt);
   const stop = runStop(resolveOrca(opts));
+  const alreadyNotRunning = stop.classification === "already_not_running";
+  const stoppedCondition = stop.coordinatorStopped || alreadyNotRunning;
   const blockingReasons = [];
-  if (!stop.coordinatorStopped) {
+  if (!stoppedCondition) {
     blockingReasons.push({ reason_code: "COORDINATOR_STOP_FAILED", message: boundedExcerpt(`orca orchestration run-stop did not succeed${stop.proc.stderr ? `: ${stop.proc.stderr}` : ""}`) });
   } else if (!alreadyStopped) {
-    // First successful stop: record the bounded stop record once. A prior record is left
-    // byte-identical (idempotent) — a second stop reports the live run-stop result and the
-    // ORIGINAL stopped_at/stop_reason without rewriting the receipt.
+    // First accepted stop condition: record the bounded stop record once. A prior record is
+    // left byte-identical (idempotent) — a second stop reports the live run-stop result and
+    // the ORIGINAL stopped_at/stop_reason without rewriting the receipt.
     recordStop(receipt, receiptPath, opts.reason);
   }
 
@@ -189,10 +213,11 @@ function main() {
     coordinatorStopped: stop.coordinatorStopped,
     stoppedAt: existingStop(receipt) ? receipt.stopped_at : null,
     stopReason: existingStop(receipt) ? receipt.stop_reason : "",
+    note: alreadyNotRunning ? ALREADY_NOT_RUNNING_NOTE : "",
     blockingReasons,
   });
   printReport(body, opts.json);
-  process.exitCode = stop.coordinatorStopped ? 0 : STOP_REASONS.COORDINATOR_STOP_FAILED;
+  process.exitCode = stoppedCondition ? 0 : STOP_REASONS.COORDINATOR_STOP_FAILED;
 }
 
 if (require.main === module) main();

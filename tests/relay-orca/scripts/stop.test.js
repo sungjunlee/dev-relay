@@ -18,7 +18,8 @@ const { programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
 const { installFakeOrcaStop } = require(path.join(__dirname, "..", "fixtures", "fake-orca-stop.js"));
 const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
 
-const STOP_REPORT_KEYS = ["ok", "program_id", "receipt_path", "coordinator_stopped", "stopped_at", "stop_reason", "blocking_reasons"];
+const STOP_REPORT_KEYS = ["ok", "program_id", "receipt_path", "coordinator_stopped", "stopped_at", "stop_reason", "note", "blocking_reasons"];
+const ALREADY_NOT_RUNNING_NOTE = "coordinator run already not running; treated as stopped (stop record written)";
 const CANCELLATION_TOKENS = ["cancel", "cancelled", "canceled", "complete", "completed", "aborted", "discard"];
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -112,10 +113,11 @@ test("D9.7: stop invokes run-stop, records bounded stopped_at/stop_reason, only 
   try {
     const r = world.run(["--reason", "operator maintenance window"]);
     assert.equal(r.status, 0);
-    assert.deepEqual(Object.keys(r.body).sort(), [...STOP_REPORT_KEYS].sort());
+    assert.deepEqual(Object.keys(r.body), STOP_REPORT_KEYS);
     assert.equal(r.body.coordinator_stopped, true);
     assert.match(r.body.stopped_at, ISO_RE);
     assert.equal(r.body.stop_reason, "operator maintenance window");
+    assert.equal(r.body.note, "");
     assert.deepEqual(r.body.blocking_reasons, []);
 
     // Exactly ONE mutating Orca subcommand — run-stop — was invoked.
@@ -190,6 +192,62 @@ test("D9.13: a second stop leaves the original stop record byte-identical and do
 });
 
 // ---------------------------------------------------------------------------
+// #1005 — the real no-active-run envelope is an accepted stopped condition
+// ---------------------------------------------------------------------------
+
+test("#1005: no-active-run succeeds with a note and writes only the stop record", () => {
+  const programId = "epic-stop-no-active-run";
+  const world = buildWorld({ programId, stopScenario: { mode: "no-active-run" } });
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--reason", "operator interruption"]);
+    assert.equal(r.status, 0, "the parsed envelope wins over the fixture's nonzero exit");
+    assert.deepEqual(Object.keys(r.body), STOP_REPORT_KEYS);
+    assert.equal(r.body.ok, true);
+    assert.equal(r.body.coordinator_stopped, false);
+    assert.match(r.body.stopped_at, ISO_RE);
+    assert.equal(r.body.stop_reason, "operator interruption");
+    assert.equal(r.body.note, ALREADY_NOT_RUNNING_NOTE);
+    assert.deepEqual(r.body.blocking_reasons, []);
+
+    const after = world.receiptOnDisk();
+    assert.notEqual(after, before, "the stop record is written");
+    assert.equal(receiptMinusStop(after), before, "only stopped_at and stop_reason change");
+    const persisted = parseReceipt(after).receipt;
+    assert.equal(persisted.note, RECEIPT_NOTE, "the report note is never persisted to the receipt");
+    assert.equal(Object.hasOwn(persisted, "coordinator_stopped"), false);
+    assert.deepEqual(world.orca.readLog(), ["orchestration run-stop --json"]);
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1005: no-active-run preserves an existing stop record byte-identically", () => {
+  const programId = "epic-stop-no-active-idempotent";
+  const world = buildWorld({ programId });
+  try {
+    const first = world.run(["--reason", "original pause"]);
+    assert.equal(first.status, 0);
+    const afterFirst = world.receiptOnDisk();
+
+    world.orca.writeScenario({ mode: "no-active-run" });
+    const second = world.run(["--reason", "replacement reason must be ignored"]);
+    assert.equal(second.status, 0);
+    assert.equal(second.body.ok, true);
+    assert.equal(second.body.coordinator_stopped, false);
+    assert.equal(second.body.stopped_at, first.body.stopped_at);
+    assert.equal(second.body.stop_reason, "original pause");
+    assert.equal(second.body.note, ALREADY_NOT_RUNNING_NOTE);
+    assert.deepEqual(second.body.blocking_reasons, []);
+    assert.equal(world.receiptOnDisk(), afterFirst, "the existing receipt remains byte-identical");
+    assert.deepEqual(world.orca.readLog(), ["orchestration run-stop --json", "orchestration run-stop --json"]);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // stop_reason is bounded (<=256)
 // ---------------------------------------------------------------------------
 
@@ -212,7 +270,7 @@ test("D5: stop_reason is bounded to <=256 chars", () => {
 
 test("run-stop failure → coordinator_stopped false, blocking_reasons, exit 65, receipt untouched", () => {
   const programId = "epic-stop-fail";
-  const world = buildWorld({ programId, stopScenario: { runStopOk: false } });
+  const world = buildWorld({ programId, stopScenario: { mode: "generic-failure" } });
   const before = world.receiptOnDisk();
   try {
     const r = world.run(["--reason", "attempted"]);
@@ -220,10 +278,28 @@ test("run-stop failure → coordinator_stopped false, blocking_reasons, exit 65,
     assert.equal(r.status, 65);
     assert.equal(r.body.coordinator_stopped, false);
     assert.equal(r.body.ok, false);
+    assert.equal(r.body.note, "");
     assert.ok(r.body.blocking_reasons.some((b) => b.reason_code === "COORDINATOR_STOP_FAILED"));
     assert.equal(r.body.stopped_at, null, "no stop record is written when run-stop fails");
     assert.equal(world.receiptOnDisk(), before, "the receipt is untouched on a failed stop");
     assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("run-stop ok envelope with stopped:false remains fail-closed", () => {
+  const programId = "epic-stop-explicit-not-stopped";
+  const world = buildWorld({ programId, stopScenario: { mode: "success", stopped: false } });
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--reason", "attempted"]);
+    assert.equal(r.status, 65);
+    assert.equal(r.body.ok, false);
+    assert.equal(r.body.coordinator_stopped, false);
+    assert.equal(r.body.note, "");
+    assert.equal(r.body.stopped_at, null);
+    assert.equal(world.receiptOnDisk(), before);
   } finally {
     world.cleanup();
   }
