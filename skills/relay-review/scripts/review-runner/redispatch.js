@@ -384,8 +384,22 @@ function formatSameHeadStaleCandidateSection(runDir, round, currentHeadSha) {
 }
 
 /**
+ * Token/boundary-aware containment for fallback factor linkage.
+ * Avoids substring collisions such as "f10 prior" falsely matching "f1".
+ */
+function containsFactorToken(haystack, needle) {
+  if (!haystack || !needle) return false;
+  if (haystack === needle) return true;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Boundaries are non-alphanumeric (not JS \\b alone) so multi-word factor
+  // names and punctuation-delimited tokens still match as whole units.
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`).test(haystack);
+}
+
+/**
  * Resolve an issue to a rubric factor. Explicit `issues[].factor` is authoritative;
  * `relates_to` and category/title are compatibility fallbacks when factor is unset.
+ * Fallbacks use token/boundary-aware matching, not raw substring includes.
  */
 function issueMatchesFactor(issue, factor) {
   const needle = normalizeFingerprintPart(factor);
@@ -395,9 +409,9 @@ function issueMatchesFactor(issue, factor) {
   if (explicitFactor) return explicitFactor === needle;
 
   const relatesTo = normalizeFingerprintPart(issue?.relates_to);
-  if (relatesTo && relatesTo.includes(needle)) return true;
+  if (relatesTo && containsFactorToken(relatesTo, needle)) return true;
 
-  return ["category", "title"].some((key) => normalizeFingerprintPart(issue?.[key]).includes(needle));
+  return ["category", "title"].some((key) => containsFactorToken(normalizeFingerprintPart(issue?.[key]), needle));
 }
 
 function isProgressiveLineage(lineage) {

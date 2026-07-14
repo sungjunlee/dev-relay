@@ -393,6 +393,11 @@ test("redispatch/issueMatchesFactor prefers explicit factor over category/title"
   assert.equal(issueMatchesFactor({ relates_to: "F1 prior", category: "Other" }, "F1"), true);
   assert.equal(issueMatchesFactor({ category: "Behavior", title: "edge" }, "Behavior"), true);
   assert.equal(issueMatchesFactor({ title: "Coverage gap remains" }, "Coverage"), true);
+  // Token/boundary fallback: F10 must not satisfy an F1 needle via substring includes.
+  assert.equal(issueMatchesFactor({ relates_to: "F10 prior", category: "Other" }, "F1"), false);
+  assert.equal(issueMatchesFactor({ relates_to: "F10 prior", category: "Other" }, "F10"), true);
+  assert.equal(issueMatchesFactor({ title: "F10 residual gap" }, "F1"), false);
+  assert.equal(issueMatchesFactor({ factor: "F10" }, "F1"), false);
 });
 
 test("redispatch/decideFlipFlopEscalation semantic recurrence arc matrix", async (t) => {
@@ -596,6 +601,23 @@ test("redispatch/decideFlipFlopEscalation semantic recurrence arc matrix", async
           { factor: "F1", trace: ["fail", "pass", "fail"] },
           { factor: "F2", trace: ["pass", "fail", "pass"] },
         ],
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "F1 flip does not latch onto F10 relates_to progressive finding",
+      input: {
+        verdict: {
+          issues: [makeFlipIssue({
+            relates_to: "F10 prior",
+            category: "Other",
+            title: "Unrelated F10 edge",
+            lineage: "new",
+          })],
+        },
+        factorFlips: failPassFail,
         repeatedIssueCount: 0,
       },
       decision: "escalate",
