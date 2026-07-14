@@ -7,6 +7,7 @@ const { getAppliedVerdict } = require("./verdict");
 
 const FLIP_STATES = new Set(["pass", "fail"]);
 const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
+const PROGRESSIVE_LINEAGES = new Set(["new", "deepening", "newly_scoreable"]);
 
 function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, currentHeadSha, convergenceSummary, options = {}) {
   const sections = [
@@ -382,15 +383,57 @@ function formatSameHeadStaleCandidateSection(runDir, round, currentHeadSha) {
   ].join("\n");
 }
 
-function issueMatchesFactor(issue, factor) {
-  const needle = normalizeFingerprintPart(factor);
-  return Boolean(needle) && ["category", "title"].some((key) => normalizeFingerprintPart(issue?.[key]).includes(needle));
+/**
+ * Token/boundary-aware containment for fallback factor linkage.
+ * Avoids substring collisions such as "f10 prior" falsely matching "f1".
+ */
+function containsFactorToken(haystack, needle) {
+  if (!haystack || !needle) return false;
+  if (haystack === needle) return true;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Boundaries are non-alphanumeric (not JS \\b alone) so multi-word factor
+  // names and punctuation-delimited tokens still match as whole units.
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`).test(haystack);
 }
 
-function allFlippedFactorIssuesDeepen(issues, factorFlips) {
+/**
+ * Resolve an issue to a rubric factor. Explicit `issues[].factor` is authoritative;
+ * `relates_to` and category/title are compatibility fallbacks when factor is unset.
+ * Fallbacks use token/boundary-aware matching, not raw substring includes.
+ */
+function issueMatchesFactor(issue, factor) {
+  const needle = normalizeFingerprintPart(factor);
+  if (!needle) return false;
+
+  const explicitFactor = normalizeFingerprintPart(issue?.factor);
+  if (explicitFactor) return explicitFactor === needle;
+
+  const relatesTo = normalizeFingerprintPart(issue?.relates_to);
+  if (relatesTo && containsFactorToken(relatesTo, needle)) return true;
+
+  return ["category", "title"].some((key) => containsFactorToken(normalizeFingerprintPart(issue?.[key]), needle));
+}
+
+function isProgressiveLineage(lineage) {
+  return PROGRESSIVE_LINEAGES.has(lineage);
+}
+
+function tiedIssuesForFactor(issues, factor) {
+  return (Array.isArray(issues) ? issues : []).filter((issue) => issueMatchesFactor(issue, factor));
+}
+
+/**
+ * Semantic recurrence rule: every flipped factor must have at least one tied
+ * finding, and every tied finding must carry progressive lineage
+ * (`new` | `deepening` | `newly_scoreable`). Unexplained flips fail closed.
+ */
+function allFlippedFactorsHaveProgressiveLineage(issues, factorFlips) {
+  if (!Array.isArray(factorFlips) || factorFlips.length === 0) return false;
   if (!Array.isArray(issues) || issues.length === 0) return false;
-  const tiedIssues = issues.filter((issue) => factorFlips.some(({ factor }) => issueMatchesFactor(issue, factor)));
-  return tiedIssues.length > 0 && tiedIssues.every((issue) => issue.lineage === "deepening");
+  return factorFlips.every(({ factor }) => {
+    const tied = tiedIssuesForFactor(issues, factor);
+    return tied.length > 0 && tied.every((issue) => isProgressiveLineage(issue?.lineage));
+  });
 }
 
 function isCleanPassVerdict(verdict) {
@@ -402,7 +445,10 @@ function decideFlipFlopEscalation({ verdict, factorFlips, repeatedIssueCount }) 
   const traces = factorFlips.map(({ factor, trace }) => ({ factor, trace }));
   const lineage_summary = summarizeLineage(verdict?.issues || []);
   if (!factorFlips.length) return { decision: "continue", reason: "no_trigger", factors: [], traces: [], lineage_summary };
-  if (repeatedIssueCount === 0 && (isCleanPassVerdict(verdict) || allFlippedFactorIssuesDeepen(verdict?.issues, factorFlips))) {
+  // repeated_issue_count is a consecutive fingerprint chain length: 0 = no current
+  // issues (clean pass path), 1 = current-round-only findings, >=2 = cross-round repeat.
+  // Semantic recurrence only continues when there is no cross-round fingerprint thrash.
+  if (repeatedIssueCount < 2 && (isCleanPassVerdict(verdict) || allFlippedFactorsHaveProgressiveLineage(verdict?.issues, factorFlips))) {
     return { decision: "continue", reason: "progressive_deepening", factors, traces, lineage_summary };
   }
   return { decision: "escalate", reason: "flip_flop_thrash", factors, traces, lineage_summary };
@@ -467,6 +513,8 @@ function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteria
 }
 
 module.exports = {
+  PROGRESSIVE_LINEAGES,
+  allFlippedFactorsHaveProgressiveLineage,
   buildRedispatchPrompt,
   buildScoreOptimizationTarget,
   buildRubricGateRedispatchPrompt,
@@ -476,10 +524,12 @@ module.exports = {
   detectChurnGrowth,
   fingerprintIssue,
   findWeakestBelowTargetQualityScore,
+  isProgressiveLineage,
   issueMatchesFactor,
   normalizeFingerprintPart,
   readPriorVerdicts,
   scanPriorVerdicts,
   summarizeLineage,
+  tiedIssuesForFactor,
   toEscalatedVerdict,
 };

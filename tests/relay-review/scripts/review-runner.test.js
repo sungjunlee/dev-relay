@@ -3239,7 +3239,89 @@ test("low-confidence downgrade is pass-equivalent for flip-flop escalation", () 
   assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 });
 });
 
-test("genuine changes_requested still escalates on pass-fail-pass flip-flop", () => {
+test("explicit-factor progressive lineage converges on fail-pass-fail arcs", async (t) => {
+  for (const lineage of ["new", "deepening", "newly_scoreable"]) {
+    await t.test(`lineage=${lineage}`, () => {
+      const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+      const runDir = ensureRunLayout(repoRoot, runId).runDir;
+      fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "F1", status: "fail" }] }), "utf-8");
+      fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "F1", status: "pass" }] }), "utf-8");
+      updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+      const reviewFile = writeVerdict(repoRoot, `flip-progressive-${lineage}.json`, {
+        verdict: "changes_requested",
+        summary: `Progressive ${lineage} finding after a real fix.`,
+        contract_status: "fail",
+        quality_review_status: "pass",
+        quality_execution_status: "pass",
+        next_action: "changes_requested",
+        issues: [{
+          title: "Narrower F1 edge after fix",
+          body: "A new or deeper edge case after the prior fix round.",
+          file: "src/index.js",
+          line: 12,
+          category: "contract",
+          factor: "F1",
+          severity: "high",
+          confidence: "high",
+          lineage,
+          relates_to: "F1",
+        }],
+        rubric_scores: [{ factor: "F1", target: ">= 1/1", observed: "0/1", status: "fail", tier: "contract", notes: "Progressive arc." }],
+        scope_drift: { creep: [], missing: [] },
+      });
+
+      const result = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123", "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath, "--review-file", reviewFile, "--no-comment", "--json"], { encoding: "utf-8" }));
+      const manifest = readManifest(manifestPath).data;
+
+      assert.equal(result.appliedVerdict, "changes_requested");
+      assert.equal(result.state, STATES.CHANGES_REQUESTED);
+      assert.equal(manifest.review.last_escalation_decision.decision, "continue");
+      assert.equal(manifest.review.last_escalation_decision.reason, "progressive_deepening");
+    });
+  }
+});
+
+test("#918-shaped repeat lineage still escalates on flip-flop thrash", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
+  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  const reviewFile = writeVerdict(repoRoot, "flip-genuine-repeat.json", {
+    verdict: "changes_requested",
+    summary: "Dead-guard residual repeats across rounds.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Dead-guard residual remains",
+      body: "The same semantic blocker still misses a done criteria branch.",
+      file: "src/index.js",
+      line: 12,
+      category: "Behavior",
+      factor: "Behavior",
+      severity: "high",
+      confidence: "high",
+      lineage: "repeat",
+      relates_to: "Round 1 Behavior blocker",
+    }],
+    rubric_scores: [{ factor: "BEHAVIOR", target: ">= 1/1", observed: "1/1", status: "pass", tier: "contract", notes: "Recovered score conflicts with blocker." }],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123", "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath, "--review-file", reviewFile, "--no-comment", "--json"], { encoding: "utf-8" }));
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(result.appliedVerdict, "escalated");
+  assert.equal(result.state, STATES.ESCALATED);
+  assert.equal(manifest.review.latest_verdict, "escalated");
+  assert.equal(manifest.review.last_escalation_decision.decision, "escalate");
+  assert.equal(manifest.review.last_escalation_decision.reason, "flip_flop_thrash");
+  assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 1, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 });
+});
+
+test("unknown lineage without explicit progressive label still escalates on flip-flop", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");

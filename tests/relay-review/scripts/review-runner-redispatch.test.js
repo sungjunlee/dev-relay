@@ -13,6 +13,7 @@ const {
   decideFlipFlopEscalation,
   detectChurnGrowth,
   findWeakestBelowTargetQualityScore,
+  issueMatchesFactor,
   scanPriorVerdicts,
   summarizeLineage,
 } = require("../../../skills/relay-review/scripts/review-runner/redispatch");
@@ -386,7 +387,254 @@ test("redispatch/computeFactorStatusFlips ignores factors that change in differe
   assert.deepEqual(flips, []);
 });
 
-test("redispatch/decideFlipFlopEscalation suppresses progressive deepening flip-flops", () => {
+test("redispatch/issueMatchesFactor prefers explicit factor over category/title", () => {
+  assert.equal(issueMatchesFactor({ factor: "F1", category: "Behavior", title: "Behavior edge" }, "F1"), true);
+  assert.equal(issueMatchesFactor({ factor: "F1", category: "Behavior", title: "Behavior edge" }, "Behavior"), false);
+  assert.equal(issueMatchesFactor({ relates_to: "F1 prior", category: "Other" }, "F1"), true);
+  assert.equal(issueMatchesFactor({ category: "Behavior", title: "edge" }, "Behavior"), true);
+  assert.equal(issueMatchesFactor({ title: "Coverage gap remains" }, "Coverage"), true);
+  // Token/boundary fallback: F10 must not satisfy an F1 needle via substring includes.
+  assert.equal(issueMatchesFactor({ relates_to: "F10 prior", category: "Other" }, "F1"), false);
+  assert.equal(issueMatchesFactor({ relates_to: "F10 prior", category: "Other" }, "F10"), true);
+  assert.equal(issueMatchesFactor({ title: "F10 residual gap" }, "F1"), false);
+  assert.equal(issueMatchesFactor({ factor: "F10" }, "F1"), false);
+});
+
+test("redispatch/decideFlipFlopEscalation semantic recurrence arc matrix", async (t) => {
+  const failPassFail = [{ factor: "F1", trace: ["fail", "pass", "fail"] }];
+  const behaviorFlip = [{ factor: "Behavior", trace: ["pass", "fail", "pass"] }];
+
+  const cases = [
+    {
+      name: "clean fail-pass-fail-pass convergence",
+      input: {
+        verdict: { verdict: "pass", issues: [] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "continue",
+      reason: "progressive_deepening",
+    },
+    {
+      name: "#910-shaped explicit-factor deepening converges",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "F1", category: "contract", title: "Narrower no-op swap", lineage: "deepening", relates_to: "F1" })] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "continue",
+      reason: "progressive_deepening",
+    },
+    {
+      name: "#928-shaped explicit-factor new converges",
+      input: {
+        verdict: {
+          issues: [makeFlipIssue({
+            factor: "test quality: extraction robustness",
+            category: "test quality",
+            title: "Delimiter edge case",
+            lineage: "new",
+          })],
+        },
+        factorFlips: [{ factor: "test quality: extraction robustness", trace: ["fail", "pass", "fail"] }],
+        repeatedIssueCount: 0,
+      },
+      decision: "continue",
+      reason: "progressive_deepening",
+    },
+    {
+      name: "newly_scoreable on explicit factor converges",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "F1", lineage: "newly_scoreable" })] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "continue",
+      reason: "progressive_deepening",
+    },
+    {
+      name: "legacy category/title deepening still converges",
+      input: {
+        verdict: { issues: [makeFlipIssue({ lineage: "deepening" })] },
+        factorFlips: behaviorFlip,
+        repeatedIssueCount: 0,
+      },
+      decision: "continue",
+      reason: "progressive_deepening",
+    },
+    {
+      name: "#918-shaped repeat thrash escalates",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "F1", lineage: "repeat", title: "Dead-guard residual" })] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "stale lineage escalates",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "F1", lineage: "stale" })] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "unknown lineage escalates",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "F1", lineage: "unknown" })] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "missing lineage escalates",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "F1", lineage: undefined })] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "missing factor linkage escalates",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "Other", category: "Other", title: "Unrelated", lineage: "new" })] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "explicit factor blocks legacy category match",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "Other", category: "Behavior", title: "Behavior edge", lineage: "deepening" })] },
+        factorFlips: behaviorFlip,
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "current-round-only finding count still converges with progressive lineage",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "F1", lineage: "deepening" })] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 1,
+      },
+      decision: "continue",
+      reason: "progressive_deepening",
+    },
+    {
+      name: "cross-round repeated count escalates even with deepening",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "F1", lineage: "deepening" })] },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 2,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "mixed progressive and thrash lineage escalates",
+      input: {
+        verdict: {
+          issues: [
+            makeFlipIssue({ factor: "F1", lineage: "deepening" }),
+            makeFlipIssue({ factor: "F1", title: "Same blocker again", lineage: "repeat" }),
+          ],
+        },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "multi-factor requires progressive evidence for every factor",
+      input: {
+        verdict: {
+          issues: [
+            makeFlipIssue({ factor: "F1", lineage: "new" }),
+            makeFlipIssue({ factor: "F2", lineage: "repeat" }),
+          ],
+        },
+        factorFlips: [
+          { factor: "F1", trace: ["fail", "pass", "fail"] },
+          { factor: "F2", trace: ["pass", "fail", "pass"] },
+        ],
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "multi-factor converges when every factor is progressive",
+      input: {
+        verdict: {
+          issues: [
+            makeFlipIssue({ factor: "F1", lineage: "new" }),
+            makeFlipIssue({ factor: "F2", lineage: "deepening" }),
+          ],
+        },
+        factorFlips: [
+          { factor: "F1", trace: ["fail", "pass", "fail"] },
+          { factor: "F2", trace: ["pass", "fail", "pass"] },
+        ],
+        repeatedIssueCount: 0,
+      },
+      decision: "continue",
+      reason: "progressive_deepening",
+    },
+    {
+      name: "multi-factor unexplained flip fails closed",
+      input: {
+        verdict: { issues: [makeFlipIssue({ factor: "F1", lineage: "newly_scoreable" })] },
+        factorFlips: [
+          { factor: "F1", trace: ["fail", "pass", "fail"] },
+          { factor: "F2", trace: ["pass", "fail", "pass"] },
+        ],
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+    {
+      name: "F1 flip does not latch onto F10 relates_to progressive finding",
+      input: {
+        verdict: {
+          issues: [makeFlipIssue({
+            relates_to: "F10 prior",
+            category: "Other",
+            title: "Unrelated F10 edge",
+            lineage: "new",
+          })],
+        },
+        factorFlips: failPassFail,
+        repeatedIssueCount: 0,
+      },
+      decision: "escalate",
+      reason: "flip_flop_thrash",
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.name, () => {
+      const decision = decideFlipFlopEscalation(entry.input);
+      assert.equal(decision.decision, entry.decision);
+      assert.equal(decision.reason, entry.reason);
+    });
+  }
+});
+
+test("redispatch/decideFlipFlopEscalation preserves audit shape for progressive continue", () => {
   assert.deepEqual(makeFlipDecision(), {
     decision: "continue",
     reason: "progressive_deepening",
@@ -404,35 +652,6 @@ test("redispatch/decideFlipFlopEscalation preserves clean pass verdicts on flip-
     traces: [{ factor: "Behavior", trace: ["pass", "fail", "pass"] }],
     lineage_summary: { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 },
   });
-});
-
-test("redispatch/decideFlipFlopEscalation escalates mixed lineage flip-flops", () => {
-  const decision = makeFlipDecision({
-    verdict: { issues: [makeFlipIssue(), makeFlipIssue({ title: "Behavior still broken", lineage: "repeat" })] },
-  });
-  assert.equal(decision.decision, "escalate");
-  assert.equal(decision.reason, "flip_flop_thrash");
-  assert.deepEqual(decision.lineage_summary, { deepening: 1, repeat: 1, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 });
-});
-
-test("redispatch/decideFlipFlopEscalation escalates repeated-issue thrash even with deepening lineage", () => {
-  const decision = makeFlipDecision({ repeatedIssueCount: 1 });
-  assert.equal(decision.decision, "escalate");
-  assert.equal(decision.reason, "flip_flop_thrash");
-});
-
-test("redispatch/decideFlipFlopEscalation escalates missing lineage on flipped-factor issues", () => {
-  const decision = makeFlipDecision({ verdict: { issues: [makeFlipIssue({ lineage: undefined })] } });
-  assert.equal(decision.decision, "escalate");
-  assert.equal(decision.reason, "flip_flop_thrash");
-  assert.deepEqual(decision.lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 1 });
-});
-
-test("redispatch/decideFlipFlopEscalation escalates stale lineage on flipped-factor issues", () => {
-  const decision = makeFlipDecision({ verdict: { issues: [makeFlipIssue({ lineage: "stale" })] } });
-  assert.equal(decision.decision, "escalate");
-  assert.equal(decision.reason, "flip_flop_thrash");
-  assert.deepEqual(decision.lineage_summary, { deepening: 0, repeat: 0, stale: 1, new: 0, newly_scoreable: 0, unknown: 0 });
 });
 
 test("redispatch/summarizeLineage distinguishes unknown from repeat", () => {
