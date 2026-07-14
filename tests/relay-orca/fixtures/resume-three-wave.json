@@ -1,0 +1,36 @@
+{
+  "program": {
+    "id": "epic-resume-three-wave",
+    "source": "file:///tmp/epic-resume-three-wave.md",
+    "repo": "example/repo",
+    "tracker": "github",
+    "concurrency": 2,
+    "exit_gates": ["integration:e2e-suite", "tracker:milestone-clean"],
+    "outcomes": [
+      {
+        "id": "foundation",
+        "issue": 7101,
+        "task_kind": "relay_run",
+        "accepted_outcomes": ["foundation merged"],
+        "depends_on": [],
+        "wave": 1
+      },
+      {
+        "id": "independent-followup",
+        "issue": 7102,
+        "task_kind": "relay_run",
+        "accepted_outcomes": ["independent follow-up merged"],
+        "depends_on": [],
+        "wave": 2
+      },
+      {
+        "id": "final-hardening",
+        "issue": 7103,
+        "task_kind": "relay_run",
+        "accepted_outcomes": ["final hardening merged"],
+        "depends_on": ["independent-followup"],
+        "wave": 3
+      }
+    ]
+  }
+}

@@ -104,22 +104,36 @@ function needsTerminalReacquire(task, diags) {
 }
 
 // D3 re-dispatch: the Orca dispatch is VERIFIABLY absent, the materialized task still
-// exists, the relay side is clean, and the wave rule allows it (v0 dispatches only wave
-// 1, matching the #944 run anchor). "Verifiably absent" (owner amendment A1, #946 R1) is
+// exists, the relay side is clean, and the wave rule allows it (wave 1, or a later wave
+// after every earlier-wave outcome is durably complete). "Verifiably absent" (owner
+// amendment A1, #946 R1) is
 // satisfied ONLY by `liveAbsent` — a live dispatch-show read for THIS task, threaded from
 // the reconciliation pass, that reports NO dispatch. A null receipt `dispatch_id` alone
 // NEVER qualifies: in the crash window (dispatch --inject landed a live dispatch but the
 // receipt write that records it never happened) the receipt id is null yet a live dispatch
 // is present, and re-injecting there would duplicate operator work — that case fails closed
 // as RESUME_MISSING_PROVENANCE in planDecisions instead of re-dispatching here.
-function isRedispatchCandidate(task, diags, outcome, liveAbsent) {
+function isRedispatchCandidate(task, diags, outcome, liveAbsent, report) {
   return (
     liveAbsent === true &&
     !isNonEmpty(task.dispatch_id) &&
     isNonEmpty(task.orca_task_id) &&
     !hasDiag(diags, "MISSING_TASK") &&
-    task.wave === 1 &&
+    (task.wave === 1 ||
+      (task.wave > 1 &&
+        (report.outcomes || [])
+          .filter((reportOutcome) => reportOutcome.wave < task.wave)
+          .every((reportOutcome) => reportOutcome.state === "complete_with_evidence"))) &&
     relayClean(task, outcome)
+  );
+}
+
+function earlierWavesComplete(task, report) {
+  return (
+    task.wave > 1 &&
+    (report.outcomes || [])
+      .filter((outcome) => outcome.wave < task.wave)
+      .every((outcome) => outcome.state === "complete_with_evidence")
   );
 }
 
@@ -185,9 +199,9 @@ function hasUnmappedRelayWork(report) {
 
 // Classify ONE outcome into a safe action (only reached when NO program-level decision
 // fired). Completion/escalation are terminal (skipped); a live mapping is reused; a lost
-// terminal is reacquired; a verifiably-absent, relay-clean, wave-1 outcome is
-// re-dispatched; everything else (in-flight/durable child, later wave, or unattributable
-// unmapped relay work) is left untouched.
+// terminal is reacquired; a verifiably-absent, relay-clean, advance-eligible outcome is
+// re-dispatched; everything else (in-flight/durable child, not-yet-eligible wave, or
+// unattributable unmapped relay work) is left untouched.
 function classifyAction(task, report, unmappedRelayWork, liveDispatch) {
   const outcome = reportOutcomeById(report, task.outcome_id) || {};
   const diags = diagsFor(report, task.outcome_id);
@@ -196,11 +210,14 @@ function classifyAction(task, report, unmappedRelayWork, liveDispatch) {
   if (outcome.state === "escalated") return makeAction(task, "skipped", "escalated; requires operator action, not automatic resume");
   if (needsTerminalReacquire(task, diags)) return makeAction(task, "redispatched", `outcome ${task.outcome_id} operator terminal is gone; reacquiring through the verified inject->dispatch-show->prompt path`, execPlan(task, "reacquire_terminal"));
   if (mappingLive(task, diags)) return makeAction(task, "reused", `outcome ${task.outcome_id} has a valid live mapping (task+dispatch+terminal); reused, not re-dispatched`);
-  if (isRedispatchCandidate(task, diags, outcome, live.absent)) {
+  if (isRedispatchCandidate(task, diags, outcome, live.absent, report)) {
     if (unmappedRelayWork) return makeAction(task, "skipped", `outcome ${task.outcome_id} is absent, but unmapped relay work references this program; not re-dispatched to avoid duplicating it`);
     return makeAction(task, "redispatched", `outcome ${task.outcome_id} Orca dispatch verifiably absent and relay side clean; re-dispatching through the verified path`, execPlan(task, "redispatch"));
   }
-  return makeAction(task, "skipped", `outcome ${task.outcome_id} has in-flight/durable relay work or is a later wave; left untouched`);
+  if (task.wave > 1 && !earlierWavesComplete(task, report)) {
+    return makeAction(task, "skipped", `outcome ${task.outcome_id} is in wave ${task.wave}; earlier waves are not yet complete_with_evidence; left untouched`);
+  }
+  return makeAction(task, "skipped", `outcome ${task.outcome_id} has in-flight/durable relay work; left untouched`);
 }
 
 // D3.3: an outcome that needs a fresh operator surface (a redispatch or a terminal

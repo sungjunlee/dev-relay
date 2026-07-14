@@ -3,9 +3,10 @@
 `resume` is **reconcile-first and fail-closed for runtime restoration**: it loads the
 reconstructible receipt, runs the SAME live reconciliation as `status` before restoring an Orca
 dispatch, and only then restores what is safe (reuse valid mappings, reacquire a lost operator
-terminal, re-dispatch a verifiably-absent, relay-clean, wave-1 outcome through the verified path —
-always to an explicitly provided `--operator-handle`, never a self-created terminal). The explicit
-`--map-relay-run` intake described below is the narrow exception: it validates and atomically
+terminal, re-dispatch a verifiably-absent, relay-clean wave-1 outcome, or advance an equivalent
+later-wave outcome after every earlier wave is `complete_with_evidence`, through the same verified
+path — always to an explicitly provided `--operator-handle`, never a self-created terminal). The
+explicit `--map-relay-run` intake described below is the narrow exception: it validates and atomically
 records supervised coordination metadata before live reconciliation. **"Verifiably absent" means a live
 `dispatch-show` read for that task, taken during the reconciliation pass, reported NO dispatch —
 a null `dispatch_id` in the receipt alone NEVER qualifies.** In the crash window (a
