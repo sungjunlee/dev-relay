@@ -11,7 +11,7 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SCRIPTS = path.join(REPO_ROOT, "skills", "relay-orca", "scripts");
 const STOP_JS = path.join(SCRIPTS, "stop.js");
 
-const { RECEIPT_NOTE, parseReceipt, serializeReceipt, STOP_REASON_MAX } = require(path.join(SCRIPTS, "lib", "receipt.js"));
+const { RECEIPT_NOTE, parseReceipt, serializeReceipt, serializeReceiptWithRecords, STOP_REASON_MAX } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { REASONS: STOP_REASONS } = require(path.join(SCRIPTS, "lib", "stop-reasons.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
 const { programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
@@ -242,6 +242,97 @@ test("#1005: no-active-run preserves an existing stop record byte-identically", 
     assert.deepEqual(second.body.blocking_reasons, []);
     assert.equal(world.receiptOnDisk(), afterFirst, "the existing receipt remains byte-identical");
     assert.deepEqual(world.orca.readLog(), ["orchestration run-stop --json", "orchestration run-stop --json"]);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #1005 R1 — the stop write must NOT drop #947 additive record fields
+// (follow_ups/decisions/authorizations/counters). Before #1005 the v0 stop always
+// failed closed, so the write was unreachable; now the already_not_running success
+// path (and the genuine run-stop success path) write, and a stop on a receipt carrying
+// additive records must preserve them byte-for-byte — not silently delete them.
+// ---------------------------------------------------------------------------
+
+// Realistic #947 additive record shapes, mirroring the resume/status/gates write points.
+const SEEDED_FOLLOW_UPS = [
+  { id: "followup-later", source_outcome: "a", description: "operator deferred this", proposed_wave: 3, status: "deferred" },
+];
+const SEEDED_DECISIONS = [
+  { id: "signoff", question: "proceed?", options: ["y", "n"], resolution: "approved", resolver: "alice", resolved_at: "2026-07-13T02:00:00Z", downstream_wave: 2 },
+];
+
+// Seed a receipt that carries additive records onto disk via the SAME serializer the
+// run/resume/status write points use, so `before` is the real byte image a stop would meet.
+function seedReceiptWithRecords(world, programId) {
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot) });
+  receipt.follow_ups = SEEDED_FOLLOW_UPS;
+  receipt.decisions = SEEDED_DECISIONS;
+  fs.writeFileSync(world.receiptPath, serializeReceiptWithRecords(receipt), "utf-8");
+  return receipt;
+}
+
+// Strip the two stop fields and re-serialize WITH records, to prove that everything except
+// the two stop fields — including the additive records — is byte-identical after a stop.
+function receiptMinusStopWithRecords(text) {
+  const receipt = parseReceipt(text).receipt;
+  delete receipt.stopped_at;
+  delete receipt.stop_reason;
+  return serializeReceiptWithRecords(receipt);
+}
+
+test("#1005 R1: no-active-run stop preserves #947 additive records (follow_ups/decisions) byte-for-byte", () => {
+  const programId = "epic-stop-additive-no-active";
+  const world = buildWorld({ programId, stopScenario: { mode: "no-active-run" } });
+  const seeded = seedReceiptWithRecords(world, programId);
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--reason", "operator interruption"]);
+    assert.equal(r.status, 0, "no-active-run is an accepted stopped condition");
+    assert.equal(r.body.ok, true);
+    assert.equal(r.body.coordinator_stopped, false);
+    assert.match(r.body.stopped_at, ISO_RE);
+    assert.equal(r.body.note, ALREADY_NOT_RUNNING_NOTE);
+    assert.deepEqual(r.body.blocking_reasons, []);
+
+    const after = world.receiptOnDisk();
+    assert.notEqual(after, before, "the stop record is written");
+    // Everything except the two stop fields is byte-identical — the additive records survive.
+    assert.equal(receiptMinusStopWithRecords(after), before, "only stopped_at and stop_reason change; additive records are preserved");
+
+    const persisted = parseReceipt(after).receipt;
+    assert.deepEqual(persisted.follow_ups, seeded.follow_ups, "follow_ups survive the stop write byte-for-byte");
+    assert.deepEqual(persisted.decisions, seeded.decisions, "decisions survive the stop write byte-for-byte");
+    assert.equal(persisted.stopped_at, r.body.stopped_at);
+    assert.equal(persisted.stop_reason, "operator interruption");
+    // Strongest byte check: the on-disk image is exactly the seeded records + the two stop keys.
+    const expected = { ...seeded, stopped_at: r.body.stopped_at, stop_reason: r.body.stop_reason };
+    assert.equal(after, serializeReceiptWithRecords(expected), "the stop write is byte-identical to records + the two stop keys");
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1005 R1: genuine run-stop success preserves #947 additive records byte-for-byte", () => {
+  const programId = "epic-stop-additive-success";
+  const world = buildWorld({ programId });
+  const seeded = seedReceiptWithRecords(world, programId);
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--reason", "operator maintenance window"]);
+    assert.equal(r.status, 0);
+    assert.equal(r.body.coordinator_stopped, true);
+
+    const after = world.receiptOnDisk();
+    assert.notEqual(after, before, "the stop record is written");
+    assert.equal(receiptMinusStopWithRecords(after), before, "only stop fields change; additive records preserved");
+    const persisted = parseReceipt(after).receipt;
+    assert.deepEqual(persisted.follow_ups, seeded.follow_ups);
+    assert.deepEqual(persisted.decisions, seeded.decisions);
+    assert.deepEqual(world.orca.readLog(), ["orchestration run-stop --json"]);
+    assert.equal(world.orca.readPoison(), null);
   } finally {
     world.cleanup();
   }

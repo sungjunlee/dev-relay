@@ -19,7 +19,7 @@ const {
   receiptExists,
   writeReceiptAtomic,
 } = require("./receipt-io");
-const { parseReceipt, serializeReceiptWithStop, boundStopReason } = require("./lib/receipt");
+const { parseReceipt, serializeReceiptWithRecords, boundStopReason } = require("./lib/receipt");
 const { boundedExcerpt } = require("./lib/bounded-excerpt");
 const { StatusError, USAGE_EXIT, reject: rejectReceipt } = require("./lib/status-reasons");
 const { resolveOrcaBin } = require("./lib/resolve-orca-bin");
@@ -135,13 +135,18 @@ function existingStop(receipt) {
 
 // Record the bounded stop record into the receipt ONCE (D5). `stopped_at` is the only
 // generated timestamp in stop; `stop_reason` is the bounded operator reason. Preserves
-// every other field verbatim (serializeReceiptWithStop appends ONLY the two stop keys,
-// so a byte comparison shows exactly the stop fields changed). Idempotent: a receipt that
-// already carries a stop record is left byte-identical (D9.13) — no rewrite.
+// every other field verbatim: serializeReceiptWithRecords appends ONLY the two stop keys
+// plus any present #947 additive records (follow_ups/decisions/authorizations/counters),
+// carrying them through exactly as run/resume/status wrote them. A receipt WITHOUT additive
+// records serializes byte-identically to serializeReceiptWithStop, so a byte comparison shows
+// exactly the two stop fields changed; a receipt WITH additive records keeps them byte-for-byte
+// (this path is now reachable — the #1005 already_not_running success write must not silently
+// drop them). Idempotent: a receipt that already carries a stop record is left byte-identical
+// (D9.13) — no rewrite.
 function recordStop(receipt, receiptPath, reason) {
   receipt.stopped_at = new Date().toISOString();
   receipt.stop_reason = boundStopReason(reason);
-  writeReceiptAtomic(receiptPath, serializeReceiptWithStop(receipt));
+  writeReceiptAtomic(receiptPath, serializeReceiptWithRecords(receipt));
 }
 
 function buildReport({ opts, receiptPath, coordinatorStopped, stoppedAt, stopReason, note, blockingReasons }) {
