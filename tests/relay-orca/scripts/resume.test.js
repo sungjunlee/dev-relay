@@ -918,6 +918,61 @@ test("#1008 manifest validation rejects a missing run with 68 and an issue misma
   }
 });
 
+// R1 #1008: an empty/non-numeric declared outcome issue is UNDECLARED, not a zero-coercible
+// value that could slip past the target gate and then Number("")===Number(null)-match a
+// manifest with no issue_number. It must fail closed as RESUME_MAP_TARGET_INVALID (exit 67).
+test("#1008 an empty declared outcome issue is undeclared → RESUME_MAP_TARGET_INVALID exit 67, byte-identical receipt", () => {
+  const programId = "epic-resume-map-empty-issue";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-a", state: "dispatched", issue_number: 100 }],
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "a" }] });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const programFile = acceptedProgramFile(world, programId, [{ id: "a", issue: "" }]);
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--program-file", programFile, "--map-relay-run", "a=run-a"]);
+    assert.equal(r.status, RESUME_REASONS.RESUME_MAP_TARGET_INVALID);
+    assert.equal(r.status, 67);
+    assertReportShape(r.body);
+    assert.equal(r.body.decision_required[0].reason_code, "RESUME_MAP_TARGET_INVALID");
+    assert.equal(world.receiptOnDisk(), before, "an empty declared issue leaves the receipt byte-identical");
+    assert.deepEqual(world.orca.readLog(), [], "target validation precedes live reconciliation");
+    assert.deepEqual(world.gh.readLog(), [], "an empty declared issue makes no GitHub read");
+  } finally {
+    world.cleanup();
+  }
+});
+
+// R1 #1008: a finite declared issue paired with a manifest that carries NO issue_number must
+// never coerce-match (both sides Number()->0). The mismatch gate fires (exit 69) instead of
+// persisting run tracking for an issue-less manifest.
+test("#1008 a declared finite issue vs a manifest without issue_number → RESUME_MAP_ISSUE_MISMATCH exit 69, byte-identical receipt", () => {
+  const programId = "epic-resume-map-manifest-no-issue";
+  const world = buildWorld({
+    programId,
+    // Manifest present (RUN_NOT_FOUND passes) but with no issue_number in frontmatter.
+    manifests: [{ run_id: "run-a", state: "dispatched" }],
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "a" }] });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const programFile = acceptedProgramFile(world, programId, [{ id: "a", issue: 100 }]);
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--program-file", programFile, "--map-relay-run", "a=run-a"]);
+    assert.equal(r.status, RESUME_REASONS.RESUME_MAP_ISSUE_MISMATCH);
+    assert.equal(r.status, 69);
+    assertReportShape(r.body);
+    assert.equal(r.body.decision_required[0].reason_code, "RESUME_MAP_ISSUE_MISMATCH");
+    assert.equal(world.receiptOnDisk(), before, "a manifest without issue_number leaves the receipt byte-identical");
+    assert.deepEqual(world.orca.readLog(), [], "mapping validation precedes live reconciliation");
+    assert.deepEqual(world.gh.readLog(), [], "the mismatch makes no GitHub read");
+  } finally {
+    world.cleanup();
+  }
+});
+
 test("#1008 duplicate or contradictory relay run mappings reuse exit 62", () => {
   const cases = [
     {

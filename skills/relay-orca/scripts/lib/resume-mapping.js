@@ -20,14 +20,31 @@ function programOutcomes(program) {
   return program && Array.isArray(program.outcomes) ? program.outcomes : [];
 }
 
-function declaredIssue(outcome) {
-  return outcome && outcome.issue !== undefined && outcome.issue !== null ? outcome.issue : null;
+// Normalize a tracker issue value to a finite integer or null, consistent with how
+// manifest-parse.js reads `issue.number` (a raw number, or a scalar string matching
+// /^-?\d+$/). Empty strings, non-numeric strings, null/undefined, and non-finite
+// numbers are all UNDECLARED (null) — they must never coerce to 0 via Number().
+function normalizeIssueNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return /^-?\d+$/.test(trimmed) ? Number(trimmed) : null;
+  }
+  return null;
 }
 
+function declaredIssue(outcome) {
+  return outcome ? normalizeIssueNumber(outcome.issue) : null;
+}
+
+// Two issues are equal ONLY when BOTH sides normalize to a finite integer and match.
+// An absent/empty/non-numeric value on either side normalizes to null and can never
+// compare equal — this closes the Number("")===Number(null)===0 coercion hole so a
+// missing manifest issue_number always fails the RESUME_MAP_ISSUE_MISMATCH gate.
 function issuesEqual(left, right) {
-  const leftNumber = Number(left);
-  const rightNumber = Number(right);
-  return Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber === rightNumber;
+  const leftNumber = normalizeIssueNumber(left);
+  const rightNumber = normalizeIssueNumber(right);
+  return leftNumber !== null && rightNumber !== null && leftNumber === rightNumber;
 }
 
 // Validate category-by-category so the documented order is deterministic across a batch:
