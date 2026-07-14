@@ -4,12 +4,14 @@
 // relay-orca `resume` — crash-safe, receipt-driven, reconcile-first, idempotent
 // resumption (issue #946). It loads the reconstructible bridge receipt through the
 // shipped receipt-io (fail-closed codes 50-52 verbatim), runs the SAME live
-// reconciliation as `status` (the imported #945 pipeline) BEFORE any mutation, and only
-// then plans and executes bounded restoration: valid live mappings are REUSED, a lost
+// reconciliation as `status` (the imported #945 pipeline) before any runtime restoration,
+// and only then plans and executes bounded restoration: valid live mappings are REUSED, a lost
 // operator terminal is REACQUIRED, and an outcome whose Orca dispatch is verifiably
 // absent AND whose relay side is clean is RE-DISPATCHED through the SAME verified path as
 // `run` (inject -> dispatch-show -> prompt). Reconciliation results that make resumption
-// unsafe fail closed with a `decision_required` report and ZERO mutation (codes 60-63).
+// unsafe fail closed with a `decision_required` report and ZERO automatic mutation
+// (codes 60-63). The explicit `--map-relay-run` coordination-metadata intake is validated
+// and atomically recorded before reconciliation by its separate supervised contract.
 // It NEVER invokes `orca orchestration reset` (D7) or any `orca worktree` subcommand
 // (D7), never deletes a task/worktree/branch/PR, and never force-closes a relay run.
 const fs = require("node:fs");
@@ -40,6 +42,7 @@ const { buildOperatorPrompt } = require("./lib/operator-prompt");
 const { routeFor, defaultEvidenceFor } = require("./lib/task-kinds");
 const { planResume } = require("./lib/resume-plan");
 const { orderReport } = require("./lib/resume-report");
+const { validateRelayRunMappings, applyRelayRunMappings } = require("./lib/resume-mapping");
 
 const READ_TIMEOUT_MS = 15000;
 const READ_MAX_BUFFER = 4 * 1024 * 1024;
@@ -50,6 +53,7 @@ function usageError(message) {
   process.stderr.write(`relay-orca resume: ${message}\n`);
   process.stderr.write(
     "usage: resume.js --program-id <id> [--json] [--operator-handle <handle> ...] " +
+      "[--program-file <accepted-program.json>] [--map-relay-run <outcome_id>=<run_id> ...] " +
       "[--orca-bin <path>] [--gh-bin <path>] [--repo-root <path>]\n",
   );
   process.exit(USAGE_EXIT);
@@ -58,6 +62,15 @@ function usageError(message) {
 function requireValue(value, flag) {
   if (!value || value.startsWith("-")) usageError(`${flag} requires a value`);
   return value;
+}
+
+function parseRelayRunMapping(value) {
+  const raw = requireValue(value, "--map-relay-run");
+  const separator = raw.indexOf("=");
+  if (separator < 0 || separator === 0 || separator === raw.length - 1) {
+    usageError("--map-relay-run requires <outcome_id>=<run_id> with both ids non-empty");
+  }
+  return { outcome_id: raw.slice(0, separator), run_id: raw.slice(separator + 1) };
 }
 
 function parseArgs(argv) {
@@ -79,6 +92,7 @@ function parseArgs(argv) {
     recordAuthorization: null,
     authorizer: null,
     programFile: null,
+    mapRelayRuns: [],
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -91,6 +105,7 @@ function parseArgs(argv) {
     else if (arg === "--record-authorization") opts.recordAuthorization = requireValue(argv[(i += 1)], "--record-authorization");
     else if (arg === "--authorizer") opts.authorizer = requireValue(argv[(i += 1)], "--authorizer");
     else if (arg === "--program-file") opts.programFile = requireValue(argv[(i += 1)], "--program-file");
+    else if (arg === "--map-relay-run") opts.mapRelayRuns.push(parseRelayRunMapping(argv[(i += 1)]));
     else if (arg === "--orca-bin") opts.orcaBin = requireValue(argv[(i += 1)], "--orca-bin");
     else if (arg === "--gh-bin") opts.ghBin = requireValue(argv[(i += 1)], "--gh-bin");
     else if (arg === "--repo-root") opts.repoRoot = requireValue(argv[(i += 1)], "--repo-root");
@@ -101,6 +116,7 @@ function parseArgs(argv) {
     usageError("--resolve-decision requires --resolution and --resolver");
   }
   if (opts.recordAuthorization && !opts.authorizer) usageError("--record-authorization requires --authorizer");
+  if (opts.mapRelayRuns.length > 0 && !opts.programFile) usageError("--map-relay-run requires --program-file");
   return opts;
 }
 
@@ -190,7 +206,8 @@ function loadReceipt(receiptPath, requestedProgramId) {
   return parsed.receipt;
 }
 
-// The imported #945 reconciliation, run BEFORE any mutation (D1). Reads only. The
+// The imported #945 reconciliation, run before any runtime restoration (D1). Reads only.
+// An explicit, already-validated relay run mapping may have been recorded up front. The
 // reconciliation's per-task dispatch-show reads are captured into `liveDispatch` and
 // returned alongside the report so the planner can decide "verifiably absent" from a live
 // read (owner amendment A1, #946 R1), never from a null receipt dispatch_id.
@@ -214,8 +231,8 @@ function reconcile({ receipt, opts, repo, receiptPath }) {
 }
 
 // Persist the live receipt object atomically, preserving created_at and any stop record
-// (D5/scenario 8) and bumping updated_at. Used at the A16 (terminal recorded) and A2
-// (provenance verified) write points during execution.
+// (D5/scenario 8) and bumping updated_at. Used for supervised mapping intake and at the
+// A16 (terminal recorded) / A2 (provenance verified) points during execution.
 function makeReceiptPersistor(receipt, receiptPath) {
   return function persist() {
     receipt.updated_at = new Date().toISOString();
@@ -239,6 +256,63 @@ function decisionGateDefFromFile(programFile, decisionId) {
   } catch {
     return null;
   }
+}
+
+function acceptedProgramFromFile(programFile, receiptProgramId) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(programFile, "utf-8"));
+  } catch (error) {
+    usageError(`cannot read program file ${programFile}: ${error.message}`);
+  }
+  const program = parsed && parsed.program && typeof parsed.program === "object" ? parsed.program : parsed;
+  if (!program || typeof program !== "object" || Array.isArray(program)) {
+    usageError(`program file ${programFile} is not a program object`);
+  }
+  if (program.id !== receiptProgramId) {
+    usageError(`program file id ${boundedExcerpt(program.id)} does not match the receipt program id ${boundedExcerpt(receiptProgramId)}`);
+  }
+  return program;
+}
+
+function mappingFailureReport(opts, receiptPath, receipt, validation) {
+  const decision = validation.decision;
+  return orderReport({
+    ok: false,
+    program_id: opts.programId,
+    receipt_path: receiptPath,
+    runtime: "unreachable",
+    reconciliation: [],
+    actions: receipt.tasks.map((task) => ({
+      outcome_id: task.outcome_id,
+      action: "decision_required",
+      reason: boundedExcerpt(`blocked: ${decision.reason_code}`),
+    })),
+    terminals_created: [],
+    decision_required: [decision],
+    blocking_reasons: [{ reason_code: decision.reason_code, message: decision.message }],
+    reconciliation_required: true,
+  });
+}
+
+function validateAndRecordRelayRunMappings(receipt, receiptPath, repo, opts) {
+  if (opts.mapRelayRuns.length === 0) return { ok: true, exitCode: 0 };
+  const program = acceptedProgramFromFile(opts.programFile, receipt.program_id);
+  const manifests = listManifestFiles(repo.slug).map((entry) => ({
+    run_id: entry.run_id,
+    parsed: parseManifest(entry.text),
+  }));
+  const validation = validateRelayRunMappings({
+    receipt,
+    program,
+    requested: opts.mapRelayRuns,
+    manifests,
+  });
+  if (!validation.ok) return validation;
+  if (applyRelayRunMappings(receipt, validation.mappings)) {
+    makeReceiptPersistor(receipt, receiptPath)();
+  }
+  return validation;
 }
 
 // #947 D4/D5: write an operator decision/authorization record into the live receipt when
@@ -303,7 +377,7 @@ function executeAction(action, ctx) {
   receiptTask.dispatch_id = show.dispatchId;
   receiptTask.assignee = show.assignee;
   ctx.persist();
-  const prompt = buildOperatorPrompt(syntheticTask(receiptTask), { id: ctx.receipt.program_id }, {});
+  const prompt = buildOperatorPrompt(syntheticTask(receiptTask), { id: ctx.receipt.program_id }, {}, programSegment);
   const sent = sendPrompt(ctx.runOrca, ctx.orcaBin, { orcaTaskId, handle, prompt });
   if (!sent.ok) ctx.blocking.push(blockingReason("RESUME_REDISPATCH_FAILED", `operator prompt hand-off failed for outcome ${action.outcome_id}`));
 }
@@ -383,6 +457,12 @@ function main() {
     receipt = loadReceipt(receiptPath, opts.programId);
     if (receipt.repo && receipt.repo.slug !== repo.slug) {
       rejectReceipt("RECEIPT_REPO_MISMATCH", `receipt repo.slug ${receipt.repo.slug} does not match the current repo slug ${repo.slug}`);
+    }
+    const mappingValidation = validateAndRecordRelayRunMappings(receipt, receiptPath, repo, opts);
+    if (!mappingValidation.ok) {
+      printReport(mappingFailureReport(opts, receiptPath, receipt, mappingValidation), opts.json);
+      process.exitCode = mappingValidation.exitCode;
+      return;
     }
     // #947: an explicit --resolve-decision / --record-authorization writes its record to the
     // receipt up front, so the decision persists regardless of the reconciliation verdict.

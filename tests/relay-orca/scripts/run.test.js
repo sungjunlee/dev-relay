@@ -481,7 +481,7 @@ test("D11.10: operator prompts carry the pinned literals and never name an engin
 
   const kinds = new Set();
   for (const task of plan.tasks) {
-    const prompt = buildOperatorPrompt(task, program, outcomeById.get(task.outcome_id));
+    const prompt = buildOperatorPrompt(task, program, outcomeById.get(task.outcome_id), programSegment);
     kinds.add(task.kind);
     // Every prompt: full payload contract + reconciliation + lifecycle literals (D8).
     PAYLOAD_FIELDS.forEach((field) => assert.ok(prompt.includes(field), `${task.kind} prompt missing payload field ${field}`));
@@ -502,6 +502,15 @@ test("D11.10: operator prompts carry the pinned literals and never name an engin
       assert.ok(prompt.includes("/tmp/leaf1-prompt.md"));
       assert.ok(prompt.includes("/tmp/leaf1-rubric.yaml"));
       assert.ok(prompt.includes("/tmp/leaf1-dc.md"));
+    }
+    if (task.kind === "relay_run" || task.kind === "relay_fleet") {
+      const destination = task.kind === "relay_fleet" ? "relay fleet manifest" : "relay run manifest";
+      const marker = `relay-orca: ${programSegment(program.id)}/${task.outcome_id}`;
+      assert.ok(prompt.includes(marker), `${task.kind} prompt missing the resolved program marker`);
+      assert.ok(prompt.includes(`in the ${destination}`), `${task.kind} prompt missing its marker destination`);
+      assert.equal(prompt.includes(`relay-orca: ${program.id}/${task.outcome_id}`), false, "the prompt marker never uses the raw program id");
+    } else {
+      assert.equal(prompt.includes("Embed this exact program marker line"), false, `${task.kind} read-only prompt must stay unchanged`);
     }
   }
   // All five kinds were exercised.

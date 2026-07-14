@@ -1,10 +1,12 @@
 # relay-orca recovery — `resume`/`stop` decision handling
 
-`resume` is **reconcile-first and fail-closed**: it loads the reconstructible receipt, runs the
-SAME live reconciliation as `status` **before any mutation**, and only then restores what is
-safe (reuse valid mappings, reacquire a lost operator terminal, re-dispatch a verifiably-absent,
-relay-clean, wave-1 outcome through the verified path — always to an explicitly provided
-`--operator-handle`, never a self-created terminal). **"Verifiably absent" means a live
+`resume` is **reconcile-first and fail-closed for runtime restoration**: it loads the
+reconstructible receipt, runs the SAME live reconciliation as `status` before restoring an Orca
+dispatch, and only then restores what is safe (reuse valid mappings, reacquire a lost operator
+terminal, re-dispatch a verifiably-absent, relay-clean, wave-1 outcome through the verified path —
+always to an explicitly provided `--operator-handle`, never a self-created terminal). The explicit
+`--map-relay-run` intake described below is the narrow exception: it validates and atomically
+records supervised coordination metadata before live reconciliation. **"Verifiably absent" means a live
 `dispatch-show` read for that task, taken during the reconciliation pass, reported NO dispatch —
 a null `dispatch_id` in the receipt alone NEVER qualifies.** In the crash window (a
 `dispatch --inject` landed a live dispatch but the receipt write recording it never happened),
@@ -16,9 +18,10 @@ anchor for those decisions.
 
 None of the steps below are performed automatically by the skill. The skill **never** resets
 Orca, deletes a task, removes a worktree, deletes a branch/PR, force-closes a relay run, or
-creates its own operator terminal — on any path, including every failure path. The **only**
-mutations `resume` performs are, on a safe outcome, `orca orchestration dispatch --inject` and
-`orca terminal send`, both against a terminal the operator provided via `--operator-handle`; if
+creates its own operator terminal — on any path, including every failure path. Its runtime
+mutations on a safe outcome are limited to `orca orchestration dispatch --inject` and `orca
+terminal send`, both against a terminal the operator provided via `--operator-handle`; explicit
+operator-record and relay-run-mapping flags may atomically update receipt metadata. If
 an outcome needs (re)dispatch and no handle was provided, `resume` fails closed with
 `RESUME_NO_OPERATOR_HANDLE` (exit 66) and mutates nothing. `stop`'s only mutation is
 `orca orchestration run-stop`.
@@ -88,6 +91,30 @@ performs **zero** mutation and asks for a terminal. Bounded steps:
    `node scripts/resume.js --program-id <id> --operator-handle <handle> --json`.
 3. Provide one handle per outcome that needs a fresh operator surface; a shortfall leaves the
    excess outcomes untouched for a follow-up resume.
+
+## Supervised relay run mapping intake
+
+Operator-driven relay work is adopted into the receipt only through an explicit, supervised
+mapping. Before changing coordination metadata, live-verify all three durable facts: the intended
+relay run manifest is terminal, its PR is `MERGED`, and its tracker issue is `CLOSED`. Then run:
+
+```bash
+node scripts/resume.js --program-id <id> --program-file <program> --map-relay-run <outcome_id>=<run_id> --json
+```
+
+The accepted program supplies the outcome's declared issue, and the manifest filename supplies
+the exact run id. The batch is rejected without changing the receipt when any mapping fails:
+
+- `RESUME_MAP_TARGET_INVALID` (exit 67): the outcome is unknown, its task kind cannot consume a
+  relay run mapping, or the accepted outcome has no declared issue.
+- `RESUME_MAP_RUN_NOT_FOUND` (exit 68): no runs-root manifest filename exactly matches the run id.
+- `RESUME_MAP_ISSUE_MISMATCH` (exit 69): the manifest issue differs from the accepted outcome issue.
+- `RESUME_CONFLICTING_MAPPING` (exit 62): the run belongs to another receipt task or the target
+  already names a different run.
+
+This intake is explicit-only and never automatic. Back-pointer discovery can propose a candidate,
+but neither `status` nor flagless `resume` adopts it. The mapping records coordination metadata;
+the next live reconciliation remains the only authority for `complete_with_evidence`.
 
 ## Corrupt or global task-graph recovery
 

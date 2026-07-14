@@ -4,7 +4,7 @@
 // 60-range so it never collides with plan.js's 2-21 codes, the probe's 30-37, run's
 // 40-44, status/receipt's 50-52, or Node's own fatal/exec codes (<=125). Existing
 // reason modules stay untouched. 64 (usage errors) and 65 (stop's
-// COORDINATOR_STOP_FAILED) are deliberately avoided.
+// COORDINATOR_STOP_FAILED) retain their existing meanings.
 //
 // These are the ONLY conditions that make resumption unsafe. In any of them
 // resume performs NO automatic mutation: it emits a `decision_required` report and
@@ -19,6 +19,9 @@ const REASONS = Object.freeze({
   RESUME_CONFLICTING_MAPPING: 62, // duplicate or contradictory (changed) mappings
   RESUME_MISSING_PROVENANCE: 63, // a mapping's dispatch context/assignee is missing where a live dispatch exists
   RESUME_NO_OPERATOR_HANDLE: 66, // an outcome needs (re)dispatch but no --operator-handle was provided (64 = usage, 65 = stop's COORDINATOR_STOP_FAILED)
+  RESUME_MAP_TARGET_INVALID: 67, // requested outcome/kind/issue cannot safely accept a relay run mapping
+  RESUME_MAP_RUN_NOT_FOUND: 68, // requested run id has no runs-root manifest filename match
+  RESUME_MAP_ISSUE_MISMATCH: 69, // manifest issue number does not match the accepted outcome
 });
 
 // Bounded recovery options per decision code (D2). Each option names a concrete
@@ -50,6 +53,21 @@ const OPTIONS = Object.freeze({
     "Create an operator terminal running an agent CLI: `orca terminal create --command \"<agent-cli>\" --json`.",
     "Re-run resume with the terminal handle: `node scripts/resume.js --program-id <id> --operator-handle <handle> --json`.",
     "See references/recovery.md § RESUME_NO_OPERATOR_HANDLE for the bounded manual steps.",
+  ],
+  RESUME_MAP_TARGET_INVALID: [
+    "Inspect the accepted program and receipt: `node scripts/status.js --program-id <id> --json`.",
+    "Confirm the outcome exists, accepts a relay run mapping, and declares a tracker issue.",
+    "See references/recovery.md § Supervised relay run mapping intake.",
+  ],
+  RESUME_MAP_RUN_NOT_FOUND: [
+    "List the repository's relay run manifests and confirm the exact run id filename.",
+    "Re-run the mapping only after the intended relay run manifest exists.",
+    "See references/recovery.md § Supervised relay run mapping intake.",
+  ],
+  RESUME_MAP_ISSUE_MISMATCH: [
+    "Compare the accepted outcome issue with the relay manifest issue number.",
+    "Map only the relay run created for that accepted outcome's tracker issue.",
+    "See references/recovery.md § Supervised relay run mapping intake.",
   ],
 });
 
