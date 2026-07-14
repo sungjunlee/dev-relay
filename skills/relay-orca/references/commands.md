@@ -147,11 +147,14 @@ see [receipt-and-status.md](receipt-and-status.md).
 
 ### Partial-wave semantics
 
-Only wave-1 tasks (all dependency-satisfied) are dispatch-eligible in v0; later waves are
-materialized but reported `pending`. At most `concurrency` tasks are dispatched at once — excess
-eligible tasks stay `pending` with **no error** (exit 0). A handle carries at most one active
-task; an explicit-handle shortfall also leaves the remaining eligible tasks `pending`.
-Completion-driven wave advancement is #945/#947 scope.
+`run` dispatches only wave-1 tasks (all dependency-satisfied); it materializes every later-wave
+Orca task at program start and reports those tasks `pending`. `resume` makes a pending later-wave
+outcome dispatch-eligible once every receipt outcome in every earlier wave classifies
+`complete_with_evidence` in the same live reconciliation. Advancement uses the already-materialized
+task and requires one explicit `--operator-handle` per dispatched outcome. At most `concurrency`
+tasks are dispatched by `run` at once — excess eligible tasks stay `pending` with **no error**
+(exit 0). A handle carries at most one active task; an explicit-handle shortfall also leaves the
+remaining eligible tasks `pending` for a follow-up `resume`.
 
 ### Run rejection matrix
 

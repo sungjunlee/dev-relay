@@ -124,13 +124,15 @@ These are supervised limitations and open follow-ups surfaced by the pilot:
   issue is CLOSED before invoking it. The flag validates the outcome, manifest, and tracker issue,
   then atomically records `relay_ids.run`; only the following #945 live reconciliation can report
   `complete_with_evidence`. See [recovery.md](recovery.md#supervised-relay-run-mapping-intake).
-- **Waves beyond wave 1 need a supervised manual dispatch (#1009).** No shipped code path advances
-  a program past wave 1: `run` dispatches wave 1 only (and cannot re-run under empty-runtime
-  admission), `resume` re-dispatches only crash-lost wave-1 outcomes, and the #947 gate/completion
-  modes are read-only. The supervised workaround is to replay `run`'s exact verified sequence for
-  the next-wave task — `dispatch --inject` → `dispatch-show` provenance verify → `terminal send`
-  prompt — then reconcile the receipt with `resume --program-file <program> --map-relay-run
-  <outcome_id>=<run_id>` per #1008.
+- **Waves beyond wave 1 advance through supervised `resume` (#1009).** `run` still dispatches wave 1
+  only, but it materializes every later-wave Orca task as `pending`. Once every earlier-wave outcome
+  classifies `complete_with_evidence`, invoke `resume` with an explicit `--operator-handle` for each
+  outcome to advance; it injects the already-materialized task, verifies dispatch provenance,
+  persists that provenance, and sends the operator prompt through the same fail-closed path as a
+  crash-lost wave-1 redispatch. Only if that path itself needs manual recovery should an operator
+  replay the bounded `dispatch --inject` → `dispatch-show` provenance verify → `terminal send`
+  sequence. Map the resulting relay run with `resume --program-file <program> --map-relay-run
+  <outcome_id>=<run_id>` per #1008 when durable coordination evidence is ready.
 
 `resume` and `stop` never reset Orca, delete a task/worktree/branch/PR, or force-close a relay
 run on any path. Manual decision recovery: [recovery.md](recovery.md).

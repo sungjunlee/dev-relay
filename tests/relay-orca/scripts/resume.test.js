@@ -21,6 +21,9 @@ const { installFakeOrcaResume } = require(path.join(__dirname, "..", "fixtures",
 const { installFakeGh } = require(path.join(__dirname, "..", "fixtures", "fake-gh.js"));
 const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
 
+const FOLLOWUP_LATER_WAVE = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "fixtures", "followup-later-wave.json"), "utf-8")).program;
+const RESUME_THREE_WAVE = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "fixtures", "resume-three-wave.json"), "utf-8")).program;
+
 const FORBIDDEN_ENGINE_TOKENS = ["codex", "claude", "gpt", "opus", "sonnet", "haiku", "gemini", "cursor", "cline", "grok", "glm", "opencode"];
 const CANCELLATION_TOKENS = ["cancel", "cancelled", "canceled", "complete", "completed", "aborted", "discard"];
 
@@ -406,6 +409,276 @@ test("D9.6: partial dispatch → only the absent+clean outcome dispatches, throu
     assert.equal(injects.length, 1, "exactly one re-dispatch");
     assert.ok(injects[0].includes("orca-live-b"), "only the absent outcome b is dispatched");
     assert.ok(!injects.some((l) => l.includes("orca-live-a")), "the reused outcome a is never re-dispatched");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #1009 — completion-driven advancement of already-materialized later waves
+// ---------------------------------------------------------------------------
+
+function completedFirstWaveWorld(program = FOLLOWUP_LATER_WAVE) {
+  const first = program.outcomes.find((outcome) => outcome.wave === 1);
+  const later = program.outcomes.find((outcome) => outcome.wave === 2);
+  const runId = `run-${first.id}`;
+  const prNumber = Number(first.issue) + 10000;
+  const world = buildWorld({
+    programId: program.id,
+    manifests: [{ run_id: runId, state: "merged", pr_number: prNumber, issue_number: first.issue }],
+    orcaScenario: {
+      tasks: [
+        orcaTask(program.id, first.id, { status: "completed", worker_done: true }),
+        orcaTask(program.id, later.id, { status: "pending" }),
+      ],
+      dispatch: absentDispatch(later.id),
+    },
+    ghScenario: {
+      prs: { [prNumber]: { state: "MERGED", mergedAt: "2026-07-14T01:00:00Z" } },
+      issues: { [first.issue]: { state: "CLOSED" } },
+    },
+  });
+  const receipt = makeReceipt({
+    programId: program.id,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: first.id, kind: first.task_kind, wave: first.wave, run: runId },
+      { outcome_id: later.id, kind: later.task_kind, wave: later.wave, dispatch_id: null, assignee: null },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  return { world, first, later };
+}
+
+test("#1009: wave 2 advances through the existing verified path and a second resume is idempotent", () => {
+  const { world, first, later } = completedFirstWaveWorld();
+  try {
+    assert.equal(runStatus(world, FOLLOWUP_LATER_WAVE.id).program_state, "ready_for_next_wave");
+    const firstRun = world.run(["--operator-handle", "h-wave-2"]);
+    assert.equal(firstRun.status, 0);
+    assertReportShape(firstRun.body);
+    assert.equal(actionFor(firstRun.body, first.id).action, "skipped");
+    assert.equal(actionFor(firstRun.body, later.id).action, "redispatched");
+
+    const firstLog = world.orca.readLog();
+    const injectIndex = firstLog.findIndex((line) => line.startsWith(`orchestration dispatch --task orca-live-${later.id}`));
+    const verifyIndex = firstLog.findIndex((line, index) => index > injectIndex && line.startsWith(`orchestration dispatch-show --task orca-live-${later.id}`));
+    const promptIndex = firstLog.findIndex((line, index) => index > verifyIndex && line.startsWith("terminal send"));
+    assert.ok(injectIndex >= 0, "the already-materialized wave-2 Orca task is injected");
+    assert.ok(verifyIndex > injectIndex, "dispatch provenance is verified after injection");
+    assert.ok(promptIndex > verifyIndex, "the operator prompt is delivered after provenance verification");
+    assert.ok(!firstLog.some((line) => line.startsWith("orchestration task-create")), "resume never creates a later-wave task");
+    assert.ok(!firstLog.some((line) => line.startsWith("terminal create")), "resume uses only the explicit operator handle");
+
+    const persisted = parseReceipt(world.receiptOnDisk()).receipt;
+    const advanced = persisted.tasks.find((task) => task.outcome_id === later.id);
+    assert.equal(advanced.orca_task_id, `orca-live-${later.id}`);
+    assert.equal(advanced.dispatch_id, `disp-orca-live-${later.id}`);
+    assert.equal(advanced.assignee, "h-wave-2");
+
+    const beforeSecond = world.receiptOnDisk();
+    const secondLogStart = firstLog.length;
+    const secondRun = world.run(["--operator-handle", "h-wave-2"]);
+    assert.equal(secondRun.status, 0);
+    assert.equal(actionFor(secondRun.body, later.id).action, "reused");
+    assert.deepEqual(mutationLines(world.orca.readLog().slice(secondLogStart)), [], "the second resume performs no duplicate inject or prompt send");
+    assert.equal(world.receiptOnDisk(), beforeSecond, "the second resume leaves the receipt byte-identical");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1009: an eligible wave-2 outcome without an explicit operator handle fails closed with exit 66", () => {
+  const { world, later } = completedFirstWaveWorld();
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run();
+    assert.equal(r.status, RESUME_REASONS.RESUME_NO_OPERATOR_HANDLE);
+    assert.equal(r.status, 66);
+    assert.equal(actionFor(r.body, later.id).action, "decision_required");
+    assert.ok(r.body.decision_required.some((decision) => decision.reason_code === "RESUME_NO_OPERATOR_HANDLE"));
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "no handle means zero mutating Orca calls");
+    assert.equal(world.receiptOnDisk(), before, "no-handle advancement leaves the receipt byte-identical");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1009: a started wave-2 sibling does not block another absent wave-2 outcome", () => {
+  const programId = "epic-resume-partial-wave-two";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-wave-one", state: "merged", pr_number: 17201, issue_number: 7201 }],
+    orcaScenario: {
+      tasks: [
+        orcaTask(programId, "wave-one", { status: "completed", worker_done: true }),
+        orcaTask(programId, "wave-two-started"),
+        orcaTask(programId, "wave-two-pending", { status: "pending" }),
+      ],
+      dispatch: absentDispatch("wave-two-pending"),
+    },
+    ghScenario: {
+      prs: { 17201: { state: "MERGED", mergedAt: "2026-07-14T01:10:00Z" } },
+      issues: { 7201: { state: "CLOSED" } },
+    },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: "wave-one", wave: 1, run: "run-wave-one" },
+      { outcome_id: "wave-two-started", wave: 2 },
+      { outcome_id: "wave-two-pending", wave: 2, dispatch_id: null, assignee: null },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  try {
+    assert.equal(runStatus(world, programId).program_state, "running", "the started sibling deliberately prevents the aggregate ready_for_next_wave label");
+    const r = world.run(["--operator-handle", "h-wave-2-pending"]);
+    assert.equal(r.status, 0);
+    assert.equal(actionFor(r.body, "wave-two-started").action, "reused");
+    assert.equal(actionFor(r.body, "wave-two-pending").action, "redispatched", "eligibility is per-outcome, not coupled to program_state");
+    const injects = world.orca.readLog().filter((line) => line.startsWith("orchestration dispatch --task"));
+    assert.equal(injects.length, 1);
+    assert.ok(injects[0].includes("orca-live-wave-two-pending"));
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1009: wave 3 stays skipped while wave 2 advances because wave 2 is not yet complete", () => {
+  const [waveOne, waveTwo, waveThree] = RESUME_THREE_WAVE.outcomes;
+  assert.deepEqual(waveTwo.depends_on, [], "the declared-wave fixture proves eligibility is wave-blanket, not dependency-scoped");
+  const world = buildWorld({
+    programId: RESUME_THREE_WAVE.id,
+    manifests: [{ run_id: "run-foundation", state: "merged", pr_number: 17101, issue_number: waveOne.issue }],
+    orcaScenario: {
+      tasks: [
+        orcaTask(RESUME_THREE_WAVE.id, waveOne.id, { status: "completed", worker_done: true }),
+        orcaTask(RESUME_THREE_WAVE.id, waveTwo.id, { status: "pending" }),
+        orcaTask(RESUME_THREE_WAVE.id, waveThree.id, { status: "pending" }),
+      ],
+      dispatch: absentDispatch(waveTwo.id, waveThree.id),
+    },
+    ghScenario: {
+      prs: { 17101: { state: "MERGED", mergedAt: "2026-07-14T01:20:00Z" } },
+      issues: { [waveOne.issue]: { state: "CLOSED" } },
+    },
+  });
+  const receipt = makeReceipt({
+    programId: RESUME_THREE_WAVE.id,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: waveOne.id, wave: waveOne.wave, run: "run-foundation" },
+      { outcome_id: waveTwo.id, wave: waveTwo.wave, dispatch_id: null, assignee: null },
+      { outcome_id: waveThree.id, wave: waveThree.wave, dispatch_id: null, assignee: null },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  try {
+    const r = world.run(["--operator-handle", "h-wave-2"]);
+    assert.equal(r.status, 0);
+    assert.equal(actionFor(r.body, waveTwo.id).action, "redispatched");
+    assert.equal(actionFor(r.body, waveThree.id).action, "skipped");
+    assert.equal(
+      actionFor(r.body, waveThree.id).reason,
+      `outcome ${waveThree.id} is in wave ${waveThree.wave}; earlier waves are not yet complete_with_evidence; left untouched`,
+    );
+    const injects = world.orca.readLog().filter((line) => line.startsWith("orchestration dispatch --task"));
+    assert.equal(injects.length, 1, "only wave 2 consumes the explicit handle");
+    assert.ok(injects[0].includes(`orca-live-${waveTwo.id}`));
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1009 masking: worker_done with an open PR keeps wave 2 fail-closed and untouched", () => {
+  const [waveOne, waveTwo] = FOLLOWUP_LATER_WAVE.outcomes;
+  const world = buildWorld({
+    programId: FOLLOWUP_LATER_WAVE.id,
+    manifests: [{ run_id: "run-stale-worker", state: "review_pending", pr_number: 17301, issue_number: waveOne.issue }],
+    orcaScenario: {
+      tasks: [
+        orcaTask(FOLLOWUP_LATER_WAVE.id, waveOne.id, { status: "completed", worker_done: true }),
+        orcaTask(FOLLOWUP_LATER_WAVE.id, waveTwo.id, { status: "pending" }),
+      ],
+      dispatch: absentDispatch(waveTwo.id),
+    },
+    ghScenario: {
+      prs: { 17301: { state: "OPEN" } },
+      issues: { [waveOne.issue]: { state: "OPEN" } },
+    },
+  });
+  const receipt = makeReceipt({
+    programId: FOLLOWUP_LATER_WAVE.id,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: waveOne.id, wave: 1, run: "run-stale-worker" },
+      { outcome_id: waveTwo.id, wave: 2, dispatch_id: null, assignee: null },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--operator-handle", "h-must-not-be-used"]);
+    assert.equal(r.status, RESUME_REASONS.RESUME_AMBIGUOUS_STATE);
+    assert.equal(r.status, 61);
+    assert.equal(r.body.reconciliation.find((outcome) => outcome.outcome_id === waveOne.id).state, "inconsistent");
+    assert.equal(actionFor(r.body, waveTwo.id).action, "decision_required");
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "an inconsistent earlier wave causes zero mutation");
+    assert.equal(world.receiptOnDisk(), before, "the later-wave receipt mapping is untouched");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1009 masking: worker_done with all-null evidence does not unlock wave 2", () => {
+  const [waveOne, waveTwo] = FOLLOWUP_LATER_WAVE.outcomes;
+  const world = buildWorld({
+    programId: FOLLOWUP_LATER_WAVE.id,
+    orcaScenario: {
+      tasks: [
+        orcaTask(FOLLOWUP_LATER_WAVE.id, waveOne.id, { status: "completed", worker_done: true }),
+        orcaTask(FOLLOWUP_LATER_WAVE.id, waveTwo.id, { status: "pending" }),
+      ],
+      dispatch: absentDispatch(waveTwo.id),
+    },
+  });
+  const receipt = makeReceipt({
+    programId: FOLLOWUP_LATER_WAVE.id,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: waveOne.id, wave: 1 },
+      { outcome_id: waveTwo.id, wave: 2, dispatch_id: null, assignee: null },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--operator-handle", "h-must-not-be-used"]);
+    assert.equal(r.status, 0);
+    const reconciledWaveOne = r.body.reconciliation.find((outcome) => outcome.outcome_id === waveOne.id);
+    assert.notEqual(reconciledWaveOne.state, "complete_with_evidence");
+    assert.ok(Object.values(reconciledWaveOne.evidence).every((value) => value === null), "all durable evidence is unresolved");
+    assert.equal(actionFor(r.body, waveOne.id).action, "reused");
+    assert.equal(actionFor(r.body, waveTwo.id).action, "skipped");
+    assert.equal(
+      actionFor(r.body, waveTwo.id).reason,
+      `outcome ${waveTwo.id} is in wave ${waveTwo.wave}; earlier waves are not yet complete_with_evidence; left untouched`,
+    );
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "worker_done alone never dispatches the next wave");
+    assert.equal(world.receiptOnDisk(), before);
     assertNoPoison(world);
   } finally {
     world.cleanup();
