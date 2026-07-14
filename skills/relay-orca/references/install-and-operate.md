@@ -110,7 +110,7 @@ coordinator (a terminal session running relay-orca's CLI scripts)
 
 ## Recovery and manual-cleanup limitations (open follow-ups from the 2026-07-13 pilot)
 
-These are honest, open follow-ups surfaced by the pilot; they are not yet fixed:
+These are supervised limitations and open follow-ups surfaced by the pilot:
 
 - **`stop` cannot currently succeed in the v0 topology (#1005).** `stop`'s only mutation,
   `orca orchestration run-stop`, assumes an always-on Orca coordinator loop that the stateless-CLI
@@ -118,18 +118,19 @@ These are honest, open follow-ups surfaced by the pilot; they are not yet fixed:
   fail-closed behavior is honest, but the intent — durably recording an operator interruption — is
   unreachable today.
 - **Operator-driven outcomes need a supervised receipt-mapping reconcile before they classify
-  complete (#1008).** `run` writes the receipt before the operator's relay run exists, and no code
-  path consumes the operator's completion payload back into the receipt, so `relay_ids.run` stays
-  null and the outcome reads `running` forever. Verified-evidence-first recipe: **live-verify**
-  the relay manifest is terminal, the PR is MERGED, and the issue is CLOSED, **then** atomically
-  write the confirmed `relay_ids.run` into the receipt. Only after that mapping does the #945
-  evidence classifier report `complete_with_evidence`.
+  complete (#1008).** `run` writes the receipt before the operator's relay run exists. The shipped
+  supervised intake path is `resume --program-file <program> --map-relay-run
+  <outcome_id>=<run_id>`: **live-verify** the relay manifest is terminal, the PR is MERGED, and the
+  issue is CLOSED before invoking it. The flag validates the outcome, manifest, and tracker issue,
+  then atomically records `relay_ids.run`; only the following #945 live reconciliation can report
+  `complete_with_evidence`. See [recovery.md](recovery.md#supervised-relay-run-mapping-intake).
 - **Waves beyond wave 1 need a supervised manual dispatch (#1009).** No shipped code path advances
   a program past wave 1: `run` dispatches wave 1 only (and cannot re-run under empty-runtime
   admission), `resume` re-dispatches only crash-lost wave-1 outcomes, and the #947 gate/completion
   modes are read-only. The supervised workaround is to replay `run`'s exact verified sequence for
   the next-wave task — `dispatch --inject` → `dispatch-show` provenance verify → `terminal send`
-  prompt — then reconcile the receipt per #1008.
+  prompt — then reconcile the receipt with `resume --program-file <program> --map-relay-run
+  <outcome_id>=<run_id>` per #1008.
 
 `resume` and `stop` never reset Orca, delete a task/worktree/branch/PR, or force-close a relay
 run on any path. Manual decision recovery: [recovery.md](recovery.md).

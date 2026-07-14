@@ -10,6 +10,7 @@ const path = require("node:path");
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SCRIPTS = path.join(REPO_ROOT, "skills", "relay-orca", "scripts");
 const RESUME_JS = path.join(SCRIPTS, "resume.js");
+const STATUS_JS = path.join(SCRIPTS, "status.js");
 
 const { REPORT_KEYS, ACTIONS } = require(path.join(SCRIPTS, "lib", "resume-report.js"));
 const { REASONS: RESUME_REASONS } = require(path.join(SCRIPTS, "lib", "resume-reasons.js"));
@@ -146,6 +147,7 @@ function buildWorld({ programId, receipt, manifests = [], fleetManifests = [], o
     repoRoot,
     programsRoot,
     runsRoot,
+    fleetsRoot,
     slug,
     receiptPath,
     orca,
@@ -180,6 +182,33 @@ function buildWorld({ programId, receipt, manifests = [], fleetManifests = [], o
 
 function actionFor(body, outcomeId) {
   return body.actions.find((entry) => entry.outcome_id === outcomeId);
+}
+
+function acceptedProgramFile(world, programId, outcomes) {
+  const programPath = path.join(world.base, "accepted-program.json");
+  fs.writeFileSync(programPath, `${JSON.stringify({ program: { id: programId, outcomes } }, null, 2)}\n`, "utf-8");
+  return programPath;
+}
+
+function mappedRun(world, outcomeId) {
+  const parsed = parseReceipt(world.receiptOnDisk());
+  assert.equal(parsed.ok, true, parsed.reason || "receipt parses");
+  return parsed.receipt.tasks.find((task) => task.outcome_id === outcomeId).relay_ids.run;
+}
+
+function runStatus(world, programId) {
+  const args = [STATUS_JS, "--program-id", programId, "--json", "--orca-bin", world.orca.orcaPath, "--gh-bin", world.gh.ghPath, "--repo-root", world.repoRoot];
+  const stdout = execFileSync(process.execPath, args, {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_ORCA_PROGRAMS_ROOT: world.programsRoot,
+      RELAY_ORCA_RUNS_ROOT: world.runsRoot,
+      RELAY_ORCA_FLEETS_ROOT: world.fleetsRoot,
+    },
+    stdio: "pipe",
+  });
+  return JSON.parse(stdout);
 }
 
 // Mutating Orca subcommand lines (dispatch --inject / terminal create / terminal send /
@@ -803,6 +832,294 @@ test("usage: unknown flag exits 64", () => {
   try {
     const r = world.run(["--bogus"]);
     assert.equal(r.status, 64);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #1008 — explicit, validated relay run mapping intake
+// ---------------------------------------------------------------------------
+
+test("#1008 usage: --map-relay-run requires a program file and a well-formed outcome=run value", () => {
+  const programId = "epic-resume-map-usage";
+  const world = buildWorld({ programId });
+  const programFile = acceptedProgramFile(world, programId, [{ id: "a", issue: 100 }]);
+  const before = world.receiptOnDisk();
+  try {
+    assert.equal(world.run(["--map-relay-run", "a=run-a"]).status, 64);
+    for (const malformed of ["a", "=run-a", "a="]) {
+      assert.equal(world.run(["--program-file", programFile, "--map-relay-run", malformed]).status, 64);
+    }
+    assert.equal(world.receiptOnDisk(), before, "usage failures leave the receipt byte-identical");
+    assert.deepEqual(world.orca.readLog(), [], "usage failures never reconcile live state");
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1008 target validation rejects unknown, non-mappable, and issue-less outcomes with exit 67", () => {
+  const cases = [
+    { name: "unknown", task: { outcome_id: "a" }, outcomes: [{ id: "a", issue: 100 }], mapping: "missing=run-a" },
+    { name: "non-mappable", task: { outcome_id: "a", kind: "advisory_review" }, outcomes: [{ id: "a", issue: 100 }], mapping: "a=run-a" },
+    { name: "issue-less", task: { outcome_id: "a" }, outcomes: [{ id: "a", issue: null }], mapping: "a=run-a" },
+  ];
+  for (const scenario of cases) {
+    const programId = `epic-resume-map-${scenario.name}`;
+    const world = buildWorld({
+      programId,
+      manifests: [{ run_id: "run-a", state: "dispatched", issue_number: 100 }],
+    });
+    const receipt = makeReceipt({
+      programId,
+      slug: world.slug,
+      root: fs.realpathSync(world.repoRoot),
+      tasks: [scenario.task],
+    });
+    fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+    const programFile = acceptedProgramFile(world, programId, scenario.outcomes);
+    const before = world.receiptOnDisk();
+    try {
+      const r = world.run(["--program-file", programFile, "--map-relay-run", scenario.mapping]);
+      assert.equal(r.status, RESUME_REASONS.RESUME_MAP_TARGET_INVALID);
+      assertReportShape(r.body);
+      assert.equal(r.body.decision_required[0].reason_code, "RESUME_MAP_TARGET_INVALID");
+      assert.equal(world.receiptOnDisk(), before, `${scenario.name} failure leaves receipt byte-identical`);
+      assert.deepEqual(world.orca.readLog(), [], `${scenario.name} failure happens before reconciliation`);
+      assert.deepEqual(world.gh.readLog(), [], `${scenario.name} failure makes no GitHub read`);
+    } finally {
+      world.cleanup();
+    }
+  }
+});
+
+test("#1008 manifest validation rejects a missing run with 68 and an issue mismatch with 69", () => {
+  const cases = [
+    { name: "missing", manifests: [], mapping: "a=run-missing", code: "RESUME_MAP_RUN_NOT_FOUND" },
+    { name: "mismatch", manifests: [{ run_id: "run-a", state: "dispatched", issue_number: 999 }], mapping: "a=run-a", code: "RESUME_MAP_ISSUE_MISMATCH" },
+  ];
+  for (const scenario of cases) {
+    const programId = `epic-resume-map-${scenario.name}`;
+    const world = buildWorld({ programId, manifests: scenario.manifests });
+    const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "a" }] });
+    fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+    const programFile = acceptedProgramFile(world, programId, [{ id: "a", issue: 100 }]);
+    const before = world.receiptOnDisk();
+    try {
+      const r = world.run(["--program-file", programFile, "--map-relay-run", scenario.mapping]);
+      assert.equal(r.status, RESUME_REASONS[scenario.code]);
+      assert.equal(r.body.decision_required[0].reason_code, scenario.code);
+      assert.equal(world.receiptOnDisk(), before);
+      assert.deepEqual(world.orca.readLog(), [], "mapping validation precedes live reconciliation");
+      assert.deepEqual(world.gh.readLog(), []);
+    } finally {
+      world.cleanup();
+    }
+  }
+});
+
+// R1 #1008: an empty/non-numeric declared outcome issue is UNDECLARED, not a zero-coercible
+// value that could slip past the target gate and then Number("")===Number(null)-match a
+// manifest with no issue_number. It must fail closed as RESUME_MAP_TARGET_INVALID (exit 67).
+test("#1008 an empty declared outcome issue is undeclared → RESUME_MAP_TARGET_INVALID exit 67, byte-identical receipt", () => {
+  const programId = "epic-resume-map-empty-issue";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-a", state: "dispatched", issue_number: 100 }],
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "a" }] });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const programFile = acceptedProgramFile(world, programId, [{ id: "a", issue: "" }]);
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--program-file", programFile, "--map-relay-run", "a=run-a"]);
+    assert.equal(r.status, RESUME_REASONS.RESUME_MAP_TARGET_INVALID);
+    assert.equal(r.status, 67);
+    assertReportShape(r.body);
+    assert.equal(r.body.decision_required[0].reason_code, "RESUME_MAP_TARGET_INVALID");
+    assert.equal(world.receiptOnDisk(), before, "an empty declared issue leaves the receipt byte-identical");
+    assert.deepEqual(world.orca.readLog(), [], "target validation precedes live reconciliation");
+    assert.deepEqual(world.gh.readLog(), [], "an empty declared issue makes no GitHub read");
+  } finally {
+    world.cleanup();
+  }
+});
+
+// R1 #1008: a finite declared issue paired with a manifest that carries NO issue_number must
+// never coerce-match (both sides Number()->0). The mismatch gate fires (exit 69) instead of
+// persisting run tracking for an issue-less manifest.
+test("#1008 a declared finite issue vs a manifest without issue_number → RESUME_MAP_ISSUE_MISMATCH exit 69, byte-identical receipt", () => {
+  const programId = "epic-resume-map-manifest-no-issue";
+  const world = buildWorld({
+    programId,
+    // Manifest present (RUN_NOT_FOUND passes) but with no issue_number in frontmatter.
+    manifests: [{ run_id: "run-a", state: "dispatched" }],
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "a" }] });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const programFile = acceptedProgramFile(world, programId, [{ id: "a", issue: 100 }]);
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--program-file", programFile, "--map-relay-run", "a=run-a"]);
+    assert.equal(r.status, RESUME_REASONS.RESUME_MAP_ISSUE_MISMATCH);
+    assert.equal(r.status, 69);
+    assertReportShape(r.body);
+    assert.equal(r.body.decision_required[0].reason_code, "RESUME_MAP_ISSUE_MISMATCH");
+    assert.equal(world.receiptOnDisk(), before, "a manifest without issue_number leaves the receipt byte-identical");
+    assert.deepEqual(world.orca.readLog(), [], "mapping validation precedes live reconciliation");
+    assert.deepEqual(world.gh.readLog(), [], "the mismatch makes no GitHub read");
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1008 duplicate or contradictory relay run mappings reuse exit 62", () => {
+  const cases = [
+    {
+      name: "target-changed",
+      tasks: [{ outcome_id: "a", run: "run-old" }],
+      outcomes: [{ id: "a", issue: 100 }],
+      manifests: [{ run_id: "run-new", state: "dispatched", issue_number: 100 }],
+      mapping: "a=run-new",
+    },
+    {
+      name: "run-on-other-task",
+      tasks: [{ outcome_id: "a", run: "run-shared" }, { outcome_id: "b" }],
+      outcomes: [{ id: "a", issue: 100 }, { id: "b", issue: 200 }],
+      manifests: [{ run_id: "run-shared", state: "dispatched", issue_number: 200 }],
+      mapping: "b=run-shared",
+    },
+    {
+      name: "run-twice-in-batch",
+      tasks: [{ outcome_id: "a" }, { outcome_id: "b" }],
+      outcomes: [{ id: "a", issue: 100 }, { id: "b", issue: 100 }],
+      manifests: [{ run_id: "run-shared", state: "dispatched", issue_number: 100 }],
+      mapping: ["a=run-shared", "b=run-shared"],
+    },
+  ];
+  for (const scenario of cases) {
+    const programId = `epic-resume-map-${scenario.name}`;
+    const world = buildWorld({ programId, manifests: scenario.manifests });
+    const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: scenario.tasks });
+    fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+    const programFile = acceptedProgramFile(world, programId, scenario.outcomes);
+    const before = world.receiptOnDisk();
+    try {
+      const mappings = Array.isArray(scenario.mapping) ? scenario.mapping : [scenario.mapping];
+      const mappingArgs = mappings.flatMap((mapping) => ["--map-relay-run", mapping]);
+      const r = world.run(["--program-file", programFile, ...mappingArgs]);
+      assert.equal(r.status, RESUME_REASONS.RESUME_CONFLICTING_MAPPING);
+      assert.equal(r.body.decision_required[0].reason_code, "RESUME_CONFLICTING_MAPPING");
+      assert.equal(world.receiptOnDisk(), before);
+      assert.deepEqual(world.orca.readLog(), []);
+    } finally {
+      world.cleanup();
+    }
+  }
+});
+
+test("#1008 mapping batches are all-or-nothing and idempotent same-mapping replay is byte-identical", () => {
+  const batchProgramId = "epic-resume-map-batch";
+  const batchWorld = buildWorld({
+    programId: batchProgramId,
+    manifests: [{ run_id: "run-a", state: "dispatched", issue_number: 100 }],
+  });
+  const batchReceipt = makeReceipt({
+    programId: batchProgramId,
+    slug: batchWorld.slug,
+    root: fs.realpathSync(batchWorld.repoRoot),
+    tasks: [{ outcome_id: "a" }, { outcome_id: "b" }],
+  });
+  fs.writeFileSync(batchWorld.receiptPath, serializeReceipt(batchReceipt), "utf-8");
+  const batchProgram = acceptedProgramFile(batchWorld, batchProgramId, [{ id: "a", issue: 100 }, { id: "b", issue: 200 }]);
+  const batchBefore = batchWorld.receiptOnDisk();
+  try {
+    const r = batchWorld.run([
+      "--program-file", batchProgram,
+      "--map-relay-run", "a=run-a",
+      "--map-relay-run", "b=run-missing",
+    ]);
+    assert.equal(r.status, RESUME_REASONS.RESUME_MAP_RUN_NOT_FOUND);
+    assert.equal(batchWorld.receiptOnDisk(), batchBefore, "a valid first mapping is not persisted when the batch fails");
+  } finally {
+    batchWorld.cleanup();
+  }
+
+  const replayProgramId = "epic-resume-map-replay";
+  const replayWorld = buildWorld({
+    programId: replayProgramId,
+    manifests: [{ run_id: "run-a", state: "dispatched", pr_number: 10, issue_number: 100 }],
+    orcaScenario: { tasks: [orcaTask(replayProgramId, "a")] },
+    ghScenario: { prs: { 10: { state: "OPEN" } }, issues: { 100: { state: "OPEN" } } },
+  });
+  const replayReceipt = makeReceipt({ programId: replayProgramId, slug: replayWorld.slug, root: fs.realpathSync(replayWorld.repoRoot), tasks: [{ outcome_id: "a", run: "run-a" }] });
+  fs.writeFileSync(replayWorld.receiptPath, serializeReceipt(replayReceipt), "utf-8");
+  const replayProgram = acceptedProgramFile(replayWorld, replayProgramId, [{ id: "a", issue: 100 }]);
+  const replayBefore = replayWorld.receiptOnDisk();
+  try {
+    const r = replayWorld.run(["--program-file", replayProgram, "--map-relay-run", "a=run-a"]);
+    assert.equal(r.status, 0);
+    assertReportShape(r.body);
+    assert.equal(replayWorld.receiptOnDisk(), replayBefore, "same mapping replay does not bump updated_at or rewrite bytes");
+  } finally {
+    replayWorld.cleanup();
+  }
+});
+
+test("#1008 a valid mapping persists before an unrelated outcome later requires a decision", () => {
+  const programId = "epic-resume-map-upfront";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "run-a", state: "merged", pr_number: 10, issue_number: 100 },
+      { run_id: "run-b", state: "review_pending", pr_number: 20, issue_number: 200 },
+    ],
+    orcaScenario: { tasks: [orcaTask(programId, "a", { status: "completed", worker_done: true }), orcaTask(programId, "b", { status: "completed", worker_done: true })] },
+    ghScenario: {
+      prs: { 10: { state: "MERGED", mergedAt: "2026-07-14T00:00:00Z" }, 20: { state: "OPEN" } },
+      issues: { 100: { state: "CLOSED" }, 200: { state: "OPEN" } },
+    },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [{ outcome_id: "a" }, { outcome_id: "b", run: "run-b" }],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const programFile = acceptedProgramFile(world, programId, [{ id: "a", issue: 100 }, { id: "b", issue: 200 }]);
+  try {
+    const r = world.run(["--program-file", programFile, "--map-relay-run", "a=run-a"]);
+    assert.equal(r.status, RESUME_REASONS.RESUME_AMBIGUOUS_STATE);
+    assert.equal(mappedRun(world, "a"), "run-a", "mapping survives the later decision_required exit");
+    assert.ok(r.body.decision_required.some((entry) => entry.reason_code === "RESUME_AMBIGUOUS_STATE"));
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1008 mapping intake enables complete_with_evidence on the next status reconciliation", () => {
+  const programId = "epic-resume-map-complete";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-done", state: "merged", pr_number: 30, issue_number: 300 }],
+    orcaScenario: { tasks: [orcaTask(programId, "done", { status: "completed", worker_done: true })] },
+    ghScenario: {
+      prs: { 30: { state: "MERGED", mergedAt: "2026-07-14T00:00:00Z" } },
+      issues: { 300: { state: "CLOSED", stateReason: "COMPLETED" } },
+    },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "done" }] });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const programFile = acceptedProgramFile(world, programId, [{ id: "done", issue: 300 }]);
+  try {
+    const resumed = world.run(["--program-file", programFile, "--map-relay-run", "done=run-done"]);
+    assert.equal(resumed.status, 0);
+    assert.equal(mappedRun(world, "done"), "run-done");
+    const status = runStatus(world, programId);
+    const outcome = status.outcomes.find((entry) => entry.outcome_id === "done");
+    assert.equal(outcome.state, "complete_with_evidence");
+    assert.deepEqual(outcome.evidence, { manifest_terminal: true, pr_merged: true, issue_closed: true });
   } finally {
     world.cleanup();
   }

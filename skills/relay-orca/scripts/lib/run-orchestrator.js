@@ -210,7 +210,7 @@ function dispatchOne(ctx) {
   // is durable coordination metadata, independent of whether the operator prompt lands),
   // so a later reconcile can recover the dispatch instead of re-materializing it.
   persistReceipt(report, options);
-  const prompt = buildOperatorPrompt(task, program, outcome);
+  const prompt = buildOperatorPrompt(task, program, outcome, options.programSegment);
   const sent = sendPrompt(options.runOrca, orcaBin, { orcaTaskId, handle, prompt });
   if (!sent.ok) {
     entry.status = STATUS.ESCALATED;

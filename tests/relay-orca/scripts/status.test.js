@@ -917,6 +917,37 @@ test("D10.11: duplicate mapping → DUPLICATE_MAPPING; unmapped manifest referen
   }
 });
 
+test("D10.11: segment-only markers discover unmapped run and fleet back-pointers", () => {
+  const programId = "epic status/segment";
+  const segment = programSegment(programId);
+  assert.equal(segment.includes(programId), false, "the raw id must not occur inside its sanitized segment");
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "run-segment", state: "dispatched", pr_number: 191, issue_number: 1901, body: `relay-orca: ${segment}/run-outcome` },
+      { run_id: "fleet-segment", fleet_state: "dispatching", children: [], body: `relay-orca: ${segment}/fleet-outcome` },
+    ],
+    orcaScenario: { tasks: [orcaTask(programId, "existing")] },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [{ outcome_id: "existing" }],
+  });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  const before = fs.readFileSync(world.receiptPath, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.ok(r.body.repair_candidates.some((candidate) => candidate.kind === "adopt_relay_run" && /run-segment/.test(candidate.proposal)));
+    assert.ok(r.body.repair_candidates.some((candidate) => candidate.kind === "adopt_relay_fleet" && /fleet-segment/.test(candidate.proposal)));
+    assert.equal(fs.readFileSync(world.receiptPath, "utf-8"), before, "segment discovery is mutation-free");
+  } finally {
+    world.cleanup();
+  }
+});
+
 // A2 (#946 R2, owner amendment A2) — an unmapped FLEET manifest under the SEPARATE fleets
 // root referencing the program → adopt_relay_fleet repair candidate (mirrors the runs-root
 // back-pointer discovery so resume can block a duplicate fleet redispatch).

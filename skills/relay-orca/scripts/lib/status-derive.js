@@ -41,9 +41,10 @@ function programMarker(programId, programSegment) {
   return `relay-orca: ${programSegment(programId)}/`;
 }
 
-function referencesProgram(text, programId) {
+function referencesProgram(text, programId, programSegment) {
   const body = String(text || "");
-  return body.includes("relay-orca") && body.includes(programId);
+  const segment = typeof programSegment === "function" ? programSegment(programId) : "";
+  return body.includes("relay-orca") && (body.includes(programId) || (segment && body.includes(segment)));
 }
 
 // D4.1: a live task row's display string is the FIRST non-empty of `task_title`,
@@ -291,12 +292,12 @@ function detectDuplicateMappings(tasks) {
 
 // live→receipt back-pointer discovery (D7): a relay manifest referencing this program
 // but absent from the receipt's mappings. Text only; NO mutation is performed.
-function discoverBackPointers({ manifests, tasks, programId }) {
+function discoverBackPointers({ manifests, tasks, programId, programSegment }) {
   const knownRunIds = new Set(tasks.map((task) => task.relay_ids && task.relay_ids.run).filter(Boolean));
   const candidates = [];
   manifests.forEach((entry) => {
     if (!entry.run_id || knownRunIds.has(entry.run_id)) return;
-    if (!referencesProgram(entry.text, programId)) return;
+    if (!referencesProgram(entry.text, programId, programSegment)) return;
     candidates.push({
       kind: "adopt_relay_run",
       outcome_id: null,
@@ -313,12 +314,12 @@ function discoverBackPointers({ manifests, tasks, programId }) {
 // unmapped fleet cannot be attributed to a specific outcome, so resume must not re-dispatch
 // a relay_fleet outcome while it is present — that would duplicate the whole fleet (forbidden
 // by the drain invariant). Text only; NO mutation is performed.
-function discoverFleetBackPointers({ fleetManifests, tasks, programId }) {
+function discoverFleetBackPointers({ fleetManifests, tasks, programId, programSegment }) {
   const knownFleetIds = new Set(tasks.map((task) => task.relay_ids && task.relay_ids.fleet).filter(Boolean));
   const candidates = [];
   fleetManifests.forEach((entry) => {
     if (!entry.run_id || knownFleetIds.has(entry.run_id)) return;
-    if (!referencesProgram(entry.text, programId)) return;
+    if (!referencesProgram(entry.text, programId, programSegment)) return;
     candidates.push({
       kind: "adopt_relay_fleet",
       outcome_id: null,
@@ -383,8 +384,8 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
 
   const repairCandidates = [];
   entries.forEach((entry) => repairForOutcome(entry).forEach((repair) => repairCandidates.push(repair)));
-  discoverBackPointers({ manifests, tasks: receipt.tasks, programId }).forEach((candidate) => repairCandidates.push(candidate));
-  discoverFleetBackPointers({ fleetManifests, tasks: receipt.tasks, programId }).forEach((candidate) => repairCandidates.push(candidate));
+  discoverBackPointers({ manifests, tasks: receipt.tasks, programId, programSegment }).forEach((candidate) => repairCandidates.push(candidate));
+  discoverFleetBackPointers({ fleetManifests, tasks: receipt.tasks, programId, programSegment }).forEach((candidate) => repairCandidates.push(candidate));
 
   const report = {
     ok: true,

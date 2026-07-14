@@ -67,23 +67,32 @@ function fleetLeavesBlock(outcome) {
   return ["prepared fleet leaves:", ...lines].join("\n");
 }
 
-function bodyBlock(task, outcome) {
+function manifestMarkerBlock(task, program, segmentEncoder) {
+  if (task.kind !== "relay_run" && task.kind !== "relay_fleet") return null;
+  if (typeof segmentEncoder !== "function") throw new TypeError("operator prompt requires the shared program segment encoder");
+  const destination = task.kind === "relay_fleet" ? "relay fleet manifest" : "relay run manifest";
+  const marker = `relay-orca: ${segmentEncoder(program.id)}/${task.outcome_id}`;
+  return `Embed this exact program marker line in the ${destination}:\n${marker}`;
+}
+
+function bodyBlock(task, program, outcome, segmentEncoder) {
   const route = task.recommended_route || {};
   if (route.read_only) {
     return [NO_EDIT_CLAUSE, `Deliver the ${route.mode} evidence, then triage blocking findings into tracker follow-ups.`].join("\n");
   }
+  const marker = manifestMarkerBlock(task, program, segmentEncoder);
   if (task.kind === "relay_fleet") {
-    return [RELAY_PATH, fleetLeavesBlock(outcome), OWNERSHIP_NOTE].join("\n");
+    return [RELAY_PATH, fleetLeavesBlock(outcome), OWNERSHIP_NOTE, marker].join("\n");
   }
-  return [RELAY_PATH, OWNERSHIP_NOTE].join("\n");
+  return [RELAY_PATH, OWNERSHIP_NOTE, marker].filter(Boolean).join("\n");
 }
 
 // Build the full operator prompt for a single task. `outcome` is the original
 // program outcome (carries relay_fleet leaves); `task` is the compiled plan task.
-function buildOperatorPrompt(task, program, outcome = {}) {
+function buildOperatorPrompt(task, program, outcome = {}, segmentEncoder) {
   return [
     headerBlock(task, program, outcome),
-    bodyBlock(task, outcome),
+    bodyBlock(task, program, outcome, segmentEncoder),
     payloadContractBlock(),
   ].join("\n\n");
 }
