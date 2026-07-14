@@ -324,10 +324,14 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/stop.js" \
 | `--help`, `-h` | Print usage. |
 
 `stop` loads the receipt (fail-closed codes 50–52 verbatim) and invokes the **only** mutating
-Orca subcommand it may ever use — `orca orchestration run-stop` — then records a bounded stop
-record (`stopped_at`, `stop_reason`) in the receipt. Only those two fields change; every other
-field is byte-identical. A second stop is idempotent: it leaves the original stop record intact
-and rewrites nothing. `stop` **never** terminates relay executors, deletes worktrees, closes
+Orca subcommand it may ever use — `orca orchestration run-stop`. A genuine active-run stop and
+the stateless-v0 answer `ok:false` with an `error.message` containing `No active coordinator
+run` are both accepted stopped conditions. The latter reports `coordinator_stopped: false` and
+the note `coordinator run already not running; treated as stopped (stop record written)` because
+no live loop was stopped. Either accepted path records a bounded stop record (`stopped_at`,
+`stop_reason`) in the receipt; only those two fields change and every other field is
+byte-identical. A second stop is idempotent: it leaves the original stop record intact and
+rewrites nothing. `stop` **never** terminates relay executors, deletes worktrees, closes
 PRs/issues, invokes `reset`, invokes any `task-create`/`task-update`/`dispatch`/`terminal`
 subcommand, or emits language claiming the program or its outcomes are cancelled/complete —
 relay/fleet artifacts stay discoverable through normal relay tooling.
@@ -335,9 +339,15 @@ relay/fleet artifacts stay discoverable through normal relay tooling.
 ### Stop report (`--json`)
 
 Exactly these top-level keys: `ok`, `program_id`, `receipt_path`, `coordinator_stopped`
-(boolean from the live `run-stop` result), `stopped_at`, `stop_reason`, `blocking_reasons`. A
-`run-stop` that does not succeed reports `coordinator_stopped: false` with a
-`COORDINATOR_STOP_FAILED` (exit `65`) blocking reason and writes no stop record.
+(whether a live coordinator loop was stopped), `stopped_at`, `stop_reason`, `note`,
+`blocking_reasons`. `note` is
+`coordinator run already not running; treated as stopped (stop record written)` only for the
+accepted no-active-run envelope and is `""` on every other report path. That accepted path exits
+`0`, has no blocking reasons, and writes the stop record while keeping
+`coordinator_stopped: false`; genuine success also exits `0` and reports
+`coordinator_stopped: true`. Unparseable output, a different error message, timeout/nonzero exit
+without the accepted envelope, and `ok:true` with `result.stopped:false` remain fail-closed:
+`COORDINATOR_STOP_FAILED` (exit `65`) with no stop record.
 
 See [experimental-status.md](experimental-status.md) for the pilot boundary,
 [capability-probe.md](capability-probe.md) for admission details, and
