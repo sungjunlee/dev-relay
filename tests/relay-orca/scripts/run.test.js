@@ -14,7 +14,7 @@ const RUN_JS = path.join(SCRIPTS, "run.js");
 const { REASONS } = require(path.join(SCRIPTS, "lib", "run-reasons.js"));
 const { REPORT_KEYS } = require(path.join(SCRIPTS, "lib", "run-report.js"));
 const { compileProgram } = require(path.join(SCRIPTS, "lib", "compile-program.js"));
-const { RECEIPT_KEYS, TASK_KEYS, RECEIPT_NOTE, parseReceipt } = require(path.join(SCRIPTS, "lib", "receipt.js"));
+const { RECEIPT_KEYS, TASK_KEYS, RECEIPT_NOTE, buildReceiptMapping, parseReceipt } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
 const { writeReceiptAtomic, programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
 const {
@@ -178,6 +178,24 @@ function assertNoMutations(fake) {
 function taskByOutcome(body, outcomeId) {
   return body.tasks.find((task) => task.outcome_id === outcomeId);
 }
+
+test("provider-named receipt paths are not semantic engine leaks", () => {
+  const receipt = buildReceiptMapping({
+    program_id: "epic-provider-paths",
+    source: "/tmp/.codex/accepted-program.json",
+    repo: { slug: "repo", root: "/tmp/.claude/worktree" },
+    runtimeId: "runtime-fixture",
+    tasks: [],
+    terminalsCreated: [],
+  });
+  receipt.created_at = "2026-07-12T00:00:00.000Z";
+  receipt.updated_at = receipt.created_at;
+
+  const serialized = JSON.stringify(receipt).toLowerCase();
+  FORBIDDEN_ENGINE_TOKENS.forEach((token) =>
+    assert.equal(serialized.includes(token), false, `receipt leaked engine/model token ${token}`),
+  );
+});
 
 // ---------------------------------------------------------------------------
 // D11.1 Successful injection — 2-task wave, provenance verified
