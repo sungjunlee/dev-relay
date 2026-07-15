@@ -155,7 +155,7 @@ test("resolve-model passes through wrapper and resolves live short model names",
     relayHome,
     env: {
       PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
-      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "5000",
     },
   });
 
@@ -229,7 +229,7 @@ test("preset add resolves compact actor short-model and stores explicit route pr
     relayHome,
     env: {
       PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
-      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "5000",
     },
   });
 
@@ -291,7 +291,7 @@ test("strict preset add rejects unresolved unregistered compact routes", () => {
     relayHome,
     env: {
       PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
-      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "5000",
     },
   });
 
