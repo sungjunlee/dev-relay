@@ -4,6 +4,7 @@ const fs = require("fs");
 const {
   reapAdvisoryLaneLeases,
 } = require("../../../relay-dispatch/scripts/run-runtime-state");
+const { writeJson } = require("./common");
 
 function matchRoundReviewer(round, reviewer) {
   return (entry) => {
@@ -106,7 +107,9 @@ function reapTimeoutAdvisoryLane({
         : JSON.parse(fs.readFileSync(resultPath, "utf-8"));
       nextResult = { ...existing, lane_reap: laneReap };
       if (!dryRun) {
-        fs.writeFileSync(resultPath, `${JSON.stringify(nextResult, null, 2)}\n`, "utf-8");
+        // Same atomic publish as the worker: settlement readers must never see
+        // this artifact truncated mid-patch.
+        writeJson(resultPath, nextResult);
       }
     } catch {
       // Best-effort: reap still happened even if the artifact cannot be patched.

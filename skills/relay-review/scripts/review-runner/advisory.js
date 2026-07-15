@@ -17,7 +17,7 @@ const { writeAdvisoryLaneLease } = require("../../../relay-dispatch/scripts/run-
 const { reapPriorAdvisoryLaneAttempts } = require("./advisory-lane-reap");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
-const { writeText } = require("./common");
+const { writeJson, writeText } = require("./common");
 
 const DEFAULT_ADVISORY_TIMEOUT_SECONDS = 900;
 const DEFAULT_ADVISORY_GRACE_SECONDS = 10;
@@ -109,11 +109,6 @@ function buildAdvisoryReviewerPolicy(reviewerName) {
       readOnly: true,
     },
   }));
-}
-
-function writeJson(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
 function readJsonIfExists(filePath) {
@@ -785,5 +780,6 @@ module.exports = {
   resolveAdvisoryModel,
   startAdvisoryReview,
   validateAdvisoryProfile,
+  writeJson,
   writeAdvisoryDecision,
 };
