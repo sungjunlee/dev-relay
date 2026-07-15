@@ -27,6 +27,7 @@ const {
   buildAdvisoryAdapterEnv,
   writeJson: writeAdvisoryJson,
 } = require("../../../skills/relay-review/scripts/review-runner/advisory");
+const { reapTimeoutAdvisoryLane } = require("../../../skills/relay-review/scripts/review-runner/advisory-lane-reap");
 const { buildAdvisoryPrompt } = require("../../../skills/relay-review/scripts/review-runner/advisory-prompt");
 const { applyReviewAssurancePolicy } = require("../../../skills/relay-review/scripts/review-runner/assurance");
 const { installFakeGhOnPath } = require("../fixtures/fake-gh");
@@ -2541,6 +2542,67 @@ test("advisory result writer never exposes partial JSON to settlement readers", 
     waitMs: 0,
   });
   assert.equal(consumed.status, "success");
+});
+
+test("advisory lane reap publishes lane_reap without exposing partial JSON to settlement readers", () => {
+  const { runDir } = setupRepo();
+  const resultPath = path.join(runDir, "review-round-1-advisory-opencode-result.json");
+  const settled = {
+    completed_at: new Date().toISOString(),
+    failureReason: "fixture timeout",
+    profile: "blindspot",
+    reviewer: "opencode",
+    status: "timeout",
+  };
+  writeAdvisoryJson(resultPath, settled);
+
+  const originalWriteFileSync = fs.writeFileSync;
+  const directWrites = [];
+  let partialRead = null;
+
+  fs.writeFileSync = (filePath, data, options) => {
+    if (path.resolve(filePath) !== path.resolve(resultPath)) {
+      return originalWriteFileSync(filePath, data, options);
+    }
+    // Writing the published path directly is the defect under test: truncate the
+    // payload so a reader racing this write observes partial JSON.
+    directWrites.push(filePath);
+    const text = String(data);
+    originalWriteFileSync(filePath, text.slice(0, Math.max(1, Math.floor(text.length / 2))), options);
+    try {
+      JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+    } catch (error) {
+      partialRead = error;
+    }
+    return originalWriteFileSync(filePath, data, options);
+  };
+
+  let reaped;
+  try {
+    reaped = reapTimeoutAdvisoryLane({
+      runDir,
+      round: 1,
+      reviewer: "opencode",
+      resultPath,
+      result: settled,
+    });
+  } finally {
+    fs.writeFileSync = originalWriteFileSync;
+  }
+
+  assert.deepEqual(directWrites, [], "lane reap must publish via temp-plus-rename, not a direct overwrite");
+  assert.equal(partialRead, null, "no reader may observe partial JSON during lane-reap publication");
+
+  const onDisk = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+  assert.equal(onDisk.status, "timeout");
+  assert.equal(onDisk.failureReason, "fixture timeout");
+  assert.equal(onDisk.lane_reap.outcome, "stale");
+  assert.equal(reaped.result.lane_reap.outcome, "stale");
+  assert.deepEqual(
+    fs.readdirSync(runDir).filter((name) => name.endsWith(".tmp")),
+    [],
+    "atomic publish must not leave temp files behind",
+  );
 });
 
 test("invalid advisory JSON is recorded as advisory failure while primary pass still applies", () => {

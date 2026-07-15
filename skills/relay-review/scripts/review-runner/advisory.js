@@ -1,5 +1,4 @@
 const { execFileSync } = require("child_process");
-const { randomUUID } = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { buildArtifactTimingFields } = require("../../../relay-dispatch/scripts/advisory-timing");
@@ -18,7 +17,7 @@ const { writeAdvisoryLaneLease } = require("../../../relay-dispatch/scripts/run-
 const { reapPriorAdvisoryLaneAttempts } = require("./advisory-lane-reap");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
-const { writeText } = require("./common");
+const { writeJson, writeText } = require("./common");
 
 const DEFAULT_ADVISORY_TIMEOUT_SECONDS = 900;
 const DEFAULT_ADVISORY_GRACE_SECONDS = 10;
@@ -110,28 +109,6 @@ function buildAdvisoryReviewerPolicy(reviewerName) {
       readOnly: true,
     },
   }));
-}
-
-function writeJson(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tempPath = path.join(
-    path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
-  );
-  try {
-    // Settlement readers may observe this file while the detached worker is
-    // publishing its result. Keep the final path either absent or complete;
-    // direct overwrite exposes truncated JSON between truncate and write.
-    fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
-      encoding: "utf-8",
-      flag: "wx",
-    });
-    fs.renameSync(tempPath, filePath);
-  } finally {
-    try {
-      fs.rmSync(tempPath, { force: true });
-    } catch {}
-  }
 }
 
 function readJsonIfExists(filePath) {
