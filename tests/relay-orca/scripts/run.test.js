@@ -14,7 +14,7 @@ const RUN_JS = path.join(SCRIPTS, "run.js");
 const { REASONS } = require(path.join(SCRIPTS, "lib", "run-reasons.js"));
 const { REPORT_KEYS } = require(path.join(SCRIPTS, "lib", "run-report.js"));
 const { compileProgram } = require(path.join(SCRIPTS, "lib", "compile-program.js"));
-const { RECEIPT_KEYS, TASK_KEYS, RECEIPT_NOTE, parseReceipt } = require(path.join(SCRIPTS, "lib", "receipt.js"));
+const { RECEIPT_KEYS, TASK_KEYS, RECEIPT_NOTE, buildReceiptMapping, parseReceipt } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
 const { writeReceiptAtomic, programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
 const {
@@ -29,6 +29,7 @@ const { showDispatch } = require(path.join(SCRIPTS, "lib", "run-orca.js"));
 const { provenanceMismatch } = require(path.join(SCRIPTS, "lib", "run-orchestrator.js"));
 const { installFakeOrcaRun } = require(path.join(__dirname, "..", "fixtures", "fake-orca-run.js"));
 const { readyStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
+const { assertReceiptEngineAgnostic } = require("./receipt-hygiene.js");
 
 // Plan-library codes re-raised verbatim by run (D1/D9).
 const PLAN_CODES = { UNPREPARED_FLEET_LEAF: 12, CONCURRENCY_EXCEEDED: 16, NESTED_RELAY_ORCA: 20 };
@@ -178,6 +179,56 @@ function assertNoMutations(fake) {
 function taskByOutcome(body, outcomeId) {
   return body.tasks.find((task) => task.outcome_id === outcomeId);
 }
+
+function makeHygieneReceipt({ source = "/tmp/accepted-program.json", root = "/tmp/repo", tasks = [] } = {}) {
+  const receipt = buildReceiptMapping({
+    program_id: "epic-paths",
+    source,
+    repo: { slug: "repo", root },
+    runtimeId: "runtime-fixture",
+    tasks,
+    terminalsCreated: [],
+  });
+  receipt.created_at = "2026-07-12T00:00:00.000Z";
+  receipt.updated_at = receipt.created_at;
+  return receipt;
+}
+
+test("provider-named receipt paths are allowed by the field-aware assertion", () => {
+  ["codex", "claude", "cursor", "grok", "opencode"].forEach((provider) => {
+    const receipt = makeHygieneReceipt({
+      source: `/tmp/.${provider}/accepted-program.json`,
+      root: `/tmp/.${provider}/worktree`,
+    });
+    assert.doesNotThrow(() => assertReceiptEngineAgnostic(receipt), provider);
+  });
+});
+
+test("field-aware receipt hygiene still rejects semantic engine/provider leaks", () => {
+  const task = {
+    outcome_id: "outcome-a",
+    task_id: "task-a",
+    kind: "relay_run",
+    wave: 1,
+    orca_task_id: "orca-task-a",
+    dispatch_id: "dispatch-a",
+    assignee: "terminal-a",
+    relay_ids: { request: null, run: null, fleet: null },
+  };
+  const cases = [
+    ["runtime semantic value", (receipt) => { receipt.runtime_id = "provider-codex"; }],
+    ["repo slug semantic value", (receipt) => { receipt.repo.slug = "claude-repo"; }],
+    ["task semantic value", (receipt) => { receipt.tasks[0].assignee = "reviewer"; }],
+    ["task semantic field", (receipt) => { receipt.tasks[0].model = "fixture"; }],
+    ["top-level semantic field", (receipt) => { receipt.executor = "fixture"; }],
+  ];
+
+  cases.forEach(([label, mutate]) => {
+    const receipt = makeHygieneReceipt({ tasks: [task] });
+    mutate(receipt);
+    assert.throws(() => assertReceiptEngineAgnostic(receipt), /leaked/, label);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // D11.1 Successful injection — 2-task wave, provenance verified
@@ -764,11 +815,9 @@ test("D2: a successful run persists a schema-1 receipt (identity/mapping only) a
     assert.equal(taskByOutcome(receipt, "alpha").assignee, "h1");
     assert.equal(taskByOutcome(receipt, "bravo").assignee, "h2");
 
-    // D11-style engine-agnostic proof over the written receipt bytes.
-    const lowered = fs.readFileSync(receiptPath, "utf-8").toLowerCase();
-    FORBIDDEN_ENGINE_TOKENS.forEach((token) =>
-      assert.equal(lowered.includes(token), false, `receipt leaked engine/model token ${token}`),
-    );
+    // D11-style engine-agnostic proof over receipt schema fields and task entries. The
+    // source path may legitimately include the executor worktree's provider directory.
+    assertReceiptEngineAgnostic(receipt);
   } finally {
     r.fake.cleanup();
   }

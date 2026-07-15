@@ -30,6 +30,7 @@ const { assertGhReadOnly } = require(STATUS_JS);
 const { installFakeOrcaStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca-status.js"));
 const { installFakeGh } = require(path.join(__dirname, "..", "fixtures", "fake-gh.js"));
 const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
+const { assertReceiptEngineAgnostic } = require("./receipt-hygiene.js");
 
 const FORBIDDEN_ENGINE_TOKENS = ["codex", "claude", "cursor", "cline", "opencode"];
 
@@ -1254,8 +1255,8 @@ test("D10.14: wave-1 complete, wave-2 pending → program ready_for_next_wave", 
 test("D11: neither the receipt fixture nor a rendered status report names an engine/model", () => {
   const world = completeWorld("epic-status-agnostic");
   try {
-    const receiptBytes = fs.readFileSync(world.receiptPath, "utf-8").toLowerCase();
-    FORBIDDEN_ENGINE_TOKENS.forEach((token) => assert.equal(receiptBytes.includes(token), false, `receipt leaked ${token}`));
+    const receipt = JSON.parse(fs.readFileSync(world.receiptPath, "utf-8"));
+    assertReceiptEngineAgnostic(receipt);
     const r = world.run();
     const reportBytes = JSON.stringify(r.body).toLowerCase();
     FORBIDDEN_ENGINE_TOKENS.forEach((token) => assert.equal(reportBytes.includes(token), false, `report leaked ${token}`));
