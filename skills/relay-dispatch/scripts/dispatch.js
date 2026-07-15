@@ -28,6 +28,7 @@
  *   --reasoning <level>    Codex reasoning effort override (default by rubric size: S=medium, M=high, L/XL=xhigh)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
+ *   --coordination-marker <marker>  Persist one safe single-line marker in the raw manifest
  *   --publish-policy <mode> immediate | after-internal-review (default: immediate)
  *   --review-assurance <level> compact | standard | hardened (default: standard)
  *   --tags <csv>          Explicit routing tags; override inferred routing tags
@@ -85,6 +86,11 @@ const {
   readManifest,
   writeManifest,
 } = require("./manifest/store");
+const {
+  coordinationMarkerFromManifest,
+  validateCoordinationMarker,
+  withCoordinationMarker,
+} = require("./manifest/coordination");
 const { parseModelHints } = require("./model-hints");
 const { resolveExecutorDefaultModel } = require("./executor-model-config");
 const {
@@ -177,7 +183,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
+  "--model", "-m", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--coordination-marker", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--tags",
   "--register", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help", "-h",
 ];
@@ -208,6 +214,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --reasoning        ${modeLabel("--reasoning")} Codex reasoning effort (default by rubric size: S=medium, M=high, L/XL=xhigh)`);
   console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
   console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
+  console.log(`  --coordination-marker ${modeLabel("--coordination-marker")} Persist one safe single-line marker in the raw manifest before executor spawn`);
   console.log(`  --publish-policy   ${modeLabel("--publish-policy")} PR publication policy: immediate | after-internal-review (default: immediate)`);
   console.log(`  --review-assurance ${modeLabel("--review-assurance")} Review assurance: compact | standard | hardened (default: standard)`);
   console.log(`  --tags             ${modeLabel("--tags")} Explicit routing tags; override inferred routing tags`);
@@ -257,6 +264,20 @@ function failEarly(message, extra = {}) {
     console.error(`Error: ${message}`);
   }
   process.exit(1);
+}
+
+// Validate this optional integration value before route resolution, worktree creation,
+// run-dir claims, or executor probing. An absent flag preserves ordinary dispatch.
+const COORDINATION_MARKER_FLAG = hasCliFlag("--coordination-marker");
+let COORDINATION_MARKER;
+try {
+  COORDINATION_MARKER = readArg(args, "--coordination-marker", undefined, CLI_ARG_OPTIONS);
+  if (COORDINATION_MARKER_FLAG && COORDINATION_MARKER === undefined) {
+    failEarly("--coordination-marker requires a value", { error_code: "missing_coordination_marker" });
+  }
+  if (COORDINATION_MARKER !== undefined) validateCoordinationMarker(COORDINATION_MARKER);
+} catch (error) {
+  failEarly(error.message, { error_code: "invalid_coordination_marker" });
 }
 
 function readRouteIntentFile(filePath) {
@@ -1995,6 +2016,16 @@ async function main() {
         worktree: validatedPaths.worktree,
       },
     };
+    if (COORDINATION_MARKER !== undefined) {
+      const existingMarker = coordinationMarkerFromManifest(manifest);
+      if (existingMarker !== COORDINATION_MARKER) {
+        console.error(
+          "Error: same-run resume cannot add or replace a coordination marker; " +
+          "use the supported relay-orca attach-marker recovery command"
+        );
+        process.exit(1);
+      }
+    }
     const manifestPublishPolicy = manifest.dispatch?.publish_policy || "immediate";
     if (PUBLISH_POLICY_ARG && PUBLISH_POLICY_ARG !== manifestPublishPolicy) {
       console.error(
@@ -2503,6 +2534,9 @@ async function main() {
       modelHints: MODEL_HINTS,
       fleetId: FLEET_ID,
     });
+    if (COORDINATION_MARKER !== undefined) {
+      manifest = withCoordinationMarker(manifest, COORDINATION_MARKER);
+    }
     ensureRunLayout(repoRoot, runId);
     manifest = persistDoneCriteria(manifest, manifestRunDir, resolvedDoneCriteriaPath, doneCriteriaSource);
     manifest = {
@@ -2785,6 +2819,15 @@ async function main() {
     },
   };
   writeManifest(manifestPath, manifest);
+  if (COORDINATION_MARKER !== undefined) {
+    const persistedManifest = readManifest(manifestPath).data;
+    if (coordinationMarkerFromManifest(persistedManifest) !== COORDINATION_MARKER) {
+      failEarly(
+        "coordination marker was not durably persisted before executor spawn",
+        { error_code: "coordination_marker_not_persisted" },
+      );
+    }
+  }
   appendRunEvent(repoRoot, runId, {
     event: EVENTS.DISPATCH_START,
     state_from: dispatchFromState,

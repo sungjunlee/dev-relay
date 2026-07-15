@@ -52,6 +52,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--by-role` | `parsed` | Presence flag; no value is consumed. |
 | `--contract-file` | `verbatim` | Operator-supplied artifact path; keep the literal argv token. |
 | `--copy` | `verbatim` | Operator-supplied file list; keep the literal argv token. |
+| `--coordination-marker` | `verbatim` | Opaque single-line coordination marker persisted in the relay manifest; keep the literal argv token. |
 | `--diff-file` | `verbatim` | Operator-supplied fixture path; keep the literal argv token. |
 | `--done-criteria-file` | `verbatim` | Operator-supplied anchor path; keep the literal argv token. |
 | `--dry-run` | `parsed` | Presence flag; no value is consumed. |
@@ -122,6 +123,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--by-role` | `parsed` | Presence flag; no value is consumed. |
 | `--contract-file` | `verbatim` | Operator-supplied artifact path; keep the literal argv token. |
 | `--copy` | `verbatim` | Operator-supplied file list; keep the literal argv token. |
+| `--coordination-marker` | `verbatim` | Opaque single-line coordination marker persisted in the relay manifest; keep the literal argv token. |
 | `--diff-file` | `verbatim` | Operator-supplied fixture path; keep the literal argv token. |
 | `--done-criteria-file` | `verbatim` | Operator-supplied anchor path; keep the literal argv token. |
 | `--dry-run` | `parsed` | Presence flag; no value is consumed. |

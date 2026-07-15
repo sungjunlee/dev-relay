@@ -93,6 +93,9 @@ issue:
   number: 42
   source: github               # github | unknown
 
+coordination:
+  marker: relay-orca: example-program-1234abcd/outcome-a  # optional opaque single-line integration correlation
+
 git:
   base_branch: main
   working_branch: issue-42

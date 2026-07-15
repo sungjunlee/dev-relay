@@ -23,6 +23,8 @@ const EVENTS = Object.freeze({
   CLEANUP_RESULT: "cleanup_result",
   CLOSE: "close",
   CONFLICTING_RUN_OVERRIDE: "conflicting_run_override",
+  // Consumer: relay-orca attach-marker audits supervised correlation-marker recovery.
+  COORDINATION_MARKER_ATTACHED: "coordination_marker_attached",
   // Consumer: dispatch resume gate and Phase 2 reconciler use this to resume or reconcile interrupted dispatches.
   DISPATCH_INTERRUPTED: "dispatch_interrupted",
   DISPATCH_RESULT: "dispatch_result",
@@ -274,6 +276,21 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
     ...(eventData.policy_decision !== undefined
       ? { policy_decision: normalizeEventValue(eventData.policy_decision) }
+      : {}),
+    ...(eventData.program_id !== undefined
+      ? { program_id: normalizeEventValue(eventData.program_id) }
+      : {}),
+    ...(eventData.outcome_id !== undefined
+      ? { outcome_id: normalizeEventValue(eventData.outcome_id) }
+      : {}),
+    ...(eventData.issue_number !== undefined
+      ? { issue_number: normalizeEventValue(eventData.issue_number) }
+      : {}),
+    ...(eventData.coordination_marker !== undefined
+      ? { coordination_marker: normalizeEventValue(eventData.coordination_marker) }
+      : {}),
+    ...(eventData.result !== undefined
+      ? { result: normalizeEventValue(eventData.result) }
       : {}),
     ...(eventData.route_plan_path !== undefined
       ? { route_plan_path: normalizeEventValue(eventData.route_plan_path) }
