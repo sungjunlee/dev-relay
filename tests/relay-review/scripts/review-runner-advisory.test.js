@@ -21,7 +21,12 @@ const {
   createEnforcementFixture,
 } = require("../../relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
-const { executeAdvisoryRequest, finishAdvisoryReview, buildAdvisoryAdapterEnv } = require("../../../skills/relay-review/scripts/review-runner/advisory");
+const {
+  executeAdvisoryRequest,
+  finishAdvisoryReview,
+  buildAdvisoryAdapterEnv,
+  writeJson: writeAdvisoryJson,
+} = require("../../../skills/relay-review/scripts/review-runner/advisory");
 const { buildAdvisoryPrompt } = require("../../../skills/relay-review/scripts/review-runner/advisory-prompt");
 const { applyReviewAssurancePolicy } = require("../../../skills/relay-review/scripts/review-runner/assurance");
 const { installFakeGhOnPath } = require("../fixtures/fake-gh");
@@ -2490,6 +2495,52 @@ test("result whose completed_at is after the deadline is deferred, not consumed"
   });
 
   assert.equal(deferred.status, "deferred");
+});
+
+test("advisory result writer never exposes partial JSON to settlement readers", async () => {
+  const { runDir } = setupRepo();
+  const resultPath = path.join(runDir, "review-round-1-advisory-opencode-result.json");
+  const result = {
+    artifactHash: null,
+    artifactPath: null,
+    completed_at: new Date().toISOString(),
+    failureReason: null,
+    profile: "blindspot",
+    rawResponsePath: null,
+    required_count: 0,
+    advisory_count: 0,
+    duplicate_low_confidence_count: 0,
+    reviewer: "opencode",
+    status: "success",
+  };
+  const originalWriteFileSync = fs.writeFileSync;
+  let partialReader = null;
+
+  fs.writeFileSync = (filePath, data, options) => {
+    if (path.resolve(filePath) !== path.resolve(resultPath)) {
+      return originalWriteFileSync(filePath, data, options);
+    }
+    const text = String(data);
+    originalWriteFileSync(filePath, text.slice(0, Math.max(1, Math.floor(text.length / 2))), options);
+    partialReader = finishAdvisoryReview({
+      advisoryRun: { resultPath, startedAt: Date.now() },
+      waitMs: 0,
+    }).catch((error) => error);
+    return originalWriteFileSync(filePath, data, options);
+  };
+
+  try {
+    writeAdvisoryJson(resultPath, result);
+  } finally {
+    fs.writeFileSync = originalWriteFileSync;
+  }
+
+  assert.equal(partialReader, null, "the final result path must not be written directly");
+  const consumed = await finishAdvisoryReview({
+    advisoryRun: { resultPath, startedAt: Date.now() },
+    waitMs: 0,
+  });
+  assert.equal(consumed.status, "success");
 });
 
 test("invalid advisory JSON is recorded as advisory failure while primary pass still applies", () => {

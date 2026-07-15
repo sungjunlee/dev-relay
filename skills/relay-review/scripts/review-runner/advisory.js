@@ -1,4 +1,5 @@
 const { execFileSync } = require("child_process");
+const { randomUUID } = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { buildArtifactTimingFields } = require("../../../relay-dispatch/scripts/advisory-timing");
@@ -113,7 +114,24 @@ function buildAdvisoryReviewerPolicy(reviewerName) {
 
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
+  );
+  try {
+    // Settlement readers may observe this file while the detached worker is
+    // publishing its result. Keep the final path either absent or complete;
+    // direct overwrite exposes truncated JSON between truncate and write.
+    fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
+      encoding: "utf-8",
+      flag: "wx",
+    });
+    fs.renameSync(tempPath, filePath);
+  } finally {
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {}
+  }
 }
 
 function readJsonIfExists(filePath) {
@@ -785,5 +803,6 @@ module.exports = {
   resolveAdvisoryModel,
   startAdvisoryReview,
   validateAdvisoryProfile,
+  writeJson,
   writeAdvisoryDecision,
 };
