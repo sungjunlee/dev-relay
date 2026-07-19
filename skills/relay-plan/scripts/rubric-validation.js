@@ -3,6 +3,7 @@ const {
   classifyEvaluationArtifact,
 } = require("../../relay-dispatch/scripts/evaluation-contract");
 const { validateEarnedRubricArtifact } = require("./earned-rubric");
+const { validateObservationContext } = require("./observation-context");
 
 const SUBSTANTIVE_TIERS = new Set(["contract", "quality"]);
 // Ready-light factors should prove the narrow task contract; broad repo hygiene belongs in prerequisites.
@@ -203,9 +204,20 @@ function validateReadyLightRubric({ rubricYaml, taskProfile = {} } = {}) {
   const errors = [];
   const warnings = [];
 
+  if (artifact.kind === "structured") {
+    const earnedRubric = validateEarnedRubricArtifact(rubricYaml);
+    for (const earnedError of earnedRubric.errors) {
+      errors.push(issue(earnedError.code, earnedError.message));
+    }
+    const observation = validateObservationContext(rubricYaml);
+    for (const observationError of observation.errors) {
+      errors.push(issue(observationError.code, observationError.message));
+    }
+  }
+
   if (!isReadyLightProfile(taskProfile)) {
     return {
-      action: "allow",
+      action: errors.length > 0 ? "block" : "allow",
       substantive_total: substantiveFactors.length,
       errors,
       warnings,
@@ -229,10 +241,6 @@ function validateReadyLightRubric({ rubricYaml, taskProfile = {} } = {}) {
   }
 
   if (artifact.kind === "structured") {
-    const earnedRubric = validateEarnedRubricArtifact(rubricYaml);
-    for (const earnedError of earnedRubric.errors) {
-      errors.push(issue(earnedError.code, earnedError.message));
-    }
     return {
       action: errors.length > 0 ? "block" : "allow",
       substantive_total: substantiveFactors.length,

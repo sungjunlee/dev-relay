@@ -8,6 +8,18 @@ evaluation:
         type: command
         command: node --test tests/recovery.test.js
         target: exit 0
+  observation:
+    artifact: Operator recovery flow
+    intended_user: An operator recovering a failed run.
+    usage_context: The operator must choose a safe next action from the visible run state.
+    surfaces:
+      - kind: operational_replay
+        target: Replay failure, diagnosis, and recovery.
+    inquiry:
+      contract_satisfying_failure: Recovery could succeed while the state and safe next action remain unclear.
+      expert_notice: An experienced operator would inspect state visibility, choices, and recovery feedback.
+    lenses:
+      - name: operations
   earned_rubric:
     factors:
       - name: Operator recovery clarity

@@ -63,6 +63,36 @@ test("allows a structured planning artifact with verification and zero earned fa
   assert.deepEqual(result.errors, []);
 });
 
+test("blocks unsupported structured quality claims for a standard planning profile", () => {
+  const result = validateReadyLightRubric({
+    rubricYaml: [
+      "evaluation:",
+      "  schema_version: 2",
+      "  outcome_contract:",
+      "    source: done_criteria",
+      "  verification:",
+      "    checks: []",
+      "  earned_rubric:",
+      "    factors:",
+      "      - name: Recovery clarity",
+      "        evidence: The changed recovery flow affects an operator decision.",
+      "        eligibility:",
+      "          gradient: Correct flows can still differ in clarity.",
+      "          observable: A replay distinguishes weak, adequate, and strong recovery.",
+      "          actionable: Lower results identify missing state or next-action feedback.",
+      "          consequential: Confusion can cause an unsafe operator action.",
+      "        anchors:",
+      "          weak: State and next action are ambiguous.",
+      "          adequate: State and one recovery action are understandable.",
+      "          strong: State, consequences, and safe choices are immediately clear.",
+    ].join("\n"),
+    taskProfile: { planning_profile: "standard", size: "M" },
+  });
+
+  assert.equal(result.action, "block");
+  assert.ok(result.errors.some((error) => error.code === "missing_observation_context"));
+});
+
 test("blocks repo hygiene misplaced under structured earned_rubric factors", () => {
   const result = validateReadyLightRubric({
     rubricYaml: [

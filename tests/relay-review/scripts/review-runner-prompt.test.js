@@ -86,6 +86,22 @@ test("prompt/buildPrompt scores only declared Earned Rubric factors for structur
         "    source: done_criteria",
         "  verification:",
         "    checks: []",
+        "  observation:",
+        "    artifact: Checkout decision screen",
+        "    intended_user: A shopper recovering from payment failure",
+        "    usage_context: The user needs a safe next action without losing context",
+        "    surfaces:",
+        "      - kind: rendered_output",
+        "        target: /checkout",
+        "        user_flows:",
+        "          - Failure to recovery",
+        "        viewports:",
+        "          - 390x844",
+        "    inquiry:",
+        "      contract_satisfying_failure: Required states could exist but remain confusing",
+        "      expert_notice: A designer would inspect hierarchy and recovery feedback",
+        "    lenses:",
+        "      - name: design",
         "  earned_rubric:",
         "    factors:",
         "      - name: Recovery clarity",
@@ -97,6 +113,8 @@ test("prompt/buildPrompt scores only declared Earned Rubric factors for structur
 
   assert.match(prompt, /score every Earned Rubric factor/i);
   assert.match(prompt, /Earned Rubric factors are the only scored channel/i);
+  assert.match(prompt, /observation context.*artifact and user surface/i);
+  assert.match(prompt, /rendered_output/);
   assert.doesNotMatch(prompt, /score every contract-tier factor/i);
 });
 

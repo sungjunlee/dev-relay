@@ -1,0 +1,53 @@
+evaluation:
+  schema_version: 2
+  outcome_contract:
+    source: done_criteria
+  verification:
+    checks:
+      - name: Rotation workflow completes
+        type: command
+        command: node --test tests/key-rotation.test.js
+        target: exit 0
+  observation:
+    artifact: Production key-rotation workflow
+    intended_user: An on-call operator rotating a compromised credential.
+    usage_context: The operator must limit exposure while preserving service and audit continuity.
+    surfaces:
+      - kind: operational_replay
+        target: Rotation success, partial failure, rollback, and audit events.
+      - kind: trust_boundary_inspection
+        target: Secret inputs, logs, process arguments, persisted artifacts, and revocation order.
+    inquiry:
+      contract_satisfying_failure: Rotation could complete while leaking material, leaving overlap unsafe, or making partial failure unrecoverable.
+      expert_notice: An SRE or security reviewer would inspect blast radius, ordering, redaction, rollback, and audit provenance.
+    lenses:
+      - name: operations
+        questions:
+          - Does every partial failure leave a safe and actionable state?
+      - name: security
+        questions:
+          - Where can secret material cross or remain beyond its intended trust boundary?
+  earned_rubric:
+    factors:
+      - name: Partial-failure recoverability
+        evidence: Operational replay reveals the state left by failure at each rotation step.
+        eligibility:
+          gradient: Successful rotation paths can differ in safety under interruption.
+          observable: Replay distinguishes stranded, manually recoverable, and bounded states.
+          actionable: Lower results identify ordering, rollback, or state-reporting gaps.
+          consequential: A stranded rotation can prolong compromise or outage.
+        anchors:
+          weak: Partial failure leaves ambiguous or unsafe credential state.
+          adequate: The operator can diagnose and recover with documented manual steps.
+          strong: Failure is bounded, state is explicit, and recovery preserves service safely.
+      - name: Secret exposure containment
+        evidence: Trust-boundary inspection covers inputs, logs, arguments, artifacts, and revocation overlap.
+        eligibility:
+          gradient: Functionally correct workflows can expose different amounts of secret material.
+          observable: Inspection distinguishes avoidable exposure from narrowly bounded handling.
+          actionable: Lower results point to a concrete crossing, retention, or redaction gap.
+          consequential: Exposure increases compromise scope and forensic uncertainty.
+        anchors:
+          weak: Secret material appears in avoidable process, log, or artifact surfaces.
+          adequate: Common surfaces are protected but one exposure window remains broad.
+          strong: Material is minimized, redacted, short-lived, and auditable across boundaries.

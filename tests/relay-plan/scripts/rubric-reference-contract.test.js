@@ -42,7 +42,7 @@ function extractGuidancePackSections(text) {
   return sections;
 }
 
-test("domain rubric references declare candidate-axis usage", () => {
+test("domain references expose candidate axes without creating scored-factor minimums", () => {
   const text = readReference("rubric-domain-axes.md");
   const domainSections = [
     "Rubric — Backend",
@@ -58,8 +58,13 @@ test("domain rubric references declare candidate-axis usage", () => {
   }
   assert.equal((text.match(/^## /gm) || []).length, 6);
   assert.equal((text.match(/^### Candidate Axis Library$/gm) || []).length, 6);
-  assert.equal((text.match(/not as a template to paste wholesale/gi) || []).length, 6);
-  assert.equal((text.match(/S-size mechanical/g) || []).length, 6);
+  assert.equal((text.match(/not as a template/gi) || []).length, 6);
+  assert.equal(
+    (text.match(/A candidate becomes an Earned Rubric factor only when task evidence establishes Gradient, Observable, Actionable, and Consequential/g) || []).length,
+    6
+  );
+  assert.equal((text.match(/mechanical changes commonly need zero scored factors/g) || []).length, 6);
+  assert.doesNotMatch(text, /S-size mechanical.*one contract factor/is);
 });
 
 test("rubric design guide states the reference use contract", () => {
@@ -134,12 +139,11 @@ test("rubric stress-test is gated by ambiguity or risk signal", () => {
 test("relay-plan frames AC as one input signal, not the whole rubric source", () => {
   const skill = readSkill();
 
-  assert.match(skill, /Synthesize task intent, explicit AC when present, repo signals, and task risk/);
+  assert.match(skill, /review anchor, structured evaluation channels, and dispatch prompt/);
   assert.match(skill, /### 4\. Recover Done Criteria/);
   assert.match(skill, /explicit AC as high-priority evidence, not the only source/);
   assert.match(skill, /If the final review anchor is planner-authored or differs from the task source, persist it/);
   assert.match(skill, /AC-missing inputs, user-provided descriptions/);
-  assert.match(skill, /not raw issue AC count/);
   assert.doesNotMatch(skill, /Convert task acceptance criteria into a scored rubric/);
   assert.doesNotMatch(skill, /Build a scoring rubric from task Acceptance Criteria/);
 });
@@ -219,6 +223,24 @@ test("planning guidance defines three evaluation channels and their authority hi
   assert.match(channels, /Existing `rubric:` artifacts remain readable/i);
   assert.match(skill, /evaluation:\n\s+schema_version: 2/);
   assert.match(skill, /earned_rubric:\n\s+factors: \[\]/);
+});
+
+test("planning guidance makes observation precede optional domain lenses", () => {
+  const channels = readReference("evaluation-channels.md");
+  const lenses = readReference("observation-lenses.md");
+  const skill = readSkill();
+
+  assert.match(channels, /artifact.*intended user.*usage context.*observation surface/is);
+  assert.match(channels, /contract-satisfying result\s+could still fail/i);
+  assert.match(channels, /domain expert.*generic checklist/i);
+  assert.match(channels, /missing required observation.*blocks.*quality/is);
+  assert.match(lenses, /advisory questions/i);
+  assert.match(lenses, /select, combine, replace, or omit/i);
+  assert.match(lenses, /rendered output.*user flows.*viewports/is);
+  assert.match(lenses, /documentation/i);
+  assert.match(lenses, /operations.*security/is);
+  assert.match(lenses, /no domain lens/i);
+  assert.match(skill, /Observe before deriving quality/i);
 });
 
 test("relay dispatch template keeps Outcome Contract, Verification, and Earned Rubric distinct", () => {

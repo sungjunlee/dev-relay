@@ -1,0 +1,23 @@
+evaluation:
+  schema_version: 2
+  outcome_contract:
+    source: done_criteria
+  verification:
+    checks:
+      - name: Exact constant rename is complete
+        type: command
+        command: node --test tests/constants.test.js
+        target: exit 0
+  observation:
+    artifact: Internal constant rename
+    intended_user: A maintainer consuming the unchanged internal API.
+    usage_context: The change is mechanical and introduces no user-facing or design-bearing behavior.
+    surfaces:
+      - kind: targeted_diff
+        target: Renamed declaration and references only.
+    inquiry:
+      contract_satisfying_failure: No meaningful quality gradient remains after the exact rename and verification pass.
+      expert_notice: No domain-specific observation would change the implementation or review decision.
+    lenses: []
+  earned_rubric:
+    factors: []

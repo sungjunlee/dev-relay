@@ -32,6 +32,17 @@ evaluation:
         type: command
         command: "node --test tests/focused.test.js"
         target: "exit 0"
+  observation:
+    artifact: "<artifact or behavior being evaluated>"
+    intended_user: "<person affected by the result>"
+    usage_context: "<conditions in which the result is used>"
+    surfaces:
+      - kind: "<rendered_output, reader_walkthrough, operational_replay, ...>"
+        target: "<observable target>"
+    inquiry:
+      contract_satisfying_failure: "<how a correct result could still fail in use>"
+      expert_notice: "<what a domain expert would notice that a generic checklist misses>"
+    lenses: []
   earned_rubric:
     factors: []
 ```
@@ -43,6 +54,20 @@ observation belongs in Verification.
 
 Earned Rubric eligibility and observation-driven derivation are defined separately.
 Until a real quality gradient is found, leave `factors: []`.
+
+## Observe Before Deriving Quality
+
+Before proposing a quality dimension, identify the artifact, intended user, usage context,
+and available observation surfaces. Ask both how a contract-satisfying result
+could still fail and what a domain expert would notice that a generic checklist misses.
+Missing required observation blocks unsupported quality claims instead of producing
+invented scores.
+
+Use `observation-lenses.md` only to expand these questions. Lenses are optional and
+advisory: select, combine, replace, or omit them. A design lens requires rendered output
+through relevant user flows and viewports; code inspection alone is not design
+observation. Non-visual work uses its own available surfaces and does not inherit a
+browser requirement.
 
 ## Earned Rubric Eligibility
 

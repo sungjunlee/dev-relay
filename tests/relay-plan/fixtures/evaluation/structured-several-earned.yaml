@@ -7,6 +7,24 @@ evaluation:
       - name: Required user flows complete
         type: observation
         target: All required states are reachable.
+  observation:
+    artifact: Dense decision screen
+    intended_user: A product user making a time-sensitive decision.
+    usage_context: The user scans, decides, and recovers from errors across mobile and desktop.
+    surfaces:
+      - kind: rendered_output
+        target: The decision screen and its failure states.
+        user_flows:
+          - Primary decision from entry to completion
+          - Recoverable network and validation failures
+        viewports:
+          - 390x844
+          - 1440x900
+    inquiry:
+      contract_satisfying_failure: Every state could work while hierarchy, recovery, or product character remains weak.
+      expert_notice: A product designer would inspect scan order, state continuity, responsive priority, and character fit.
+    lenses:
+      - name: design
   earned_rubric:
     factors:
       - name: Information hierarchy

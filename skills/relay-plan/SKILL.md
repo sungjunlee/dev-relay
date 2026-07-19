@@ -90,6 +90,7 @@ evaluation:
 ```
 
 Tests, builds, type checks, lint, artifact existence, and other binary evidence belong under Verification. Zero Earned Rubric factors is valid. A factor is earned only when Gradient, Observable, Actionable, and Consequential all hold; use qualitative weak/adequate/strong anchors before any optional numeric mapping. See `references/evaluation-channels.md`.
+Observe before deriving quality: identify the artifact, intended user, usage context, and available surfaces, then use optional advisory questions from `references/observation-lenses.md`.
 
 ### 6. Validate and simplify the channels
 
@@ -135,6 +136,7 @@ Use add-ons only when task evidence earns them; do not copy reference checklists
 - Probe template: `scripts/match-template.js` can suggest a scaffold; never auto-apply.
 - `task_profile` or working guidance: `references/task-profile.md` and `references/guidance-packs.md`.
 - Domain rubric ideas: `references/rubric-domain-axes.md`.
+- Observation-first domain questions: `references/observation-lenses.md`.
 - Trust boundaries and fail-closed behavior: `references/rubric-trust-model.md` and `references/rubric-fail-closed-patterns.md`.
 - File/path precision, forbidden zones, event-shape changes, or TDD-flavored factors: `references/rubric-patterns.md`.
 - L/XL ambiguity or unclear subsystem boundaries: consider a read-only scout via `references/subsystem-scout.md`; skip for S/M tasks with clear scope.

@@ -42,7 +42,8 @@ function buildEvaluationSections(rubricLoad = {}) {
   ];
   if (meta.has_scored_factors) {
     instructions.push(
-      "Earned Rubric factors are the only scored channel. Independently score every Earned Rubric factor below and report its tier as `quality`."
+      "Earned Rubric factors are the only scored channel. Independently score every Earned Rubric factor below and report its tier as `quality`.",
+      "Use the observation context to inspect the declared artifact and user surface; do not substitute code-only inference or invent evidence outside the listed surfaces."
     );
   } else {
     instructions.push(
