@@ -429,7 +429,7 @@ async function settleOneAdvisoryForVerdict({ advisoryRun, config, currentState, 
       phaseDecisionWaited: criticalPathWaitMs > 0,
     };
   }
-  if (hardenedAssurance && advisoryResult?.status === "success") {
+  if ((hardenedAssurance || advisoryRun.gating) && advisoryResult?.status === "success") {
     advisoryResult = await finishAdvisoryReview({
       advisoryRun,
       consumedByPhase: "review",
