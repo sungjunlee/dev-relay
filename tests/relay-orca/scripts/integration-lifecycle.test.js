@@ -17,6 +17,8 @@ const {
   IntegrationLifecycleError,
 } = require(path.join(SCRIPTS, "lib", "integration-lifecycle.js"));
 const { programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
+const { deriveStatusReport } = require(path.join(SCRIPTS, "lib", "status-derive.js"));
+const { buildFinalSummary } = require(path.join(SCRIPTS, "lib", "final-summary.js"));
 const { installFakeOrcaIntegrationLifecycle } = require(path.join(__dirname, "..", "fixtures", "fake-orca-integration-lifecycle.js"));
 
 const PROGRAM_ID = "repilot-941-20260715";
@@ -178,5 +180,56 @@ test("#1019 completion command is explicit and never raw-payload shaped", () => 
     assert.match(command.copy_paste, /--report-path/);
   } finally {
     fs.rmSync(report.dir, { recursive: true, force: true });
+  }
+});
+
+test("#1019 final summary vetoes active integration task and generic resolved gate", () => {
+  const question = canonicalIntegrationQuestion(PROGRAM_ID, OUTCOME_ID, programSegment);
+  const makeReport = (taskStatus, gate) => {
+    const fake = installFakeOrcaIntegrationLifecycle(initialState({
+      tasks: [{ id: TASK_ID, task_title: `relay-orca: ${programSegment(PROGRAM_ID)}/${OUTCOME_ID}`, display_name: `relay-orca: ${programSegment(PROGRAM_ID)}/${OUTCOME_ID}`, status: taskStatus, worker_done: taskStatus === "completed" }],
+      gates: [gate],
+    }));
+    const receipt = {
+      program_id: PROGRAM_ID,
+      runtime_id: "runtime-integration-fixture",
+      tasks: [{ outcome_id: OUTCOME_ID, task_id: "orca-task-integration-check", kind: "integration_gate", wave: 1, orca_task_id: TASK_ID, dispatch_id: DISPATCH_ID, assignee: ASSIGNEE, relay_ids: { request: null, run: null, fleet: null } }],
+    };
+    const report = deriveStatusReport({
+      receipt,
+      programId: PROGRAM_ID,
+      receiptPath: "/tmp/receipt.json",
+      manifests: [],
+      orca: (_bin, args) => fake.run(args[0] === "orchestration" && args[1] === "gate-list" && !args.includes("--task") ? ["orchestration", "gate-list", "--task", TASK_ID, "--json"] : args),
+      gh: null,
+      urlFor: () => null,
+      programSegment,
+      strictIntegration: true,
+    });
+    return { fake, report };
+  };
+  const gate = { id: "g1", task_id: TASK_ID, question, options: ["passed", "failed"], status: "resolved", resolution: "passed" };
+  const active = makeReport("ready", gate);
+  try {
+    const summary = buildFinalSummary({
+      programId: PROGRAM_ID,
+      receiptPath: "/tmp/receipt.json",
+      report: active.report,
+      gateEval: { prerequisites_met: true, gates: [{ gate: "integration:integration-check", kind: "integration", state: "passed", evidence: { passed: true }, message: "" }], blocking_reasons: [] },
+      followUps: { blocking: [], deferred: [] },
+      decisions: [],
+    });
+    assert.equal(active.report.runtime, "ok", JSON.stringify({ diagnostics: active.report.diagnostics, log: active.fake.readLog() }));
+    assert.equal(summary.program_complete, false);
+    assert.equal(summary.stopped_on, "orca_lifecycle_failure");
+    assert.ok(summary.blocking_reasons.some((reason) => reason.reason_code === "INTEGRATION_TASK_ACTIVE"), JSON.stringify({ diagnostics: active.report.diagnostics, outcomes: active.report.outcomes }));
+  } finally {
+    active.fake.cleanup();
+  }
+  const generic = makeReport("completed", { id: "g1", task_id: TASK_ID, question, options: ["passed", "failed"], status: "resolved" });
+  try {
+    assert.ok(generic.report.diagnostics.some((diagnostic) => diagnostic.code === "INTEGRATION_GATE_CONFLICT"));
+  } finally {
+    generic.fake.cleanup();
   }
 });
