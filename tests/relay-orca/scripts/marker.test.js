@@ -15,6 +15,7 @@ const RESUME_JS = path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "resum
 
 const { COMMAND_FLAGS, FLAGS } = require(path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "cli-schema.js"));
 const { buildOperatorPrompt } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "lib", "operator-prompt.js"));
+const { shellQuote } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "lib", "coordination-marker.js"));
 const { programSegment } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "receipt-io.js"));
 const {
   createManifestSkeleton,
@@ -166,11 +167,26 @@ test("marker CLI/schema and relay-orca operator contract are first-class and out
   assert.match(prompts[0], /--coordination-marker/);
   assert.match(prompts[0], /\$\{RELAY_SKILL_ROOT:-skills\}\/relay-dispatch\/scripts\/dispatch\.js/);
   assert.match(prompts[0], new RegExp(markerFor(program.id, "outcome-a").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(prompts[0], new RegExp(`--coordination-marker ${shellQuote(markerFor(program.id, "outcome-a")).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.doesNotMatch(prompts[0], /--coordination-marker \"relay-orca:/);
   assert.match(prompts[0], /fail closed|fail-closed/i);
   assert.notEqual(prompts[0].match(/relay-orca: [^\n]+/)[0], prompts[1].match(/relay-orca: [^\n]+/)[0]);
   for (const prompt of prompts) {
     assert.doesNotMatch(prompt, /codex|claude|cursor|cline|opencode|gpt|glm/i);
   }
+});
+
+test("operator prompt shell-quotes marker values containing apostrophes", () => {
+  const program = { id: "shell-quote-program", outcomes: [] };
+  const outcomeId = "outcome-'a";
+  const prompt = buildOperatorPrompt(
+    { outcome_id: outcomeId, kind: "relay_run", wave: 1, recommended_route: { operator: "relay", mode: "single_run", read_only: false }, expected_evidence: [] },
+    program,
+    { accepted_outcomes: ["done"] },
+    programSegment,
+  );
+  const marker = markerFor(program.id, outcomeId);
+  assert.match(prompt, new RegExp(`--coordination-marker ${shellQuote(marker).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
 test("dispatch persists the exact marker before fake executor spawn, preserves it on rewrite, and rejects unsafe values before worktree mutation", () => {
@@ -397,6 +413,53 @@ fs.openSync = function(target, flags) {
     assert.equal(fs.readFileSync(run.manifestPath, "utf-8"), beforeManifest);
     assert.equal(fs.existsSync(eventsPath), false);
     assert.equal(fs.existsSync(getManifestLockPath(run.manifestPath)), false, "transaction lock must be released after rollback");
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("attach-marker rollback preserves a symlinked events journal boundary", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-marker-event-symlink-failure-"));
+  const repoRoot = path.join(base, "repo");
+  const relayHome = path.join(base, "relay");
+  const runsRoot = path.join(relayHome, "override-runs");
+  initGitRepo(repoRoot);
+  const { file: programFile, program } = writeProgram(base, "event-symlink-program");
+  const run = writeRun({ repoRoot, relayHome, runsRoot });
+  const foreignDir = fs.mkdtempSync(path.join(base, "foreign-events-"));
+  const targetPath = path.join(foreignDir, "events.jsonl");
+  fs.writeFileSync(targetPath, "pre-existing journal\n", "utf-8");
+  fs.symlinkSync(targetPath, run.eventsPath);
+  const beforeManifest = fs.readFileSync(run.manifestPath, "utf-8");
+  const linkTarget = fs.readlinkSync(run.eventsPath);
+  const preloadPath = path.join(base, "fail-event-append-symlink.js");
+  fs.writeFileSync(preloadPath, `const fs = require("fs");
+const originalOpenSync = fs.openSync;
+fs.openSync = function(target, flags) {
+  if (String(target) === process.env.RELAY_TEST_MARKER_EVENTS_PATH && (Number(flags) & fs.constants.O_APPEND)) {
+    const error = new Error("injected coordination audit append failure");
+    error.code = "EIO";
+    throw error;
+  }
+  return originalOpenSync.apply(this, arguments);
+};
+`, "utf-8");
+  const env = {
+    ...process.env,
+    RELAY_HOME: relayHome,
+    RELAY_ORCA_RUNS_ROOT: runsRoot,
+    RELAY_TEST_MARKER_EVENTS_PATH: run.eventsPath,
+    NODE_OPTIONS: `--require ${preloadPath}`,
+  };
+  try {
+    const result = shellRun(ATTACH_MARKER_JS, ["--program-file", programFile, "--outcome-id", "outcome-a", "--run-id", run.runId, "--repo-root", repoRoot, "--json"], { cwd: repoRoot, env });
+    assert.notEqual(result.status, 0);
+    assert.equal(result.body.reason_code, "ATTACH_MARKER_PERSISTENCE_FAILED", `${result.stderr}\n${JSON.stringify(result.body)}`);
+    assert.equal(fs.readFileSync(run.manifestPath, "utf-8"), beforeManifest);
+    assert.equal(fs.lstatSync(run.eventsPath).isSymbolicLink(), true);
+    assert.equal(fs.readlinkSync(run.eventsPath), linkTarget);
+    assert.equal(fs.readFileSync(targetPath, "utf-8"), "pre-existing journal\n");
+    assert.equal(fs.existsSync(getManifestLockPath(run.manifestPath)), false, "transaction lock must be released after symlink rollback");
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

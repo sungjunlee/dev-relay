@@ -10,6 +10,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { resolveRepoContext, runsRoot, programSegment } = require("./receipt-io");
+const { coordinationMarkerFor } = require("./lib/coordination-marker");
 const {
   requireValidRunId,
   validateManifestPaths,
@@ -122,7 +123,7 @@ function deriveTarget(program, outcomeId) {
   if (issueNumber === null) {
     throw new AttachMarkerError("OUTCOME_INVALID", `outcome ${JSON.stringify(outcomeId)} has no finite declared issue`);
   }
-  const marker = `relay-orca: ${programSegment(program.id)}/${outcome.id}`;
+  const marker = coordinationMarkerFor(program.id, outcome.id, programSegment);
   try {
     validateCoordinationMarker(marker);
   } catch (error) {
@@ -190,15 +191,45 @@ function resolveRunPaths(repo, runId) {
 }
 
 function snapshotFile(filePath) {
+  let entry;
   try {
-    return { exists: true, text: fs.readFileSync(filePath, "utf-8") };
+    entry = fs.lstatSync(filePath);
   } catch (error) {
-    if (error.code === "ENOENT") return { exists: false, text: null };
+    if (error.code === "ENOENT") return { exists: false, kind: "missing", text: null };
+    throw error;
+  }
+  if (entry.isSymbolicLink()) {
+    return {
+      exists: true,
+      kind: "symlink",
+      linkTarget: fs.readlinkSync(filePath),
+      text: null,
+    };
+  }
+  try {
+    return { exists: true, kind: "regular", text: fs.readFileSync(filePath, "utf-8") };
+  } catch (error) {
+    if (error.code === "ENOENT") return { exists: false, kind: "missing", text: null };
     throw error;
   }
 }
 
 function restoreFile(filePath, snapshot) {
+  if (snapshot.kind === "symlink") {
+    let entry;
+    try {
+      entry = fs.lstatSync(filePath);
+    } catch (error) {
+      throw new Error(`rollback refused to recreate journal symlink ${filePath}: ${error.message}`);
+    }
+    if (!entry.isSymbolicLink() || fs.readlinkSync(filePath) !== snapshot.linkTarget) {
+      throw new Error(`rollback refused to replace changed journal boundary ${filePath}`);
+    }
+    // appendRunEvent refuses this boundary before writing. If a future writer
+    // partially fails after opening it, leave the original symlink inode and
+    // target untouched rather than replacing the boundary with a regular file.
+    return;
+  }
   if (!snapshot.exists) {
     try { fs.unlinkSync(filePath); } catch (error) {
       if (error.code !== "ENOENT") throw error;
