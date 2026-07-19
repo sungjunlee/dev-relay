@@ -2560,6 +2560,28 @@ async function main() {
         summary: summarizeRoutePlan(routePlan),
       },
     };
+    // A coordination marker is an admission invariant. Publish and verify the
+    // manifest before creating a relay-owned worktree so a persistence failure
+    // cannot reach any worktree or executor mutation. The later write refreshes
+    // environment/path metadata after worktree creation and preserves the marker
+    // through the shared manifest writer boundary.
+    if (COORDINATION_MARKER !== undefined) {
+      try {
+        writeManifest(manifestPath, manifest);
+        const persistedManifest = readManifest(manifestPath).data;
+        if (coordinationMarkerFromManifest(persistedManifest) !== COORDINATION_MARKER) {
+          failEarly(
+            "coordination marker was not durably persisted before worktree creation",
+            { error_code: "coordination_marker_not_persisted" },
+          );
+        }
+      } catch (error) {
+        failEarly(
+          `coordination marker persistence failed before worktree creation: ${error.message}`,
+          { error_code: "coordination_marker_persistence_failed" },
+        );
+      }
+    }
     try {
       const created = createWorktree({
         repoRoot,

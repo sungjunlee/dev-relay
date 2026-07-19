@@ -1,7 +1,10 @@
 const fs = require("fs");
 const path = require("path");
-const { getActorName } = require("./manifest/store");
-const { ensureRunLayout, getEventsPath, getRunsDir } = require("./manifest/paths");
+const {
+  getActorName,
+  withManifestTransaction,
+} = require("./manifest/store");
+const { ensureRunLayout, getEventsPath, getManifestPath, getRunsDir } = require("./manifest/paths");
 const { timingFieldsFromEventData } = require("./advisory-timing");
 const {
   appendTextFileWithoutFollowingSymlinks,
@@ -124,7 +127,7 @@ function validateOverrideAuditFields(eventData) {
   }
 }
 
-function appendRunEvent(repoRoot, runId, eventData) {
+function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null } = {}) {
   if (!runId) {
     throw new Error("run_id is required to append a relay event");
   }
@@ -139,7 +142,7 @@ function appendRunEvent(repoRoot, runId, eventData) {
   }
   validateOverrideAuditFields(eventData);
 
-  ensureRunLayout(repoRoot, runId);
+  if (!eventsPath) ensureRunLayout(repoRoot, runId);
   const record = {
     ts: eventData.ts || new Date().toISOString(),
     event: eventData.event,
@@ -445,8 +448,18 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
   };
 
-  appendEventLine(repoRoot, runId, record);
+  if (eventsPath) appendEventLineToPath(eventsPath, record);
+  else appendEventLine(repoRoot, runId, record);
   return record;
+}
+
+// Manifest and journal writers share the same per-run transaction lock. Callers
+// already inside a transaction (notably attach-marker's manifest+audit pair) set
+// lockHeld and may target an explicitly resolved events path.
+function appendRunEvent(repoRoot, runId, eventData, { eventsPath = null, lockHeld = false } = {}) {
+  if (lockHeld) return appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath });
+  const manifestPath = getManifestPath(repoRoot, runId);
+  return withManifestTransaction(manifestPath, () => appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath }));
 }
 
 function appendUnregisteredRouteUsedEvent(repoRoot, runId, {

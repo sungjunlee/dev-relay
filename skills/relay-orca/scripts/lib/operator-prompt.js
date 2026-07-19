@@ -83,7 +83,7 @@ function relayDispatchMarkerContract(task, program, segmentEncoder) {
     "Relay coordination-marker contract (fail closed before dispatch):",
     `Exact resolved marker: ${marker}`,
     "Authoritative relay dispatch CLI shape:",
-    `node skills/relay-dispatch/scripts/dispatch.js <repo-root> --branch <branch> --prompt-file <prompt-file> --rubric-file <rubric-file> --coordination-marker ${JSON.stringify(marker)}`,
+    `node "\${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" <repo-root> --branch <branch> --prompt-file <prompt-file> --rubric-file <rubric-file> --coordination-marker ${JSON.stringify(marker)}`,
     "Use that --coordination-marker value on the initial relay dispatch. If the flag is unavailable or its exact marker cannot be persisted before executor spawn, stop before worktree/executor mutation; do not dispatch or replay.",
   ].join("\n");
 }

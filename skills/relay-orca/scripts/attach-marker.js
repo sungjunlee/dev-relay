@@ -9,14 +9,16 @@
 // stale caller cannot overwrite a concurrent marker or unrelated manifest edit.
 const fs = require("node:fs");
 const path = require("node:path");
-const { resolveRepoContext, programSegment } = require("./receipt-io");
+const { resolveRepoContext, runsRoot, programSegment } = require("./receipt-io");
 const {
-  getManifestPath,
-  getRunDir,
   requireValidRunId,
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
-const { readManifest, writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
+const {
+  readManifest,
+  withManifestTransaction,
+  writeManifestUnlocked,
+} = require("../../relay-dispatch/scripts/manifest/store");
 const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const {
   coordinationMarkerFromManifest,
@@ -25,10 +27,6 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/coordination");
 
 const USAGE_EXIT = 64;
-const LOCK_NAME = ".coordination_marker.lock";
-const DEFAULT_LOCK_TIMEOUT_MS = 5000;
-const DEFAULT_LOCK_POLL_MS = 50;
-const LOCK_WAIT_STATE = new Int32Array(new SharedArrayBuffer(4));
 
 class AttachMarkerError extends Error {
   constructor(reasonCode, message) {
@@ -69,11 +67,6 @@ function parseArgs(argv) {
   if (!opts.outcomeId) usageError("--outcome-id is required");
   if (!opts.runId) usageError("--run-id is required");
   return opts;
-}
-
-function positiveEnv(name, fallback) {
-  const parsed = Number.parseInt(process.env[name] || "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function unwrapProgram(value) {
@@ -156,6 +149,7 @@ function readAndValidateManifest(manifestPath, runId, repoRoot, expectedIssue) {
     validateManifestPaths(manifest.paths, {
       expectedRepoRoot: repoRoot,
       manifestPath,
+      expectedRunsBase: runsRoot(),
       runId,
       allowMissingWorktree: true,
       caller: "relay-orca attach-marker",
@@ -181,34 +175,50 @@ function readAndValidateManifest(manifestPath, runId, repoRoot, expectedIssue) {
   return { ...record, data: manifest };
 }
 
-function waitForLock(lockPath) {
-  const deadline = Date.now() + positiveEnv("RELAY_COORDINATION_MARKER_LOCK_TIMEOUT_MS", DEFAULT_LOCK_TIMEOUT_MS);
-  while (Date.now() < deadline) {
-    try {
-      return fs.openSync(lockPath, "wx");
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      Atomics.wait(
-        LOCK_WAIT_STATE,
-        0,
-        0,
-        positiveEnv("RELAY_COORDINATION_MARKER_LOCK_POLL_MS", DEFAULT_LOCK_POLL_MS),
-      );
-    }
-  }
-  return null;
+function resolveRunPaths(repo, runId) {
+  // Keep this resolver in lockstep with status/resume: receipt-io.runsRoot()
+  // honors RELAY_ORCA_RUNS_ROOT before the relay-wide fallbacks. The slug and
+  // run id remain canonical/single-segment values, so the recovery override
+  // cannot broaden the target outside one repository/run path.
+  const root = path.resolve(runsRoot());
+  const repoDir = path.join(root, repo.slug);
+  return {
+    manifestPath: path.join(repoDir, `${runId}.md`),
+    runDir: path.join(repoDir, runId),
+    eventsPath: path.join(repoDir, runId, "events.jsonl"),
+  };
 }
 
-function releaseLock(lockFd, lockPath) {
-  try { fs.closeSync(lockFd); } catch {}
-  try { fs.unlinkSync(lockPath); } catch (error) {
-    if (error.code !== "ENOENT") throw error;
+function snapshotFile(filePath) {
+  try {
+    return { exists: true, text: fs.readFileSync(filePath, "utf-8") };
+  } catch (error) {
+    if (error.code === "ENOENT") return { exists: false, text: null };
+    throw error;
+  }
+}
+
+function restoreFile(filePath, snapshot) {
+  if (!snapshot.exists) {
+    try { fs.unlinkSync(filePath); } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    return;
+  }
+  const tmpPath = `${filePath}.rollback.${process.pid}`;
+  try {
+    fs.writeFileSync(tmpPath, snapshot.text, "utf-8");
+    fs.renameSync(tmpPath, filePath);
+  } catch (error) {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw error;
   }
 }
 
 function attachMarker({ opts, repo, target }) {
   const runId = requireValidRunId(opts.runId);
-  const manifestPath = getManifestPath(repo.root, runId);
+  const paths = resolveRunPaths(repo, runId);
+  const { manifestPath, runDir, eventsPath } = paths;
   const initial = readAndValidateManifest(manifestPath, runId, repo.root, target.issueNumber);
   const initialMarker = coordinationMarkerFromManifest(initial.data);
   if (initialMarker === target.marker) return resultFor(target, runId, "already_present");
@@ -219,47 +229,58 @@ function attachMarker({ opts, repo, target }) {
     );
   }
 
-  const runDir = getRunDir(repo.root, runId);
   fs.mkdirSync(runDir, { recursive: true });
-  const lockPath = path.join(runDir, LOCK_NAME);
-  const lockFd = waitForLock(lockPath);
-  if (lockFd === null) {
-    const afterTimeout = readAndValidateManifest(manifestPath, runId, repo.root, target.issueNumber);
-    const timeoutMarker = coordinationMarkerFromManifest(afterTimeout.data);
-    if (timeoutMarker === target.marker) return resultFor(target, runId, "already_present");
-    throw new AttachMarkerError(
-      "LOCK_TIMEOUT",
-      `timed out acquiring ${lockPath}; refusing to overwrite a concurrently changing manifest`,
-    );
-  }
-
   try {
-    // The caller's first read is only an admission check. Always validate and use
-    // the fresh record inside the lock before the atomic write.
-    const fresh = readAndValidateManifest(manifestPath, runId, repo.root, target.issueNumber);
-    const freshMarker = coordinationMarkerFromManifest(fresh.data);
-    if (freshMarker === target.marker) return resultFor(target, runId, "already_present");
-    if (freshMarker !== undefined) {
-      throw new AttachMarkerError("MARKER_CONFLICT", `relay run ${runId} already has a different coordination marker`);
-    }
+    return withManifestTransaction(manifestPath, () => {
+      // The caller's first read is only an admission check. Always validate and
+      // use the fresh record inside the shared manifest transaction before the
+      // atomic write; lifecycle writers use this same transaction boundary.
+      const fresh = readAndValidateManifest(manifestPath, runId, repo.root, target.issueNumber);
+      const freshMarker = coordinationMarkerFromManifest(fresh.data);
+      if (freshMarker === target.marker) return resultFor(target, runId, "already_present");
+      if (freshMarker !== undefined) {
+        throw new AttachMarkerError("MARKER_CONFLICT", `relay run ${runId} already has a different coordination marker`);
+      }
 
-    const updated = withCoordinationMarker(fresh.data, target.marker);
-    writeManifest(manifestPath, updated, fresh.body);
-    appendRunEvent(repo.root, runId, {
-      event: EVENTS.COORDINATION_MARKER_ATTACHED,
-      state_from: updated.state || null,
-      state_to: updated.state || null,
-      head_sha: updated.git?.head_sha || null,
-      reason: "supervised_relay_orca_marker_recovery",
-      program_id: target.programId,
-      outcome_id: target.outcomeId,
-      issue_number: target.issueNumber,
-      coordination_marker: target.marker,
-      result: "attached",
+      const manifestBefore = snapshotFile(manifestPath);
+      const eventsBefore = snapshotFile(eventsPath);
+      const updated = withCoordinationMarker(fresh.data, target.marker);
+      try {
+        writeManifestUnlocked(manifestPath, updated, fresh.body, { preserveMarker: false });
+        appendRunEvent(repo.root, runId, {
+          event: EVENTS.COORDINATION_MARKER_ATTACHED,
+          state_from: updated.state || null,
+          state_to: updated.state || null,
+          head_sha: updated.git?.head_sha || null,
+          reason: "supervised_relay_orca_marker_recovery",
+          program_id: target.programId,
+          outcome_id: target.outcomeId,
+          issue_number: target.issueNumber,
+          coordination_marker: target.marker,
+          result: "attached",
+        }, { eventsPath, lockHeld: true });
+      } catch (error) {
+        try {
+          restoreFile(manifestPath, manifestBefore);
+          restoreFile(eventsPath, eventsBefore);
+        } catch (rollbackError) {
+          throw new AttachMarkerError(
+            "ATTACH_MARKER_ROLLBACK_FAILED",
+            `marker persistence failed and rollback failed: ${rollbackError.message}; original error: ${error.message}`,
+          );
+        }
+        throw new AttachMarkerError(
+          "ATTACH_MARKER_PERSISTENCE_FAILED",
+          `marker persistence failed; manifest and audit journal were restored: ${error.message}`,
+        );
+      }
+      return resultFor(target, runId, "attached");
     });
-    return resultFor(target, runId, "attached");
-  } finally {
-    releaseLock(lockFd, lockPath);
+  } catch (error) {
+    if (error?.code === "MANIFEST_LOCK_TIMEOUT") {
+      throw new AttachMarkerError("LOCK_TIMEOUT", `${error.message}; refusing to overwrite a concurrently changing manifest`);
+    }
+    throw error;
   }
 }
 
@@ -295,7 +316,7 @@ function main() {
     const runId = requireValidRunId(opts.runId);
     const repo = resolveRepoContext({ repoRootOverride: opts.repoRoot });
     // Resolve the exact manifest path before any run-dir or journal mutation.
-    const manifestPath = getManifestPath(repo.root, runId);
+    const manifestPath = resolveRunPaths(repo, runId).manifestPath;
     if (!fs.existsSync(manifestPath)) {
       throw new AttachMarkerError("RUN_NOT_FOUND", `relay run manifest was not found at ${manifestPath}`);
     }
@@ -315,5 +336,5 @@ module.exports = {
   deriveTarget,
   readAndValidateManifest,
   attachMarker,
-  waitForLock,
+  resolveRunPaths,
 };

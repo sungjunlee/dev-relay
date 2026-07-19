@@ -16,7 +16,11 @@ const RESUME_JS = path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "resum
 const { COMMAND_FLAGS, FLAGS } = require(path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "cli-schema.js"));
 const { buildOperatorPrompt } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "lib", "operator-prompt.js"));
 const { programSegment } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "receipt-io.js"));
-const { createManifestSkeleton, writeManifest } = require(path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "manifest", "store.js"));
+const {
+  createManifestSkeleton,
+  getManifestLockPath,
+  writeManifest,
+} = require(path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "manifest", "store.js"));
 const { getRepoSlug } = require(path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "manifest", "paths.js"));
 const { serializeReceipt, RECEIPT_NOTE } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "lib", "receipt.js"));
 const { installFakeOrcaStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca-status.js"));
@@ -73,8 +77,8 @@ function markerFor(programId, outcomeId = "outcome-a") {
   return `relay-orca: ${programSegment(programId)}/${outcomeId}`;
 }
 
-function writeRun({ repoRoot, relayHome, runId = "issue-100-20260715120000000-aabbccdd", issue = 100, marker = null, state = "dispatched", prNumber = null }) {
-  const manifestPath = path.join(relayHome, "runs", getRepoSlug(repoRoot), `${runId}.md`);
+function writeRun({ repoRoot, relayHome, runsRoot = path.join(relayHome, "runs"), runId = "issue-100-20260715120000000-aabbccdd", issue = 100, marker = null, state = "dispatched", prNumber = null }) {
+  const manifestPath = path.join(runsRoot, getRepoSlug(repoRoot), `${runId}.md`);
   const manifest = createManifestSkeleton({
     repoRoot,
     runId,
@@ -160,6 +164,7 @@ test("marker CLI/schema and relay-orca operator contract are first-class and out
     programSegment,
   ));
   assert.match(prompts[0], /--coordination-marker/);
+  assert.match(prompts[0], /\$\{RELAY_SKILL_ROOT:-skills\}\/relay-dispatch\/scripts\/dispatch\.js/);
   assert.match(prompts[0], new RegExp(markerFor(program.id, "outcome-a").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(prompts[0], /fail closed|fail-closed/i);
   assert.notEqual(prompts[0].match(/relay-orca: [^\n]+/)[0], prompts[1].match(/relay-orca: [^\n]+/)[0]);
@@ -203,6 +208,34 @@ fs.writeFileSync(output, "done\\n", "utf8");
   const marker = markerFor("dispatch-program");
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome, RELAY_TEST_EXECUTOR_OBSERVED: observedPath };
   try {
+    const failedObservedPath = path.join(base, "executor-should-not-run.txt");
+    const renameFailurePreload = path.join(binDir, "fail-marker-manifest-write.js");
+    fs.writeFileSync(renameFailurePreload, `const fs = require("fs");
+const originalRenameSync = fs.renameSync;
+fs.renameSync = function(source, target) {
+  if (process.env.RELAY_TEST_FAIL_MARKER_MANIFEST_WRITE === "1" && String(target).endsWith(".md")) {
+    const error = new Error("injected marker manifest persistence failure");
+    error.code = "EIO";
+    throw error;
+  }
+  return originalRenameSync.apply(this, arguments);
+};
+`, "utf-8");
+    const failed = shellRun(DISPATCH_JS, [repoRoot, "--branch", "issue-102", "--prompt", "implement", "--executor", "codex", "--rubric-file", rubricPath, "--coordination-marker", marker, "--json"], {
+      cwd: repoRoot,
+      env: {
+        ...env,
+        RELAY_TEST_EXECUTOR_OBSERVED: failedObservedPath,
+        RELAY_TEST_FAIL_MARKER_MANIFEST_WRITE: "1",
+        NODE_OPTIONS: `--require ${renameFailurePreload}`,
+      },
+    });
+    assert.notEqual(failed.status, 0);
+    assert.match(`${failed.stdout}\n${failed.stderr}`, /before worktree creation|persistence failure/i);
+    const worktreesDir = path.join(relayHome, "worktrees");
+    assert.equal(fs.existsSync(worktreesDir) ? fs.readdirSync(worktreesDir).length : 0, 0, "marker persistence failure must create no worktree");
+    assert.equal(fs.existsSync(failedObservedPath), false, "marker persistence failure must not invoke the executor");
+
     const result = shellRun(DISPATCH_JS, [repoRoot, "--branch", "issue-100", "--prompt", "implement", "--executor", "codex", "--rubric-file", rubricPath, "--publish-policy", "after-internal-review", "--coordination-marker", marker, "--json"], { cwd: repoRoot, env });
     assert.equal(result.status, 0, result.stderr);
     const raw = fs.readFileSync(result.body.manifestPath, "utf-8");
@@ -225,11 +258,11 @@ test("recovery is audited, idempotent, concurrent-safe, strict, and closes statu
   const repoRoot = path.join(base, "repo");
   const relayHome = path.join(base, "relay");
   const programsRoot = path.join(relayHome, "programs");
-  const runsRoot = path.join(relayHome, "runs");
+  const runsRoot = path.join(relayHome, "recovery-runs");
   fs.mkdirSync(repoRoot, { recursive: true });
   initGitRepo(repoRoot);
   const { file: programFile, program } = writeProgram(base);
-  const run = writeRun({ repoRoot, relayHome, state: "dispatched" });
+  const run = writeRun({ repoRoot, relayHome, runsRoot, state: "dispatched" });
   const slug = getRepoSlug(repoRoot);
   writeReceipt({ relayHome, repoRoot, programId: program.id, runId: null });
   const statusOrca = installFakeOrcaStatus({ tasks: [fakeOrcaTask(program.id)] });
@@ -268,7 +301,7 @@ test("recovery is audited, idempotent, concurrent-safe, strict, and closes statu
     assert.equal(fs.existsSync(eventsPath) ? fs.readFileSync(eventsPath, "utf-8") : "", eventsBeforeFailure);
 
     const attach = shellRun(ATTACH_MARKER_JS, ["--program-file", programFile, "--outcome-id", "outcome-a", "--run-id", run.runId, "--repo-root", repoRoot, "--json"], { cwd: repoRoot, env });
-    assert.equal(attach.status, 0, attach.stderr);
+    assert.equal(attach.status, 0, `${attach.stderr}\n${JSON.stringify(attach.body)}`);
     assert.equal(attach.body.result, "attached");
     assert.equal(JSON.parse(JSON.stringify(require(path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "manifest", "store.js")).readManifest(run.manifestPath).data)).coordination.marker, markerFor(program.id));
     assert.match(fs.readFileSync(eventsPath, "utf-8"), /coordination_marker_attached/);
@@ -289,7 +322,7 @@ test("recovery is audited, idempotent, concurrent-safe, strict, and closes statu
     assert.equal(fs.readFileSync(run.manifestPath, "utf-8"), manifestBeforeConflict);
     assert.equal(fs.readFileSync(eventsPath, "utf-8"), eventsBeforeConflict);
 
-    const concurrentRun = writeRun({ repoRoot, relayHome, runId: "issue-100-20260715120000001-aabbccdd", state: "dispatched" });
+    const concurrentRun = writeRun({ repoRoot, relayHome, runsRoot, runId: "issue-100-20260715120000001-aabbccdd", state: "dispatched" });
     const concurrent = await Promise.all([1, 2].map(() => new Promise((resolve) => {
       const child = spawn(process.execPath, [ATTACH_MARKER_JS, "--program-file", programFile, "--outcome-id", "outcome-a", "--run-id", concurrentRun.runId, "--repo-root", repoRoot, "--json"], { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"] });
       let stdout = "";
@@ -324,6 +357,117 @@ test("recovery is audited, idempotent, concurrent-safe, strict, and closes statu
   } finally {
     statusOrca.cleanup();
     statusGh.cleanup();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("attach-marker rolls back the manifest when the coordination audit append fails", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-marker-event-failure-"));
+  const repoRoot = path.join(base, "repo");
+  const relayHome = path.join(base, "relay");
+  const runsRoot = path.join(relayHome, "override-runs");
+  initGitRepo(repoRoot);
+  const { file: programFile, program } = writeProgram(base, "event-failure-program");
+  const run = writeRun({ repoRoot, relayHome, runsRoot });
+  const eventsPath = run.eventsPath;
+  const preloadPath = path.join(base, "fail-event-append.js");
+  fs.writeFileSync(preloadPath, `const fs = require("fs");
+const originalOpenSync = fs.openSync;
+fs.openSync = function(target, flags) {
+  if (String(target) === process.env.RELAY_TEST_MARKER_EVENTS_PATH && (Number(flags) & fs.constants.O_APPEND)) {
+    const error = new Error("injected coordination audit append failure");
+    error.code = "EIO";
+    throw error;
+  }
+  return originalOpenSync.apply(this, arguments);
+};
+`, "utf-8");
+  const beforeManifest = fs.readFileSync(run.manifestPath, "utf-8");
+  const env = {
+    ...process.env,
+    RELAY_HOME: relayHome,
+    RELAY_ORCA_RUNS_ROOT: runsRoot,
+    RELAY_TEST_MARKER_EVENTS_PATH: eventsPath,
+    NODE_OPTIONS: `--require ${preloadPath}`,
+  };
+  try {
+    const result = shellRun(ATTACH_MARKER_JS, ["--program-file", programFile, "--outcome-id", "outcome-a", "--run-id", run.runId, "--repo-root", repoRoot, "--json"], { cwd: repoRoot, env });
+    assert.notEqual(result.status, 0);
+    assert.equal(result.body.reason_code, "ATTACH_MARKER_PERSISTENCE_FAILED", `${result.stderr}\n${JSON.stringify(result.body)}`);
+    assert.equal(fs.readFileSync(run.manifestPath, "utf-8"), beforeManifest);
+    assert.equal(fs.existsSync(eventsPath), false);
+    assert.equal(fs.existsSync(getManifestLockPath(run.manifestPath)), false, "transaction lock must be released after rollback");
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("attach-marker preserves a lifecycle writer's stale update through the shared manifest boundary", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-marker-lifecycle-race-"));
+  const repoRoot = path.join(base, "repo");
+  const relayHome = path.join(base, "relay");
+  const runsRoot = path.join(relayHome, "runs");
+  initGitRepo(repoRoot);
+  const { file: programFile, program } = writeProgram(base, "lifecycle-race-program");
+  const run = writeRun({ repoRoot, relayHome, runsRoot });
+  const readyPath = path.join(base, "writer-ready");
+  const releasePath = path.join(base, "writer-release");
+  const writerPath = path.join(base, "stale-writer.js");
+  const storePath = path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "manifest", "store.js");
+  fs.writeFileSync(writerPath, `const fs = require("fs");
+const { readManifest, writeManifest } = require(${JSON.stringify(storePath)});
+const manifestPath = process.argv[2];
+const readyPath = process.argv[3];
+const releasePath = process.argv[4];
+const stale = readManifest(manifestPath);
+fs.writeFileSync(readyPath, "ready");
+while (!fs.existsSync(releasePath)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+writeManifest(manifestPath, { ...stale.data, state: "review_pending", next_action: "run_review" }, stale.body);
+`, "utf-8");
+  const writer = spawn(process.execPath, [writerPath, run.manifestPath, readyPath, releasePath], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    const readyDeadline = Date.now() + 5000;
+    while (!fs.existsSync(readyPath) && Date.now() < readyDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(fs.existsSync(readyPath), true, "lifecycle writer must read before attach-marker starts");
+    const env = { ...process.env, RELAY_HOME: relayHome, RELAY_ORCA_RUNS_ROOT: runsRoot };
+    const attached = shellRun(ATTACH_MARKER_JS, ["--program-file", programFile, "--outcome-id", "outcome-a", "--run-id", run.runId, "--repo-root", repoRoot, "--json"], { cwd: repoRoot, env });
+    assert.equal(attached.status, 0, `${attached.stderr}\n${JSON.stringify(attached.body)}`);
+    fs.writeFileSync(releasePath, "release");
+    await new Promise((resolve) => writer.once("close", resolve));
+    const persisted = require(storePath).readManifest(run.manifestPath).data;
+    assert.equal(persisted.state, "review_pending");
+    assert.equal(persisted.coordination.marker, `relay-orca: ${programSegment(program.id)}/outcome-a`);
+  } finally {
+    if (!fs.existsSync(releasePath)) fs.writeFileSync(releasePath, "release");
+    if (writer.exitCode === null) await new Promise((resolve) => writer.once("close", resolve));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("attach-marker automatically recovers a dead abandoned manifest lock", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-marker-abandoned-lock-"));
+  const repoRoot = path.join(base, "repo");
+  const relayHome = path.join(base, "relay");
+  const runsRoot = path.join(relayHome, "runs");
+  initGitRepo(repoRoot);
+  const { file: programFile } = writeProgram(base, "abandoned-lock-program");
+  const run = writeRun({ repoRoot, relayHome, runsRoot });
+  const lockPath = getManifestLockPath(run.manifestPath);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: 99999999, host: os.hostname(), token: "dead", acquired_at: "2000-01-01T00:00:00.000Z" }), "utf-8");
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(lockPath, old, old);
+  try {
+    const result = shellRun(ATTACH_MARKER_JS, ["--program-file", programFile, "--outcome-id", "outcome-a", "--run-id", run.runId, "--repo-root", repoRoot, "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, RELAY_HOME: relayHome, RELAY_ORCA_RUNS_ROOT: runsRoot, RELAY_MANIFEST_LOCK_STALE_MS: "1" },
+    });
+    assert.equal(result.status, 0, `${result.stderr}\n${JSON.stringify(result.body)}`);
+    assert.equal(result.body.result, "attached");
+    assert.equal(fs.existsSync(lockPath), false);
+  } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
