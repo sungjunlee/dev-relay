@@ -514,6 +514,11 @@ function reenterReviewPendingPreservingMarker(manifestPath) {
 // checks-green recovery route can no longer replay the earlier procedural block (#950 R2).
 test("pending-checks marker is single-use: a later green changes_requested at the same head clears it and recover-state then refuses", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath, headSha } = setupRepo();
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    review: { ...(record.data.review || {}), max_rounds: 3 },
+  }, record.body);
 
   // Round 1: proceed with a pending check + changes_requested -> marker stamped at head H.
   const round1Gh = installGh(repoRoot, { checks: [{ name: "unit", bucket: "pending" }] });

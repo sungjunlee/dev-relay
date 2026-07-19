@@ -3546,6 +3546,10 @@ test("round 2 review prompt contains Prior Round Context section", () => {
 
 test("round 2 redispatch artifact contains prior round summary", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    review: { ...(data.review || {}), max_rounds: 3 },
+  }));
 
   // Round 1: changes_requested
   const r1File = writeVerdict(repoRoot, "r1.json", {
@@ -4016,7 +4020,7 @@ test("review-runner rejects empty rubric_scores when rubric is present", () => {
     "--review-file", reviewFile,
     "--no-comment",
     "--json",
-  ], { encoding: "utf-8", stdio: "pipe" }), /empty rubric_scores.*rubric was provided/i);
+  ], { encoding: "utf-8", stdio: "pipe" }), /legacy rubric was provided.*score every factor/i);
 });
 
 test("review-runner fails closed when the manifest still carries anchor.rubric_grandfathered", () => {
