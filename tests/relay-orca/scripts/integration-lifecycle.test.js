@@ -16,7 +16,7 @@ const {
   advanceIntegrationGate,
   IntegrationLifecycleError,
 } = require(path.join(SCRIPTS, "lib", "integration-lifecycle.js"));
-const { programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
+const { programSegment, withIntegrationLifecycleLock, readIntegrationEvidenceFile } = require(path.join(SCRIPTS, "receipt-io.js"));
 const { deriveStatusReport } = require(path.join(SCRIPTS, "lib", "status-derive.js"));
 const { buildFinalSummary } = require(path.join(SCRIPTS, "lib", "final-summary.js"));
 const { installFakeOrcaIntegrationLifecycle } = require(path.join(__dirname, "..", "fixtures", "fake-orca-integration-lifecycle.js"));
@@ -48,6 +48,8 @@ function context(fake, reportPath, extra = {}) {
     reportPath,
     programSegment,
     lockRoot: fake.dir,
+    withLock: (lockKey, callback) => withIntegrationLifecycleLock({ programId: PROGRAM_ID, outcomeId: OUTCOME_ID, taskId: TASK_ID, lockRoot: fake.dir, lockKey }, callback),
+    readReport: readIntegrationEvidenceFile,
     ...extra,
   };
 }
