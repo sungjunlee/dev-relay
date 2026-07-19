@@ -20,6 +20,7 @@
   "leafId": null,
   "doneCriteriaFile": null,
   "reviewAssurance": "standard",
+  "publishPolicy": "immediate",
   "environment": "collected-at-dispatch",
   "runState": null,
   "dispatchSkipped": false,

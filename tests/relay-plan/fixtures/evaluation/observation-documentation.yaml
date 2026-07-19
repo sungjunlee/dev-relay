@@ -1,0 +1,37 @@
+evaluation:
+  schema_version: 2
+  outcome_contract:
+    source: done_criteria
+  verification:
+    checks:
+      - name: Commands and links resolve
+        type: command
+        command: node --test tests/docs-example.test.js
+        target: exit 0
+  observation:
+    artifact: First-run deployment guide
+    intended_user: An application developer deploying this project for the first time.
+    usage_context: The reader starts with repository access but no unwritten team context.
+    surfaces:
+      - kind: reader_walkthrough
+        target: Follow the guide from prerequisites to a verified deployment.
+    inquiry:
+      contract_satisfying_failure: Every command could work while the reader still cannot recognize prerequisites, success, or recovery.
+      expert_notice: A documentation specialist would notice assumed knowledge, order, scan paths, and missing failure cues.
+    lenses:
+      - name: documentation
+        questions:
+          - Can a zero-context reader predict and verify each transition?
+  earned_rubric:
+    factors:
+      - name: Zero-context reader success
+        evidence: A reader walkthrough exposes assumptions and unclear success or recovery cues.
+        eligibility:
+          gradient: Technically correct guides can differ in independent reader success.
+          observable: The walkthrough distinguishes blocked, assisted, and self-sufficient use.
+          actionable: Lower results identify missing prerequisites, transitions, or cues.
+          consequential: Hidden context prevents or delays deployment.
+        anchors:
+          weak: The reader needs unwritten team knowledge to complete the guide.
+          adequate: The reader completes the happy path with minor inference.
+          strong: The reader can complete, verify, and recover without outside context.

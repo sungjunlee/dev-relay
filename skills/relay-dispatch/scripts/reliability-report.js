@@ -10,11 +10,15 @@ const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { EVENTS, readAllRunEvents } = require("./relay-events");
 const { extractAllFactors } = require("../../relay-plan/scripts/tdd-flavor");
 const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
+const {
+  buildCalibrationReport,
+} = require("./reliability/calibration");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h"] };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const NO_GUIDANCE_DATA_TEXT = "no guidance data available";
+const LEGACY_SCORE_DIVERGENCE_EVENT = "score_divergence";
 const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
 const HANDOFF_RECOVERY_EVENTS = new Set([
   EVENTS.RECOVER_COMMIT,
@@ -210,7 +214,10 @@ function buildTierEffectiveness(events) {
 }
 
 function buildDivergenceHotspots(events) {
-  const divergenceEvents = events.filter((event) => event.event === EVENTS.SCORE_DIVERGENCE && Array.isArray(event.divergences));
+  const divergenceEvents = events.filter((event) => (
+    event.event === LEGACY_SCORE_DIVERGENCE_EVENT
+    && Array.isArray(event.divergences)
+  ));
   if (divergenceEvents.length === 0) return null;
 
   const grouped = new Map();
@@ -221,10 +228,7 @@ function buildDivergenceHotspots(events) {
       if (!factor || !Number.isFinite(delta)) continue;
 
       if (!grouped.has(factor)) {
-        grouped.set(factor, {
-          occurrences: 0,
-          deltas: [],
-        });
+        grouped.set(factor, { occurrences: 0, deltas: [] });
       }
       const current = grouped.get(factor);
       current.occurrences += 1;
@@ -491,7 +495,7 @@ function hasChangesRequestedOutcome(manifest, events) {
 
 function buildPackDivergenceSummary(events) {
   const divergenceEvents = events.filter((event) => (
-    event.event === EVENTS.SCORE_DIVERGENCE
+    event.event === LEGACY_SCORE_DIVERGENCE_EVENT
     && Array.isArray(event.divergences)
   ));
   const deltas = [];
@@ -562,13 +566,17 @@ function buildGuidancePackInsights(manifests, events) {
       )
     ));
 
-    packSummaries[pack] = {
+    const packSummary = {
       usage_count: runIds.size,
       avg_review_rounds: average(reviewRounds),
       changes_requested_rate: ratio(changesRequestedRuns.length, runIds.size),
       stuck_factors: factorAnalysisToStuckFactors(buildFactorAnalysis(packEvents)),
-      executor_reviewer_divergence: buildPackDivergenceSummary(packEvents),
     };
+    const legacyDivergence = buildPackDivergenceSummary(packEvents);
+    if (legacyDivergence.occurrences > 0) {
+      packSummary.executor_reviewer_divergence = legacyDivergence;
+    }
+    packSummaries[pack] = packSummary;
   }
 
   return {
@@ -1429,7 +1437,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
 
   const reviewRuns = new Map();
   for (const manifest of manifests) {
-    reviewRuns.set(manifest.data.run_id, Number(manifest.data.review?.max_rounds || 20));
+    reviewRuns.set(manifest.data.run_id, Number(manifest.data.review?.max_rounds || 2));
   }
   const maxRoundsCompliant = new Set();
   for (const [runId, maxRounds] of reviewRuns.entries()) {
@@ -1487,6 +1495,12 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     [...passedRunIds].filter((runId) => recoveredRunIds.has(runId))
   );
   const reviewLineage = buildReviewLineageSummary({ repoRoot, manifests });
+  const calibrationVerdicts = new Map(manifests
+    .filter(({ data }) => data?.run_id)
+    .map(({ data }) => [
+      data.run_id,
+      readReviewVerdictRecords(repoRoot, data.run_id),
+    ]));
 
   const report = {
     repoRoot,
@@ -1525,6 +1539,11 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     round_cost: buildRoundCostSummary({ repoRoot, manifests, events, reviewLineage }),
     advisory_timing: buildAdvisoryTiming(events),
     override_audit: buildOverrideAuditSummary(events),
+    calibration: buildCalibrationReport({
+      manifests,
+      events,
+      verdictsByRun: calibrationVerdicts,
+    }),
   };
 
   return report;
@@ -1782,6 +1801,24 @@ function main() {
       `escalate=${factorFlip.escalate}`
     );
   }
+  if (report.calibration) {
+    const calibration = report.calibration;
+    console.log("  calibration:");
+    console.log(
+      `    coverage: ${formatCountSummary(calibration.coverage.by_task_class) || "n/a"} `
+      + `no_rubric_runs=${calibration.coverage.no_rubric_runs}`
+    );
+    console.log(
+      `    decisions: ${Object.entries(calibration.promotion_decisions)
+        .map(([taskClass, decision]) => `${taskClass}=${decision.status}`)
+        .join(", ")}`
+    );
+    console.log(
+      `    legacy_mechanisms: ${Object.entries(calibration.legacy_mechanisms)
+        .map(([mechanism, summary]) => `${mechanism}=${summary.decision}`)
+        .join(", ")}`
+    );
+  }
   console.log(`  most_stuck_factor: ${report.factor_analysis.most_stuck_factor ?? "n/a"}`);
   if (hasRubricInsights(report.rubric_insights)) {
     const gradeDistribution = report.rubric_insights.quality_grade_distribution;
@@ -1791,7 +1828,9 @@ function main() {
     const topHotspot = report.rubric_insights.divergence_hotspots?.[0];
     console.log(`  rubric_grades: ${gradeText}`);
     console.log(`  avg_quality_ratio: ${report.rubric_insights.avg_quality_ratio ?? "n/a"}`);
-    console.log(`  top_divergence_hotspot: ${topHotspot ? `${topHotspot.factor_pattern} (${topHotspot.avg_delta})` : "n/a"}`);
+    if (topHotspot) {
+      console.log(`  legacy_divergence_hotspot: ${topHotspot.factor_pattern} (${topHotspot.avg_delta})`);
+    }
   }
   if (report.guidance_pack_insights?.status === NO_GUIDANCE_DATA_TEXT) {
     console.log(`  guidance_pack_insights: ${NO_GUIDANCE_DATA_TEXT}`);
@@ -1799,12 +1838,15 @@ function main() {
     console.log("  guidance_pack_insights:");
     for (const [pack, summary] of Object.entries(report.guidance_pack_insights?.packs || {})) {
       const topStuckFactor = summary.stuck_factors?.[0]?.factor || "n/a";
+      const legacyDivergence = summary.executor_reviewer_divergence;
       console.log(
         `    ${pack}: usage_count=${summary.usage_count} ` +
         `avg_review_rounds=${summary.avg_review_rounds ?? "n/a"} ` +
         `changes_requested_rate=${summary.changes_requested_rate ?? "n/a"} ` +
-        `top_stuck_factor=${topStuckFactor} ` +
-        `divergence_avg_delta=${summary.executor_reviewer_divergence?.avg_delta ?? "n/a"}`
+        `top_stuck_factor=${topStuckFactor}` +
+        (legacyDivergence
+          ? ` legacy_divergence_avg_delta=${legacyDivergence.avg_delta}`
+          : "")
       );
     }
   }

@@ -132,6 +132,19 @@ test("createManifestSkeleton defaults and validates review assurance policy", ()
     worktreePath: path.join(repoRoot, "wt"),
   });
   assert.equal(standard.policy.review_assurance, DEFAULT_REVIEW_ASSURANCE);
+  assert.equal(standard.review.max_rounds, 2);
+
+  const compact = createManifestSkeleton({
+    repoRoot,
+    runId: "issue-528-20260524120030000",
+    branch: "issue-528-compact",
+    baseBranch: "main",
+    issueNumber: 528,
+    worktreePath: path.join(repoRoot, "wt-compact"),
+    reviewAssurance: REVIEW_ASSURANCE.COMPACT,
+  });
+  assert.equal(compact.policy.review_assurance, "compact");
+  assert.equal(compact.review.max_rounds, 1);
 
   const hardened = createManifestSkeleton({
     repoRoot,
@@ -143,6 +156,11 @@ test("createManifestSkeleton defaults and validates review assurance policy", ()
     reviewAssurance: REVIEW_ASSURANCE.HARDENED,
   });
   assert.equal(hardened.policy.review_assurance, "hardened");
+  assert.equal(hardened.review.max_rounds, 3);
+  for (const field of ["merge", "cleanup", "reviewer_write"]) {
+    assert.equal(compact.policy[field], hardened.policy[field]);
+  }
+  assert.deepEqual(compact.roles, hardened.roles);
 
   assert.throws(
     () => createManifestSkeleton({
@@ -1119,7 +1137,7 @@ test("formatAttemptsForPrompt formats attempts correctly", () => {
   ];
   const result = formatAttemptsForPrompt(attempts);
   assert.match(result, /## Previous Attempt \(dispatch #1\)/);
-  assert.match(result, /### Score Log/);
+  assert.match(result, /### Legacy Score Log/);
   assert.match(result, /0\.35s/);
   assert.match(result, /### Reviewer Feedback/);
   assert.match(result, /Timeout middleware missing/);

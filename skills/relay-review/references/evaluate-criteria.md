@@ -39,8 +39,15 @@ Note: The reviewer does NOT fix code directly — all fixes go through the execu
 
 **Re-dispatch rules:** file:line references, what to fix (not how), "do not change anything else".
 
-**Convergence model:** Loop until all rubric factors meet target AND qualitative checks pass. The rubric anchors each round to the original scope — prevents drift. Safety cap: 20 rounds.
+**Convergence model:** Compact assurance allows one post-publication review. Standard
+allows two review rounds: one independent review, one targeted re-dispatch when
+needed, then one review of the corrected result. Hardened allows three rounds for
+the existing pre-publication, targeted-repair, and post-publication path.
 
-**After safety cap:** Escalate — show user the PR URL, list unresolved issues, let them decide. Hitting the cap means something is structurally wrong, not that more rounds would help.
+An explicit extended policy for experimental work may persist a still-higher `review.max_rounds`. It
+retains repeated-issue, flip-flop, SHA, and audit gates.
+
+**After the configured cap:** Escalate — show the user the PR URL, list unresolved
+issues, and let them decide. More default rounds are not evidence of convergence.
 
 Lineage grammar for repeated review findings is documented separately in `review-lineage.md`.

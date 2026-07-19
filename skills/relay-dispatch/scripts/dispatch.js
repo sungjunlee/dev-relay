@@ -29,7 +29,7 @@
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
  *   --publish-policy <mode> immediate | after-internal-review (default: immediate)
- *   --review-assurance <level> standard | hardened (default: standard)
+ *   --review-assurance <level> compact | standard | hardened (default: standard)
  *   --tags <csv>          Explicit routing tags; override inferred routing tags
  *   --rubric-grandfathered Retired alias; dispatch rejects it
  *   --request-id <id>      Link the run back to a relay-ready request
@@ -87,7 +87,11 @@ const {
 } = require("./manifest/store");
 const { parseModelHints } = require("./model-hints");
 const { resolveExecutorDefaultModel } = require("./executor-model-config");
-const { normalizeReviewAssurance } = require("./manifest/review-assurance");
+const {
+  REVIEW_ASSURANCE: REVIEW_ASSURANCE_LEVEL,
+  normalizeReviewAssurance,
+  reviewAssuranceRank,
+} = require("./manifest/review-assurance");
 const {
   createRunId,
   ensureRunLayout,
@@ -121,7 +125,6 @@ const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/at
 const {
   buildGuidanceMetadata,
   extractGuidanceFromPrompt,
-  extractReviewAssuranceFromPrompt,
   extractTaskProfileSummaryFromPrompt,
   GUIDANCE_METADATA_FILENAME,
   persistGuidanceMetadata,
@@ -206,7 +209,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
   console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
   console.log(`  --publish-policy   ${modeLabel("--publish-policy")} PR publication policy: immediate | after-internal-review (default: immediate)`);
-  console.log(`  --review-assurance ${modeLabel("--review-assurance")} Review assurance: standard | hardened (default: standard)`);
+  console.log(`  --review-assurance ${modeLabel("--review-assurance")} Review assurance: compact | standard | hardened (default: standard)`);
   console.log(`  --tags             ${modeLabel("--tags")} Explicit routing tags; override inferred routing tags`);
   console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
   console.log(`  --request-id       ${modeLabel("--request-id")} Link the run back to a relay-ready request`);
@@ -305,9 +308,9 @@ function loadInitialRoutePlan(repoRoot) {
     executor: EXECUTOR_ARG,
     model: MODEL,
   });
-  // An explicit CLI --review-assurance always wins. Seed it into the run intent
-  // before preset expansion so a preset cannot record itself as having filled a
-  // field the CLI overrode (keeps the persisted route-plan attribution honest).
+  // An explicit CLI --review-assurance wins when it meets the task-derived risk
+  // floor. Seed it before preset expansion so a preset cannot record itself as
+  // having filled a field the CLI overrode (keeps attribution honest).
   if (REVIEW_ASSURANCE_RAW && !nonEmptyString(routeIntent.review_assurance)) {
     routeIntent.review_assurance = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW);
   }
@@ -2208,9 +2211,48 @@ async function main() {
     effectiveDoneCriteriaPath,
   });
   let taskPrompt = taskPromptResult.prompt;
-  if (!RESUME_MODE && REVIEW_ASSURANCE_RAW === undefined && REVIEW_ASSURANCE_SOURCE === null) {
+  if (!RESUME_MODE) {
     try {
-      REVIEW_ASSURANCE = extractReviewAssuranceFromPrompt(taskPrompt) || REVIEW_ASSURANCE;
+      const promptTaskProfile = extractTaskProfileSummaryFromPrompt(taskPrompt);
+      const promptReviewAssurance = promptTaskProfile?.review_assurance || null;
+      if (
+        promptReviewAssurance
+        && REVIEW_ASSURANCE_RAW === undefined
+        && REVIEW_ASSURANCE_SOURCE === null
+      ) {
+        REVIEW_ASSURANCE = promptReviewAssurance;
+      } else if (
+        promptReviewAssurance
+        && reviewAssuranceRank(REVIEW_ASSURANCE)
+          < reviewAssuranceRank(promptReviewAssurance)
+      ) {
+        throw new Error(
+          `review_assurance=${REVIEW_ASSURANCE} is below the `
+          + `${promptReviewAssurance} risk floor from task_profile`
+        );
+      }
+      const minimumReviewAssurance = promptTaskProfile?.minimum_review_assurance
+        || REVIEW_ASSURANCE_LEVEL.STANDARD;
+      if (
+        reviewAssuranceRank(REVIEW_ASSURANCE)
+        < reviewAssuranceRank(minimumReviewAssurance)
+      ) {
+        throw new Error(
+          `review_assurance=${REVIEW_ASSURANCE} requires a complete risk-aware `
+          + "task_profile before selecting below the standard fail-closed floor"
+        );
+      }
+      if (promptTaskProfile?.publish_policy === "after-internal-review") {
+        if (
+          PUBLISH_POLICY_ARG !== undefined
+          && PUBLISH_POLICY_ARG !== "after-internal-review"
+        ) {
+          throw new Error(
+            "high-risk task_profile requires --publish-policy after-internal-review"
+          );
+        }
+        PUBLISH_POLICY = "after-internal-review";
+      }
     } catch (error) {
       failEarly(`Invalid task_profile metadata in prompt: ${error.message}`, {
         error_code: "task_profile_parse_failed",
@@ -2369,6 +2411,7 @@ async function main() {
       leafId: LEAF_ID || manifest?.source?.leaf_id || null,
       doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
       reviewAssurance: REVIEW_ASSURANCE,
+      publishPolicy: PUBLISH_POLICY,
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
       runState: manifest?.state || null,
       dispatchSkipped: false,

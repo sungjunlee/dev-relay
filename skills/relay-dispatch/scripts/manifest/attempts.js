@@ -76,7 +76,7 @@ function formatAttemptsForPrompt(attempts) {
   const sections = attempts.map((attempt) => {
     const lines = [`## Previous Attempt (dispatch #${attempt.dispatch_number})`];
     if (attempt.score_log) {
-      lines.push("", "### Score Log", attempt.score_log);
+      lines.push("", "### Legacy Score Log", attempt.score_log);
     }
     if (attempt.reviewer_feedback) {
       lines.push("", "### Reviewer Feedback", attempt.reviewer_feedback);

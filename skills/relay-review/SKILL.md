@@ -10,14 +10,14 @@ metadata:
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, and `RUN_ID`.
-- Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, Score Log/rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`.
+- Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, structured evaluation or legacy rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
 # Relay Review
 
 ## Use when
 
-- Reviewing an executor PR against frozen Done Criteria and rubric anchors
+- Reviewing an executor PR against frozen Done Criteria, Verification evidence, and optional Earned Rubric anchors
 - Running `review-runner.js` for isolated reviewer invocation, PR comments, and manifest transitions
 - Producing a pass, changes-requested, or escalated relay review verdict
 
@@ -46,7 +46,7 @@ gh issue view <N>  # Done Criteria / Acceptance Criteria source; infer <N> per r
 
 2. **Fix the anchor** — these do NOT change across rounds:
    - Done Criteria from `anchor.done_criteria_path` when present, otherwise from the issue (the contract)
-   - Rubric factors + targets from the Score Log (if relay-plan was used)
+   - Structured evaluation channels or the persisted legacy rubric from the run directory
    - Original scope boundary ("do not change" areas)
 
 3. Preferred path: let the review runner invoke an isolated reviewer directly:
@@ -79,14 +79,14 @@ This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `re
 | current_phase | outcome | event | next_phase |
 |---------------|---------|-------|------------|
 | Phase 1 | pass | `phase1_pass` | Phase 2 |
-| Phase 1 | fail | `phase1_fail` | Re-dispatch, then Phase 1 |
+| Round 1, compact | fail | `repair_cycle_exhausted` | Escalated |
+| Round 1, standard/hardened | fail | `phase_fail` | One targeted re-dispatch |
 | Phase 2 | pass | `phase2_pass` | Converged |
 | Converged (internal) | ready-to-publish verdict emitted | `converged` | `publish_pending` |
 | Converged (post-publication) | ready verdict emitted | `converged` | `ready_to_merge` |
-| Phase 2 | fail | `phase2_fail` | Re-dispatch, then Phase 1 |
-| Any phase | same issue 3+ rounds or safety cap hit | `escalated` | Escalated |
+| Configured cap | fail | `repair_cycle_exhausted` | Escalated |
 
-Two phases, run in order. Each round re-measures against the **original anchor**, not the previous round's state.
+Two phases run in order. Standard assurance uses one independent review, one targeted re-dispatch when needed, and one review of the corrected result. Compact escalates a substantive first-review failure; hardened has an explicit third-round budget for its pre-publication/repair/post-publication path. Each round re-measures against the **original anchor**, not the previous round's state.
 
 ### Phase 1: Spec Compliance
 
@@ -96,12 +96,12 @@ Two phases, run in order. Each round re-measures against the **original anchor**
    - **Integration**: Does it break callers/consumers of changed code?
    - **Security**: Auth/token handling, input validation, injection risks?
 
-6. **Rubric verification** (when Score Log present):
+6. **Evaluation channel verification**:
    - Do not copy `rubric.yaml` or run artifacts into the worktree; runner rubric resolution is run-dir-relative by design (see `references/runner-notes.md`)
-   - The reviewer evaluates `quality_review_status` by inspection; the runner independently verifies `quality_execution_status` via a SHA-bound execution-evidence artifact. The reviewer cannot execute code, so quality evidence comes from two trust roots.
-   - Re-score ALL evaluated quality factors with fresh eyes (0-10) and include numeric `score` / `target_score`; contract factors stay pass/fail and may use `null` numeric fields
-   - Any required factor below target → issue
-   - The runner computes executor/reviewer divergence and re-dispatches toward the weakest below-target quality factor before falling back to generic issue repair
+   - Outcome Contract and captured Verification remain independent pass/fail authorities.
+   - The independent reviewer is the only scoring authority. Executor-authored scores are not review evidence.
+   - Score only persisted Earned Rubric factors; use `rubric_scores: []` when none were earned. Numeric scores remain optional when the persisted factor has qualitative anchors only.
+   - A below-target factor becomes a targeted reviewer finding; do not invent generic factors to fill the verdict schema.
 
 7. **Phase 1 gate**: Issues found → return a structured verdict with `verdict=changes_requested`, then re-dispatch (see Re-dispatch below). Do NOT proceed to Phase 2 until Phase 1 passes.
 
@@ -117,14 +117,13 @@ Before any re-dispatch, check:
 - **Scope:** Does the fix address a review issue, or is it scope creep?
 - **Regression:** Are previously passing rubric factors still passing?
 - **Churn:** Is the total diff growing without convergence?
-- **Score trend:** Is the same quality factor flat for 3 rounds? If yes, pivot implementation approach without expanding scope, or escalate.
-- **Stuck:** Same issue 3+ consecutive rounds → escalate immediately (not fixable by the executor).
+- **Stuck:** A substantive failure at the configured cap escalates. Repeated-issue and flip-flop detection remain active.
 
 ### Converge
 
 11. Both phases pass → produce a structured verdict with `verdict=pass` and `issues=[]`. Use `next_action=publish_pending` when the manifest state is `internal_review_pending`; use `next_action=ready_to_merge` when the manifest state is `review_pending`.
 
-**Safety cap: 20 rounds total.** Ceiling, not target — most PRs converge in 1-3 rounds. Hitting the cap means something is structurally wrong; escalate.
+**Assurance caps:** compact `1`, standard `2`, hardened `3`. Higher experimental values must be explicitly persisted.
 
 ## Verdict + Audit Trail
 

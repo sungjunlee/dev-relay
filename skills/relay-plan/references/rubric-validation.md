@@ -1,8 +1,21 @@
 # Rubric Validation, Grading, and Quality Card
 
-This reference holds the validation detail that used to live inline in `SKILL.md`. Apply it after building the rubric and before simplification.
+This reference holds validation detail for both structured evaluation artifacts and
+legacy rubrics. For `evaluation.schema_version: 2`, first apply
+`evaluation-channels.md`: validate frozen Done Criteria as the Outcome Contract, place
+binary evidence under Verification, and allow `earned_rubric.factors: []`. Factor
+minimums, `prerequisites`, and contract-tier factor rules below are legacy-only during
+the transition.
 
-## Validate the rubric (full checklist)
+## Validate Structured Evaluation Channels
+
+- [ ] Outcome Contract points to frozen, observable Done Criteria and explicit non-goals
+- [ ] Verification contains concrete command, observation, or artifact evidence
+- [ ] Tests, builds, type checks, lint, and artifact existence are not Earned Rubric factors
+- [ ] Earned Rubric is optional; zero factors is a valid result
+- [ ] No lower-authority channel expands or waives the Outcome Contract
+
+## Validate a Legacy Rubric (full checklist)
 
 Before dispatch, verify:
 
@@ -133,7 +146,6 @@ Calibration status: skipped (S/M task)
 Risk signals: none
 Historical signal:
 historical_signal.stuck_factors: Docs (met_rate=0.5, avg_rounds_to_met=3); Coverage (met_rate=0.6667, avg_rounds_to_met=1.5)
-historical_signal.divergence_hotspots: Coverage (avg_delta=2.5, recommendation=Executor scores trend higher than review; tighten examples or add automation.); Docs (avg_delta=-2, recommendation=Reviewer scores trend higher than executor; check whether the factor is underspecified.)
 historical_signal.avg_rounds: contract.avg_rounds_to_met=1.5; quality.avg_rounds_to_met=1; metrics.median_rounds_to_ready=3
 Probe signal:
 probe_signal.test_infra: jest
@@ -161,7 +173,6 @@ Calibration status: skipped (S/M task)
 Risk signals: none
 Historical signal: Empty-data state — historical signal not available, proceed to rubric design.
 historical_signal.stuck_factors: no historical data available
-historical_signal.divergence_hotspots: no historical data available
 historical_signal.avg_rounds: no historical data available
 Probe signal: no quality infra detected.
 probe_signal.test_infra: no quality infra detected
@@ -189,7 +200,6 @@ Calibration status: skipped (S/M task)
 Risk signals: none
 Historical signal: Reliability report unavailable: Unexpected end of JSON input. Proceeding without historical signal.
 historical_signal.stuck_factors: no historical data available
-historical_signal.divergence_hotspots: no historical data available
 historical_signal.avg_rounds: no historical data available
 Probe signal: Probe signals unavailable: probe timed out after 30s. Proceeding without probe signal.
 probe_signal.test_infra: no quality infra detected
@@ -201,20 +211,6 @@ probe_signal.scripts: no quality infra detected
 Grade: A
 Action: dispatch allowed
 ```
-
-### TDD skip reasons
-
-When zero factors carry an applied `tdd_anchor`, the quality card records why as one of five standardized reasons (see `skills/relay-plan/scripts/quality-card.js`):
-
-| Reason | When it applies |
-|--------|------------------|
-| `no_runner` | No test infra was detected (auto-derived from the probe signal; the planner does not need to declare this one) |
-| `docs_only` | The diff is docs-only — nothing executable to test-drive |
-| `broad_ui_judgment` | The outcome is broad visual/UX judgment, not a crisp assertion a test can pin down |
-| `exploratory_task` | The task is a spike or investigation where behavior is discovered, not specified up front |
-| `non_crisp_behavior` | Done Criteria describe behavior too loosely for a failing-test-first anchor |
-
-An unrecognized skip reason string is a fail-closed error, not a silent coercion — pick one of the five values above or leave it undeclared.
 
 ## Grading logic
 
@@ -242,7 +238,6 @@ Grade D means stop and revise the rubric first. Grade C means warn before dispat
 | `ready_light_factor_count` | Ready-light S rubric has more than 2 substantive factors without explicit risk or design-bearing rationale |
 | `repo_hygiene_in_factor` | Repo-wide lint, typecheck, or test command is placed in `factors` instead of `prerequisites` |
 | `over_engineering_risk` | Ready-light factor asks for unsupported helper, dependency, config, or abstraction work |
-| `all_contract` | Zero quality coverage on a design-bearing task |
 | `weak_done_criteria` | Done Criteria are not observable, bounded, reviewable, risk-aware, or verifiable |
 
 Any check fails → revise. See `rubric-design-guide.md` for fix patterns.

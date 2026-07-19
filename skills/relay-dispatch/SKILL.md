@@ -9,7 +9,7 @@ metadata:
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
-- Files: dispatch prompt (`--prompt-file` or `--prompt`), required rubric file, optional Done Criteria file, request/leaf ids, copied files, and retained run manifest.
+- Files: dispatch prompt (`--prompt-file` or `--prompt`), required evaluation artifact or legacy rubric via `--rubric-file`, optional Done Criteria file, request/leaf ids, copied files, and retained run manifest.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # Relay Dispatch
@@ -56,9 +56,9 @@ Essential flags:
 
 - `--branch, -b` starts a new retained run; `--run-id` or `--manifest` resumes one.
 - `--prompt, -p` or `--prompt-file` supplies the executor prompt.
-- `--rubric-file` is required for new dispatches from relay-plan.
+- `--rubric-file` is required for new dispatches from relay-plan and carries either structured evaluation channels or a readable legacy rubric.
 - `--executor, -e`, `--model, -m`, and `--model-hints` select harness/model routes subject to policy.
-- `--review-assurance`, `--request-id`, `--leaf-id`, and `--done-criteria-file` persist review and readiness anchors.
+- `--review-assurance compact | standard | hardened`, `--request-id`, `--leaf-id`, and `--done-criteria-file` persist review and readiness anchors.
 - `--detach` starts a detached dispatch supervisor, prints a receipt, and returns before executor completion.
 - `--dry-run` validates without executing; `--json` returns structured output for orchestration.
 
@@ -72,7 +72,7 @@ For precedence, managed CLI defaults, unmanaged route requirements, and optional
 
 ### Timeout guidance
 
-Use defaults for simple work, `--timeout 3600` when the executor prompt includes self-review, and `--timeout 5400` only for complex multi-file work.
+Use defaults for simple work, `--timeout 3600` when implementation plus verification needs more time, and `--timeout 5400` only for complex multi-file work with a long final gate.
 
 ## Verify Success
 
@@ -83,12 +83,14 @@ JSON output reports `status`, `runId`, `manifestPath`, `runState`, `cleanupPolic
 - `completed-with-warning` + `review_pending` → inspect uncommitted work, then review
 - `failed` + `escalated` → inspect error, fix or re-dispatch
 
-Successful dispatches retain the worktree by default — use the returned `runId` to continue. Resume only from `changes_requested`; dispatch reuses the same run + worktree. On re-dispatch, previous Score Log + reviewer feedback are auto-prepended (storage: `~/.relay/runs/<slug>/<run-id>/previous-attempts.json`).
+Successful dispatches retain the worktree by default — use the returned `runId` to continue. Resume only from `changes_requested`; dispatch reuses the same run + worktree. On re-dispatch, previous attempt evidence + reviewer feedback are auto-prepended, including legacy Score Log content when present (storage: `~/.relay/runs/<slug>/<run-id>/previous-attempts.json`).
 
 Publication policy:
 - Default direct dispatch behavior is `--publish-policy immediate`: push/open PR, then `review_pending`.
 - Full `/relay` orchestration uses `--publish-policy after-internal-review`: retain the branch locally in `internal_review_pending`, require relay-review LGTM, then run `publish-run.js` to push/open PR and move to `review_pending`.
 - `publish-run.js` is valid only from `publish_pending`; it writes a `publish_result` event and stamps `git.pr_number`.
+
+Risk-aware task profiles derive compact/standard/hardened from task properties, never model identity. Compact keeps the same permission, sandbox, network, repository, SHA, audit, publication, and merge boundaries with a one-round review cap; hardened uses the existing delayed-publication and advisory-gated path. See `../relay-plan/references/risk-assurance.md`.
 
 ### Handling Failures
 

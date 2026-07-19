@@ -79,16 +79,21 @@ test("non-TDD rubric leaves dispatch prompt byte-identical to baseline", () => {
   assert.equal(rendered, baseline);
 });
 
-test("non-TDD baseline keeps the compact iteration protocol", () => {
+test("non-TDD baseline delegates the repair process while requiring evidence and a commit", () => {
   const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
 
-  assert.match(baseline, /Fix the weakest required failing factor with one focused change/);
-  assert.match(baseline, /self-review finds no stubs\/TODOs\/test shortcuts/);
+  assert.match(baseline, /## Completion Responsibilities/);
+  assert.match(baseline, /Capture concise verification evidence/);
+  assert.match(baseline, /final work is committed/);
+  assert.doesNotMatch(baseline, /Score Log/);
+  assert.doesNotMatch(baseline, /self-(?:evaluate|review)/i);
+  assert.doesNotMatch(baseline, /weakest (?:required )?factor/i);
+  assert.doesNotMatch(baseline, /max \d+ iterations/i);
   assert.doesNotMatch(baseline, /REGRESSION CHECK/);
   assert.doesNotMatch(baseline, /Oscillation/);
 });
 
-test("TDD rubric inserts Step 0a, preserves existing Step 0 numbering, and scopes Step 4 relaxation", () => {
+test("TDD rubric inserts Step 0a before the final prerequisite gate without restoring executor ceremony", () => {
   const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
 
   const rendered = applyTddFlavorToDispatchPrompt({
@@ -101,9 +106,11 @@ test("TDD rubric inserts Step 0a, preserves existing Step 0 numbering, and scope
   assert.match(rendered, new RegExp(TDD_COMMIT_PREFIX));
   assert.match(rendered, /tests\/parser\.test\.js/);
   assert.match(rendered, /Do not modify `rubric\.factors\[\]\.command`/);
-  assert.match(rendered, /this relaxation applies only to factors carrying `tdd_anchor`; other factors in the same rubric are reviewed under the existing rule/);
   assert.ok(rendered.indexOf("0a. TDD RED ANCHOR STEP") < rendered.indexOf("  0. PREREQUISITE GATE"));
   assert.match(rendered, /  0\. PREREQUISITE GATE/);
+  assert.doesNotMatch(rendered, /Score Log/);
+  assert.doesNotMatch(rendered, /self-(?:evaluate|review)/i);
+  assert.doesNotMatch(rendered, /max \d+ iterations/i);
 });
 
 test("empty tdd_anchor values do not activate Step 0a", () => {
@@ -284,13 +291,13 @@ test("reference docs document the exact two-cell TDD state matrix and avoid top-
   const matrix = [
     "| any factor has `tdd_anchor` | Behavior |",
     "|------|----------|",
-    "| Yes  | Step 0a active for every anchor; reviewer TDD section active; prereq exclusion active for those paths; final self-review shortcut check relaxed for `tdd_anchor` factors only |",
-    "| No   | Compact default protocol; reviewer prompt unchanged |",
+    "| Yes  | Step 0a active for every anchor; reviewer TDD section active; prerequisite exclusion active for those paths |",
+    "| No   | Compact default completion contract; reviewer prompt unchanged |",
   ].join("\n");
 
   assert.match(rubricGuide, /tdd_anchor: <path-string>/);
   assert.match(rubricGuide, /tdd_runner: <jest\|pytest\|mocha\|vitest\|\.\.\.>/);
-  assert.ok(iterationProtocol.includes(matrix));
+  assert.ok(iterationProtocol.replace(/\r\n/g, "\n").includes(matrix));
   assert.match(iterationProtocol, /Do not add a top-level `tdd_mode` field/);
   assert.doesNotMatch(reviewSchema, /tdd_anchor|tdd_runner|tdd_mode/);
 });

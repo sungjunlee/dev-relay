@@ -34,6 +34,7 @@ test("manifest/store createManifestSkeleton keeps draft lifecycle defaults", () 
   assert.equal(manifest.state, "draft");
   assert.equal(manifest.cleanup.status, "pending");
   assert.equal(manifest.roles.executor, "unknown");
+  assert.equal(manifest.review.max_rounds, 2);
 });
 
 test("manifest/store writeManifest and readManifest round-trip direct imports", () => {

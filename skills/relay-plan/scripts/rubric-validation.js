@@ -1,4 +1,9 @@
 const { extractAllFactors } = require("./tdd-flavor");
+const {
+  classifyEvaluationArtifact,
+} = require("../../relay-dispatch/scripts/evaluation-contract");
+const { validateEarnedRubricArtifact } = require("./earned-rubric");
+const { validateObservationContext } = require("./observation-context");
 
 const SUBSTANTIVE_TIERS = new Set(["contract", "quality"]);
 // Ready-light factors should prove the narrow task contract; broad repo hygiene belongs in prerequisites.
@@ -193,21 +198,34 @@ function issue(code, message) {
 }
 
 function validateReadyLightRubric({ rubricYaml, taskProfile = {} } = {}) {
+  const artifact = classifyEvaluationArtifact(rubricYaml);
   const factors = extractAllFactors(rubricYaml);
   const substantiveFactors = factors.filter(isSubstantiveFactor);
   const errors = [];
   const warnings = [];
 
+  if (artifact.kind === "structured") {
+    const earnedRubric = validateEarnedRubricArtifact(rubricYaml);
+    for (const earnedError of earnedRubric.errors) {
+      errors.push(issue(earnedError.code, earnedError.message));
+    }
+    const observation = validateObservationContext(rubricYaml);
+    for (const observationError of observation.errors) {
+      errors.push(issue(observationError.code, observationError.message));
+    }
+  }
+
   if (!isReadyLightProfile(taskProfile)) {
     return {
-      action: "allow",
+      action: errors.length > 0 ? "block" : "allow",
       substantive_total: substantiveFactors.length,
       errors,
       warnings,
     };
   }
 
-  const hygieneFactors = substantiveFactors.filter(isRepoHygieneFactor);
+  const factorCandidates = artifact.kind === "structured" ? factors : substantiveFactors;
+  const hygieneFactors = factorCandidates.filter(isRepoHygieneFactor);
   if (hygieneFactors.length > 0) {
     errors.push(issue(
       "repo_hygiene_in_factor",
@@ -220,6 +238,15 @@ function validateReadyLightRubric({ rubricYaml, taskProfile = {} } = {}) {
       "over_engineering_risk",
       "Unsupported helper, dependency, config, or abstraction requirements are over-engineering risk for ready-light rubrics."
     ));
+  }
+
+  if (artifact.kind === "structured") {
+    return {
+      action: errors.length > 0 ? "block" : "allow",
+      substantive_total: substantiveFactors.length,
+      errors,
+      warnings,
+    };
   }
 
   // A compact ready-light rubric needs at least one reviewable contract and should stay at two by default.

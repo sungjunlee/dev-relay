@@ -5,10 +5,6 @@ function isMissingScoreCell(value) {
   return !normalized || normalized === "—" || normalized === "–" || normalized === "-" || normalized === "n/a" || normalized === "na";
 }
 
-function normalizeFactorKey(value) {
-  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
 function parseNumericScore(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const text = String(value || "").trim();
@@ -61,7 +57,6 @@ module.exports = {
   getRubricScoreNumber,
   getRubricTargetNumber,
   isMissingScoreCell,
-  normalizeFactorKey,
   parseNumericScore,
   parseTargetScore,
   toIterationScoreEventEntry,

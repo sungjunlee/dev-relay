@@ -20,7 +20,6 @@ const {
   appendIterationScore,
   appendRubricQuality,
   appendRunEvent,
-  appendScoreDivergence,
 } = require("../../../skills/relay-dispatch/scripts/relay-events");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "reliability-report.js");
@@ -153,7 +152,7 @@ function appendScore(repoRoot, runId, round, factor, met = true) {
   });
 }
 
-function setManifestGuidance(repoRoot, runId, guidancePacks) {
+function setManifestGuidance(repoRoot, runId, guidancePacks, profileOverrides = {}) {
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
   const manifest = readManifest(manifestPath).data;
   manifest.advisory = {
@@ -166,6 +165,7 @@ function setManifestGuidance(repoRoot, runId, guidancePacks) {
         domains: ["relay-dispatch"],
         risk_tags: [],
         execution_mode: "standard",
+        ...profileOverrides,
       },
       artifact_path: "guidance-metadata.json",
       source: "prompt",
@@ -996,19 +996,6 @@ test("reliability-report derives guidance pack insights from guidance events and
       { factor: "Refactor", target: ">= 8", observed: "8", met: true, status: "pass" },
     ],
   });
-  appendScoreDivergence(repoRoot, runEventPass, {
-    round: 1,
-    divergences: [
-      { factor: "Coverage", executor: "9", reviewer: "7", delta: 2, tier: "contract" },
-    ],
-  });
-  appendScoreDivergence(repoRoot, runEventChanges, {
-    round: 3,
-    divergences: [
-      { factor: "Docs", executor: "5", reviewer: "6", delta: -1, tier: "quality" },
-    ],
-  });
-
   const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
   const report = JSON.parse(stdout);
 
@@ -1027,11 +1014,6 @@ test("reliability-report derives guidance pack insights from guidance events and
             avg_rounds_to_met: 2,
           },
         ],
-        executor_reviewer_divergence: {
-          occurrences: 0,
-          avg_delta: null,
-          hotspots: [],
-        },
       },
       "surgical-change": {
         usage_count: 3,
@@ -1051,24 +1033,6 @@ test("reliability-report derives guidance pack insights from guidance events and
             avg_rounds_to_met: 1,
           },
         ],
-        executor_reviewer_divergence: {
-          occurrences: 2,
-          avg_delta: 0.5,
-          hotspots: [
-            {
-              factor_pattern: "Coverage",
-              occurrences: 1,
-              avg_delta: 2,
-              recommendation: "Executor scores trend higher than review; tighten examples or add automation.",
-            },
-            {
-              factor_pattern: "Docs",
-              occurrences: 1,
-              avg_delta: -1,
-              recommendation: "Reviewer scores trend higher than executor; check whether the factor is underspecified.",
-            },
-          ],
-        },
       },
       "verification-evidence": {
         usage_count: 1,
@@ -1088,18 +1052,6 @@ test("reliability-report derives guidance pack insights from guidance events and
             avg_rounds_to_met: 1,
           },
         ],
-        executor_reviewer_divergence: {
-          occurrences: 1,
-          avg_delta: 2,
-          hotspots: [
-            {
-              factor_pattern: "Coverage",
-              occurrences: 1,
-              avg_delta: 2,
-              recommendation: "Executor scores trend higher than review; tighten examples or add automation.",
-            },
-          ],
-        },
       },
     },
   });
@@ -1607,43 +1559,55 @@ test("reliability-report derives tier effectiveness from tiered iteration scores
   });
 });
 
-test("reliability-report derives divergence hotspots from score_divergence events", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-divergence-"));
+test("reliability-report preserves legacy score_divergence analytics without a producer", () => {
+  const repoRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "relay-report-legacy-divergence-")
+  );
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runA = createRunId({ branch: "run-a", timestamp: new Date("2026-04-12T05:00:00.000Z") });
-
+  const runId = createRunId({
+    branch: "legacy-divergence",
+    timestamp: new Date("2026-04-12T05:00:00.000Z"),
+  });
   writeRun(repoRoot, {
-    runId: runA,
+    runId,
     state: STATES.CHANGES_REQUESTED,
     rounds: 2,
-    updatedAt: recentTs,
   });
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  fs.appendFileSync(
+    path.join(runDir, "events.jsonl"),
+    `${JSON.stringify({
+      ts: new Date().toISOString(),
+      event: "score_divergence",
+      actor: "legacy-reviewer",
+      run_id: runId,
+      round: 1,
+      divergences: [
+        {
+          factor: "Coverage",
+          executor: "9",
+          reviewer: "6",
+          delta: 3,
+          tier: "contract",
+        },
+      ],
+    })}\n`
+  );
 
-  appendScoreDivergence(repoRoot, runA, {
-    round: 1,
-    divergences: [
-      { factor: "Coverage", executor: "9", reviewer: "6", delta: 3, tier: "contract" },
-      { factor: "Coverage", executor: "8", reviewer: "6", delta: 2, tier: "contract" },
-      { factor: "Docs", executor: "5", reviewer: "7", delta: -2, tier: "quality" },
-    ],
-  });
-
-  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const stdout = execFileSync(
+    "node",
+    [SCRIPT, "--repo", repoRoot, "--json"],
+    { encoding: "utf-8" }
+  );
   const report = JSON.parse(stdout);
 
   assert.deepEqual(report.rubric_insights.divergence_hotspots, [
     {
       factor_pattern: "Coverage",
-      occurrences: 2,
-      avg_delta: 2.5,
-      recommendation: "Executor scores trend higher than review; tighten examples or add automation.",
-    },
-    {
-      factor_pattern: "Docs",
       occurrences: 1,
-      avg_delta: -2,
-      recommendation: "Reviewer scores trend higher than executor; check whether the factor is underspecified.",
+      avg_delta: 3,
+      recommendation:
+        "Executor scores trend higher than review; tighten examples or add automation.",
     },
   ]);
 });
@@ -1684,7 +1648,6 @@ test("reliability-report populates only available rubric insight subfields", () 
   });
   assert.equal(report.rubric_insights.avg_quality_ratio, 0.5);
   assert.equal(report.rubric_insights.tier_effectiveness, null);
-  assert.equal(report.rubric_insights.divergence_hotspots, null);
   assert.deepEqual(report.rubric_insights.auto_vs_eval_correlation, {
     high_auto_runs: {
       avg_rounds: 1,
@@ -2444,4 +2407,55 @@ test("reliability-report --help mentions --by-dispatch", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /--by-dispatch/);
   assert.match(result.stdout, /executor\/model\/provider/);
+});
+
+test("reliability-report publishes path-aware calibration and class decisions", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-calibration-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date().toISOString();
+  const runId = createRunId({
+    branch: "calibration-docs",
+    timestamp: new Date("2026-07-19T04:30:00.000Z"),
+  });
+
+  writeRun(repoRoot, {
+    runId,
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  setManifestGuidance(repoRoot, runId, [], {
+    task_class: "documentation",
+    behavior_path: "lightweight",
+    review_assurance: "compact",
+  });
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
+  const manifest = readManifest(manifestPath).data;
+  manifest.policy.review_assurance = "compact";
+  writeManifest(manifestPath, manifest);
+  writeReviewVerdict(repoRoot, runId, 1, [], {
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    rubric_scores: [],
+  });
+
+  const report = JSON.parse(execFileSync(
+    "node",
+    [SCRIPT, "--repo", repoRoot, "--json"],
+    { encoding: "utf-8" }
+  ));
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], {
+    encoding: "utf-8",
+  });
+
+  assert.equal(report.calibration.by_run[runId].behavior_path, "lightweight");
+  assert.equal(report.calibration.by_run[runId].assurance_tier, "compact");
+  assert.equal(report.calibration.by_run[runId].rubric_mode, "none");
+  assert.equal(
+    report.calibration.promotion_decisions.documentation.status,
+    "continue_calibration"
+  );
+  assert.match(text, /calibration:/);
+  assert.match(text, /documentation=continue_calibration/);
 });

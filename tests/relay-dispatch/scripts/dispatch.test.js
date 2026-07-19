@@ -6266,7 +6266,8 @@ test("pushAndOpenPR uses the injected execFile seam for happy-path publication",
     branch: "issue-198",
   });
   assert.ok(createCall.args.includes(body));
-  assert.match(body, /^## Score Log$/m);
+  assert.match(body, /^## Dispatch Metadata$/m);
+  assert.doesNotMatch(body, /^## Score Log$/m);
   assert.match(body, /^- Run: issue-198-run$/m);
   assert.match(body, /^- Executor: codex$/m);
   assert.match(body, /^- Branch: issue-198$/m);
@@ -7364,7 +7365,7 @@ test("re-dispatch prompt includes previous iteration history", () => {
   // Verify the persisted dispatch prompt includes the history section
   const dispatchPrompt = fs.readFileSync(path.join(second.runDir, "dispatch-prompt.md"), "utf-8");
   assert.match(dispatchPrompt, /Previous Attempt \(dispatch #1\)/);
-  assert.match(dispatchPrompt, /Score Log/);
+  assert.match(dispatchPrompt, /Legacy Score Log/);
   assert.match(dispatchPrompt, /0\.35s/);
   assert.match(dispatchPrompt, /Timeout middleware missing/);
   assert.match(dispatchPrompt, /Do NOT Repeat/);

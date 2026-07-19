@@ -72,11 +72,7 @@ Review only issues a senior engineer should fix before merge:
 
 Set `quality_review_status` by inspection only. The reviewer cannot execute code; the runner independently verifies SHA-bound execution evidence from `execution-evidence.json`. This preserves the trust boundary between inspection evidence and execution evidence.
 
-If a rubric is present:
-- score every contract-tier factor as pass/fail against the diff
-- score every quality-tier factor independently using its `scoring_guide`; when the target is numeric, include numeric `score` and `target_score` on the 0-10 scale
-- set numeric fields to `null` for factors that are not numeric
-- do not defer to executor self-scores
+Follow the artifact-specific channel instructions appended below this review protocol. The Outcome Contract remains pass/fail, Verification remains evidence rather than a quality score, and only declared Earned Rubric factors are scored. Legacy rubric artifacts retain their original contract-tier and quality-tier interpretation.
 
 Do not invent nitpicks. Style-only suggestions are not review findings.
 

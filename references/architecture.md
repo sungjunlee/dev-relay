@@ -124,7 +124,7 @@ policy:
   merge: manual_after_lgtm      # merge strategy
   cleanup: on_close              # when to remove worktree
   reviewer_write: forbid         # reviewer must not mutate code
-  review_assurance: standard      # standard | hardened
+  review_assurance: standard      # compact | standard | hardened
   executor_network:
     access: disabled             # disabled | enabled
     mechanism: default           # default | sandbox_workspace_write.network_access
@@ -136,7 +136,7 @@ anchor:
 
 review:
   rounds: 2
-  max_rounds: 20
+  max_rounds: 2              # compact=1, standard=2, hardened=3
   latest_verdict: pass           # pending | pass | changes_requested | escalated
   repeated_issue_count: 0
   last_reviewed_sha: abc123def
@@ -183,7 +183,7 @@ bootstrap_exempt:
 | Detached launch receipt | `dispatch.js --detach --json` re-execs dispatch under a detached Node supervisor and returns only after the child has entered `dispatched`, written `lease.json`, and created the real run-dir log files. The receipt includes `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and `reconcileCommand`; it is a launch contract, not a manifest field. |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
-| `policy.review_assurance` | `standard` keeps current behavior; `hardened` requires stronger review/evidence gates without using agent identity heuristics. Hardened review commands must include an advisory reviewer, and passing verdicts require successful advisory artifacts plus strict execution evidence. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; legacy evidence without that array still falls back to `test_exit_code=0` plus a SHA-bound result hash |
+| `policy.review_assurance` | `compact` gives low-risk work one independent review with the same permission, sandbox, network, repository, SHA, audit, publication, and merge protections; `standard` keeps the bounded two-round default; `hardened` requires stronger review/evidence gates without using agent identity heuristics. Hardened review commands must include an advisory reviewer, and passing verdicts require successful advisory artifacts plus strict execution evidence. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; legacy evidence without that array still falls back to `test_exit_code=0` plus a SHA-bound result hash |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
 | `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; escalated same-adapter retry requires an `--independent-review-reason`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
@@ -247,7 +247,7 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 | `dispatch_start`, `dispatch_interrupted`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js`; `reconcile-run.js` may also emit `dispatch_interrupted` when settling dead or timed-out dispatched runs |
 | `publish_result` | `relay-dispatch/scripts/publish-run.js` |
 | `recover_commit`, `recover_commit_failed`, `execution_evidence_rebranded` | `relay-dispatch/scripts/recover-commit.js`, `rebrand-evidence.js` |
-| `iteration_score`, `rubric_quality`, `score_divergence` | `relay-dispatch/scripts/relay-events.js` (helpers) |
+| `iteration_score`, `rubric_quality`, `safety_boundary_violation` | `relay-dispatch/scripts/relay-events.js` (helpers) |
 | `close`, `cleanup_result` | `relay-dispatch/scripts/close-run.js`, `cleanup-worktrees.js` |
 | `state_recovery` | `relay-dispatch/scripts/recover-state.js`; `reconcile-run.js` emits it for `dispatched -> review_pending` dead-work recovery |
 | `review_invoke` | `relay-review/scripts/review-runner/reviewer-invoke.js` |

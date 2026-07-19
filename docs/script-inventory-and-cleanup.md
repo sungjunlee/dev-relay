@@ -64,7 +64,7 @@ an operator CLI, adapter entry point, or archived measurement tool.
 |--------|----------|----------|------------------|
 | `scripts/probe-executor-env.js` | Runtime entry point / signal producer | `/relay-plan` step 3 invokes it. | Keep. |
 | `scripts/persist-done-criteria.js` | Runtime entry point | `/relay-plan` uses it to persist Phase 1 deviations. | Keep. |
-| `scripts/tdd-flavor.js` | Shared helper | Imported by `reliability-report.js`, `sprint-close-report.js`, and `tdd-suggestion.js`. | Keep. Consider renaming to a rubric parser/renderer name because it is shared outside the planner flow. |
+| `scripts/tdd-flavor.js` | Shared helper | Imported by `reliability-report.js` and `tdd-suggestion.js`. | Keep. Consider renaming to a rubric parser/renderer name because it is shared outside the planner flow. |
 | `scripts/tdd-suggestion.js` | Optional planner helper | Mentioned by TDD reference; not wired into default `/relay-plan` flow. | Keep while Phase 1.2 TDD mode is planned; wire or fold into `rubric-pattern-tdd-flavor.md` when #142 lands. |
 
 ### Relay Review
@@ -87,7 +87,6 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/finalize-run.js` | Runtime entry point | `/relay-merge` step 1. | Keep. |
 | `scripts/review-gate.js` | Shared helper | Used by gate-check and finalize. | Keep. |
 | `scripts/relay-reconcile-artifact.js` | Optional operator tool | Documented bootstrap artifact reconciliation path. | Keep while bootstrap exemption remains supported. |
-| `scripts/sprint-close-report.js` | Optional operator tool | Documented in `relay-merge/references/sprint-close-report.md`; decision record #767. | Keep for sprint-close repeated-quality reporting after the last sprint PR merges. |
 
 ## Cleanup Order
 
@@ -114,7 +113,7 @@ node --test tests/relay-dispatch/scripts/cli-schema.test.js
 
 - `plan-runner.js` and its `invoke-planner-*` adapters were retired from the runtime skill package because isolated planning was optional and duplicated the human-in-the-loop `/relay-plan` flow.
 - `tdd-flavor.js` is a shared rubric helper despite its narrow name. It remains after `plan-runner` cleanup.
-- #767 documents `sprint-close-report.js` as a report-only operator utility for sprint close, after the last sprint PR merges.
+- #1033 removes `sprint-close-report.js` from the default flow but retains it as a legacy-only reader while historical Score Log manifests remain supported.
 - #767 retires `update-manifest-state.js`; use `recover-state.js` as the canonical structured state recovery command.
 
 ## Retired In #766

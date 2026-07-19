@@ -16,7 +16,7 @@ function appendCommentWarnings(commentBody, warnings = []) {
   return [
     commentBody,
     "",
-    "Score divergence warnings:",
+    "Advisory review warnings:",
     ...warnings.map((warning) => `- ${warning}`),
   ].join("\n");
 }

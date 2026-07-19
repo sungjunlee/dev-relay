@@ -29,6 +29,95 @@ test("prompt/buildPrompt preserves rubric warnings in the rendered prompt", () =
   assert.match(prompt, /\[rubric missing\]/i);
 });
 
+test("prompt/buildPrompt renders structured channels and permits zero earned factors", () => {
+  const prompt = buildPrompt({
+    round: 1,
+    prNumber: 1027,
+    branch: "issue-1027",
+    issueNumber: 1027,
+    doneCriteria: "# Done Criteria\n\n- Preserve the outcome contract\n",
+    doneCriteriaSource: "planner_decision",
+    diffText: "diff --git a/a.js b/a.js\n",
+    runDir: null,
+    rubricLoad: {
+      warning: null,
+      content: [
+        "evaluation:",
+        "  schema_version: 2",
+        "  outcome_contract:",
+        "    source: done_criteria",
+        "  verification:",
+        "    checks:",
+        "      - name: Focused tests pass",
+        "        type: command",
+        "        command: node --test tests/focused.test.js",
+        "        target: exit 0",
+        "  earned_rubric:",
+        "    factors: []",
+      ].join("\n"),
+    },
+  });
+
+  assert.match(prompt, /## Evaluation Channels/);
+  assert.match(prompt, /Outcome Contract.*frozen Done Criteria/i);
+  assert.match(prompt, /Verification.*runner/i);
+  assert.match(prompt, /No Earned Rubric factors were declared/i);
+  assert.match(prompt, /set `rubric_scores` to `\[\]`/);
+  assert.doesNotMatch(prompt, /score EVERY factor below/);
+  assert.doesNotMatch(prompt, /Do NOT leave `rubric_scores` empty/);
+});
+
+test("prompt/buildPrompt scores only declared Earned Rubric factors for structured artifacts", () => {
+  const prompt = buildPrompt({
+    round: 1,
+    prNumber: 1027,
+    branch: "issue-1027",
+    issueNumber: 1027,
+    doneCriteria: "# Done Criteria\n\n- Preserve the outcome contract\n",
+    doneCriteriaSource: "planner_decision",
+    diffText: "diff --git a/a.js b/a.js\n",
+    runDir: null,
+    rubricLoad: {
+      warning: null,
+      content: [
+        "evaluation:",
+        "  schema_version: 2",
+        "  outcome_contract:",
+        "    source: done_criteria",
+        "  verification:",
+        "    checks: []",
+        "  observation:",
+        "    artifact: Checkout decision screen",
+        "    intended_user: A shopper recovering from payment failure",
+        "    usage_context: The user needs a safe next action without losing context",
+        "    surfaces:",
+        "      - kind: rendered_output",
+        "        target: /checkout",
+        "        user_flows:",
+        "          - Failure to recovery",
+        "        viewports:",
+        "          - 390x844",
+        "    inquiry:",
+        "      contract_satisfying_failure: Required states could exist but remain confusing",
+        "      expert_notice: A designer would inspect hierarchy and recovery feedback",
+        "    lenses:",
+        "      - name: design",
+        "  earned_rubric:",
+        "    factors:",
+        "      - name: Recovery clarity",
+        "        type: evaluated",
+        "        target: strong",
+      ].join("\n"),
+    },
+  });
+
+  assert.match(prompt, /score every Earned Rubric factor/i);
+  assert.match(prompt, /Earned Rubric factors are the only scored channel/i);
+  assert.match(prompt, /observation context.*artifact and user surface/i);
+  assert.match(prompt, /rendered_output/);
+  assert.doesNotMatch(prompt, /score every contract-tier factor/i);
+});
+
 test("prompt/buildPrompt includes the reviewer versus runner trust-boundary rationale", () => {
   const prompt = buildPrompt({
     round: 1,

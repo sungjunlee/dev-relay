@@ -2,7 +2,13 @@
 
 How to synthesize a task-specific evaluation rubric from the full task brief. Acceptance Criteria (AC) are high-priority evidence, not the only source. When AC are missing, vague, or incomplete, first recover observable Done Criteria from task intent, repo context, quality signals, and risk.
 
-Before dispatch, persist the finished rubric to a file and pass it through `relay-dispatch --rubric-file <path>`. This records `anchor.rubric_path` for review and merge gates.
+For new planning, use `evaluation-channels.md`. Binary requirements belong in the
+Outcome Contract, commands and observations belong in Verification, and the factor
+design guidance below applies only to optional `earned_rubric.factors`. There is no
+factor minimum. Existing `rubric:` YAML examples in this reference document the legacy
+shape retained for in-flight compatibility.
+
+Before dispatch, persist the finished evaluation artifact to a file and pass it through `relay-dispatch --rubric-file <path>`. This compatibility-named boundary records `anchor.rubric_path` for review and merge gates.
 
 ## Reference Use Contract
 
@@ -10,15 +16,15 @@ The domain `rubric-*.md` files are **candidate axis libraries**, not dispatch te
 
 - Pick only the axes earned by task-specific evidence: explicit AC, inferred Done Criteria, repo conventions, historical signal, probe signal, or concrete risk.
 - Do not copy a whole domain reference into a dispatch prompt.
-- S-size mechanical tasks may use one contract factor plus hygiene prerequisites and no quality factor.
-- Add quality factors only when the task has real design judgment or risk that a command cannot verify.
+- S-size mechanical tasks may use Verification with zero Earned Rubric factors.
+- Add Earned Rubric factors only when the task has real design judgment or risk that a command cannot verify.
 - Treat `fix_hint` examples as optional escalation aids for historical plateaus or non-obvious score transitions, not default implementation instructions.
 
 ## Factor Fields
 
 Common factor fields are:
 
-- `name`: short label used by the Score Log and reviewer
+- `name`: short label used by the independent reviewer and audit artifacts
 - `tier`: `contract` or `quality`
 - `type`: `automated` or `evaluated`
 - `command`: immutable command for automated factors
@@ -63,7 +69,7 @@ List the evidence that defines success for this task:
 - Explicit AC, if present
 - Inferred Done Criteria from the user request, issue body, relay-ready handoff, and nearby repo conventions
 - Repo quality signals from available tests, lint, typecheck, CI, and scripts
-- Historical relay signals such as stuck factors, score divergence, and average rounds
+- Historical relay signals such as stuck factors, repeated reviewer findings, reviewer yield, and average rounds
 - Task risk such as trust boundaries, data loss, migrations, user-visible flows, performance, or operational failure modes
 
 If explicit AC and inferred Done Criteria disagree, resolve the conflict before drafting factors. Run the [pre-flight ambiguity audit](dc-preflight-audit.md) before freezing the Done Criteria, then persist planner-authored Done Criteria when the final anchor differs from the issue body or intake handoff.
@@ -119,18 +125,18 @@ Good criteria:
 
 Consult domain references only after drafting from task-specific evidence. Borrow the thinking, not the whole checklist.
 
-### Q5: What does each score level mean?
+### Q5: What does each qualitative level mean?
 
-Every evaluated factor needs a `scoring_guide` with low/mid/high anchors.
+Every Earned Rubric factor needs weak/adequate/strong anchors before any numeric mapping.
 
 ```yaml
-scoring_guide:
-  low: "No timeouts on external calls, retry-on-everything, errors swallowed"
-  mid: "Timeouts exist but retry/backoff and caller-actionable errors are incomplete"
-  high: "Timeouts, idempotency-aware retry, backoff, and actionable errors all present"
+anchors:
+  weak: "No timeouts on external calls, retry-on-everything, errors swallowed"
+  adequate: "Timeouts exist but retry/backoff and caller-actionable errors are incomplete"
+  strong: "Timeouts, idempotency-aware retry, backoff, and actionable errors all present"
 ```
 
-Use one sentence per level. If low/mid/high are hard to distinguish, the factor is too broad or too vague.
+Use one sentence per level. If weak/adequate/strong are hard to distinguish, omit or refine the factor. Numeric mapping is optional and follows the qualitative anchors only when it improves a real decision.
 
 Add `fix_hint` only when anchors are not enough, usually because historical signals show a plateau or the mid-to-high transition requires a non-obvious technique:
 
@@ -150,17 +156,9 @@ For delta metrics such as performance, bundle size, complexity, or dead code, ta
 
 ## Size Guidance
 
-Use task size to limit, not inflate, the rubric:
-
-| Size | Contract min | Quality min | Recommended substantive total |
-|---|---:|---:|---:|
-| S mechanical | 1 | 0 | 1-2 |
-| S design-bearing | 1 | 1 | ~2 |
-| M | 2 | 1 | ~5 |
-| L | 2 | 2 | ~6 |
-| XL | 3 | 2 | ~8 |
-
-Warn at 8+ substantive factors. Usually that means overlap, hygiene left in `factors`, or task scope that should be split.
+Task size never creates a minimum factor count. Use zero factors when no quality
+dimension passes all four eligibility tests. When factors are earned, use only the
+smallest non-overlapping set that changes a real implementation or review decision.
 
 ## Grounding
 

@@ -1,0 +1,66 @@
+evaluation:
+  schema_version: 2
+  outcome_contract:
+    source: done_criteria
+  verification:
+    checks:
+      - name: Required user flows complete
+        type: observation
+        target: All required states are reachable.
+  observation:
+    artifact: Dense decision screen
+    intended_user: A product user making a time-sensitive decision.
+    usage_context: The user scans, decides, and recovers from errors across mobile and desktop.
+    surfaces:
+      - kind: rendered_output
+        target: The decision screen and its failure states.
+        user_flows:
+          - Primary decision from entry to completion
+          - Recoverable network and validation failures
+        viewports:
+          - 390x844
+          - 1440x900
+    inquiry:
+      contract_satisfying_failure: Every state could work while hierarchy, recovery, or product character remains weak.
+      expert_notice: A product designer would inspect scan order, state continuity, responsive priority, and character fit.
+    lenses:
+      - name: design
+  earned_rubric:
+    factors:
+      - name: Information hierarchy
+        evidence: The task redesigns a dense decision screen used under time pressure.
+        eligibility:
+          gradient: Correct screens can differ in prioritization and scan speed.
+          observable: Visual inspection distinguishes flat, serviceable, and decisive hierarchy.
+          actionable: Lower results point to grouping, emphasis, or ordering changes.
+          consequential: Scan speed affects user decisions and error rate.
+        anchors:
+          weak: Competing elements have equal weight and the next decision is hard to find.
+          adequate: Primary content is findable with deliberate scanning.
+          strong: Priority and next action are obvious at a glance.
+        target: strong
+      - name: Failure-state recovery
+        evidence: The flow has recoverable network and validation failures.
+        eligibility:
+          gradient: Complete flows can differ in recovery continuity and loss of user work.
+          observable: Replayed failures reveal dead ends, recoverable paths, or seamless continuation.
+          actionable: Lower results identify the state, feedback, or retained input that needs work.
+          consequential: Recovery quality affects abandonment and duplicate actions.
+        anchors:
+          weak: Failure creates a dead end or loses entered data.
+          adequate: Users can retry without restarting the whole flow.
+          strong: The failure is explained, input is preserved, and recovery is effortless.
+        target: strong
+        numeric_scale: Optional 0-10 mapping for comparative model evaluation.
+      - name: Product character fit
+        evidence: The product has an established calm and precise visual language.
+        eligibility:
+          gradient: Usable designs can still feel generic or distinctly native to the product.
+          observable: Side-by-side review distinguishes stock patterns from coherent product expression.
+          actionable: Lower results point to typography, density, motion, or tone mismatches.
+          consequential: Character fit affects trust and perceived product coherence.
+        anchors:
+          weak: The result looks interchangeable with a generic template.
+          adequate: The result follows existing components without obvious mismatch.
+          strong: The result extends the product language with a distinctive but coherent expression.
+        target: strong

@@ -12,32 +12,42 @@ const {
 } = require("../../relay-review/scripts/review-runner/divergence");
 const { extractAllFactors } = require("../../relay-plan/scripts/tdd-flavor");
 const { bindCliArgs } = require("../../relay-dispatch/scripts/cli-args");
-const { listManifestRecords } = require("../../relay-dispatch/scripts/manifest/store");
+const {
+  listManifestRecords,
+} = require("../../relay-dispatch/scripts/manifest/store");
 
 const DEFAULT_THRESHOLD = 9;
 const DEFAULT_MIN_RUNS = 2;
 const TERMINAL_STATES = new Set(["merged", "closed"]);
-const RESERVED_FLAGS = ["--repo", "--sprint", "--threshold", "--min-runs", "--help", "-h"];
+const RESERVED_FLAGS = [
+  "--repo",
+  "--sprint",
+  "--threshold",
+  "--min-runs",
+  "--help",
+  "-h",
+];
 
 function usage() {
   return [
     "Usage: node skills/relay-merge/scripts/sprint-close-report.js --repo <path> --sprint <path-to-sprint-md> [--threshold N] [--min-runs N]",
     "",
-    "Reports rubric factors that scored consistently high across completed sprint runs.",
+    "Legacy-only report for completed runs that still contain executor Score Logs.",
+    "It does not evaluate reviewer-only runs and is not part of the default merge flow.",
     "",
     "Options:",
     "  --repo <path>       Repository root used to resolve relay manifests.",
     "  --sprint <path>     Sprint markdown file containing a Plan checklist.",
-    "  --threshold N       Minimum numeric Score Log value; overrides backlog/config.yml.",
-    "  --min-runs N        Minimum distinct runs for a factor; overrides backlog/config.yml.",
+    "  --threshold N       Minimum numeric legacy Score Log value.",
+    "  --min-runs N        Minimum distinct historical runs for a factor.",
     "  --help, -h          Show this help.",
-    "",
-    "Config fallback: backlog/config.yml may define sprint_close.threshold_score and sprint_close.min_runs.",
   ].join("\n");
 }
 
 function parsePositiveNumber(value, label) {
-  if (value === undefined || value === null || String(value).trim() === "") return null;
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return null;
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${label} must be a positive number`);
@@ -59,7 +69,6 @@ function parseSprintCloseConfig(configText) {
       sprintCloseIndent = section[1].length;
       continue;
     }
-
     if (!inSprintClose) continue;
 
     const indent = line.match(/^\s*/)[0].length;
@@ -68,7 +77,9 @@ function parseSprintCloseConfig(configText) {
       continue;
     }
 
-    const field = line.match(/^\s*(threshold_score|min_runs):\s*([^\s#]+)\s*$/);
+    const field = line.match(
+      /^\s*(threshold_score|min_runs):\s*([^\s#]+)\s*$/
+    );
     if (field) {
       result[field[1]] = field[2].replace(/^['"]|['"]$/g, "");
     }
@@ -97,10 +108,22 @@ function resolveOptions(args) {
 
   const sprintPath = path.resolve(repoRoot, sprintArg);
   const config = loadSprintCloseConfig(repoRoot);
-  const configThreshold = parsePositiveNumber(config.threshold_score, "sprint_close.threshold_score");
-  const configMinRuns = parsePositiveNumber(config.min_runs, "sprint_close.min_runs");
-  const cliThreshold = parsePositiveNumber(cli.getArg("--threshold", undefined), "--threshold");
-  const cliMinRuns = parsePositiveNumber(cli.getArg("--min-runs", undefined), "--min-runs");
+  const configThreshold = parsePositiveNumber(
+    config.threshold_score,
+    "sprint_close.threshold_score"
+  );
+  const configMinRuns = parsePositiveNumber(
+    config.min_runs,
+    "sprint_close.min_runs"
+  );
+  const cliThreshold = parsePositiveNumber(
+    cli.getArg("--threshold", undefined),
+    "--threshold"
+  );
+  const cliMinRuns = parsePositiveNumber(
+    cli.getArg("--min-runs", undefined),
+    "--min-runs"
+  );
 
   return {
     help: false,
@@ -122,10 +145,8 @@ function parseSprintIssueNumbers(sprintText) {
       continue;
     }
     if (inPlan && /^##\s+\S/.test(line)) break;
-    if (!inPlan) continue;
+    if (!inPlan || !/^\s*-\s*\[[xX]\]\s+/.test(line)) continue;
 
-    // Keep checkbox detection separate so formatted issue refs stay easy to match.
-    if (!/^\s*-\s*\[[xX]\]\s+/.test(line)) continue;
     const match = line.match(/#(\d+)\b/);
     if (!match) continue;
     const issueNumber = Number(match[1]);
@@ -139,9 +160,12 @@ function parseSprintIssueNumbers(sprintText) {
 }
 
 function issueNumberForManifest(record) {
-  const issueNumber = record?.data?.issue?.number ?? record?.data?.git?.issue_number;
+  const issueNumber = record?.data?.issue?.number
+    ?? record?.data?.git?.issue_number;
   if (Number.isInteger(issueNumber)) return issueNumber;
-  const runId = record?.data?.run_id || path.basename(record?.manifestPath || "", ".md");
+
+  const runId = record?.data?.run_id
+    || path.basename(record?.manifestPath || "", ".md");
   const match = String(runId).match(/^issue-(\d+)-/);
   return match ? Number(match[1]) : null;
 }
@@ -149,14 +173,23 @@ function issueNumberForManifest(record) {
 function resolveRubricPath(record) {
   const runId = record?.data?.run_id;
   const rubricPath = record?.data?.anchor?.rubric_path;
-  if (!record?.manifestPath || typeof runId !== "string" || typeof rubricPath !== "string" || !rubricPath.trim()) {
+  if (
+    !record?.manifestPath
+    || typeof runId !== "string"
+    || typeof rubricPath !== "string"
+    || !rubricPath.trim()
+  ) {
     return null;
   }
 
   const runDir = path.join(path.dirname(record.manifestPath), runId);
   const resolved = path.resolve(runDir, rubricPath);
   const relative = path.relative(runDir, resolved);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (
+    relative === ".."
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
     return null;
   }
   return resolved;
@@ -167,7 +200,9 @@ function readRubricFactorIndex(record) {
   if (!rubricPath) return new Map();
 
   try {
-    const factors = extractAllFactors(fs.readFileSync(rubricPath, "utf-8"));
+    const factors = extractAllFactors(
+      fs.readFileSync(rubricPath, "utf-8")
+    );
     return new Map(
       factors
         .map((factor) => String(factor?.name || "").trim())
@@ -183,12 +218,21 @@ function matchingSprintRecords(repoRoot, issueNumbers) {
   const issueSet = new Set(issueNumbers);
   return listManifestRecords(repoRoot).filter((record) => {
     const issueNumber = issueNumberForManifest(record);
-    return issueSet.has(issueNumber) && TERMINAL_STATES.has(String(record?.data?.state || "").toLowerCase());
+    const state = String(record?.data?.state || "").toLowerCase();
+    return issueSet.has(issueNumber) && TERMINAL_STATES.has(state);
   });
 }
 
-function aggregateCandidatePatterns({ repoRoot, sprintPath, threshold, minRuns }) {
-  const issueNumbers = parseSprintIssueNumbers(fs.readFileSync(sprintPath, "utf-8"));
+function aggregateCandidatePatterns({
+  repoRoot,
+  sprintPath,
+  threshold,
+  minRuns,
+  loadBody = loadPrBody,
+}) {
+  const issueNumbers = parseSprintIssueNumbers(
+    fs.readFileSync(sprintPath, "utf-8")
+  );
   const records = matchingSprintRecords(repoRoot, issueNumbers);
   const byFactor = new Map();
   let scorableRuns = 0;
@@ -198,7 +242,7 @@ function aggregateCandidatePatterns({ repoRoot, sprintPath, threshold, minRuns }
     if (rubricFactors.size === 0) continue;
 
     const prNumber = record?.data?.git?.pr_number;
-    const scoreLog = parseScoreLog(loadPrBody(repoRoot, prNumber));
+    const scoreLog = parseScoreLog(loadBody(repoRoot, prNumber));
     if (scoreLog.length === 0) continue;
 
     let runHasNumericRubricScore = false;
@@ -214,7 +258,11 @@ function aggregateCandidatePatterns({ repoRoot, sprintPath, threshold, minRuns }
       if (score < threshold) continue;
 
       if (!byFactor.has(factorKey)) {
-        byFactor.set(factorKey, { factor: rubricName, runs: new Set(), scores: [] });
+        byFactor.set(factorKey, {
+          factor: rubricName,
+          runs: new Set(),
+          scores: [],
+        });
       }
       byFactor.get(factorKey).runs.add(record.data.run_id);
       byFactor.get(factorKey).scores.push(score);
@@ -226,7 +274,10 @@ function aggregateCandidatePatterns({ repoRoot, sprintPath, threshold, minRuns }
 
   const candidates = [...byFactor.values()]
     .filter((entry) => entry.runs.size >= minRuns)
-    .sort((left, right) => right.runs.size - left.runs.size || left.factor.localeCompare(right.factor))
+    .sort((left, right) => (
+      right.runs.size - left.runs.size
+      || left.factor.localeCompare(right.factor)
+    ))
     .map((entry) => ({
       factor: entry.factor,
       runCount: entry.runs.size,
@@ -246,25 +297,31 @@ function aggregateCandidatePatterns({ repoRoot, sprintPath, threshold, minRuns }
 
 function renderReport(report) {
   const lines = [
-    "Candidate patterns this sprint:",
+    "Legacy Score Log candidate patterns:",
     `Threshold: >= ${report.threshold}/10 across >= ${report.minRuns} runs`,
-    `Sprint issues: ${report.issueNumbers.length ? report.issueNumbers.map((issue) => `#${issue}`).join(", ") : "(none found in Plan)"}`,
+    `Sprint issues: ${report.issueNumbers.length
+      ? report.issueNumbers.map((issue) => `#${issue}`).join(", ")
+      : "(none found in Plan)"}`,
     `Completed runs scanned: ${report.recordsScanned}`,
     "",
   ];
 
   if (report.candidates.length > 0) {
     for (const candidate of report.candidates) {
-      const scores = candidate.scores.map((score) => `${score}/10`).join(", ");
-      lines.push(`- ${candidate.factor} (${candidate.runCount} runs; scores: ${scores})`);
+      const scores = candidate.scores
+        .map((score) => `${score}/10`)
+        .join(", ");
+      lines.push(
+        `- ${candidate.factor} (${candidate.runCount} runs; scores: ${scores})`
+      );
     }
   } else if (report.scorableRuns === 0) {
-    lines.push("(none — no scorable Score Log tables in sprint runs)");
+    lines.push("(none — no scorable legacy Score Log tables in sprint runs)");
   } else {
     lines.push("(none — no factors met threshold and min-runs gates)");
   }
 
-  lines.push("", "Promote manually to _context.md if applicable");
+  lines.push("", "Promote manually only after current evidence confirms it");
   return lines.join("\n");
 }
 
@@ -275,8 +332,7 @@ function main(args = process.argv.slice(2)) {
     return 0;
   }
 
-  const report = aggregateCandidatePatterns(options);
-  console.log(renderReport(report));
+  console.log(renderReport(aggregateCandidatePatterns(options)));
   return 0;
 }
 

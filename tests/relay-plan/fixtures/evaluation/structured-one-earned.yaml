@@ -1,0 +1,36 @@
+evaluation:
+  schema_version: 2
+  outcome_contract:
+    source: done_criteria
+  verification:
+    checks:
+      - name: Recovery tests pass
+        type: command
+        command: node --test tests/recovery.test.js
+        target: exit 0
+  observation:
+    artifact: Operator recovery flow
+    intended_user: An operator recovering a failed run.
+    usage_context: The operator must choose a safe next action from the visible run state.
+    surfaces:
+      - kind: operational_replay
+        target: Replay failure, diagnosis, and recovery.
+    inquiry:
+      contract_satisfying_failure: Recovery could succeed while the state and safe next action remain unclear.
+      expert_notice: An experienced operator would inspect state visibility, choices, and recovery feedback.
+    lenses:
+      - name: operations
+  earned_rubric:
+    factors:
+      - name: Operator recovery clarity
+        evidence: The task changes a recovery flow where operators must choose a safe next action.
+        eligibility:
+          gradient: Contract-satisfying flows can still differ in how clearly they expose state and choices.
+          observable: A reviewer can replay the failure and distinguish confusing, usable, and self-explanatory recovery.
+          actionable: A lower assessment points to missing state, unclear choices, or weak next-step feedback.
+          consequential: Confusion can cause repeated failure or an unsafe operator action.
+        anchors:
+          weak: State and next action remain ambiguous after failure.
+          adequate: The current state and one viable recovery action are understandable.
+          strong: State, consequences, and safe recovery choices are immediately clear.
+        target: strong
