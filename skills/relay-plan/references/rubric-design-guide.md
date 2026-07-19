@@ -125,18 +125,18 @@ Good criteria:
 
 Consult domain references only after drafting from task-specific evidence. Borrow the thinking, not the whole checklist.
 
-### Q5: What does each score level mean?
+### Q5: What does each qualitative level mean?
 
-Every evaluated factor needs a `scoring_guide` with low/mid/high anchors.
+Every Earned Rubric factor needs weak/adequate/strong anchors before any numeric mapping.
 
 ```yaml
-scoring_guide:
-  low: "No timeouts on external calls, retry-on-everything, errors swallowed"
-  mid: "Timeouts exist but retry/backoff and caller-actionable errors are incomplete"
-  high: "Timeouts, idempotency-aware retry, backoff, and actionable errors all present"
+anchors:
+  weak: "No timeouts on external calls, retry-on-everything, errors swallowed"
+  adequate: "Timeouts exist but retry/backoff and caller-actionable errors are incomplete"
+  strong: "Timeouts, idempotency-aware retry, backoff, and actionable errors all present"
 ```
 
-Use one sentence per level. If low/mid/high are hard to distinguish, the factor is too broad or too vague.
+Use one sentence per level. If weak/adequate/strong are hard to distinguish, omit or refine the factor. Numeric mapping is optional and follows the qualitative anchors only when it improves a real decision.
 
 Add `fix_hint` only when anchors are not enough, usually because historical signals show a plateau or the mid-to-high transition requires a non-obvious technique:
 
@@ -156,17 +156,9 @@ For delta metrics such as performance, bundle size, complexity, or dead code, ta
 
 ## Size Guidance
 
-Use task size to limit, not inflate, the rubric:
-
-| Size | Contract min | Quality min | Recommended substantive total |
-|---|---:|---:|---:|
-| S mechanical | 1 | 0 | 1-2 |
-| S design-bearing | 1 | 1 | ~2 |
-| M | 2 | 1 | ~5 |
-| L | 2 | 2 | ~6 |
-| XL | 3 | 2 | ~8 |
-
-Warn at 8+ substantive factors. Usually that means overlap, hygiene left in `factors`, or task scope that should be split.
+Task size never creates a minimum factor count. Use zero factors when no quality
+dimension passes all four eligibility tests. When factors are earned, use only the
+smallest non-overlapping set that changes a real implementation or review decision.
 
 ## Grounding
 

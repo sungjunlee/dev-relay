@@ -61,12 +61,6 @@ function countPrerequisites(rubricYaml) {
 // hasExplicitRiskOrDesignRationale in rubric-validation.js, which also folds
 // in risk_rationale and the "risk-bearing" tag for a different purpose
 // (ready-light factor-count leniency).
-function isDesignBearing(taskProfile) {
-  const riskTags = Array.isArray(taskProfile.risk_tags) ? taskProfile.risk_tags : [];
-  const designRationale = String(taskProfile.design_rationale || "").trim();
-  return riskTags.includes("design-bearing") || designRationale !== "";
-}
-
 function tierOf(factor) {
   return String(factor.tier || "").toLowerCase();
 }
@@ -132,13 +126,6 @@ function buildQualityCardSummary({
 
   const waiver = String(qualityWaiver || "").trim();
   const warnings = [];
-
-  if (isDesignBearing(taskProfile) && qualityFactors.length === 0 && !waiver) {
-    warnings.push({
-      code: "all_contract",
-      message: "Design-bearing task has zero quality-tier factors and no quality waiver.",
-    });
-  }
 
   if (hygieneViolations.length > 0) {
     warnings.push({

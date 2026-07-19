@@ -89,7 +89,7 @@ evaluation:
     factors: []
 ```
 
-Tests, builds, type checks, lint, artifact existence, and other binary evidence belong under Verification. Zero Earned Rubric factors is valid. Use `references/rubric-design-guide.md` only when a real quality gradient is present.
+Tests, builds, type checks, lint, artifact existence, and other binary evidence belong under Verification. Zero Earned Rubric factors is valid. A factor is earned only when Gradient, Observable, Actionable, and Consequential all hold; use qualitative weak/adequate/strong anchors before any optional numeric mapping. See `references/evaluation-channels.md`.
 
 ### 6. Validate and simplify the channels
 

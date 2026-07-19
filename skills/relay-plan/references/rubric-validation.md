@@ -255,7 +255,6 @@ Grade D means stop and revise the rubric first. Grade C means warn before dispat
 | `ready_light_factor_count` | Ready-light S rubric has more than 2 substantive factors without explicit risk or design-bearing rationale |
 | `repo_hygiene_in_factor` | Repo-wide lint, typecheck, or test command is placed in `factors` instead of `prerequisites` |
 | `over_engineering_risk` | Ready-light factor asks for unsupported helper, dependency, config, or abstraction work |
-| `all_contract` | Zero quality coverage on a design-bearing task |
 | `weak_done_criteria` | Done Criteria are not observable, bounded, reviewable, risk-aware, or verifiable |
 
 Any check fails → revise. See `rubric-design-guide.md` for fix patterns.

@@ -44,6 +44,26 @@ observation belongs in Verification.
 Earned Rubric eligibility and observation-driven derivation are defined separately.
 Until a real quality gradient is found, leave `factors: []`.
 
+## Earned Rubric Eligibility
+
+A proposed factor is earned only when all four properties hold:
+
+1. **Gradient**: contract-satisfying results can differ meaningfully.
+2. **Observable**: weak, adequate, and strong outcomes can be distinguished in the
+   artifact or behavior.
+3. **Actionable**: a lower assessment gives a useful improvement direction.
+4. **Consequential**: the difference materially affects users, maintainability,
+   reliability, security, operability, or another engineering outcome.
+
+Ground every factor in task-specific `evidence`. Generic labels such as "code quality"
+or "best practices" do not qualify on their own. Describe qualitative
+`anchors.weak`, `anchors.adequate`, and `anchors.strong` first. A `numeric_scale` is
+optional and should appear only when it improves comparison, optimization, or another
+real decision.
+
+The fixtures under `tests/relay-plan/fixtures/evaluation/` demonstrate valid planning
+results with zero, one, and several earned factors.
+
 ## Transition Compatibility
 
 Existing `rubric:` artifacts remain readable for in-flight and persisted runs. Runtime

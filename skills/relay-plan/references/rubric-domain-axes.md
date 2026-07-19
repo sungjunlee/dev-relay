@@ -4,7 +4,7 @@ Backend candidate axes for production behavior, data safety, and operational fai
 
 ### Candidate Axis Library
 
-Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical backend changes, one contract factor plus hygiene prerequisites is enough unless explicit AC, inferred Done Criteria, or concrete risk introduce real production-design judgment.
+Use this file to discover candidate backend quality axes, not as a template. A candidate becomes an Earned Rubric factor only when task evidence establishes Gradient, Observable, Actionable, and Consequential; mechanical changes commonly need zero scored factors.
 
 ### Hygiene Prerequisites
 
@@ -48,7 +48,7 @@ Frontend candidate axes for user-visible behavior, accessibility, responsiveness
 
 ### Candidate Axis Library
 
-Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical frontend changes, one contract factor plus hygiene prerequisites is enough unless explicit AC, inferred Done Criteria, or concrete risk introduce real UX or state-management judgment.
+Use this file to discover candidate frontend quality axes, not as a template. A candidate becomes an Earned Rubric factor only when task evidence establishes Gradient, Observable, Actionable, and Consequential; mechanical changes commonly need zero scored factors.
 
 ### Hygiene Prerequisites
 
@@ -92,7 +92,7 @@ Design candidate axes for product value, usability, visual hierarchy, and polish
 
 ### Candidate Axis Library
 
-Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical design changes, one contract factor plus hygiene prerequisites is enough unless explicit AC, inferred Done Criteria, or concrete risk introduce real product or UX judgment.
+Use this file to discover candidate design quality axes, not as a template. A candidate becomes an Earned Rubric factor only when task evidence establishes Gradient, Observable, Actionable, and Consequential; mechanical changes commonly need zero scored factors.
 
 ### Hygiene Prerequisites
 
@@ -136,7 +136,7 @@ Documentation candidate axes for reader success, maintainability, and executable
 
 ### Candidate Axis Library
 
-Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical docs changes, one contract factor plus hygiene prerequisites is enough unless explicit AC, inferred Done Criteria, or concrete risk introduce real reader-success judgment.
+Use this file to discover candidate documentation quality axes, not as a template. A candidate becomes an Earned Rubric factor only when task evidence establishes Gradient, Observable, Actionable, and Consequential; mechanical changes commonly need zero scored factors.
 
 ### Hygiene Prerequisites
 
@@ -180,7 +180,7 @@ Refactoring candidate axes for behavior preservation, concept reduction, and mai
 
 ### Candidate Axis Library
 
-Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical refactors, one contract factor plus hygiene prerequisites is enough unless explicit AC, inferred Done Criteria, or concrete risk introduce real design judgment.
+Use this file to discover candidate refactor quality axes, not as a template. A candidate becomes an Earned Rubric factor only when task evidence establishes Gradient, Observable, Actionable, and Consequential; mechanical changes commonly need zero scored factors.
 
 ### Hygiene Prerequisites
 
@@ -226,7 +226,7 @@ Security candidate axes for trust boundaries, secrets, inputs, files, dependenci
 
 ### Candidate Axis Library
 
-Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical security-adjacent changes, one contract factor plus hygiene prerequisites is enough unless explicit AC, inferred Done Criteria, or concrete risk introduce real trust-boundary judgment.
+Use this file to discover candidate security quality axes, not as a template. A candidate becomes an Earned Rubric factor only when task evidence establishes Gradient, Observable, Actionable, and Consequential; mechanical changes commonly need zero scored factors.
 
 ### Hygiene Prerequisites
 

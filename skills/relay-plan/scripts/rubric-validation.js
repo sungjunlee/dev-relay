@@ -2,6 +2,7 @@ const { extractAllFactors } = require("./tdd-flavor");
 const {
   classifyEvaluationArtifact,
 } = require("../../relay-dispatch/scripts/evaluation-contract");
+const { validateEarnedRubricArtifact } = require("./earned-rubric");
 
 const SUBSTANTIVE_TIERS = new Set(["contract", "quality"]);
 // Ready-light factors should prove the narrow task contract; broad repo hygiene belongs in prerequisites.
@@ -228,6 +229,10 @@ function validateReadyLightRubric({ rubricYaml, taskProfile = {} } = {}) {
   }
 
   if (artifact.kind === "structured") {
+    const earnedRubric = validateEarnedRubricArtifact(rubricYaml);
+    for (const earnedError of earnedRubric.errors) {
+      errors.push(issue(earnedError.code, earnedError.message));
+    }
     return {
       action: errors.length > 0 ? "block" : "allow",
       substantive_total: substantiveFactors.length,

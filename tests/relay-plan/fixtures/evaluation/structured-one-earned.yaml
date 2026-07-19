@@ -1,0 +1,24 @@
+evaluation:
+  schema_version: 2
+  outcome_contract:
+    source: done_criteria
+  verification:
+    checks:
+      - name: Recovery tests pass
+        type: command
+        command: node --test tests/recovery.test.js
+        target: exit 0
+  earned_rubric:
+    factors:
+      - name: Operator recovery clarity
+        evidence: The task changes a recovery flow where operators must choose a safe next action.
+        eligibility:
+          gradient: Contract-satisfying flows can still differ in how clearly they expose state and choices.
+          observable: A reviewer can replay the failure and distinguish confusing, usable, and self-explanatory recovery.
+          actionable: A lower assessment points to missing state, unclear choices, or weak next-step feedback.
+          consequential: Confusion can cause repeated failure or an unsafe operator action.
+        anchors:
+          weak: State and next action remain ambiguous after failure.
+          adequate: The current state and one viable recovery action are understandable.
+          strong: State, consequences, and safe recovery choices are immediately clear.
+        target: strong

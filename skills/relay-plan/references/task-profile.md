@@ -43,7 +43,7 @@ When `guidance_packs` is non-empty, dispatch prompts render both the profile met
 ## Selection Hints
 
 - Code tasks normally select `surgical-change` and `verification-evidence`.
-- Ready-light code tasks should stay S-size, use one observable contract factor when possible, and avoid unsupported helper, dependency, or config requirements.
+- Ready-light code tasks should stay S-size, keep binary outcomes in the Outcome Contract, use Verification for evidence, and allow zero Earned Rubric factors.
 - Documentation tasks select `docs-reader-success`.
 - User-visible product-flow tasks can select `user-replay-evidence` for concise replay notes.
 - Refactors and quality-risk M+ code tasks select `simplify-pass`.

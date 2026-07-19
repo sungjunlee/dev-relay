@@ -67,7 +67,7 @@ test("does not flag a task-specific command as hygiene", () => {
   assert.ok(!result.warnings.some((warning) => warning.code === "repo_hygiene_in_factor"));
 });
 
-test("warns all_contract for a design-bearing task with zero quality factors and no waiver", () => {
+test("allows a design-bearing task with zero quality factors and no waiver", () => {
   const result = buildQualityCardSummary({
     rubricYaml: rubricWithFactors([
       { name: "Route decision is preserved", tier: "contract" },
@@ -76,7 +76,7 @@ test("warns all_contract for a design-bearing task with zero quality factors and
   });
 
   assert.equal(result.quality_factors, 0);
-  assert.ok(result.warnings.some((warning) => warning.code === "all_contract"));
+  assert.ok(!result.warnings.some((warning) => warning.code === "all_contract"));
   assert.equal(result.quality_waiver, "");
 });
 

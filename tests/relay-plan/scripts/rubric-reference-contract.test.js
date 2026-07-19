@@ -210,6 +210,12 @@ test("planning guidance defines three evaluation channels and their authority hi
   assert.match(channels, /Verification.*executable or observable evidence/is);
   assert.match(channels, /Earned Rubric.*optional quality gradients/is);
   assert.match(channels, /zero Earned Rubric factors is valid/i);
+  assert.match(channels, /\*\*Gradient\*\*/);
+  assert.match(channels, /\*\*Observable\*\*/);
+  assert.match(channels, /\*\*Actionable\*\*/);
+  assert.match(channels, /\*\*Consequential\*\*/);
+  assert.match(channels, /weak.*adequate.*strong/is);
+  assert.match(channels, /`numeric_scale` is\s+optional/i);
   assert.match(channels, /Existing `rubric:` artifacts remain readable/i);
   assert.match(skill, /evaluation:\n\s+schema_version: 2/);
   assert.match(skill, /earned_rubric:\n\s+factors: \[\]/);
