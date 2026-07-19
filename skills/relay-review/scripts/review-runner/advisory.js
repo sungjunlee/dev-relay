@@ -716,7 +716,6 @@ function executeAdvisoryRequest(request) {
     trigger: request.trigger || "every_round",
     ...counts,
   };
-  writeJson(request.resultPath, result);
   const timingFields = waitForDecisionTiming(request);
   Object.assign(result, {
     consumedByPhase: timingFields.consumed_by_phase,
@@ -724,6 +723,9 @@ function executeAdvisoryRequest(request) {
     elapsedMs: timingFields.elapsed_ms,
     phaseDecisionWaited: timingFields.phase_decision_waited,
   });
+  // The advisory result is the settlement signal. Publish it only after the
+  // required audit event has been durably appended under the shared manifest
+  // transaction lock, so settlement cannot consume success without provenance.
   try {
     appendRunEvent(request.runRepoPath, request.runId, {
       event: EVENTS.ADVISORY_REVIEW,
