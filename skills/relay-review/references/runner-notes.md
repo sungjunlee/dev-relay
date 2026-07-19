@@ -33,7 +33,7 @@ Prepared or invoked rounds write artifacts under `~/.relay/runs/<repo-slug>/<run
 - `review-round-N-policy-violation.txt` if the reviewer changed files
 - `review-round-N-redispatch.md` when changes are requested
 
-The runner reviews the retained checkout recorded in `paths.worktree`, not the repo root. It records `review.last_reviewed_sha`, enforces `review.max_rounds`, and escalates when the same issue fingerprint repeats 3 consecutive rounds.
+The runner reviews the retained checkout recorded in `paths.worktree`, not the repo root. It records `review.last_reviewed_sha` and enforces `review.max_rounds`, which defaults to `2` (one review, one targeted repair, one corrected-result review). A higher persisted value is an explicit extended policy; repeated-issue and flip-flop escalation still apply within that budget.
 
 ## Audit Trail
 

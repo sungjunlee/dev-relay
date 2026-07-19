@@ -2200,11 +2200,10 @@ test("review-runner records rubric_scores as iteration_score events", () => {
   assert.match(events.at(-1).ts, /\d{4}-\d{2}-\d{2}T/);
 });
 
-test("review-runner records score divergence and appends warning text to the PR comment", () => {
+test("review-runner ignores executor-authored Score Log as review evidence", () => {
   const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
-  const commentCapturePath = path.join(repoRoot, "captured-comment.txt");
   writeFakeGhScript(repoRoot, {
-    capturePath: commentCapturePath,
+    capturePath: path.join(repoRoot, "unused-comment.txt"),
     prBody: [
       "## Score Log",
       "",
@@ -2260,6 +2259,7 @@ test("review-runner records score divergence and appends warning text to the PR 
     "--done-criteria-file", doneCriteriaPath,
     "--diff-file", diffPath,
     "--review-file", reviewFile,
+    "--no-comment",
     "--json",
   ], {
     encoding: "utf-8",
@@ -2270,29 +2270,8 @@ test("review-runner records score divergence and appends warning text to the PR 
   });
 
   const events = readRunEvents(repoRoot, runId);
-  assert.equal(events.at(-2).event, "iteration_score");
-  assert.equal(events.at(-1).event, "score_divergence");
-  assert.deepEqual(events.at(-1).divergences, [
-    {
-      factor: "Coverage",
-      executor: "9",
-      reviewer: "6",
-      delta: 3,
-      tier: "contract",
-    },
-    {
-      factor: "Docs & Notes?",
-      executor: "8",
-      reviewer: "7",
-      delta: 1,
-      tier: "quality",
-    },
-  ]);
-
-  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
-  assert.match(commentBody, /Score divergence warnings:/);
-  assert.match(commentBody, /Coverage: executor 9, reviewer 6 \(\+3\)/);
-  assert.doesNotMatch(commentBody, /Docs & Notes\?: executor 8, reviewer 7/);
+  assert.equal(events.at(-1).event, "iteration_score");
+  assert.ok(!events.some((event) => event.event === "score_divergence"));
 });
 
 test("review-runner keeps event journals on the manifest repo slug when --repo is a symlinked alias", () => {
@@ -2367,9 +2346,7 @@ test("review-runner keeps event journals on the manifest repo slug when --repo i
     "escalation_decision",
     "review_apply",
     "iteration_score",
-    "score_divergence",
   ]);
-  assert.equal(events.at(-1).divergences[0].factor, "Coverage");
   assert.equal(fs.existsSync(aliasEventsPath), true);
   assert.deepEqual(readRunEvents(repoAliasPath, runId), events);
 });
@@ -3126,8 +3103,58 @@ test("review runner enforces max_rounds before starting a new round", () => {
   assert.equal("reviewer" in reviewApplyEvent, false);
 });
 
+test("default repair cycle escalates after the corrected result fails its second review", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "bounded-cycle-issue.json", {
+    verdict: "changes_requested",
+    summary: "A substantive issue remains.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Required recovery state is missing",
+      body: "The corrected result still omits the required recovery state.",
+      file: "src/index.js",
+      line: 12,
+      category: "contract",
+      severity: "high",
+      confidence: "high",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const first = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--review-file", reviewFile, "--no-comment", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(first.state, STATES.CHANGES_REQUESTED);
+  assert.ok(first.redispatchPath);
+  setReviewPending(manifestPath);
+
+  const second = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--review-file", reviewFile, "--no-comment", "--json",
+  ], { encoding: "utf-8" }));
+
+  assert.equal(second.state, STATES.ESCALATED);
+  assert.equal(second.appliedVerdict, "escalated");
+  assert.equal(second.redispatchPath, null);
+  const events = readRunEvents(repoRoot, runId);
+  const escalation = events.findLast((event) => event.event === "escalation_decision");
+  assert.equal(escalation.trigger, "repair_cycle_exhausted");
+  assert.equal(escalation.decision, "escalate");
+  assert.match(escalation.head_sha, /^[0-9a-f]{40}$/);
+});
+
 test("repeated identical issues escalate on the third consecutive round", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const manifestRecord = readManifest(manifestPath);
+  manifestRecord.data.review.max_rounds = 4;
+  writeManifest(manifestPath, manifestRecord.data, manifestRecord.body);
   const reviewFile = writeVerdict(repoRoot, "same-issue.json", {
     verdict: "changes_requested",
     summary: "Same issue persists.",
@@ -3182,7 +3209,10 @@ test("rubric factor flip-flops preserve pass verdicts when there are zero repeat
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
-  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    review: { ...(data.review || {}), rounds: 2, max_rounds: 4 },
+  }));
   const reviewFile = writeVerdict(repoRoot, "flip-pass.json", {
     verdict: "pass", summary: "Looks good.", contract_status: "pass", quality_review_status: "pass",
     quality_execution_status: "pass", next_action: "ready_to_merge", issues: [],
@@ -3203,7 +3233,10 @@ test("low-confidence downgrade is pass-equivalent for flip-flop escalation", () 
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
-  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    review: { ...(data.review || {}), rounds: 2, max_rounds: 4 },
+  }));
   const reviewFile = writeVerdict(repoRoot, "flip-low-confidence.json", {
     verdict: "changes_requested",
     summary: "Only speculative behavior notes remain.",
@@ -3246,7 +3279,10 @@ test("explicit-factor progressive lineage converges on fail-pass-fail arcs", asy
       const runDir = ensureRunLayout(repoRoot, runId).runDir;
       fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "F1", status: "fail" }] }), "utf-8");
       fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "F1", status: "pass" }] }), "utf-8");
-      updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+      updateManifestRecord(manifestPath, (data) => ({
+        ...data,
+        review: { ...(data.review || {}), rounds: 2, max_rounds: 4 },
+      }));
       const reviewFile = writeVerdict(repoRoot, `flip-progressive-${lineage}.json`, {
         verdict: "changes_requested",
         summary: `Progressive ${lineage} finding after a real fix.`,
@@ -3286,7 +3322,10 @@ test("#918-shaped repeat lineage still escalates on flip-flop thrash", () => {
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
-  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    review: { ...(data.review || {}), rounds: 2, max_rounds: 4 },
+  }));
   const reviewFile = writeVerdict(repoRoot, "flip-genuine-repeat.json", {
     verdict: "changes_requested",
     summary: "Dead-guard residual repeats across rounds.",
@@ -3326,7 +3365,10 @@ test("unknown lineage without explicit progressive label still escalates on flip
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
-  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    review: { ...(data.review || {}), rounds: 2, max_rounds: 4 },
+  }));
   const reviewFile = writeVerdict(repoRoot, "flip-genuine-changes.json", {
     verdict: "changes_requested",
     summary: "Behavior blocker remains.",
@@ -3362,7 +3404,10 @@ test("rubric factor flip-flops fail closed for stale lineage without waiting for
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
-  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    review: { ...(data.review || {}), rounds: 2, max_rounds: 4 },
+  }));
   const reviewFile = writeVerdict(repoRoot, "flip-stale.json", {
     verdict: "changes_requested",
     summary: "Behavior stale finding repeats.",

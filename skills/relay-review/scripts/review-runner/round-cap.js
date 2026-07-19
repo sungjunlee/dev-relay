@@ -4,8 +4,21 @@ const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/rela
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
 const { summarizeLineage } = require("./redispatch");
 
+const DEFAULT_MAX_REVIEW_ROUNDS = 2;
+
+function getMaxReviewRounds(data) {
+  const configured = Number(data?.review?.max_rounds);
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_MAX_REVIEW_ROUNDS;
+}
+
+function shouldEscalateRepairCycle({ data, round, blocking }) {
+  return Boolean(blocking) && Number(round) >= getMaxReviewRounds(data);
+}
+
 function enforceRoundCap({ body, data, manifestPath, prNumber, reviewedHeadSha, round, runRepoPath }) {
-  const maxRounds = Number(data.review?.max_rounds || 20);
+  const maxRounds = getMaxReviewRounds(data);
   if (round <= maxRounds) return;
   const previousRound = Number(data.review?.rounds || 0);
   const escalationDecision = {
@@ -40,5 +53,8 @@ function enforceRoundCap({ body, data, manifestPath, prNumber, reviewedHeadSha, 
 }
 
 module.exports = {
+  DEFAULT_MAX_REVIEW_ROUNDS,
   enforceRoundCap,
+  getMaxReviewRounds,
+  shouldEscalateRepairCycle,
 };

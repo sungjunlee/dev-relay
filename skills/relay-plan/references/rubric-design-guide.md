@@ -24,7 +24,7 @@ The domain `rubric-*.md` files are **candidate axis libraries**, not dispatch te
 
 Common factor fields are:
 
-- `name`: short label used by the Score Log and reviewer
+- `name`: short label used by the independent reviewer and audit artifacts
 - `tier`: `contract` or `quality`
 - `type`: `automated` or `evaluated`
 - `command`: immutable command for automated factors

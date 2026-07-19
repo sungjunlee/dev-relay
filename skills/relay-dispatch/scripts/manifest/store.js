@@ -226,7 +226,7 @@ function createManifestSkeleton({
     },
     review: {
       rounds: 0,
-      max_rounds: 20,
+      max_rounds: 2,
       latest_verdict: "pending",
       repeated_issue_count: 0,
       last_reviewed_sha: null,

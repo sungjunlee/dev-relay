@@ -102,7 +102,7 @@ anchor:
 
 review:
   rounds: 1
-  max_rounds: 20
+  max_rounds: 2
   latest_verdict: changes_requested
   repeated_issue_count: 0
 

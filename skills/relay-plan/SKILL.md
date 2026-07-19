@@ -141,4 +141,4 @@ Use add-ons only when task evidence earns them; do not copy reference checklists
 - File/path precision, forbidden zones, event-shape changes, or TDD-flavored factors: `references/rubric-patterns.md`.
 - L/XL ambiguity or unclear subsystem boundaries: consider a read-only scout via `references/subsystem-scout.md`; skip for S/M tasks with clear scope.
 - Novel, vague, high-risk, or easy-to-game Done Criteria: run one stress-test round via `references/rubric-stress-test.md`; ambiguity or risk can opt any size into stress-test.
-- Re-dispatch after review feedback: keep the original anchor fixed; previous attempt evidence and reviewer feedback are automatically prepended. Legacy Score Log artifacts remain readable during migration.
+- Re-dispatch after review feedback: keep the original anchor fixed; previous attempt evidence and reviewer feedback are automatically prepended. Legacy Score Log text remains readable during migration but executor-authored scores are not review evidence.

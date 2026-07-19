@@ -136,7 +136,7 @@ anchor:
 
 review:
   rounds: 2
-  max_rounds: 20
+  max_rounds: 2              # explicit higher values opt into extended review
   latest_verdict: pass           # pending | pass | changes_requested | escalated
   repeated_issue_count: 0
   last_reviewed_sha: abc123def

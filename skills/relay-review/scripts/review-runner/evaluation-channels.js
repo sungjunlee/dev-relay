@@ -14,6 +14,85 @@ function evaluationArtifactMeta(rubricLoad = {}) {
   };
 }
 
+function blockEnd(lines, start, indent, limit = lines.length) {
+  for (let index = start + 1; index < limit; index += 1) {
+    if (/^\s*(?:#.*)?$/.test(lines[index])) continue;
+    if (lines[index].match(/^\s*/)[0].length <= indent) return index;
+  }
+  return limit;
+}
+
+function structuredEarnedFactorNames(content) {
+  const lines = String(content || "").split(/\r?\n/);
+  const earnedIndex = lines.findIndex((line) => /^\s*earned_rubric:\s*$/.test(line));
+  if (earnedIndex < 0) return [];
+  const earnedIndent = lines[earnedIndex].match(/^\s*/)[0].length;
+  const earnedEnd = blockEnd(lines, earnedIndex, earnedIndent);
+  const factorsIndex = lines.findIndex((line, index) => (
+    index > earnedIndex
+    && index < earnedEnd
+    && /^\s*factors:\s*(?:\[\s*\])?\s*$/.test(line)
+  ));
+  if (factorsIndex < 0 || /\[\s*\]/.test(lines[factorsIndex])) return [];
+  const factorsIndent = lines[factorsIndex].match(/^\s*/)[0].length;
+  const factorsEnd = blockEnd(lines, factorsIndex, factorsIndent, earnedEnd);
+  const starts = [];
+  let itemIndent = null;
+  for (let index = factorsIndex + 1; index < factorsEnd; index += 1) {
+    const item = lines[index].match(/^(\s*)-\s+/);
+    if (!item) continue;
+    const indent = item[1].length;
+    if (itemIndent === null) itemIndent = indent;
+    if (indent === itemIndent) starts.push(index);
+  }
+  return starts.map((start, position) => {
+    const end = starts[position + 1] || factorsEnd;
+    for (let index = start; index < end; index += 1) {
+      const name = lines[index].match(/^\s*(?:-\s*)?name:\s*(.*?)\s*$/);
+      if (name) return name[1].replace(/^["']|["']$/g, "").trim();
+    }
+    return "";
+  }).filter(Boolean);
+}
+
+function normalizeFactorName(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function validateReviewerScoresForArtifact(rubricLoad = {}, rubricScores = []) {
+  const scores = Array.isArray(rubricScores) ? rubricScores : [];
+  const meta = evaluationArtifactMeta(rubricLoad);
+  if (meta.kind === "legacy") {
+    if (scores.length === 0) {
+      throw new Error("A legacy rubric was provided; the reviewer must score every factor.");
+    }
+    return;
+  }
+  if (meta.kind !== "structured") return;
+
+  const expected = structuredEarnedFactorNames(rubricLoad.content);
+  if (expected.length === 0) {
+    if (scores.length > 0) {
+      throw new Error("No Earned Rubric factors were persisted; the reviewer must not invent scores.");
+    }
+    return;
+  }
+
+  const expectedKeys = new Set(expected.map(normalizeFactorName));
+  const actualNames = scores.map((score) => String(score?.factor || "").trim()).filter(Boolean);
+  const actualKeys = new Set(actualNames.map(normalizeFactorName));
+  const missing = expected.filter((name) => !actualKeys.has(normalizeFactorName(name)));
+  const unexpected = actualNames.filter((name) => !expectedKeys.has(normalizeFactorName(name)));
+  if (missing.length || unexpected.length || actualNames.length !== expected.length) {
+    throw new Error(
+      `Reviewer scores must exactly match persisted Earned Rubric factors; missing: ${missing.join(", ") || "none"}; unexpected: ${unexpected.join(", ") || "none"}.`
+    );
+  }
+  if (scores.some((score) => score?.tier !== "quality")) {
+    throw new Error("Structured Earned Rubric reviewer scores must use tier=quality.");
+  }
+}
+
 function buildEvaluationSections(rubricLoad = {}) {
   if (rubricLoad.warning) {
     return ["", "## Scoring Rubric", rubricLoad.warning];
@@ -72,4 +151,6 @@ module.exports = {
   buildEvaluationSections,
   buildRubricScoreValidationRule,
   evaluationArtifactMeta,
+  structuredEarnedFactorNames,
+  validateReviewerScoresForArtifact,
 };

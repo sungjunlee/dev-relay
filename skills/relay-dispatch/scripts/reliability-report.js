@@ -1429,7 +1429,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
 
   const reviewRuns = new Map();
   for (const manifest of manifests) {
-    reviewRuns.set(manifest.data.run_id, Number(manifest.data.review?.max_rounds || 20));
+    reviewRuns.set(manifest.data.run_id, Number(manifest.data.review?.max_rounds || 2));
   }
   const maxRoundsCompliant = new Set();
   for (const [runId, maxRounds] of reviewRuns.entries()) {
