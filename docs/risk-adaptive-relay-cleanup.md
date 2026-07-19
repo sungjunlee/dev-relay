@@ -27,8 +27,9 @@ exists, the observation gate applies and the mechanism remains.
 | Candidate | Evidence | Decision | Surviving invariant owner |
 | --- | --- | --- | --- |
 | Executor Score Log production | #1030 made reviewer output the sole scoring authority; current dispatch output contained metadata, not scores | Remove and rename the PR section to Dispatch Metadata | Reviewer verdict plus `iteration_score` journal |
-| Executor/reviewer score divergence parser, event writer, report fields, and planner signal | No current producer or runtime caller after reviewer-only scoring | Remove together | Reviewer verdict validation and reliability factor analysis |
-| Score-Log sprint-close report | Its only input was the retired executor Score Log, so it cannot observe future runs | Remove script, tests, reference, and operator links | Risk-path calibration and project retrospectives |
+| Executor/reviewer score divergence producer, review comparison, and planner signal | Reviewer-only scoring removed the current executor score authority | Remove from current review and planning paths | Reviewer verdict validation and reliability factor analysis |
+| Historical score-divergence analytics | Historical events remain readable and may still carry operator value | Retain as a legacy-only reliability-report consumer; do not restore an event producer | Generic event reader plus legacy analytics |
+| Score-Log sprint-close report | It cannot observe future reviewer-only runs, but completed historical manifests and PR bodies remain supported inputs | Retain `skills/relay-merge/scripts/sprint-close-report.js` as an explicit legacy-only command; remove it from the default operator flow | Historical manifest and Score Log compatibility readers |
 | Superseded self-review compatibility needle | Current protocol no longer emits that text | Remove fallback branch | Completion Responsibilities and independent review |
 | Legacy quality-card summary helper | No planner, dispatcher, reviewer, or operator path calls it; it only parses the superseded factor-tier shape and its own TDD skip-reason vocabulary | Remove helper, tests, and stale documentation link | Structured evaluation validation, optional TDD flavor, and task-derived observation lenses |
 | Additional review rounds | No observed runs | Retain | Assurance-derived review cap and review runner |
@@ -46,9 +47,10 @@ explicit approval for merge or other irreversible actions remain mandatory.
 
 Historical `score_divergence` journal lines are still readable because event
 validation is write-only and the generic reader accepts historical names. No
-current code emits or analyzes them. Historical `score_log` fields remain
-readable in retained previous-attempt artifacts and are never treated as review
-evidence.
+current code emits them; reliability-report may still analyze them as
+legacy-only historical data. Historical `score_log` fields remain readable in
+retained previous-attempt artifacts and by the legacy-only sprint-close report,
+and are never treated as current review evidence.
 
 ## Rollback triggers
 

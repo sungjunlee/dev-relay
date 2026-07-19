@@ -183,9 +183,10 @@ Once Phase 0+1 produce consistent artifact flow, add consumers.
 
 ## Retired experiment
 
-The Score-Log-based sprint-close candidate report was retired in #1033 after
-reviewer-only scoring removed its producer. Use risk-path calibration and normal
-retrospectives instead; neither mutates project memory automatically.
+Reviewer-only scoring retired the Score-Log producer in #1033. The old
+sprint-close candidate report remains available only to reproduce analysis of
+completed historical runs; current work uses risk-path calibration and normal
+retrospectives instead. Neither path mutates project memory automatically.
 
 ---
 

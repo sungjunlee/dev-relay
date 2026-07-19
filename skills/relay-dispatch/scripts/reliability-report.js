@@ -18,6 +18,7 @@ const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h"] };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const NO_GUIDANCE_DATA_TEXT = "no guidance data available";
+const LEGACY_SCORE_DIVERGENCE_EVENT = "score_divergence";
 const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
 const HANDOFF_RECOVERY_EVENTS = new Set([
   EVENTS.RECOVER_COMMIT,
@@ -121,6 +122,7 @@ function buildEmptyRubricInsights() {
     quality_grade_distribution: null,
     avg_quality_ratio: null,
     tier_effectiveness: null,
+    divergence_hotspots: null,
     auto_vs_eval_correlation: null,
   };
 }
@@ -211,6 +213,55 @@ function buildTierEffectiveness(events) {
   };
 }
 
+function buildDivergenceHotspots(events) {
+  const divergenceEvents = events.filter((event) => (
+    event.event === LEGACY_SCORE_DIVERGENCE_EVENT
+    && Array.isArray(event.divergences)
+  ));
+  if (divergenceEvents.length === 0) return null;
+
+  const grouped = new Map();
+  for (const event of divergenceEvents) {
+    for (const entry of event.divergences) {
+      const factor = typeof entry?.factor === "string" ? entry.factor.trim() : "";
+      const delta = Number(entry?.delta);
+      if (!factor || !Number.isFinite(delta)) continue;
+
+      if (!grouped.has(factor)) {
+        grouped.set(factor, { occurrences: 0, deltas: [] });
+      }
+      const current = grouped.get(factor);
+      current.occurrences += 1;
+      current.deltas.push(delta);
+    }
+  }
+
+  if (grouped.size === 0) return null;
+
+  return [...grouped.entries()]
+    .map(([factorPattern, summary]) => {
+      const avgDelta = average(summary.deltas);
+      let recommendation = "Review scoring examples for this factor.";
+      if (avgDelta !== null && avgDelta >= 0.5) {
+        recommendation = "Executor scores trend higher than review; tighten examples or add automation.";
+      } else if (avgDelta !== null && avgDelta <= -0.5) {
+        recommendation = "Reviewer scores trend higher than executor; check whether the factor is underspecified.";
+      }
+
+      return {
+        factor_pattern: factorPattern,
+        occurrences: summary.occurrences,
+        avg_delta: avgDelta,
+        recommendation,
+      };
+    })
+    .sort((left, right) => (
+      right.occurrences - left.occurrences
+      || Math.abs(right.avg_delta || 0) - Math.abs(left.avg_delta || 0)
+      || left.factor_pattern.localeCompare(right.factor_pattern)
+    ));
+}
+
 function buildAutoVsEvalCorrelation(rubricQualityEvents, manifests) {
   const manifestsByRun = new Map(
     manifests
@@ -285,6 +336,7 @@ function buildRubricInsights(events, manifests) {
   }
 
   insights.tier_effectiveness = buildTierEffectiveness(events);
+  insights.divergence_hotspots = buildDivergenceHotspots(events);
   insights.auto_vs_eval_correlation = buildAutoVsEvalCorrelation(rubricQualityEvents, manifests);
 
   return insights;
@@ -441,6 +493,29 @@ function hasChangesRequestedOutcome(manifest, events) {
   );
 }
 
+function buildPackDivergenceSummary(events) {
+  const divergenceEvents = events.filter((event) => (
+    event.event === LEGACY_SCORE_DIVERGENCE_EVENT
+    && Array.isArray(event.divergences)
+  ));
+  const deltas = [];
+
+  for (const event of divergenceEvents) {
+    for (const entry of event.divergences) {
+      const delta = Number(entry?.delta);
+      if (Number.isFinite(delta)) {
+        deltas.push(delta);
+      }
+    }
+  }
+
+  return {
+    occurrences: deltas.length,
+    avg_delta: average(deltas),
+    hotspots: buildDivergenceHotspots(divergenceEvents) || [],
+  };
+}
+
 function buildGuidancePackInsights(manifests, events) {
   const packsByRun = buildGuidanceRunIndex(manifests, events);
   if (packsByRun.size === 0) {
@@ -491,12 +566,17 @@ function buildGuidancePackInsights(manifests, events) {
       )
     ));
 
-    packSummaries[pack] = {
+    const packSummary = {
       usage_count: runIds.size,
       avg_review_rounds: average(reviewRounds),
       changes_requested_rate: ratio(changesRequestedRuns.length, runIds.size),
       stuck_factors: factorAnalysisToStuckFactors(buildFactorAnalysis(packEvents)),
     };
+    const legacyDivergence = buildPackDivergenceSummary(packEvents);
+    if (legacyDivergence.occurrences > 0) {
+      packSummary.executor_reviewer_divergence = legacyDivergence;
+    }
+    packSummaries[pack] = packSummary;
   }
 
   return {
@@ -1745,8 +1825,12 @@ function main() {
     const gradeText = gradeDistribution
       ? `A:${gradeDistribution.A} B:${gradeDistribution.B} C:${gradeDistribution.C} D:${gradeDistribution.D}`
       : "n/a";
+    const topHotspot = report.rubric_insights.divergence_hotspots?.[0];
     console.log(`  rubric_grades: ${gradeText}`);
     console.log(`  avg_quality_ratio: ${report.rubric_insights.avg_quality_ratio ?? "n/a"}`);
+    if (topHotspot) {
+      console.log(`  legacy_divergence_hotspot: ${topHotspot.factor_pattern} (${topHotspot.avg_delta})`);
+    }
   }
   if (report.guidance_pack_insights?.status === NO_GUIDANCE_DATA_TEXT) {
     console.log(`  guidance_pack_insights: ${NO_GUIDANCE_DATA_TEXT}`);
@@ -1754,11 +1838,15 @@ function main() {
     console.log("  guidance_pack_insights:");
     for (const [pack, summary] of Object.entries(report.guidance_pack_insights?.packs || {})) {
       const topStuckFactor = summary.stuck_factors?.[0]?.factor || "n/a";
+      const legacyDivergence = summary.executor_reviewer_divergence;
       console.log(
         `    ${pack}: usage_count=${summary.usage_count} ` +
         `avg_review_rounds=${summary.avg_review_rounds ?? "n/a"} ` +
         `changes_requested_rate=${summary.changes_requested_rate ?? "n/a"} ` +
-        `top_stuck_factor=${topStuckFactor}`
+        `top_stuck_factor=${topStuckFactor}` +
+        (legacyDivergence
+          ? ` legacy_divergence_avg_delta=${legacyDivergence.avg_delta}`
+          : "")
       );
     }
   }

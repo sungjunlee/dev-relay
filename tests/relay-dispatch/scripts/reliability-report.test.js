@@ -1433,6 +1433,7 @@ test("reliability-report keeps rubric_insights null-safe when new events are abs
     quality_grade_distribution: null,
     avg_quality_ratio: null,
     tier_effectiveness: null,
+    divergence_hotspots: null,
     auto_vs_eval_correlation: null,
   });
 });
@@ -1556,6 +1557,59 @@ test("reliability-report derives tier effectiveness from tiered iteration scores
       avg_rounds_to_met: 1,
     },
   });
+});
+
+test("reliability-report preserves legacy score_divergence analytics without a producer", () => {
+  const repoRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "relay-report-legacy-divergence-")
+  );
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = createRunId({
+    branch: "legacy-divergence",
+    timestamp: new Date("2026-04-12T05:00:00.000Z"),
+  });
+  writeRun(repoRoot, {
+    runId,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 2,
+  });
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  fs.appendFileSync(
+    path.join(runDir, "events.jsonl"),
+    `${JSON.stringify({
+      ts: new Date().toISOString(),
+      event: "score_divergence",
+      actor: "legacy-reviewer",
+      run_id: runId,
+      round: 1,
+      divergences: [
+        {
+          factor: "Coverage",
+          executor: "9",
+          reviewer: "6",
+          delta: 3,
+          tier: "contract",
+        },
+      ],
+    })}\n`
+  );
+
+  const stdout = execFileSync(
+    "node",
+    [SCRIPT, "--repo", repoRoot, "--json"],
+    { encoding: "utf-8" }
+  );
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.rubric_insights.divergence_hotspots, [
+    {
+      factor_pattern: "Coverage",
+      occurrences: 1,
+      avg_delta: 3,
+      recommendation:
+        "Executor scores trend higher than review; tighten examples or add automation.",
+    },
+  ]);
 });
 
 test("reliability-report populates only available rubric insight subfields", () => {

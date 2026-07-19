@@ -24,14 +24,15 @@ test("legacy cleanup records evidence, invariant owners, rollback, and operator 
   assert.match(decision, /adversarial.*retain/is);
   assert.match(decision, /lifecycle.*recovery.*retain/is);
   assert.match(decision, /historical.*manifest.*retain/is);
-  assert.match(decision, /executor Score Log.*remove/is);
-  assert.match(decision, /score divergence.*remove/is);
+  assert.match(decision, /executor.*score divergence producer.*remove/is);
+  assert.match(decision, /Historical score-divergence analytics.*retain/is);
+  assert.match(decision, /Score-Log sprint-close report.*retain/is);
   assert.match(decision, /surviving invariant owner/i);
   assert.match(decision, /rollback trigger/i);
   assert.match(decision, /final operator flow/i);
 });
 
-test("current runtime has one reviewer-owned score path and no dead divergence tooling", () => {
+test("current runtime has one reviewer-owned score path and no divergence producer", () => {
   const publish = read("skills/relay-dispatch/scripts/dispatch-publish.js");
   const events = read("skills/relay-dispatch/scripts/relay-events.js");
   const report = read("skills/relay-dispatch/scripts/reliability-report.js");
@@ -46,8 +47,12 @@ test("current runtime has one reviewer-owned score path and no dead divergence t
 
   assert.match(publish, /## Dispatch Metadata/);
   assert.doesNotMatch(publish, /## Score Log/);
-  assert.doesNotMatch(events, /SCORE_DIVERGENCE|appendScoreDivergence/);
-  assert.doesNotMatch(report, /divergence_hotspots|executor_reviewer_divergence/);
+  assert.doesNotMatch(
+    events,
+    /EVENTS\.SCORE_DIVERGENCE|appendScoreDivergence/
+  );
+  assert.match(report, /LEGACY_SCORE_DIVERGENCE_EVENT/);
+  assert.match(report, /divergence_hotspots|executor_reviewer_divergence/);
   assert.doesNotMatch(runner, /parseScoreLog|review-runner\/divergence/);
   assert.doesNotMatch(reviewComment, /Score divergence warnings/);
   assert.match(reviewComment, /Advisory review warnings/);
@@ -55,18 +60,9 @@ test("current runtime has one reviewer-owned score path and no dead divergence t
   assert.match(roundPersistence, /review-runner\/score-utils|\.[/\\]score-utils/);
   assert.equal(
     fs.existsSync(
-      path.join(
-        ROOT,
-        "skills/relay-review/scripts/review-runner/divergence.js"
-      )
-    ),
-    false
-  );
-  assert.equal(
-    fs.existsSync(
       path.join(ROOT, "skills/relay-merge/scripts/sprint-close-report.js")
     ),
-    false
+    true
   );
 });
 

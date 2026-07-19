@@ -113,7 +113,7 @@ node --test tests/relay-dispatch/scripts/cli-schema.test.js
 
 - `plan-runner.js` and its `invoke-planner-*` adapters were retired from the runtime skill package because isolated planning was optional and duplicated the human-in-the-loop `/relay-plan` flow.
 - `tdd-flavor.js` is a shared rubric helper despite its narrow name. It remains after `plan-runner` cleanup.
-- #1033 retires `sprint-close-report.js`; its only producer was the executor Score Log retired by reviewer-only scoring.
+- #1033 removes `sprint-close-report.js` from the default flow but retains it as a legacy-only reader while historical Score Log manifests remain supported.
 - #767 retires `update-manifest-state.js`; use `recover-state.js` as the canonical structured state recovery command.
 
 ## Retired In #766
