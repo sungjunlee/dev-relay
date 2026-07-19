@@ -1,6 +1,11 @@
 # Rubric Simplification
 
-Apply this pass to every draft rubric before persistence. The goal is to keep the contract observable without turning implementation choices into requirements.
+Apply this pass to every draft evaluation artifact before persistence. For structured
+artifacts, simplify each channel separately: keep requirements in Outcome Contract,
+move binary evidence to Verification, and simplify only genuine quality gradients under
+Earned Rubric. Legacy `rubric:` artifacts retain their existing field names. The goal
+is to keep the contract observable without turning implementation choices into
+requirements.
 
 ## Heuristics
 

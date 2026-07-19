@@ -10,14 +10,14 @@ metadata:
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, and `RUN_ID`.
-- Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, Score Log/rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`.
+- Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, structured evaluation or legacy rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
 # Relay Review
 
 ## Use when
 
-- Reviewing an executor PR against frozen Done Criteria and rubric anchors
+- Reviewing an executor PR against frozen Done Criteria, Verification evidence, and optional Earned Rubric anchors
 - Running `review-runner.js` for isolated reviewer invocation, PR comments, and manifest transitions
 - Producing a pass, changes-requested, or escalated relay review verdict
 

@@ -51,8 +51,8 @@ function withInlineWorkingGuidance(prompt) {
     "",
     "",
   ].join("\n");
-  assert.match(prompt, /## Scoring Rubric/);
-  return prompt.replace("## Scoring Rubric", `${guidanceBlock}## Scoring Rubric`);
+  assert.match(prompt, /## Evaluation Channels/);
+  return prompt.replace("## Evaluation Channels", `${guidanceBlock}## Evaluation Channels`);
 }
 
 test("TDD Step 0a remains factor-scoped when Working Guidance is rendered", () => {
@@ -68,7 +68,7 @@ test("TDD Step 0a remains factor-scoped when Working Guidance is rendered", () =
   assert.match(rendered, /tests\/parser\.test\.js/);
   assert.doesNotMatch(rendered, /tdd_mode/);
   assert.doesNotMatch(rendered, /## TDD/i);
-  assert.ok(rendered.indexOf("## Working Guidance") < rendered.indexOf("## Scoring Rubric"));
+  assert.ok(rendered.indexOf("## Working Guidance") < rendered.indexOf("## Evaluation Channels"));
   assert.ok(rendered.indexOf("0a. TDD RED ANCHOR STEP") > rendered.indexOf("## Completion Responsibilities"));
 });
 

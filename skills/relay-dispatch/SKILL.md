@@ -9,7 +9,7 @@ metadata:
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
-- Files: dispatch prompt (`--prompt-file` or `--prompt`), required rubric file, optional Done Criteria file, request/leaf ids, copied files, and retained run manifest.
+- Files: dispatch prompt (`--prompt-file` or `--prompt`), required evaluation artifact or legacy rubric via `--rubric-file`, optional Done Criteria file, request/leaf ids, copied files, and retained run manifest.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # Relay Dispatch
@@ -56,7 +56,7 @@ Essential flags:
 
 - `--branch, -b` starts a new retained run; `--run-id` or `--manifest` resumes one.
 - `--prompt, -p` or `--prompt-file` supplies the executor prompt.
-- `--rubric-file` is required for new dispatches from relay-plan.
+- `--rubric-file` is required for new dispatches from relay-plan and carries either structured evaluation channels or a readable legacy rubric.
 - `--executor, -e`, `--model, -m`, and `--model-hints` select harness/model routes subject to policy.
 - `--review-assurance`, `--request-id`, `--leaf-id`, and `--done-criteria-file` persist review and readiness anchors.
 - `--detach` starts a detached dispatch supervisor, prints a receipt, and returns before executor completion.

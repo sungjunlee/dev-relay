@@ -201,15 +201,35 @@ test("default executor contract delegates iteration while preserving verificatio
   assert.doesNotMatch(text, /max \d+ iterations/i);
 });
 
-test("relay dispatch template and wrapper use Done Criteria outcome language", () => {
+test("planning guidance defines three evaluation channels and their authority hierarchy", () => {
+  const channels = readReference("evaluation-channels.md");
+  const skill = readSkill();
+
+  assert.match(channels, /## Authority Hierarchy/);
+  assert.match(channels, /Outcome Contract.*required results and explicit non-goals/is);
+  assert.match(channels, /Verification.*executable or observable evidence/is);
+  assert.match(channels, /Earned Rubric.*optional quality gradients/is);
+  assert.match(channels, /zero Earned Rubric factors is valid/i);
+  assert.match(channels, /Existing `rubric:` artifacts remain readable/i);
+  assert.match(skill, /evaluation:\n\s+schema_version: 2/);
+  assert.match(skill, /earned_rubric:\n\s+factors: \[\]/);
+});
+
+test("relay dispatch template keeps Outcome Contract, Verification, and Earned Rubric distinct", () => {
   const template = readRelayReference("prompt-template.md");
   const relaySkill = readRelaySkill();
 
-  assert.match(template, /specific Done Criteria outcome is implemented/);
-  assert.match(template, /\[specific Done Criteria outcome\]/);
+  assert.match(template, /## Outcome Contract \(Done Criteria\)/);
+  assert.match(template, /## Evaluation Channels/);
+  assert.match(template, /outcome_contract:/);
+  assert.match(template, /verification:/);
+  assert.match(template, /earned_rubric:/);
+  assert.match(template, /factors: \[\]/);
   assert.match(template, /## Completion Responsibilities/);
   assert.match(template, /Capture concise verification evidence/);
   assert.match(template, /proxy signal/i);
+  assert.doesNotMatch(template, /## Tier Test/);
+  assert.doesNotMatch(template, /## Scoring Rubric/);
   assert.doesNotMatch(template, /## After Implementation/);
   assert.doesNotMatch(template, /## Completion Audit/);
   assert.doesNotMatch(template, /Score Log/);

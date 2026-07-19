@@ -2,20 +2,25 @@
 
 Implement the documented behavior.
 
-## Scoring Rubric
+## Outcome Contract (Done Criteria)
+
+- The documented behavior remains stable.
+
+## Evaluation Channels
 
 ```yaml
-rubric:
-  prerequisites:
-    - command: "node --test"
-      target: "exit 0"
-  factors:
-    - name: Behavior remains stable
-      tier: contract
-      type: automated
-      command: "node --test tests/behavior.test.js"
-      target: "exit 0"
-      weight: required
+evaluation:
+  schema_version: 2
+  outcome_contract:
+    source: done_criteria
+  verification:
+    checks:
+      - name: Behavior tests pass
+        type: command
+        command: "node --test tests/behavior.test.js"
+        target: "exit 0"
+  earned_rubric:
+    factors: []
 ```
 
 ## Completion Responsibilities

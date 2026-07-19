@@ -1,8 +1,21 @@
 # Rubric Validation, Grading, and Quality Card
 
-This reference holds the validation detail that used to live inline in `SKILL.md`. Apply it after building the rubric and before simplification.
+This reference holds validation detail for both structured evaluation artifacts and
+legacy rubrics. For `evaluation.schema_version: 2`, first apply
+`evaluation-channels.md`: validate frozen Done Criteria as the Outcome Contract, place
+binary evidence under Verification, and allow `earned_rubric.factors: []`. Factor
+minimums, `prerequisites`, and contract-tier factor rules below are legacy-only during
+the transition.
 
-## Validate the rubric (full checklist)
+## Validate Structured Evaluation Channels
+
+- [ ] Outcome Contract points to frozen, observable Done Criteria and explicit non-goals
+- [ ] Verification contains concrete command, observation, or artifact evidence
+- [ ] Tests, builds, type checks, lint, and artifact existence are not Earned Rubric factors
+- [ ] Earned Rubric is optional; zero factors is a valid result
+- [ ] No lower-authority channel expands or waives the Outcome Contract
+
+## Validate a Legacy Rubric (full checklist)
 
 Before dispatch, verify:
 

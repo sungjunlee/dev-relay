@@ -39,6 +39,53 @@ test("allows a one-factor ready-light S mechanical rubric", () => {
   assert.deepEqual(result.errors, []);
 });
 
+test("allows a structured planning artifact with verification and zero earned factors", () => {
+  const result = validateReadyLightRubric({
+    rubricYaml: [
+      "evaluation:",
+      "  schema_version: 2",
+      "  outcome_contract:",
+      "    source: done_criteria",
+      "  verification:",
+      "    checks:",
+      "      - name: Repo suite remains green",
+      "        type: command",
+      "        command: node --test",
+      "        target: exit 0",
+      "  earned_rubric:",
+      "    factors: []",
+    ].join("\n"),
+    taskProfile: { planning_profile: "ready_light", size: "S" },
+  });
+
+  assert.equal(result.action, "allow");
+  assert.equal(result.substantive_total, 0);
+  assert.deepEqual(result.errors, []);
+});
+
+test("blocks repo hygiene misplaced under structured earned_rubric factors", () => {
+  const result = validateReadyLightRubric({
+    rubricYaml: [
+      "evaluation:",
+      "  schema_version: 2",
+      "  outcome_contract:",
+      "    source: done_criteria",
+      "  verification:",
+      "    checks: []",
+      "  earned_rubric:",
+      "    factors:",
+      "      - name: Repo suite remains green",
+      "        type: automated",
+      "        command: node --test",
+      "        target: exit 0",
+    ].join("\n"),
+    taskProfile: { planning_profile: "ready_light", size: "S" },
+  });
+
+  assert.equal(result.action, "block");
+  assert.ok(result.errors.some((error) => error.code === "repo_hygiene_in_factor"));
+});
+
 test("blocks a ready-light S rubric with no substantive factors", () => {
   const result = validateReadyLightRubric({
     rubricYaml: [

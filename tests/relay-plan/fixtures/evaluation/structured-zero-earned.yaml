@@ -1,0 +1,13 @@
+evaluation:
+  schema_version: 2
+  outcome_contract:
+    source: done_criteria
+    path: tests/relay-plan/fixtures/evaluation/done-criteria.md
+  verification:
+    checks:
+      - name: Focused tests pass
+        type: command
+        command: node --test tests/focused.test.js
+        target: exit 0
+  earned_rubric:
+    factors: []

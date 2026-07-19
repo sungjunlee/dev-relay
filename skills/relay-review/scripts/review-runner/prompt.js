@@ -2,6 +2,10 @@ const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("../review-schema");
 const { readText } = require("./common");
 const { formatPriorRoundContext, loadProjectConventions } = require("./context");
+const {
+  buildEvaluationSections,
+  buildRubricScoreValidationRule,
+} = require("./evaluation-channels");
 const { getAppliedVerdict } = require("./verdict");
 
 const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "..", "references", "reviewer-prompt.md");
@@ -122,24 +126,7 @@ function buildPrompt({
   if (prBodySnapshotSection) sections.push("", prBodySnapshotSection);
   sections.push("", template);
 
-  if (rubricLoad.warning) {
-    sections.push(
-      "",
-      "## Scoring Rubric",
-      rubricLoad.warning
-    );
-  } else if (rubricLoad.content) {
-    sections.push(
-      "",
-      "## Scoring Rubric",
-      "A rubric was provided during planning. You MUST score EVERY factor below.",
-      "For each factor, populate a `rubric_scores` entry with `factor`, `target`, `observed`, `score`, `target_score`, `status`, `tier`, and `notes`.",
-      "Always include `score` and `target_score`: use numbers on the 0-10 scale for numeric quality factors, otherwise use null.",
-      "Do NOT leave `rubric_scores` empty when a rubric is provided.",
-      "",
-      rubricLoad.content
-    );
-  }
+  sections.push(...buildEvaluationSections(rubricLoad));
 
   const priorContext = formatPriorRoundContext(runDir, round);
   if (priorContext) {
@@ -164,9 +151,7 @@ function buildPrompt({
     "- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.",
     "- For `changes_requested` issues, optionally include `factor`, `attempted_approach`, and `fix_direction` when that context would help a later re-dispatch avoid repeating a rejected approach.",
     "- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.",
-    rubricLoad.content
-      ? "- `rubric_scores` is REQUIRED — score every factor from the rubric. Each entry must include `factor`, `target`, `observed`, `score`, `target_score`, `status`, `tier`, and `notes`. Use `score:null` and `target_score:null` when numeric scoring does not apply."
-      : "- If no Score Log is available, set `rubric_scores` to `[]`.",
+    buildRubricScoreValidationRule(rubricLoad),
     "- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `score`, `target_score`, `status`, `tier`, and `notes`.",
     "- `scope_drift` is always required. Set `scope_drift.creep` to `[]` if no out-of-scope changes. Set `scope_drift.missing` to list each Done Criteria item with status `verified`, `partial`, `not_done`, or `changed`.",
     "- If `scope_drift.missing` contains any `not_done`, `changed`, or `partial` entries, verdict cannot be `pass`.",

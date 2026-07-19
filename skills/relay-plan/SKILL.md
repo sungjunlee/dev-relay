@@ -1,22 +1,22 @@
 ---
 name: relay-plan
 argument-hint: "[task, issue, or ready handoff]"
-description: Use when a relay run needs its review anchor, scored rubric, or dispatch prompt — always before relay-dispatch, whether AC are explicit, vague, or missing.
+description: Use when a relay run needs its review anchor, evaluation channels, or dispatch prompt — always before relay-dispatch, whether AC are explicit, vague, or missing.
 compatibility: Requires gh CLI.
 metadata:
   related-skills: "relay, relay-ready, relay-dispatch, relay-review, dev-backlog"
-  keywords: "계획, 루브릭, planning, rubric, dispatch prompt"
+  keywords: "계획, 평가, 루브릭, planning, evaluation, rubric, dispatch prompt"
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
-- Files: relay-ready handoff, task file, issue/user text, optional local harness context (`AGENTS.md`, `CLAUDE.md`, `CHARTER.md`, `spec/capabilities.md`, active sprint notes), optional `/tmp/done-criteria-<N>.md`, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
+- Files: relay-ready handoff, task file, issue/user text, optional local harness context (`AGENTS.md`, `CLAUDE.md`, `CHARTER.md`, `spec/capabilities.md`, active sprint notes), optional `/tmp/done-criteria-<N>.md`, `/tmp/dispatch-<N>.md`, and compatibility-named `/tmp/rubric-<N>.yaml` evaluation artifact.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # Relay Plan
 
 ## Use when
 
-- Building the review anchor, scored rubric, and dispatch prompt for a relay run
+- Building the review anchor, structured evaluation channels, and dispatch prompt for a relay run
 - Converting task intent, explicit AC, repo signals, and risk into reviewable Done Criteria
 - Persisting planner-authored Done Criteria before dispatch
 
@@ -70,29 +70,30 @@ Identify the evaluation source model:
 
 If AC are missing, vague, or incomplete, write observable Done Criteria first. Treat explicit AC as high-priority evidence, not the only source. Before freezing, run the [pre-flight ambiguity audit](references/dc-preflight-audit.md). If the final review anchor is planner-authored or differs from the task source, persist it in step 7.
 
-### 5. Build the rubric
+### 5. Build the evaluation channels
 
-Synthesize task intent, explicit AC when present, repo signals, and task risk into a scored rubric — the recovered Done Criteria are the anchor, not the issue text alone. Use the guided interview in `references/rubric-design-guide.md` to synthesize factors from them. Minimal shape:
+Keep Outcome Contract, Verification, and optional Earned Rubric separate according to `references/evaluation-channels.md`. The frozen Done Criteria are the contract. Minimal artifact:
 
 ```yaml
-rubric:
-  prerequisites:
-    - command: "npm test"
-      target: "exit 0"
-  factors:
-    - name: Observable task contract
-      tier: contract
-      type: automated
-      command: "<task-specific command>"
-      target: "<observable pass condition>"
-      weight: required
+evaluation:
+  schema_version: 2
+  outcome_contract:
+    source: done_criteria
+  verification:
+    checks:
+      - name: Focused behavior passes
+        type: command
+        command: "<task-specific command>"
+        target: "<observable pass condition>"
+  earned_rubric:
+    factors: []
 ```
 
-Size the rubric by task risk and ambiguity, not raw issue AC count. Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, `scoring_guide`, size guidance, and optional `tdd_anchor` / `tdd_runner`: `references/rubric-design-guide.md`.
+Tests, builds, type checks, lint, artifact existence, and other binary evidence belong under Verification. Zero Earned Rubric factors is valid. Use `references/rubric-design-guide.md` only when a real quality gradient is present.
 
-### 6. Validate and simplify the rubric
+### 6. Validate and simplify the channels
 
-Quick gate before handoff: prerequisites hold repo-wide hygiene only; factors stay substantive; task-size minimums are satisfied; at least one automated check exists; evaluated factors have low/mid/high `scoring_guide`; criteria and targets are concrete. Full checklist: `references/rubric-validation.md`.
+Quick gate before handoff: Outcome Contract items are binary and observable; Verification checks name concrete evidence; Earned Rubric may be empty and contains no routine hygiene. Full checklist: `references/rubric-validation.md`.
 
 Before persisting, apply `references/rubric-simplification.md`: rewrite HOW into observable WHAT, merge overlaps, remove unsupported defensive clauses, and verify weights.
 
@@ -111,7 +112,7 @@ Skip this step when the issue or relay-ready handoff already provides the final 
 
 ### 8. Emit handoff artifacts
 
-Write the dispatch prompt and rubric YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Scoring Rubric, and Completion Responsibilities. The compatibility-named `references/iteration-protocol.md` defines the compact evidence-and-commit contract plus optional TDD flavor.
+Write the dispatch prompt and evaluation YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Pass the evaluation artifact through the compatibility-named `--rubric-file`; `references/iteration-protocol.md` defines the compact evidence-and-commit contract plus optional TDD flavor.
 
 Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, review assurance level, and the recommended `relay-dispatch` command. Use `--review-assurance hardened` only when task/rubric risk requires stronger verification; never derive it from executor or reviewer identity.
 

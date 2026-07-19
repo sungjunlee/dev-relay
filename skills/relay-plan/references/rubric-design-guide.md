@@ -2,7 +2,13 @@
 
 How to synthesize a task-specific evaluation rubric from the full task brief. Acceptance Criteria (AC) are high-priority evidence, not the only source. When AC are missing, vague, or incomplete, first recover observable Done Criteria from task intent, repo context, quality signals, and risk.
 
-Before dispatch, persist the finished rubric to a file and pass it through `relay-dispatch --rubric-file <path>`. This records `anchor.rubric_path` for review and merge gates.
+For new planning, use `evaluation-channels.md`. Binary requirements belong in the
+Outcome Contract, commands and observations belong in Verification, and the factor
+design guidance below applies only to optional `earned_rubric.factors`. There is no
+factor minimum. Existing `rubric:` YAML examples in this reference document the legacy
+shape retained for in-flight compatibility.
+
+Before dispatch, persist the finished evaluation artifact to a file and pass it through `relay-dispatch --rubric-file <path>`. This compatibility-named boundary records `anchor.rubric_path` for review and merge gates.
 
 ## Reference Use Contract
 
@@ -10,8 +16,8 @@ The domain `rubric-*.md` files are **candidate axis libraries**, not dispatch te
 
 - Pick only the axes earned by task-specific evidence: explicit AC, inferred Done Criteria, repo conventions, historical signal, probe signal, or concrete risk.
 - Do not copy a whole domain reference into a dispatch prompt.
-- S-size mechanical tasks may use one contract factor plus hygiene prerequisites and no quality factor.
-- Add quality factors only when the task has real design judgment or risk that a command cannot verify.
+- S-size mechanical tasks may use Verification with zero Earned Rubric factors.
+- Add Earned Rubric factors only when the task has real design judgment or risk that a command cannot verify.
 - Treat `fix_hint` examples as optional escalation aids for historical plateaus or non-obvious score transitions, not default implementation instructions.
 
 ## Factor Fields
