@@ -12,6 +12,7 @@
 const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const { PlanError } = require("./lib/reasons");
+const { COMMAND_FLAGS, FLAGS } = require("../../relay-dispatch/scripts/cli-schema");
 const { orchestrate } = require("./lib/run-orchestrator");
 const { orderedReport } = require("./lib/run-report");
 const { buildReceiptMapping, serializeReceiptWithRecords } = require("./lib/receipt");
@@ -196,6 +197,21 @@ function readProgram(programFile) {
   }
 }
 
+function assertRelayMarkerPersistenceCapability() {
+  const definition = FLAGS.find((entry) => entry.flag === "--coordination-marker");
+  if (
+    !COMMAND_FLAGS.dispatch.includes("--coordination-marker")
+    || !definition
+    || definition.kind !== "value"
+    || definition.mode !== "verbatim"
+  ) {
+    throw new PlanError(
+      "INVALID_INPUT",
+      "relay-orca relay_run dispatch requires the first-class relay --coordination-marker CLI surface; refusing to dispatch without exact marker persistence",
+    );
+  }
+}
+
 function printReport(report, json) {
   if (json) {
     process.stdout.write(`${JSON.stringify(orderedReport(report), null, 2)}\n`);
@@ -228,6 +244,9 @@ function main() {
   const program = readProgram(opts.programFile);
   let result;
   try {
+    // Check the local authoritative relay CLI/schema before admission or any
+    // Orca materialization. The operator contract is fail-closed at this boundary.
+    assertRelayMarkerPersistenceCapability();
     // A27: build the persistor FIRST. This eagerly canonicalizes the repo and resolves the
     // receipt path before orchestrate runs ANY admission/materialization mutation — a
     // git-canonicalization failure exits 52 here (CanonicalizationError, caught below) with

@@ -28,6 +28,20 @@ and [commands.md](commands.md) for the full flag tables referenced throughout.
 All five intents are invoked directly, by hand. `plan` is read-only and needs no Orca. The four
 runtime intents require probe admission first. Full flag tables: [commands.md](commands.md).
 
+`attach-marker` is a separate supervised recovery utility, not a sixth runtime intent and not
+an implicit part of `run`, `status`, or `resume`:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/attach-marker.js" \
+  --program-file /tmp/accepted-program.json \
+  --outcome-id outcome-a --run-id <relay-run-id> --repo-root <repo-root> --json
+```
+
+It repairs only the relay manifest's coordination marker and its audit event. It does not
+invoke Orca or GitHub, replay a dispatch, mutate a receipt, or perform receipt adoption;
+follow [recovery.md](recovery.md#supervised-relay-marker-recovery) for the required
+marker-then-mapping sequence.
+
 ```bash
 # plan — compile an accepted program into an immutable, read-only wave plan
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/plan.js" \

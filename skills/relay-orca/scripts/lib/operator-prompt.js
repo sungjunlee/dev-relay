@@ -1,5 +1,7 @@
 "use strict";
 
+const { coordinationMarkerFor, shellQuote } = require("./coordination-marker");
+
 // Engine-agnostic operator prompt builder (D8). One prompt per task kind. The
 // operator SURFACE is sourced from the plan's recommended_route (operator name +
 // mode only). NO executor/reviewer engine name, model name, or engine-specific
@@ -71,8 +73,21 @@ function manifestMarkerBlock(task, program, segmentEncoder) {
   if (task.kind !== "relay_run" && task.kind !== "relay_fleet") return null;
   if (typeof segmentEncoder !== "function") throw new TypeError("operator prompt requires the shared program segment encoder");
   const destination = task.kind === "relay_fleet" ? "relay fleet manifest" : "relay run manifest";
-  const marker = `relay-orca: ${segmentEncoder(program.id)}/${task.outcome_id}`;
+  const marker = coordinationMarkerFor(program.id, task.outcome_id, segmentEncoder);
   return `Embed this exact program marker line in the ${destination}:\n${marker}`;
+}
+
+function relayDispatchMarkerContract(task, program, segmentEncoder) {
+  if (task.kind !== "relay_run") return null;
+  if (typeof segmentEncoder !== "function") throw new TypeError("operator prompt requires the shared program segment encoder");
+  const marker = coordinationMarkerFor(program.id, task.outcome_id, segmentEncoder);
+  return [
+    "Relay coordination-marker contract (fail closed before dispatch):",
+    `Exact resolved marker: ${marker}`,
+    "Authoritative relay dispatch CLI shape:",
+    `node "\${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" <repo-root> --branch <branch> --prompt-file <prompt-file> --rubric-file <rubric-file> --coordination-marker ${shellQuote(marker)}`,
+    "Use that --coordination-marker value on the initial relay dispatch. If the flag is unavailable or its exact marker cannot be persisted before executor spawn, stop before worktree/executor mutation; do not dispatch or replay.",
+  ].join("\n");
 }
 
 function bodyBlock(task, program, outcome, segmentEncoder) {
@@ -84,7 +99,9 @@ function bodyBlock(task, program, outcome, segmentEncoder) {
   if (task.kind === "relay_fleet") {
     return [RELAY_PATH, fleetLeavesBlock(outcome), OWNERSHIP_NOTE, marker].join("\n");
   }
-  return [RELAY_PATH, OWNERSHIP_NOTE, marker].filter(Boolean).join("\n");
+  return [RELAY_PATH, OWNERSHIP_NOTE, marker, relayDispatchMarkerContract(task, program, segmentEncoder)]
+    .filter(Boolean)
+    .join("\n");
 }
 
 // Build the full operator prompt for a single task. `outcome` is the original
@@ -105,5 +122,6 @@ module.exports = {
   READ_ONLY_MARKER,
   NO_EDIT_CLAUSE,
   RELAY_PATH,
+  relayDispatchMarkerContract,
   buildOperatorPrompt,
 };

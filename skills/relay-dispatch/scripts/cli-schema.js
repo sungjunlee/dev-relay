@@ -35,6 +35,7 @@ const FLAGS = [
   { flag: "--by-role", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--contract-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied artifact path; keep the literal argv token." },
   { flag: "--copy", kind: VALUE, mode: MODE_VERBATIM, valueName: "<file,...>", rationale: "Operator-supplied file list; keep the literal argv token." },
+  { flag: "--coordination-marker", kind: VALUE, mode: MODE_VERBATIM, valueName: "<marker>", rationale: "Opaque single-line coordination marker persisted in the relay manifest; keep the literal argv token." },
   { flag: "--diff-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied fixture path; keep the literal argv token." },
   { flag: "--dispatch", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
   { flag: "--detach", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Launch the run (dispatch or review round) under a detached supervisor and return a receipt; no value is consumed." },
@@ -152,7 +153,7 @@ const COMMAND_FLAGS = {
   dispatch: [
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
     "--model", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
-    "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
+    "--test-command", "--coordination-marker", "--rubric-grandfathered", "--request-id", "--leaf-id",
     "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--register", "--auto-recover-commit", "--no-auto-recover-commit",
     "--tags", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help",
   ],

@@ -13,6 +13,8 @@ const {
   updateManifestState,
   writeManifest,
   readManifest,
+  acquireManifestLock,
+  releaseManifestLock,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 const { appendRunEvent, EVENTS, readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
@@ -24,6 +26,7 @@ const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/sc
 const {
   executeAdvisoryRequest,
   finishAdvisoryReview,
+  startAdvisoryReview,
   buildAdvisoryAdapterEnv,
   writeJson: writeAdvisoryJson,
 } = require("../../../skills/relay-review/scripts/review-runner/advisory");
@@ -599,6 +602,19 @@ function waitForEvent(repoRoot, runId, predicate, { timeoutMs = 2000 } = {}) {
   return null;
 }
 
+function waitForFileText(filePath, expectedText, { timeoutMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if (fs.readFileSync(filePath, "utf-8").includes(expectedText)) return true;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  return false;
+}
+
 test("executeAdvisoryRequest forwards advisory profile to reviewer argv", () => {
   const { logPath, result } = executeProfileRequest({
     profile: "adversarial",
@@ -608,6 +624,116 @@ test("executeAdvisoryRequest forwards advisory profile to reviewer argv", () => 
   const args = JSON.parse(fs.readFileSync(logPath, "utf-8"));
   assert.equal(result.status, "success");
   assert.deepEqual(args.slice(args.indexOf("--profile"), args.indexOf("--profile") + 2), ["--profile", "adversarial"]);
+});
+
+test("advisory worker does not publish success while its audit event waits on the shared manifest lock", async () => {
+  const { repoRoot, manifestPath, runDir, runId } = setupRepo();
+  const manifest = readManifest(manifestPath).data;
+  const logPath = path.join(runDir, "blocked-advisory-writer.log");
+  const reviewerScript = writeFakeOpencode(repoRoot, { logPath });
+  const lock = acquireManifestLock(manifestPath);
+  let advisoryRun;
+
+  try {
+    advisoryRun = startAdvisoryReview({
+      headSha: manifest.git.head_sha,
+      laneIndex: 1,
+      profile: "blindspot",
+      promptText: "Wait for the audit event before publishing the result.",
+      reviewerModel: "example/opencode-model-fast",
+      reviewerName: "opencode",
+      reviewerScript,
+      reviewRepoPath: repoRoot,
+      round: 1,
+      runDir,
+      runId,
+      runRepoPath: repoRoot,
+      state: STATES.REVIEW_PENDING,
+      timeoutSeconds: 5,
+      trigger: "every_round",
+    });
+
+    assert.equal(waitForFileText(logPath, "advisory-end", { timeoutMs: 3000 }), true);
+    // The old writer publishes resultPath before trying to acquire this lock.
+    // Give it time to reach the blocked append, then exercise the real reader.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    const consumedBeforeEvent = await finishAdvisoryReview({
+      advisoryRun,
+      waitMs: 0,
+    });
+    assert.equal(consumedBeforeEvent.status, "deferred");
+    assert.equal(
+      readRunEvents(repoRoot, runId).some((record) => record.event === EVENTS.ADVISORY_REVIEW),
+      false,
+    );
+  } finally {
+    releaseManifestLock(lock);
+  }
+
+  const event = waitForEvent(
+    repoRoot,
+    runId,
+    (record) => record.event === EVENTS.ADVISORY_REVIEW,
+    { timeoutMs: 5000 },
+  );
+  assert.ok(event);
+  assert.equal(event.status, "success");
+  assert.equal(waitForFileText(advisoryRun.resultPath, '"status": "success"', { timeoutMs: 2000 }), true);
+  assert.equal(JSON.parse(fs.readFileSync(advisoryRun.resultPath, "utf-8")).status, "success");
+  assert.equal(fs.existsSync(advisoryRun.laneLeasePath), false);
+});
+
+test("executeAdvisoryRequest publishes a failed result when the advisory event append fails", () => {
+  const { repoRoot, manifestPath, runDir, runId } = setupRepo();
+  const promptPath = path.join(runDir, "event-failure-prompt.md");
+  const resultPath = path.join(runDir, "event-failure-result.json");
+  const reviewerScript = writeFakeOpencode(repoRoot);
+  fs.writeFileSync(promptPath, "Advisory prompt\n", "utf-8");
+  const lock = acquireManifestLock(manifestPath);
+  const previousTimeout = process.env.RELAY_MANIFEST_LOCK_TIMEOUT_MS;
+  const previousStale = process.env.RELAY_MANIFEST_LOCK_STALE_MS;
+  let result;
+
+  process.env.RELAY_MANIFEST_LOCK_TIMEOUT_MS = "50";
+  process.env.RELAY_MANIFEST_LOCK_STALE_MS = "10000";
+  try {
+    result = executeAdvisoryRequest({
+      artifactReviewerName: "opencode",
+      decisionPath: path.join(runDir, "event-failure-decision.json"),
+      headSha: readManifest(manifestPath).data.git.head_sha,
+      laneIndex: 1,
+      profile: "blindspot",
+      promptPath,
+      requestPath: path.join(runDir, "event-failure-request.json"),
+      resultPath,
+      reviewerModel: "example/opencode-model-fast",
+      reviewerName: "opencode",
+      reviewerPolicy: null,
+      policyDecision: null,
+      modelResolution: null,
+      reviewerScript,
+      reviewRepoPath: repoRoot,
+      round: 1,
+      runDir,
+      runId,
+      runRepoPath: repoRoot,
+      startedAt: Date.now(),
+      state: STATES.REVIEW_PENDING,
+      timeoutSeconds: 5,
+      trigger: "every_round",
+    });
+  } finally {
+    releaseManifestLock(lock);
+    if (previousTimeout === undefined) delete process.env.RELAY_MANIFEST_LOCK_TIMEOUT_MS;
+    else process.env.RELAY_MANIFEST_LOCK_TIMEOUT_MS = previousTimeout;
+    if (previousStale === undefined) delete process.env.RELAY_MANIFEST_LOCK_STALE_MS;
+    else process.env.RELAY_MANIFEST_LOCK_STALE_MS = previousStale;
+  }
+
+  assert.equal(result.status, "failed");
+  assert.match(result.failureReason, /advisory event write failed/);
+  assert.equal(JSON.parse(fs.readFileSync(resultPath, "utf-8")).status, "failed");
+  assert.equal(readRunEvents(repoRoot, runId).some((record) => record.event === EVENTS.ADVISORY_REVIEW), false);
 });
 
 test("executeAdvisoryRequest omits profile argv when request has no profile", () => {

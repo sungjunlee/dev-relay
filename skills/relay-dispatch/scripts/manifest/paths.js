@@ -448,6 +448,7 @@ function getTrustRootRepoBasename(expectedGitCommonDir) {
 function validateManifestPaths(paths, {
   expectedRepoRoot,
   manifestPath,
+  expectedRunsBase,
   runId,
   requireWorktree = false,
   allowMissingWorktree = false,
@@ -508,7 +509,9 @@ function validateManifestPaths(paths, {
   }
 
   if (normalizedManifestPath) {
-    const expectedManifestPath = getManifestPath(effectiveRepoRoot, normalizedRunId);
+    const expectedManifestPath = expectedRunsBase
+      ? path.join(path.resolve(expectedRunsBase), getRepoSlug(effectiveRepoRoot), `${normalizedRunId}.md`)
+      : getManifestPath(effectiveRepoRoot, normalizedRunId);
     if (normalizedManifestPath !== expectedManifestPath) {
       throw new Error(
         `${caller}: manifest paths.repo_root ${JSON.stringify(effectiveRepoRoot)} does not match the manifest storage path ` +

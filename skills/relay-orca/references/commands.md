@@ -173,6 +173,31 @@ git-canonicalized fails closed with `RECEIPT_REPO_MISMATCH` (exit `52`) — ther
 realpath fallback (A24). Full operator prompt contract and provenance rules:
 [operator-dispatch.md](operator-dispatch.md).
 
+## `attach-marker` — supervised relay manifest correlation repair
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/attach-marker.js" \
+  --program-file <accepted-program.json> --outcome-id <outcome-id> --run-id <run-id> \
+  [--repo-root <path>] [--json]
+```
+
+`attach-marker` is the supported recovery command for an initially unmarked
+`relay_run`. It derives the exact `relay-orca: <program-segment>/<outcome-id>` marker and
+the outcome's expected issue from the accepted program, then atomically attaches it to the
+exact relay manifest named by `--run-id`.
+
+It validates the accepted program, exact run identity, manifest storage/path ownership, and
+issue match before mutation. A bounded per-run lock and fresh-read/recheck make concurrent
+callers idempotent: the first caller returns `attached`, an exact repeat returns
+`already_present`, and a different existing marker fails closed. Successful attachment
+adds a `coordination_marker_attached` event containing the run/program/outcome/issue/marker
+and result needed to reconstruct the repair.
+
+This command does not read or write the relay-orca receipt, invoke Orca or GitHub, replay a
+dispatch, adopt a run into a receipt, or weaken `resume --map-relay-run`'s terminal PR/issue
+evidence checks. It only repairs the relay manifest correlation boundary; mapping remains a
+separate explicit operator action.
+
 ## `status` — read-only live reconciler
 
 ```bash

@@ -19,6 +19,7 @@ const {
   sendPrompt,
 } = require("./run-orca");
 const { buildOperatorPrompt } = require("./operator-prompt");
+const { coordinationMarkerFor } = require("./coordination-marker");
 
 // The CLI-invocation boundary is injected by run.js (the Node subprocess module
 // may not live under scripts/lib/ — plan.js's frozen D6 source scan forbids it).
@@ -68,7 +69,7 @@ function taskTitle(program, task, programSegment) {
   // task titled for `alpha/child`. The segment is slash-free, so `status`'s
   // `title.includes("relay-orca: <segment>/")` foreign-task check can never confuse two
   // distinct programs. `programSegment` is injected (pure) so lib/ stays subprocess-free.
-  return `relay-orca: ${programSegment(program.id)}/${task.outcome_id}`;
+  return coordinationMarkerFor(program.id, task.outcome_id, programSegment);
 }
 
 function taskSpec(program, task) {

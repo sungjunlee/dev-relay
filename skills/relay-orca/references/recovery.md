@@ -93,6 +93,33 @@ performs **zero** mutation and asks for a terminal. Bounded steps:
 3. Provide one handle per outcome that needs a fresh operator surface; a shortfall leaves the
    excess outcomes untouched for a follow-up resume.
 
+## Supervised relay marker recovery
+
+When a relay operator was dispatched without the first-class marker, repair the correlation
+boundary before attempting receipt mapping:
+
+```bash
+node scripts/attach-marker.js \
+  --program-file <accepted-program.json> \
+  --outcome-id <outcome_id> \
+  --run-id <run_id> \
+  --repo-root <repo-root> --json
+```
+
+The command accepts only an existing `relay_run` outcome and an exact relay manifest. It
+derives the marker from the accepted program id and outcome id, requires the manifest issue
+to equal the outcome's declared issue, and uses atomic manifest writing plus a bounded
+per-run lock/fresh-read check. Exact repeats are explicit and idempotent (`already_present`);
+a different marker, wrong outcome/program input, malformed file, invalid path/run identity,
+or issue mismatch fails before manifest or event mutation. A successful `attached` result
+writes only the manifest's generic `coordination.marker` surface and one
+`coordination_marker_attached` audit event. It never invokes Orca or `gh`, replays dispatch,
+or edits the relay-orca receipt.
+
+After marker recovery, use the existing read-only `status` command to inspect the emitted
+`adopt_relay_run` repair candidate, then independently live-verify terminal evidence before
+the explicit mapping intake below. Marker attachment does not implicitly adopt a run.
+
 ## Supervised relay run mapping intake
 
 Operator-driven relay work is adopted into the receipt only through an explicit, supervised

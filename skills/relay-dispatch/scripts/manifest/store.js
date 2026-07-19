@@ -1,5 +1,7 @@
 const { execFileSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const {
@@ -16,6 +18,158 @@ const {
 
 const RELAY_VERSION = 2;
 const NOTES_TEMPLATE = "# Notes\n\n## Context\n\n## Review History\n";
+const MANIFEST_LOCK_NAME = ".coordination_marker.lock";
+const DEFAULT_MANIFEST_LOCK_TIMEOUT_MS = 5000;
+const DEFAULT_MANIFEST_LOCK_POLL_MS = 50;
+const DEFAULT_MANIFEST_LOCK_STALE_MS = 1000;
+const LOCK_WAIT_STATE = new Int32Array(new SharedArrayBuffer(4));
+
+function positiveEnv(name, fallback, aliases = []) {
+  const names = [name, ...aliases];
+  for (const candidate of names) {
+    const parsed = Number.parseInt(process.env[candidate] || "", 10);
+    if (Number.isInteger(parsed) && parsed > 0) return parsed;
+  }
+  return fallback;
+}
+
+function getManifestLockPath(manifestPath) {
+  if (typeof manifestPath !== "string" || !manifestPath.trim()) {
+    throw new Error("manifestPath is required for the manifest lock");
+  }
+  const manifestName = path.basename(manifestPath);
+  const runId = manifestName.endsWith(".md") ? manifestName.slice(0, -3) : manifestName;
+  return path.join(path.dirname(manifestPath), runId, MANIFEST_LOCK_NAME);
+}
+
+function readLockOwner(lockPath) {
+  try {
+    const stat = fs.statSync(lockPath);
+    let owner = null;
+    try {
+      owner = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
+    } catch {}
+    return { stat, owner };
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+function lockIsAbandoned(lockPath) {
+  const observed = readLockOwner(lockPath);
+  if (!observed) return false;
+  const staleMs = positiveEnv(
+    "RELAY_MANIFEST_LOCK_STALE_MS",
+    DEFAULT_MANIFEST_LOCK_STALE_MS,
+    ["RELAY_COORDINATION_MARKER_LOCK_STALE_MS"],
+  );
+  if (Date.now() - observed.stat.mtimeMs < staleMs) return false;
+
+  const owner = observed.owner;
+  if (owner && owner.host === os.hostname() && Number.isInteger(owner.pid)) {
+    return !isProcessAlive(owner.pid);
+  }
+  // A malformed or foreign-host lock has no live-owner proof. The lease age is
+  // the bounded recovery contract for those crash leftovers.
+  return true;
+}
+
+function reclaimAbandonedLock(lockPath) {
+  const quarantinePath = `${lockPath}.stale.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
+  try {
+    fs.renameSync(lockPath, quarantinePath);
+  } catch (error) {
+    if (error.code === "ENOENT") return true;
+    return false;
+  }
+  try {
+    fs.unlinkSync(quarantinePath);
+  } catch (error) {
+    if (error.code !== "ENOENT") return false;
+  }
+  return true;
+}
+
+function acquireManifestLock(manifestPath) {
+  const lockPath = getManifestLockPath(manifestPath);
+  const timeoutMs = positiveEnv(
+    "RELAY_MANIFEST_LOCK_TIMEOUT_MS",
+    DEFAULT_MANIFEST_LOCK_TIMEOUT_MS,
+    ["RELAY_COORDINATION_MARKER_LOCK_TIMEOUT_MS"],
+  );
+  const pollMs = positiveEnv(
+    "RELAY_MANIFEST_LOCK_POLL_MS",
+    DEFAULT_MANIFEST_LOCK_POLL_MS,
+    ["RELAY_COORDINATION_MARKER_LOCK_POLL_MS"],
+  );
+  const deadline = Date.now() + timeoutMs;
+
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  while (Date.now() <= deadline) {
+    let fd;
+    const token = crypto.randomBytes(16).toString("hex");
+    try {
+      fd = fs.openSync(lockPath, "wx", 0o600);
+      const owner = {
+        pid: process.pid,
+        host: os.hostname(),
+        token,
+        acquired_at: new Date().toISOString(),
+      };
+      fs.writeFileSync(fd, `${JSON.stringify(owner)}\n`, "utf-8");
+      fs.fsyncSync(fd);
+      return { fd, lockPath, token };
+    } catch (error) {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      if (error.code !== "EEXIST") throw error;
+      if (lockIsAbandoned(lockPath) && reclaimAbandonedLock(lockPath)) continue;
+      if (Date.now() >= deadline) break;
+      Atomics.wait(LOCK_WAIT_STATE, 0, 0, pollMs);
+    }
+  }
+
+  const error = new Error(`timed out acquiring manifest lock ${lockPath}`);
+  error.code = "MANIFEST_LOCK_TIMEOUT";
+  error.lockPath = lockPath;
+  throw error;
+}
+
+function releaseManifestLock(lock) {
+  if (!lock) return;
+  try { fs.closeSync(lock.fd); } catch {}
+  try {
+    const owner = JSON.parse(fs.readFileSync(lock.lockPath, "utf-8"));
+    if (owner.token !== lock.token) return;
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    return;
+  }
+  try { fs.unlinkSync(lock.lockPath); } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
+function withManifestTransaction(manifestPath, callback) {
+  const lock = acquireManifestLock(manifestPath);
+  try {
+    return callback();
+  } finally {
+    releaseManifestLock(lock);
+  }
+}
 
 function getActorName(repoRoot) {
   if (!repoRoot || typeof repoRoot !== "string") {
@@ -132,13 +286,54 @@ function toFrontmatter(data, indent = 0) {
     .join("\n");
 }
 
-function writeManifest(manifestPath, data, body = NOTES_TEMPLATE) {
+function preserveCoordinationMarker(manifestPath, data) {
+  if (!fs.existsSync(manifestPath)) return data;
+  let current;
+  try {
+    current = readManifest(manifestPath).data;
+  } catch {
+    return data;
+  }
+  const currentMarker = current?.coordination?.marker;
+  if (currentMarker === undefined) return data;
+  const incomingMarker = data?.coordination?.marker;
+  if (incomingMarker === undefined) {
+    return {
+      ...data,
+      coordination: {
+        ...(data.coordination || {}),
+        marker: currentMarker,
+      },
+    };
+  }
+  if (incomingMarker !== currentMarker) {
+    const error = new Error(
+      `coordination marker conflict while writing ${manifestPath}; refusing to replace the persisted marker`,
+    );
+    error.code = "COORDINATION_MARKER_CONFLICT";
+    throw error;
+  }
+  return data;
+}
+
+function writeManifestUnlocked(manifestPath, data, body = NOTES_TEMPLATE, { preserveMarker = true } = {}) {
   const dir = path.dirname(manifestPath);
   fs.mkdirSync(dir, { recursive: true });
   const tmpPath = `${manifestPath}.tmp.${process.pid}`;
-  const content = `---\n${toFrontmatter(data)}\n---\n${body.endsWith("\n") ? body : `${body}\n`}`;
-  fs.writeFileSync(tmpPath, content, "utf-8");
-  fs.renameSync(tmpPath, manifestPath);
+  const nextData = preserveMarker ? preserveCoordinationMarker(manifestPath, data) : data;
+  const content = `---\n${toFrontmatter(nextData)}\n---\n${body.endsWith("\n") ? body : `${body}\n`}`;
+  try {
+    fs.writeFileSync(tmpPath, content, "utf-8");
+    fs.renameSync(tmpPath, manifestPath);
+  } catch (error) {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw error;
+  }
+  return manifestPath;
+}
+
+function writeManifest(manifestPath, data, body = NOTES_TEMPLATE) {
+  return withManifestTransaction(manifestPath, () => writeManifestUnlocked(manifestPath, data, body));
 }
 
 function readManifest(manifestPath) {
@@ -271,11 +466,16 @@ module.exports = {
   NOTES_TEMPLATE,
   RELAY_VERSION,
   createManifestSkeleton,
+  acquireManifestLock,
   ensureRunLayout,
   getActorName,
+  getManifestLockPath,
   listManifestRecords,
   nowIso,
   parseFrontmatter,
   readManifest,
+  releaseManifestLock,
+  withManifestTransaction,
   writeManifest,
+  writeManifestUnlocked,
 };
