@@ -91,6 +91,53 @@ test("#1019 happy path is gate-create, evidence, resolve, fresh instruction, wor
   }
 });
 
+test("#1019 repeated resume on passed gate + active task re-issues the completion instruction idempotently", () => {
+  const question = canonicalIntegrationQuestion(PROGRAM_ID, OUTCOME_ID, programSegment);
+  // Live residue after a lost completion instruction / second resume: the canonical gate is
+  // already resolved passed, evidence is valid, yet the program-owned task is still active.
+  const gate = { id: "g1", task_id: TASK_ID, question, options: ["passed", "failed"], status: "resolved", resolution: "passed" };
+  const fake = installFakeOrcaIntegrationLifecycle(initialState({
+    tasks: [{ id: TASK_ID, status: "ready", worker_done: false }],
+    gates: [gate],
+  }));
+  const report = reportFile();
+  try {
+    const firstResume = advanceIntegrationGate(context(fake, report.reportPath));
+    assert.equal(firstResume.ok, false);
+    assert.equal(firstResume.state, "awaiting_worker_done");
+    assert.equal(firstResume.reason_code, "INTEGRATION_WORKER_DONE_REQUIRED");
+    assert.ok(firstResume.completion_command, "awaiting_worker_done must carry a copy-paste completion command");
+    assert.match(firstResume.completion_command.copy_paste, /worker_done/);
+    // It re-issued the worker-owned completion instruction, never a coordinator-side worker_done.
+    assert.equal(fake.readSends().filter((argv) => argv.includes("worker_done")).length, 0);
+    assert.equal(fake.readSends().filter((argv) => argv.includes("integration_gate_completion")).length, 1);
+    // No duplicate gate creation and no gate re-resolution — the gate was already passed.
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-create").length, 0);
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-resolve").length, 0);
+
+    // A second resume is idempotent: it re-issues again, still no duplicate gate.
+    const secondResume = advanceIntegrationGate(context(fake, report.reportPath));
+    assert.equal(secondResume.ok, false);
+    assert.equal(secondResume.state, "awaiting_worker_done");
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-create").length, 0);
+    assert.equal(fake.readState().gates.length, 1);
+    assert.equal(fake.readSends().filter((argv) => argv.includes("integration_gate_completion")).length, 2);
+
+    // Once the operator finally sends the explicit worker_done, the task terminalizes with no task-update.
+    const command = completionCommand(context(fake, report.reportPath));
+    assert.equal(fake.run(command.argv).status, 0);
+    const completed = advanceIntegrationGate(context(fake, report.reportPath));
+    assert.equal(completed.ok, true);
+    assert.equal(completed.state, "completed");
+    assert.equal(fake.readState().tasks[0].status, "completed");
+    assert.equal(fake.readSends().filter((argv) => argv.includes("worker_done")).length, 1);
+    assert.equal(fake.readPoison(), null);
+  } finally {
+    fake.cleanup();
+    fs.rmSync(report.dir, { recursive: true, force: true });
+  }
+});
+
 test("#1019 create response loss is recovered by re-list/adopt without a second create", () => {
   const fake = installFakeOrcaIntegrationLifecycle(initialState({ createResponseLoss: true }));
   try {

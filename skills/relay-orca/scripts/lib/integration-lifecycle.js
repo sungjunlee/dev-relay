@@ -340,6 +340,27 @@ function prepareIntegrationGate(ctx) {
   });
 }
 
+// Re-issue the worker-owned completion instruction (never a coordinator-side worker_done)
+// after a fresh provenance re-read, then require task-list to observe status=completed. This
+// stays idempotent: the instruction only asks the operator to send the explicit worker_done
+// exactly once, so replaying it after a lost instruction or a second resume cannot
+// double-complete the task or create a duplicate gate.
+function reissueCompletionInstruction(ctx, gateRow) {
+  sendCompletionInstruction(ctx);
+  const afterInstruction = currentProvenance(ctx, { requireActive: true });
+  if (afterInstruction.task.status !== "completed") {
+    return {
+      ok: false,
+      state: "awaiting_worker_done",
+      reason_code: "INTEGRATION_WORKER_DONE_REQUIRED",
+      gate: gateRow,
+      report_path: ctx.reportPath,
+      completion_command: completionCommand(ctx),
+    };
+  }
+  return { ok: true, state: "completed", gate: gateRow, report_path: ctx.reportPath };
+}
+
 function advanceIntegrationGate(ctx) {
   return withBoundedLock(ctx, () => {
     const provenance = currentProvenance(ctx);
@@ -366,22 +387,14 @@ function advanceIntegrationGate(ctx) {
       void resolvePayload;
       const reread = inspectCanonicalGates(listGates(ctx), identityFor(ctx));
       if (!reread.ok || reread.state !== "passed") fail(reread.reasonCode || "INTEGRATION_GATE_RESOLUTION_UNCONFIRMED", reread.message || "canonical gate resolution was not re-read as passed");
-      sendCompletionInstruction(ctx);
-      const afterInstruction = currentProvenance(ctx, { requireActive: true });
-      if (afterInstruction.task.status !== "completed") {
-        return {
-          ok: false,
-          state: "awaiting_worker_done",
-          reason_code: "INTEGRATION_WORKER_DONE_REQUIRED",
-          gate: reread.gate,
-          report_path: ctx.reportPath,
-          completion_command: completionCommand(ctx),
-        };
-      }
-      return { ok: true, state: "completed", gate: reread.gate, report_path: ctx.reportPath };
+      return reissueCompletionInstruction(ctx, reread.gate);
     }
     if (!report.present) fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "canonical gate is passed but its deterministic live evidence report is unavailable");
-    if (provenance.task.status !== "completed") fail("INTEGRATION_WORKER_DONE_NOT_OBSERVED", "canonical gate is already passed but task-list is still active; refusing to resend worker_done and risk duplicate completion");
+    // Passed canonical gate + valid live evidence + a still-active task is the exact live
+    // residue after a lost completion instruction or a second resume. Re-issue the worker-owned
+    // completion instruction idempotently (revalidating provenance) instead of failing closed,
+    // so the program-owned task can terminalize without a coordinator task-update. (#1019 R2)
+    if (provenance.task.status !== "completed") return reissueCompletionInstruction(ctx, gate.gate);
     return { ok: true, state: "completed", gate: gate.gate, report_path: ctx.reportPath };
   });
 }

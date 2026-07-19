@@ -17,6 +17,7 @@ const { REASONS: RESUME_REASONS } = require(path.join(SCRIPTS, "lib", "resume-re
 const { RECEIPT_NOTE, parseReceipt, serializeReceipt, serializeReceiptWithStop } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
 const { programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
+const { integrationBlockingEntry } = require(RESUME_JS);
 const { installFakeOrcaResume } = require(path.join(__dirname, "..", "fixtures", "fake-orca-resume.js"));
 const { installFakeGh } = require(path.join(__dirname, "..", "fixtures", "fake-gh.js"));
 const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
@@ -1396,4 +1397,29 @@ test("#1008 mapping intake enables complete_with_evidence on the next status rec
   } finally {
     world.cleanup();
   }
+});
+
+// --- #1019 R2: resume surfaces the copy-paste worker_done command while awaiting completion ---
+
+test("#1019 integrationBlockingEntry surfaces the full copy-paste worker_done command while awaiting completion", () => {
+  const copyPaste = "orca orchestration send --to coord-current --subject 'worker_done: relay-orca: seg/out' --from term-fresh --body 'send once' --type worker_done --task-id task_x --dispatch-id disp_x --report-path /runs/out.json --phase integration_gate --json";
+  const entry = integrationBlockingEntry({
+    ok: false,
+    state: "awaiting_worker_done",
+    reason_code: "INTEGRATION_WORKER_DONE_REQUIRED",
+    completion_command: { copy_paste: copyPaste },
+  });
+  assert.equal(entry.reason_code, "INTEGRATION_WORKER_DONE_REQUIRED");
+  // The authoritative explicit-flag command is surfaced verbatim (not truncated) in the report.
+  assert.equal(entry.completion_command, copyPaste);
+  assert.match(entry.message, /worker_done/);
+});
+
+test("#1019 integrationBlockingEntry omits completion_command when the lifecycle failed without one", () => {
+  const entry = integrationBlockingEntry({
+    ok: false,
+    reason_code: "INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH",
+  });
+  assert.equal(entry.reason_code, "INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH");
+  assert.equal("completion_command" in entry, false);
 });

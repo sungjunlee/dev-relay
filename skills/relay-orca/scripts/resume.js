@@ -394,6 +394,17 @@ function blockingReason(reasonCode, message) {
   return { reason_code: reasonCode, message: boundedExcerpt(message) };
 }
 
+// Blocking entry for a non-ok integration lifecycle advance. When the lifecycle is awaiting
+// the operator's explicit worker_done, surface the authoritative explicit-flag command
+// (complete, not bounded/truncated) so a restarted coordinator/operator can recover it
+// straight from the resume report instead of a prior pane message. (#1019 R2)
+function integrationBlockingEntry(result) {
+  const entry = blockingReason(result.reason_code, `${result.reason_code}: operator must send the fresh explicit worker_done command exactly once after gate resolution`);
+  const copyPaste = result.completion_command && result.completion_command.copy_paste;
+  if (copyPaste) entry.completion_command = copyPaste;
+  return entry;
+}
+
 // Execute ONE re-dispatch / terminal-reacquisition action through the SAME verified path
 // as run: inject -> dispatch-show (provenance trio) -> prompt, persisting the receipt at
 // A16 (handle) and A2 (verified provenance) write points.
@@ -494,9 +505,7 @@ function advanceIntegrationTasks({ receipt, opts, orcaBin, persist }) {
         }, callback),
         readReport: readIntegrationEvidenceFile,
       });
-      if (!result.ok) {
-        blocking.push(blockingReason(result.reason_code, `${result.reason_code}: operator must send the fresh explicit worker_done command exactly once after gate resolution`));
-      }
+      if (!result.ok) blocking.push(integrationBlockingEntry(result));
     } catch (error) {
       if (!(error instanceof IntegrationLifecycleError)) throw error;
       blocking.push(blockingReason(error.reasonCode, error.message));
@@ -609,4 +618,4 @@ function main() {
 // without triggering a real resume run.
 if (require.main === module) main();
 
-module.exports = { syntheticTask, reportActions };
+module.exports = { syntheticTask, reportActions, integrationBlockingEntry };
