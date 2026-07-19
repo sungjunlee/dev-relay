@@ -120,7 +120,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
 ```
 If `REVIEW_BEFORE.ready_status.status == "merge_ready"`, skip the review invocation and continue to Step 5.
 
-Invoke **relay-review** in an isolated context. It runs Spec Compliance then Code Quality, re-dispatches on issues, updates manifest state, and keeps the relay-plan rubric fixed as the review anchor. Safety cap: 20 rounds. Do NOT review inline.
+Invoke **relay-review** in an isolated context. It runs Spec Compliance then Code Quality, re-dispatches on issues, updates manifest state, and keeps the relay-plan rubric fixed as the review anchor. Review rounds use the assurance-derived cap (compact 1, standard 2, hardened 3) unless a higher run cap is explicit. Do NOT review inline.
 
 After review returns, compare against the snapshot:
 ```bash

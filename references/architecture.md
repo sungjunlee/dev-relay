@@ -247,7 +247,7 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 | `dispatch_start`, `dispatch_interrupted`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js`; `reconcile-run.js` may also emit `dispatch_interrupted` when settling dead or timed-out dispatched runs |
 | `publish_result` | `relay-dispatch/scripts/publish-run.js` |
 | `recover_commit`, `recover_commit_failed`, `execution_evidence_rebranded` | `relay-dispatch/scripts/recover-commit.js`, `rebrand-evidence.js` |
-| `iteration_score`, `rubric_quality`, `score_divergence` | `relay-dispatch/scripts/relay-events.js` (helpers) |
+| `iteration_score`, `rubric_quality`, `safety_boundary_violation` | `relay-dispatch/scripts/relay-events.js` (helpers) |
 | `close`, `cleanup_result` | `relay-dispatch/scripts/close-run.js`, `cleanup-worktrees.js` |
 | `state_recovery` | `relay-dispatch/scripts/recover-state.js`; `reconcile-run.js` emits it for `dispatched -> review_pending` dead-work recovery |
 | `review_invoke` | `relay-review/scripts/review-runner/reviewer-invoke.js` |

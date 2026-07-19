@@ -181,21 +181,11 @@ Once Phase 0+1 produce consistent artifact flow, add consumers.
 
 ---
 
-## Phase 3: Experimental (after Phase 2 validates value)
+## Retired experiment
 
-### 3.1 Sprint-Close Candidate Patterns (formerly #5, refactored per Codex)
-
-**Origin**: Willison — "Coding agents mean we only ever need to figure out a useful trick once."
-
-**Codex critique**: "Many runs produce issue-local fixes, not conventions. Auto-appending to `_context.md` creates another stale-review queue."
-
-**Fix (refactored)**:
-- **No file mutation**. Instead: `sprint-close.sh` reports candidate patterns from the sprint's run retros
-- Heuristic: a factor scored high (9/10+) across 2+ runs in the same sprint is a candidate
-- Sprint close outputs to terminal: "Candidate patterns this sprint: [list]. Promote manually to _context.md if applicable."
-- No contract change with dev-backlog. No auto-append.
-
-**Effort**: S | **Dependencies**: Phase 2.1
+The Score-Log-based sprint-close candidate report was retired in #1033 after
+reviewer-only scoring removed its producer. Use risk-path calibration and normal
+retrospectives instead; neither mutates project memory automatically.
 
 ---
 
@@ -206,7 +196,6 @@ Once Phase 0+1 produce consistent artifact flow, add consumers.
 | **0** | 0.1 rubric persistence, 0.2 reliability-report consumption, 0.3 probe consumption | S + S + S | **Done** (2026-04) |
 | **1** | 1.1 rejection log, 1.2 TDD mode | S + M | After Phase 0 + observation window (#141, #142) |
 | **2** | 2.1 retro integration, 2.2 signal templates, 2.3 TDD auto-suggest | M + M + S | After Phase 1 data validates |
-| **3** | 3.1 sprint-close candidate patterns | S | After Phase 2 shows sprint retros have signal |
 
 ---
 

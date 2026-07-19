@@ -33,5 +33,7 @@ test("manifest/attempts captureAttempt round-trips through direct imports", () =
   });
   const attempts = readPreviousAttempts(repoRoot, runId);
   assert.equal(attempts.length, 1);
-  assert.match(formatAttemptsForPrompt(attempts), /Previous Attempt/);
+  const prompt = formatAttemptsForPrompt(attempts);
+  assert.match(prompt, /Previous Attempt/);
+  assert.match(prompt, /Legacy Score Log/);
 });

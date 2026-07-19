@@ -6,7 +6,7 @@ const {
 } = require("../../../relay-dispatch/scripts/relay-events");
 const { applyReviewerIdentity } = require("./context");
 const { buildCommentBody, postComment } = require("./comment");
-const { toIterationScoreEventEntry } = require("./divergence");
+const { toIterationScoreEventEntry } = require("./score-utils");
 const { applyVerdictToManifest } = require("./manifest-apply");
 const { applyPendingChecksMarker } = require("./check-wait");
 

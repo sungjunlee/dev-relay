@@ -10,7 +10,6 @@ const { getGhLogin, parseRemoteHost, resolveContext, resolveIssueNumber, resolve
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
 const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
-const { parseScoreLog } = require("./review-runner/divergence");
 const { applyQualityExecutionStatus, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const { printFailureAndExit } = require("./review-runner/failure-output");
 const { buildRedispatchPrompt, detectChurnGrowth } = require("./review-runner/redispatch");
@@ -261,4 +260,4 @@ async function run() {
 if (require.main === module) {
   dispatchReviewEntry({ options, args, entryPath: __filename, jsonOut: cliArgs.hasFlag("--json"), preflight: () => { assertKnownReviewRunnerFlags(args); preflightResolvedPrimaryReviewer(options); }, run, printFailureAndExit });
 }
-module.exports = { applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt, buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList, formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir, parseRemoteHost, parseReviewVerdict, parseScoreLog, resolveIssueNumber, resolveRemoteHost, validateReviewVerdict, validateScopeDrift };
+module.exports = { applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt, buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList, formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir, parseRemoteHost, parseReviewVerdict, resolveIssueNumber, resolveRemoteHost, validateReviewVerdict, validateScopeDrift };

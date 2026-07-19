@@ -56,7 +56,6 @@ const EVENTS = Object.freeze({
   REVIEW_INVOKE: "review_invoke",
   REVIEWER_SWAP: "reviewer_swap",
   RUBRIC_QUALITY: "rubric_quality",
-  SCORE_DIVERGENCE: "score_divergence",
   SAFETY_BOUNDARY_VIOLATION: "safety_boundary_violation",
   SKIP_REVIEW: "skip_review",
   STATE_RECOVERY: "state_recovery",
@@ -574,53 +573,6 @@ function appendRubricQuality(repoRoot, runId, data = {}) {
   return record;
 }
 
-function appendScoreDivergence(repoRoot, runId, { round, divergences } = {}) {
-  if (!runId) {
-    throw new Error("run_id is required");
-  }
-  if (!Array.isArray(divergences) || divergences.length === 0) {
-    throw new Error("divergences must be a non-empty array");
-  }
-
-  divergences.forEach((entry, index) => {
-    const location = `divergences[${index}]`;
-    if (typeof entry?.factor !== "string" || !entry.factor.trim()) {
-      throw new Error(`${location}.factor is required`);
-    }
-    if (typeof entry.executor !== "string") {
-      throw new Error(`${location}.executor must be a string`);
-    }
-    if (typeof entry.reviewer !== "string") {
-      throw new Error(`${location}.reviewer must be a string`);
-    }
-    if (typeof entry.delta !== "number" || Number.isNaN(entry.delta)) {
-      throw new Error(`${location}.delta must be a number`);
-    }
-    if (!ALLOWED_SCORE_TIERS.has(entry.tier)) {
-      throw new Error(`${location}.tier must be one of: contract, quality`);
-    }
-  });
-
-  ensureRunLayout(repoRoot, runId);
-  const record = {
-    ts: new Date().toISOString(),
-    event: EVENTS.SCORE_DIVERGENCE,
-    actor: getActorName(repoRoot),
-    run_id: runId,
-    round,
-    divergences: divergences.map((entry) => ({
-      factor: entry.factor,
-      executor: entry.executor,
-      reviewer: entry.reviewer,
-      delta: entry.delta,
-      tier: entry.tier,
-    })),
-  };
-
-  appendEventLine(repoRoot, runId, record);
-  return record;
-}
-
 function appendSafetyBoundaryViolation(repoRoot, runId, {
   boundary,
   reason,
@@ -679,7 +631,6 @@ module.exports = {
   appendRubricQuality,
   appendRunEvent,
   appendSafetyBoundaryViolation,
-  appendScoreDivergence,
   appendUnregisteredRouteUsedEvent,
   EVENTS,
   readAllRunEvents,

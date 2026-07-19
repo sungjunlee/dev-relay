@@ -146,7 +146,6 @@ Calibration status: skipped (S/M task)
 Risk signals: none
 Historical signal:
 historical_signal.stuck_factors: Docs (met_rate=0.5, avg_rounds_to_met=3); Coverage (met_rate=0.6667, avg_rounds_to_met=1.5)
-historical_signal.divergence_hotspots: Coverage (avg_delta=2.5, recommendation=Executor scores trend higher than review; tighten examples or add automation.); Docs (avg_delta=-2, recommendation=Reviewer scores trend higher than executor; check whether the factor is underspecified.)
 historical_signal.avg_rounds: contract.avg_rounds_to_met=1.5; quality.avg_rounds_to_met=1; metrics.median_rounds_to_ready=3
 Probe signal:
 probe_signal.test_infra: jest
@@ -174,7 +173,6 @@ Calibration status: skipped (S/M task)
 Risk signals: none
 Historical signal: Empty-data state — historical signal not available, proceed to rubric design.
 historical_signal.stuck_factors: no historical data available
-historical_signal.divergence_hotspots: no historical data available
 historical_signal.avg_rounds: no historical data available
 Probe signal: no quality infra detected.
 probe_signal.test_infra: no quality infra detected
@@ -202,7 +200,6 @@ Calibration status: skipped (S/M task)
 Risk signals: none
 Historical signal: Reliability report unavailable: Unexpected end of JSON input. Proceeding without historical signal.
 historical_signal.stuck_factors: no historical data available
-historical_signal.divergence_hotspots: no historical data available
 historical_signal.avg_rounds: no historical data available
 Probe signal: Probe signals unavailable: probe timed out after 30s. Proceeding without probe signal.
 probe_signal.test_infra: no quality infra detected

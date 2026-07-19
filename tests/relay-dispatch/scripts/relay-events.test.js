@@ -12,7 +12,6 @@ const {
   appendRubricQuality,
   appendRunEvent,
   appendSafetyBoundaryViolation,
-  appendScoreDivergence,
   EVENTS,
   readRunEvents,
 } = require("../../../skills/relay-dispatch/scripts/relay-events");
@@ -92,17 +91,6 @@ function createRubricQuality(overrides = {}) {
     auto_coverage: 0.5,
     risk_signals: ["high_factor_count"],
     task_size: "M",
-    ...overrides,
-  };
-}
-
-function createDivergence(overrides = {}) {
-  return {
-    factor: "Coverage",
-    executor: "9/10",
-    reviewer: "6/10",
-    delta: 3,
-    tier: "contract",
     ...overrides,
   };
 }
@@ -499,10 +487,21 @@ test("readRunEvents tolerates historical-only event names", () => {
   const { repoRoot, runId } = createContext();
   const eventsPath = getEventsPath(repoRoot, runId);
   fs.mkdirSync(path.dirname(eventsPath), { recursive: true });
-  const historicalEvent = { event: "manual_state_override", run_id: runId };
-  fs.writeFileSync(eventsPath, `${JSON.stringify(historicalEvent)}\n`, "utf-8");
+  const historicalEvents = [
+    { event: "manual_state_override", run_id: runId },
+    {
+      event: "score_divergence",
+      run_id: runId,
+      divergences: [{ factor: "Coverage", delta: 3 }],
+    },
+  ];
+  fs.writeFileSync(
+    eventsPath,
+    `${historicalEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    "utf-8"
+  );
 
-  assert.deepEqual(readRunEvents(repoRoot, runId), [historicalEvent]);
+  assert.deepEqual(readRunEvents(repoRoot, runId), historicalEvents);
 });
 
 test("appendIterationScore requires run_id", () => {
@@ -635,26 +634,6 @@ test("appendRubricQuality rejects an invalid task_size", () => {
   assert.throws(() => appendRubricQuality(repoRoot, runId, createRubricQuality({ task_size: "XXL" })), /task_size must be one of: S, M, L, XL/);
 });
 
-test("appendScoreDivergence writes a score_divergence record to events.jsonl", () => {
-  const { repoRoot, runId } = createContext();
-  const record = appendScoreDivergence(repoRoot, runId, {
-    round: 2,
-    divergences: [
-      createDivergence(),
-      createDivergence({ factor: "Docs", executor: "8", reviewer: "5", delta: 3, tier: "quality" }),
-    ],
-  });
-
-  const eventsPath = getEventsPath(repoRoot, runId);
-  const lines = fs.readFileSync(eventsPath, "utf-8").trim().split("\n");
-  assert.equal(lines.length, 1);
-
-  const parsed = JSON.parse(lines[0]);
-  assert.equal(record.actor, "Relay Events Test");
-  assert.deepEqual(parsed, record);
-  assert.deepEqual(readRunEvents(repoRoot, runId), [record]);
-});
-
 test("appendIterationScore falls back to unknown actor when git user.name is unavailable", () => {
   withGitIdentityDisabled(() => {
     const { repoRoot, runId } = createContextWithoutActor();
@@ -665,30 +644,6 @@ test("appendIterationScore falls back to unknown actor when git user.name is una
 
     assert.equal(record.actor, "unknown");
   });
-});
-
-test("appendScoreDivergence rejects an empty divergences array", () => {
-  const { repoRoot, runId } = createContext();
-  assert.throws(() => appendScoreDivergence(repoRoot, runId, {
-    round: 1,
-    divergences: [],
-  }), /divergences must be a non-empty array/);
-});
-
-test("appendScoreDivergence rejects an invalid tier", () => {
-  const { repoRoot, runId } = createContext();
-  assert.throws(() => appendScoreDivergence(repoRoot, runId, {
-    round: 1,
-    divergences: [createDivergence({ tier: "hygiene" })],
-  }), /divergences\[0\]\.tier must be one of: contract, quality/);
-});
-
-test("appendScoreDivergence rejects a missing factor", () => {
-  const { repoRoot, runId } = createContext();
-  assert.throws(() => appendScoreDivergence(repoRoot, runId, {
-    round: 1,
-    divergences: [createDivergence({ factor: "   " })],
-  }), /divergences\[0\]\.factor is required/);
 });
 
 // ---------------------------------------------------------------------------

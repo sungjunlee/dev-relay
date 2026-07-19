@@ -34,7 +34,7 @@ function parsePrNumber(rawText) {
 function buildPrBody({ resultPreview, runId, executor, branch }) {
   const preview = String(resultPreview || "").trim().slice(0, 500);
   const summary = preview || "Dispatch completed successfully.";
-  const scoreLog = [
+  const metadata = [
     `- Run: ${String(runId || "").trim() || "unknown"}`,
     `- Executor: ${String(executor || "").trim() || "unknown"}`,
     `- Branch: ${String(branch || "").trim() || "unknown"}`,
@@ -46,9 +46,9 @@ function buildPrBody({ resultPreview, runId, executor, branch }) {
     summary,
     "```",
     "",
-    "## Score Log",
+    "## Dispatch Metadata",
     "",
-    ...scoreLog,
+    ...metadata,
   ].join("\n");
 }
 

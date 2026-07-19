@@ -2200,7 +2200,7 @@ test("review-runner records rubric_scores as iteration_score events", () => {
   assert.match(events.at(-1).ts, /\d{4}-\d{2}-\d{2}T/);
 });
 
-test("review-runner ignores executor-authored Score Log as review evidence", () => {
+test("review-runner ignores a legacy executor Score Log as review evidence", () => {
   const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
   writeFakeGhScript(repoRoot, {
     capturePath: path.join(repoRoot, "unused-comment.txt"),
@@ -2271,7 +2271,13 @@ test("review-runner ignores executor-authored Score Log as review evidence", () 
 
   const events = readRunEvents(repoRoot, runId);
   assert.equal(events.at(-1).event, "iteration_score");
-  assert.ok(!events.some((event) => event.event === "score_divergence"));
+  assert.deepEqual(
+    events.at(-1).scores.map(({ factor, observed }) => ({ factor, observed })),
+    [
+      { factor: "Coverage", observed: "6" },
+      { factor: "Docs & Notes?", observed: "7" },
+    ]
+  );
 });
 
 test("review-runner keeps event journals on the manifest repo slug when --repo is a symlinked alias", () => {
@@ -3477,43 +3483,6 @@ test("formatPriorVerdictSummary produces correct round numbers and rubric summar
   assert.match(out.result, /- Round 2: changes_requested — Missing tests \[1 issue\(s\), lineage: deepening=0, repeat=0, stale=0, new=0, newly_scoreable=0, unknown=1; Coverage: 5 \(target >= 8, fail\)\]/);
   assert.match(out.result, /- Round 1: changes_requested — No auth guard \[2 issue\(s\), lineage: deepening=0, repeat=0, stale=0, new=0, newly_scoreable=0, unknown=2; no rubric scores\]/);
   assert.equal(out.empty, "");
-});
-
-test("parseScoreLog extracts final scores and falls back to the last populated iteration", () => {
-  const markdown = [
-    "# PR",
-    "",
-    "## Score Log",
-    "",
-    "| Factor | Target | Baseline | Iter 1 | Iter 2 | Final | Status |",
-    "|--------|--------|----------|--------|--------|-------|--------|",
-    "| Coverage | >= 8 | — | 6 | 9 | 9 | locked |",
-    "| Docs & Notes? | >= 8 | — | 6 | 7 | — | locked |",
-    "| Placeholder | >= 8 | — | n/a | — | — | — |",
-  ].join("\n");
-
-  const out = JSON.parse(runReviewRunnerModule([
-    `const result = reviewRunner.parseScoreLog(${JSON.stringify(markdown)});`,
-    `process.stdout.write(JSON.stringify(result));`,
-  ]));
-
-  assert.deepEqual(out, [
-    { factor: "Coverage", score: "9" },
-    { factor: "Docs & Notes?", score: "7" },
-  ]);
-});
-
-test("parseScoreLog returns [] for missing or malformed tables", () => {
-  const out = JSON.parse(runReviewRunnerModule([
-    `const missing = reviewRunner.parseScoreLog("No score log here");`,
-    `const malformed = reviewRunner.parseScoreLog("| Factor | Final |\\n| bad | row |");`,
-    `process.stdout.write(JSON.stringify({ missing, malformed }));`,
-  ]));
-
-  assert.deepEqual(out, {
-    missing: [],
-    malformed: [],
-  });
 });
 
 test("round 2 review prompt contains Prior Round Context section", () => {

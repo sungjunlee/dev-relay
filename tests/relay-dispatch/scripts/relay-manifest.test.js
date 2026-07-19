@@ -1137,7 +1137,7 @@ test("formatAttemptsForPrompt formats attempts correctly", () => {
   ];
   const result = formatAttemptsForPrompt(attempts);
   assert.match(result, /## Previous Attempt \(dispatch #1\)/);
-  assert.match(result, /### Score Log/);
+  assert.match(result, /### Legacy Score Log/);
   assert.match(result, /0\.35s/);
   assert.match(result, /### Reviewer Feedback/);
   assert.match(result, /Timeout middleware missing/);
