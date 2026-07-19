@@ -69,7 +69,7 @@ test("TDD Step 0a remains factor-scoped when Working Guidance is rendered", () =
   assert.doesNotMatch(rendered, /tdd_mode/);
   assert.doesNotMatch(rendered, /## TDD/i);
   assert.ok(rendered.indexOf("## Working Guidance") < rendered.indexOf("## Scoring Rubric"));
-  assert.ok(rendered.indexOf("0a. TDD RED ANCHOR STEP") > rendered.indexOf("## Iteration Protocol"));
+  assert.ok(rendered.indexOf("0a. TDD RED ANCHOR STEP") > rendered.indexOf("## Completion Responsibilities"));
 });
 
 require("./tdd-flavor.test");

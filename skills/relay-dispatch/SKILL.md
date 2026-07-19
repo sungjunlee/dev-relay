@@ -72,7 +72,7 @@ For precedence, managed CLI defaults, unmanaged route requirements, and optional
 
 ### Timeout guidance
 
-Use defaults for simple work, `--timeout 3600` when the executor prompt includes self-review, and `--timeout 5400` only for complex multi-file work.
+Use defaults for simple work, `--timeout 3600` when implementation plus verification needs more time, and `--timeout 5400` only for complex multi-file work with a long final gate.
 
 ## Verify Success
 
@@ -83,7 +83,7 @@ JSON output reports `status`, `runId`, `manifestPath`, `runState`, `cleanupPolic
 - `completed-with-warning` + `review_pending` → inspect uncommitted work, then review
 - `failed` + `escalated` → inspect error, fix or re-dispatch
 
-Successful dispatches retain the worktree by default — use the returned `runId` to continue. Resume only from `changes_requested`; dispatch reuses the same run + worktree. On re-dispatch, previous Score Log + reviewer feedback are auto-prepended (storage: `~/.relay/runs/<slug>/<run-id>/previous-attempts.json`).
+Successful dispatches retain the worktree by default — use the returned `runId` to continue. Resume only from `changes_requested`; dispatch reuses the same run + worktree. On re-dispatch, previous attempt evidence + reviewer feedback are auto-prepended, including legacy Score Log content when present (storage: `~/.relay/runs/<slug>/<run-id>/previous-attempts.json`).
 
 Publication policy:
 - Default direct dispatch behavior is `--publish-policy immediate`: push/open PR, then `review_pending`.

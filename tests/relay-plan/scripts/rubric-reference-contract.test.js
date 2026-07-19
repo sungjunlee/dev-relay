@@ -188,14 +188,17 @@ test("rubric validation gates Done Criteria quality before dispatch", () => {
   assert.match(text, /weak_done_criteria/);
 });
 
-test("iteration protocol treats quality scores as optimization signals", () => {
+test("default executor contract delegates iteration while preserving verification evidence", () => {
   const text = readReference("iteration-protocol.md");
 
-  assert.match(text, /Use 0-10 numbers for quality factors with numeric targets/);
-  assert.match(text, /optimize the lowest reviewer score/);
-  assert.match(text, /first-class event data/);
-  assert.match(text, /quality factors can converge from `6\/10 → 7\.5\/10 → 8\/10`/);
-  assert.match(text, /without adding new manifest states/);
+  assert.match(text, /## Completion Responsibilities/);
+  assert.match(text, /Capture concise verification evidence/);
+  assert.match(text, /final work is committed/);
+  assert.match(text, /choose the implementation, exploration, test, and repair sequence/i);
+  assert.doesNotMatch(text, /Score Log/);
+  assert.doesNotMatch(text, /self-(?:evaluate|review)/i);
+  assert.doesNotMatch(text, /weakest (?:required )?factor/i);
+  assert.doesNotMatch(text, /max \d+ iterations/i);
 });
 
 test("relay dispatch template and wrapper use Done Criteria outcome language", () => {
@@ -204,8 +207,14 @@ test("relay dispatch template and wrapper use Done Criteria outcome language", (
 
   assert.match(template, /specific Done Criteria outcome is implemented/);
   assert.match(template, /\[specific Done Criteria outcome\]/);
-  assert.match(template, /## Completion Audit/);
+  assert.match(template, /## Completion Responsibilities/);
+  assert.match(template, /Capture concise verification evidence/);
   assert.match(template, /proxy signal/i);
+  assert.doesNotMatch(template, /## After Implementation/);
+  assert.doesNotMatch(template, /## Completion Audit/);
+  assert.doesNotMatch(template, /Score Log/);
+  assert.doesNotMatch(template, /self-(?:evaluate|review)/i);
+  assert.doesNotMatch(template, /weakest (?:required )?factor/i);
   assert.doesNotMatch(template, /specific AC (item|implemented)/i);
 
   assert.match(relaySkill, /Task evidence/);

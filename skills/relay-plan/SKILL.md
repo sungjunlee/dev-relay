@@ -111,7 +111,7 @@ Skip this step when the issue or relay-ready handoff already provides the final 
 
 ### 8. Emit handoff artifacts
 
-Write the dispatch prompt and rubric YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Scoring Rubric, Iteration Protocol, and Score Log sections. Full iteration protocol and Score Log format: `references/iteration-protocol.md`.
+Write the dispatch prompt and rubric YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Scoring Rubric, and Completion Responsibilities. The compatibility-named `references/iteration-protocol.md` defines the compact evidence-and-commit contract plus optional TDD flavor.
 
 Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, review assurance level, and the recommended `relay-dispatch` command. Use `--review-assurance hardened` only when task/rubric risk requires stronger verification; never derive it from executor or reviewer identity.
 
@@ -138,4 +138,4 @@ Use add-ons only when task evidence earns them; do not copy reference checklists
 - File/path precision, forbidden zones, event-shape changes, or TDD-flavored factors: `references/rubric-patterns.md`.
 - L/XL ambiguity or unclear subsystem boundaries: consider a read-only scout via `references/subsystem-scout.md`; skip for S/M tasks with clear scope.
 - Novel, vague, high-risk, or easy-to-game Done Criteria: run one stress-test round via `references/rubric-stress-test.md`; ambiguity or risk can opt any size into stress-test.
-- Re-dispatch after review feedback: keep the original anchor fixed; previous Score Log and reviewer feedback are automatically prepended.
+- Re-dispatch after review feedback: keep the original anchor fixed; previous attempt evidence and reviewer feedback are automatically prepended. Legacy Score Log artifacts remain readable during migration.
