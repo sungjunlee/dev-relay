@@ -69,7 +69,7 @@ List the evidence that defines success for this task:
 - Explicit AC, if present
 - Inferred Done Criteria from the user request, issue body, relay-ready handoff, and nearby repo conventions
 - Repo quality signals from available tests, lint, typecheck, CI, and scripts
-- Historical relay signals such as stuck factors, score divergence, and average rounds
+- Historical relay signals such as stuck factors, repeated reviewer findings, reviewer yield, and average rounds
 - Task risk such as trust boundaries, data loss, migrations, user-visible flows, performance, or operational failure modes
 
 If explicit AC and inferred Done Criteria disagree, resolve the conflict before drafting factors. Run the [pre-flight ambiguity audit](dc-preflight-audit.md) before freezing the Done Criteria, then persist planner-authored Done Criteria when the final anchor differs from the issue body or intake handoff.

@@ -10,8 +10,17 @@ default relay home report `0` manifests and `0` events. Every task class remains
 `continue_calibration`; additional review rounds, Earned Rubric evaluation, and
 adversarial review remain `insufficient_evidence`.
 
-Static reachability is sufficient only for machinery whose producer was already
-removed. It is not a substitute for outcome evidence about an active safeguard.
+The observation gate is therefore closed. No active review, recovery,
+compatibility, audit, SHA-freshness, publication, or approval mechanism may be
+removed on this evidence.
+
+A separate structural obsolescence proof applies only after an approved earlier
+transition has removed every current producer, consumer, and semantic effect of
+an artifact. It establishes that retaining or deleting that artifact is
+behaviorally equivalent; it is not promotion evidence or a substitute for
+outcome-quality evidence. Structural obsolescence proof never authorizes
+deletion of an active mechanism. If any live call path or unique invariant owner
+exists, the observation gate applies and the mechanism remains.
 
 ## Inventory and decision
 
@@ -21,6 +30,7 @@ removed. It is not a substitute for outcome evidence about an active safeguard.
 | Executor/reviewer score divergence parser, event writer, report fields, and planner signal | No current producer or runtime caller after reviewer-only scoring | Remove together | Reviewer verdict validation and reliability factor analysis |
 | Score-Log sprint-close report | Its only input was the retired executor Score Log, so it cannot observe future runs | Remove script, tests, reference, and operator links | Risk-path calibration and project retrospectives |
 | Superseded self-review compatibility needle | Current protocol no longer emits that text | Remove fallback branch | Completion Responsibilities and independent review |
+| Legacy quality-card summary helper | No planner, dispatcher, reviewer, or operator path calls it; it only parses the superseded factor-tier shape and its own TDD skip-reason vocabulary | Remove helper, tests, and stale documentation link | Structured evaluation validation, optional TDD flavor, and task-derived observation lenses |
 | Additional review rounds | No observed runs | Retain | Assurance-derived review cap and review runner |
 | Earned Rubric | No observed earned-rubric runs | Retain | Evaluation channels, rubric anchor, and reviewer scoring |
 | Adversarial review | No observed advisory runs | Retain | Hardened assurance and advisory orchestration |

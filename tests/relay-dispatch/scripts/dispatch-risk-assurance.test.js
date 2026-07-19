@@ -68,6 +68,28 @@ function preview(name, extra = []) {
   return JSON.parse(stdout);
 }
 
+function previewPrompt(name, prompt, extra = []) {
+  const repoRoot = setupRepo();
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-risk-home-"));
+  const stdout = execFileSync(process.execPath, [
+    SCRIPT,
+    repoRoot,
+    "--branch",
+    `risk-${name}-preview`,
+    "--prompt",
+    prompt,
+    "--rubric-file",
+    RUBRIC,
+    ...extra,
+    "--dry-run",
+    "--json",
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, RELAY_HOME: relayHome },
+  });
+  return JSON.parse(stdout);
+}
+
 test("real dispatch surface selects compact without weakening durable runtime boundaries", () => {
   const result = preview("compact");
 
@@ -85,6 +107,29 @@ test("real dispatch surface accepts an explicit compact tier at the derived floo
 
   assert.equal(result.reviewAssurance, "compact");
   assert.equal(result.publishPolicy, "immediate");
+});
+
+test("real dispatch surface rejects compact without a task-derived risk floor", () => {
+  const defaultResult = previewPrompt(
+    "missing-risk-default",
+    "Update a repository file according to the issue."
+  );
+  assert.equal(defaultResult.reviewAssurance, "standard");
+
+  assert.throws(
+    () => previewPrompt(
+      "missing-risk-compact",
+      "Update a repository file according to the issue.",
+      ["--review-assurance", "compact"]
+    ),
+    (error) => {
+      assert.match(
+        `${String(error.stdout)}\n${String(error.stderr)}`,
+        /compact.*complete risk-aware task_profile|task-derived risk floor/i
+      );
+      return true;
+    }
+  );
 });
 
 test("real dispatch surface selects hardened on the existing delayed-publication path", () => {

@@ -88,6 +88,7 @@ const {
 const { parseModelHints } = require("./model-hints");
 const { resolveExecutorDefaultModel } = require("./executor-model-config");
 const {
+  REVIEW_ASSURANCE: REVIEW_ASSURANCE_LEVEL,
   normalizeReviewAssurance,
   reviewAssuranceRank,
 } = require("./manifest/review-assurance");
@@ -2228,6 +2229,17 @@ async function main() {
         throw new Error(
           `review_assurance=${REVIEW_ASSURANCE} is below the `
           + `${promptReviewAssurance} risk floor from task_profile`
+        );
+      }
+      const minimumReviewAssurance = promptTaskProfile?.minimum_review_assurance
+        || REVIEW_ASSURANCE_LEVEL.STANDARD;
+      if (
+        reviewAssuranceRank(REVIEW_ASSURANCE)
+        < reviewAssuranceRank(minimumReviewAssurance)
+      ) {
+        throw new Error(
+          `review_assurance=${REVIEW_ASSURANCE} requires a complete risk-aware `
+          + "task_profile before selecting below the standard fail-closed floor"
         );
       }
       if (promptTaskProfile?.publish_policy === "after-internal-review") {

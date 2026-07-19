@@ -38,7 +38,7 @@ Simon Willison의 가이드와 HN 실무 코멘트에서 추출한 패턴들을 
 | Appropriate PR scope | relay-ready multi-leaf splitting |
 | Drift/churn detection | 3-round same-issue → auto-escalation |
 | Test infrastructure detection | `probe-executor-env.js` (20+ signals) |
-| Run analytics | `reliability-report.js` (tier effectiveness, divergence, factor met_rate) |
+| Run analytics | `reliability-report.js` (task-class calibration, reviewer yield, factor met_rate, round cost) |
 
 ### Killed Proposals
 
@@ -67,7 +67,7 @@ Everything downstream depends on these artifacts actually flowing between phases
 
 ### 0.2 relay-plan reads reliability-report before rubric design
 
-**Problem**: `reliability-report.js` computes rich analytics (factor met_rate, avg_rounds_to_met, stuck_factor, grade distribution, tier effectiveness, divergence hotspots). **No one reads it during planning.**
+**Problem**: `reliability-report.js` computes rich analytics (factor met_rate, avg_rounds_to_met, stuck_factor, reviewer yield, round cost, and task-class calibration). **No one reads it during planning.**
 
 **Fix**:
 - relay-plan SKILL.md: run `reliability-report.js --json` before designing rubric

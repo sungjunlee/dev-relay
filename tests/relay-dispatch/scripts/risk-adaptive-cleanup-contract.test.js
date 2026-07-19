@@ -13,6 +13,12 @@ test("legacy cleanup records evidence, invariant owners, rollback, and operator 
   const decision = read("docs/risk-adaptive-relay-cleanup.md");
 
   assert.match(decision, /Live observation status: insufficient evidence/i);
+  assert.match(decision, /observation gate.*closed/i);
+  assert.match(decision, /structural obsolescence proof/i);
+  assert.match(
+    decision,
+    /structural obsolescence proof.*never authorizes\s+deletion of an active mechanism/is
+  );
   assert.match(decision, /additional review rounds.*retain/is);
   assert.match(decision, /Earned Rubric.*retain/is);
   assert.match(decision, /adversarial.*retain/is);
@@ -80,12 +86,52 @@ test("cleanup preserves migration readers and durable safety boundaries", () => 
 test("operator guidance no longer advertises the retired score workflow", () => {
   const relaySkill = read("skills/relay/SKILL.md");
   const mergeSkill = read("skills/relay-merge/SKILL.md");
+  const planSkill = read("skills/relay-plan/SKILL.md");
+  const taskProfile = read("skills/relay-plan/references/task-profile.md");
+  const rubricGuide = read(
+    "skills/relay-plan/references/rubric-design-guide.md"
+  );
+  const rubricStressTest = read(
+    "skills/relay-plan/references/rubric-stress-test.md"
+  );
+  const adoptionGuide = read("docs/agentic-patterns-adoption.md");
+  const currentPlanningGuidance = [
+    planSkill,
+    taskProfile,
+    rubricGuide,
+    rubricStressTest,
+    adoptionGuide,
+  ].join("\n");
   const externalTools = read("docs/external-tool-workflow.md");
   const installGraph = read("references/install-graph.md");
 
   assert.doesNotMatch(relaySkill, /Safety cap: 20 rounds/i);
   assert.match(relaySkill, /assurance/i);
+  assert.doesNotMatch(
+    currentPlanningGuidance,
+    /score divergence|divergence hotspots|divergence_hotspots/i
+  );
   assert.doesNotMatch(mergeSkill, /sprint-close-report/);
   assert.doesNotMatch(externalTools, /executor cites in its Score Log/i);
   assert.doesNotMatch(installGraph, /sprint-close-report/);
+});
+
+test("producer-less quality-card machinery is removed from the planning surface", () => {
+  const rubricValidation = read(
+    "skills/relay-plan/references/rubric-validation.md"
+  );
+
+  assert.equal(
+    fs.existsSync(
+      path.join(ROOT, "skills/relay-plan/scripts/quality-card.js")
+    ),
+    false
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(ROOT, "tests/relay-plan/scripts/quality-card.test.js")
+    ),
+    false
+  );
+  assert.doesNotMatch(rubricValidation, /quality-card\.js/i);
 });

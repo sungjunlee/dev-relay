@@ -35,7 +35,7 @@ Build the profile from the same planning evidence used for the rubric:
 
 - Done Criteria: infer the work shape, touched domains, and scope boundary.
 - probe signal: use available tests, CI, scripts, and detected project tools as evidence for domains and runnable verification, not as automatic commands.
-- historical signal: use stuck factors, divergence hotspots, and average rounds to choose stronger working-style guidance when quality convergence has historically taken more rounds.
+- historical signal: use stuck factors, repeated reviewer findings, reviewer yield, and average rounds to choose stronger working-style guidance when quality convergence has historically taken more rounds.
 - task risk: surface trust boundaries, state machines, public APIs, migrations, data loss, prompt contracts, or backward-compatibility concerns as `risk_tags`.
 - assurance risk: derive authority, reversibility, blast radius, and affected trust boundaries using `risk-assurance.md`; never use model identity.
 - calibration class: select the primary observation surface as `task_class`; do not add a second class merely because implementation code is involved.

@@ -65,7 +65,7 @@ Keep explicit AC, inferred Done Criteria, relay-ready handoff, project harness c
 Identify the evaluation source model:
 - Explicit AC from the task source, when present
 - Inferred Done Criteria from user intent, issue body, relay-ready handoff, and nearby repo conventions
-- Repo/historical signals from probes, available commands, stuck factors, and score divergence
+- Repo/historical signals from probes, available commands, stuck factors, repeated reviewer findings, round cost, and task-class calibration
 - Task-specific risk from touched domains, trust boundaries, data loss, migrations, UX flows, or operational failure modes
 
 If AC are missing, vague, or incomplete, write observable Done Criteria first. Treat explicit AC as high-priority evidence, not the only source. Before freezing, run the [pre-flight ambiguity audit](references/dc-preflight-audit.md). If the final review anchor is planner-authored or differs from the task source, persist it in step 7.

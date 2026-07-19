@@ -12,7 +12,7 @@ For complex, ambiguous, or risk-bearing tasks, stress-test the rubric before dis
 
 **Cross-domain**: task spans frontend + backend, infra + application, or multiple services.
 
-**Ambiguity/risk signal**: novel quality criteria, historical score divergence, trust/security boundary, unclear Done Criteria recovery, or factors that could be gamed by a minimal implementation.
+**Ambiguity/risk signal**: novel quality criteria, repeated reviewer findings or factor plateaus, trust/security boundary, unclear Done Criteria recovery, or factors that could be gamed by a minimal implementation.
 
 ## Process: Validate → Review → Generate
 

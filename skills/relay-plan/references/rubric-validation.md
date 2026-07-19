@@ -212,20 +212,6 @@ Grade: A
 Action: dispatch allowed
 ```
 
-### TDD skip reasons
-
-When zero factors carry an applied `tdd_anchor`, the quality card records why as one of five standardized reasons (see `skills/relay-plan/scripts/quality-card.js`):
-
-| Reason | When it applies |
-|--------|------------------|
-| `no_runner` | No test infra was detected (auto-derived from the probe signal; the planner does not need to declare this one) |
-| `docs_only` | The diff is docs-only — nothing executable to test-drive |
-| `broad_ui_judgment` | The outcome is broad visual/UX judgment, not a crisp assertion a test can pin down |
-| `exploratory_task` | The task is a spike or investigation where behavior is discovered, not specified up front |
-| `non_crisp_behavior` | Done Criteria describe behavior too loosely for a failing-test-first anchor |
-
-An unrecognized skip reason string is a fail-closed error, not a silent coercion — pick one of the five values above or leave it undeclared.
-
 ## Grading logic
 
 Apply downgrade checks first (`D`, then `C`), then assign `A` or `B`.
