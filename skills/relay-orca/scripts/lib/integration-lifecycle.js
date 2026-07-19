@@ -4,16 +4,11 @@
 // boundary but receives the subprocess runner from run.js/resume.js. It deliberately
 // never builds task-update, reset, worktree, or raw-payload commands.
 const crypto = require("node:crypto");
-const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { coordinationMarkerFor, shellQuote } = require("./coordination-marker");
 const { boundedExcerpt } = require("./bounded-excerpt");
 
 const CANONICAL_OPTIONS = Object.freeze(["passed", "failed"]);
-const LOCK_TIMEOUT_MS = 5000;
-const LOCK_POLL_MS = 10;
-
 class IntegrationLifecycleError extends Error {
   constructor(reasonCode, message, details = {}) {
     super(message);
@@ -187,32 +182,14 @@ function lockName(ctx) {
   return crypto.createHash("sha256").update(key).digest("hex");
 }
 
-function sleep(ms) {
-  const shared = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(shared, 0, 0, ms);
-}
-
 function withBoundedLock(ctx, callback) {
-  const root = path.resolve(ctx.lockRoot || path.join(os.tmpdir(), "relay-orca-integration-locks"));
-  const lockPath = path.join(root, `${lockName(ctx)}.lock`);
-  const started = Date.now();
-  let acquired = false;
-  fs.mkdirSync(root, { recursive: true });
-  while (!acquired && Date.now() - started <= LOCK_TIMEOUT_MS) {
-    try {
-      fs.mkdirSync(lockPath);
-      fs.writeFileSync(path.join(lockPath, "owner"), `${process.pid}\n`, "utf8");
-      acquired = true;
-    } catch (error) {
-      if (error.code !== "EEXIST") fail("INTEGRATION_LOCK_UNAVAILABLE", `integration lifecycle lock cannot be acquired: ${error.message}`);
-      sleep(LOCK_POLL_MS);
-    }
+  if (!ctx || typeof ctx.withLock !== "function") {
+    fail("INTEGRATION_LOCK_UNAVAILABLE", "bounded integration lifecycle lock is unavailable; no mutation was attempted");
   }
-  if (!acquired) fail("INTEGRATION_LOCK_UNAVAILABLE", `integration lifecycle lock timed out for ${ctx.programId}/${ctx.outcomeId}; no mutation was attempted`);
   try {
-    return callback();
-  } finally {
-    fs.rmSync(lockPath, { recursive: true, force: true });
+    return ctx.withLock(lockName(ctx), callback);
+  } catch (error) {
+    fail("INTEGRATION_LOCK_UNAVAILABLE", `integration lifecycle lock cannot be acquired: ${error.message}`);
   }
 }
 
@@ -300,17 +277,14 @@ function currentProvenance(ctx, { requireActive = false } = {}) {
   return { runtimeId: currentRuntime, coordinator: verifiedCoordinator, task, tasks, dispatch };
 }
 
-function readReport(reportPath) {
-  if (!nonEmpty(reportPath)) fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "deterministic integration report path is required");
-  if (!fs.existsSync(reportPath)) return { present: false };
-  let value;
-  try {
-    value = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-  } catch (error) {
-    fail("INTEGRATION_REPORT_INVALID", `integration report ${reportPath} is not valid JSON: ${error.message}`);
-  }
+function readReport(ctx) {
+  if (!ctx || !nonEmpty(ctx.reportPath)) fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "deterministic integration report path is required");
+  if (typeof ctx.readReport !== "function") fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "deterministic integration report reader is unavailable");
+  const source = ctx.readReport(ctx.reportPath);
+  if (!source || source.present === false) return { present: false };
+  const value = source.value !== undefined ? source.value : source;
   if (!value || value.passed !== true || !nonEmpty(value.evidence)) {
-    fail("INTEGRATION_REPORT_INVALID", `integration report ${reportPath} must contain passed:true and deterministic evidence text`);
+    fail("INTEGRATION_REPORT_INVALID", `integration report ${ctx.reportPath} must contain passed:true and deterministic evidence text`);
   }
   return { present: true, passed: true, evidence: value.evidence };
 }
@@ -369,7 +343,7 @@ function prepareIntegrationGate(ctx) {
 function advanceIntegrationGate(ctx) {
   return withBoundedLock(ctx, () => {
     const provenance = currentProvenance(ctx);
-    const report = readReport(ctx.reportPath);
+    const report = readReport(ctx);
     const identity = identityFor(ctx);
     const first = inspectCanonicalGates(listGates(ctx), identity);
     if (!first.ok) fail(first.reasonCode, first.message);

@@ -28,6 +28,8 @@ const {
   makeUrlResolver,
   writeReceiptAtomic,
   programSegment,
+  withIntegrationLifecycleLock,
+  readIntegrationEvidenceFile,
 } = require("./receipt-io");
 const { parseReceipt, serializeReceiptWithRecords } = require("./lib/receipt");
 const { applyOperatorRecords } = require("./lib/operator-records");
@@ -423,6 +425,14 @@ function executeAction(action, ctx) {
         runtimeId: ctx.receipt.runtime_id,
         reportPath: ctx.integrationReportPath(receiptTask.outcome_id),
         programSegment,
+        withLock: (lockKey, callback) => withIntegrationLifecycleLock({
+          programId: ctx.receipt.program_id,
+          outcomeId: receiptTask.outcome_id,
+          taskId: orcaTaskId,
+          lockRoot: ctx.integrationLockRoot,
+          lockKey,
+        }, callback),
+        readReport: readIntegrationEvidenceFile,
       });
     } catch (error) {
       if (!(error instanceof IntegrationLifecycleError)) throw error;
@@ -450,6 +460,7 @@ function executeActions({ receipt, actions, opts, orcaBin, persist }) {
     persist,
     coordinatorHandle: opts.coordinatorHandle,
     integrationReportPath: opts.integrationReportPath,
+    integrationLockRoot: opts.integrationLockRoot,
     taskByOutcome: new Map(receipt.tasks.map((task) => [task.outcome_id, task])),
   };
   actions.forEach((action) => {
@@ -474,6 +485,14 @@ function advanceIntegrationTasks({ receipt, opts, orcaBin, persist }) {
         runtimeId: receipt.runtime_id,
         reportPath: opts.integrationReportPath(task.outcome_id),
         programSegment,
+        withLock: (lockKey, callback) => withIntegrationLifecycleLock({
+          programId: receipt.program_id,
+          outcomeId: task.outcome_id,
+          taskId: task.orca_task_id,
+          lockRoot: opts.integrationLockRoot,
+          lockKey,
+        }, callback),
+        readReport: readIntegrationEvidenceFile,
       });
       if (!result.ok) {
         blocking.push(blockingReason(result.reason_code, `${result.reason_code}: operator must send the fresh explicit worker_done command exactly once after gate resolution`));

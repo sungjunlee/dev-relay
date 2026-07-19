@@ -175,6 +175,13 @@ function requireIntegrationCoordinator(program, options) {
       "Provide --gate-evidence-dir or RELAY_ORCA_GATE_EVIDENCE_ROOT so the operator can write the live report at a deterministic path.",
     );
   }
+  if (integrationTasks(program).length > 0 && typeof options.withIntegrationLifecycleLock !== "function") {
+    reject(
+      "INTEGRATION_LIFECYCLE_FAILED",
+      "integration_gate requires the bounded lifecycle lock adapter; no mutation was attempted",
+      "Use the shipped run/resume entry point so the coordinator lifecycle lock is installed; do not bypass it with a manual bridge.",
+    );
+  }
 }
 
 // D6.2 provenance trio verification. Returns a bounded description of the first
@@ -248,6 +255,14 @@ function dispatchOne(ctx) {
         runtimeId: report.admission.runtime_id,
         reportPath: options.integrationReportPath(task.outcome_id),
         programSegment: options.programSegment,
+        withLock: (lockKey, callback) => options.withIntegrationLifecycleLock({
+          programId: program.id,
+          outcomeId: task.outcome_id,
+          taskId: orcaTaskId,
+          lockRoot: options.integrationLockRoot,
+          lockKey,
+        }, callback),
+        readReport: () => ({ present: false }),
       });
     } catch (error) {
       if (!(error instanceof IntegrationLifecycleError)) throw error;

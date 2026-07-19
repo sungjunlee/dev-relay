@@ -166,6 +166,55 @@ function readReceiptFile(finalPath) {
   return fs.readFileSync(finalPath, "utf-8");
 }
 
+// #1019 integration lifecycle I/O stays at the top-level script boundary. The pure
+// lifecycle state machine receives these adapters so plan.js's lib source-scan remains
+// intact while run/resume still get a bounded per-program/outcome lock and deterministic
+// evidence reads.
+const INTEGRATION_LOCK_TIMEOUT_MS = 5000;
+const INTEGRATION_LOCK_POLL_MS = 10;
+
+function integrationLockName({ programId, outcomeId, taskId }) {
+  return crypto.createHash("sha256").update(`${programId}\0${outcomeId}\0${taskId}`).digest("hex");
+}
+
+function integrationSleep(ms) {
+  const shared = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(shared, 0, 0, ms);
+}
+
+function withIntegrationLifecycleLock({ programId, outcomeId, taskId, lockRoot }, callback) {
+  const root = path.resolve(lockRoot || path.join(os.tmpdir(), "relay-orca-integration-locks"));
+  const lockPath = path.join(root, `${integrationLockName({ programId, outcomeId, taskId })}.lock`);
+  const started = Date.now();
+  let acquired = false;
+  fs.mkdirSync(root, { recursive: true });
+  while (!acquired && Date.now() - started <= INTEGRATION_LOCK_TIMEOUT_MS) {
+    try {
+      fs.mkdirSync(lockPath);
+      fs.writeFileSync(path.join(lockPath, "owner"), `${process.pid}\n`, "utf8");
+      acquired = true;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      integrationSleep(INTEGRATION_LOCK_POLL_MS);
+    }
+  }
+  if (!acquired) throw new Error(`integration lifecycle lock timed out for ${programId}/${outcomeId}`);
+  try {
+    return callback();
+  } finally {
+    fs.rmSync(lockPath, { recursive: true, force: true });
+  }
+}
+
+function readIntegrationEvidenceFile(filePath) {
+  if (!fs.existsSync(filePath)) return { present: false };
+  try {
+    return { present: true, value: JSON.parse(fs.readFileSync(filePath, "utf8")) };
+  } catch (error) {
+    return { present: true, invalid: true, error: error.message };
+  }
+}
+
 function receiptExists(finalPath) {
   return fs.existsSync(finalPath);
 }
@@ -226,6 +275,8 @@ module.exports = {
   receiptPathFor,
   writeReceiptAtomic,
   readReceiptFile,
+  withIntegrationLifecycleLock,
+  readIntegrationEvidenceFile,
   receiptExists,
   listManifestFiles,
   listFleetManifestFiles,

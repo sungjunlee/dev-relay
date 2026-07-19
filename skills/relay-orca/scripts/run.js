@@ -26,6 +26,8 @@ const {
   readReceiptFile,
   receiptExists,
   programSegment,
+  withIntegrationLifecycleLock,
+  readIntegrationEvidenceFile,
 } = require("./receipt-io");
 const { integrationReportPath } = require("./lib/integration-lifecycle");
 
@@ -275,6 +277,8 @@ function main() {
       persistReceipt,
       coordinatorHandle: opts.coordinatorHandle,
       integrationReportPath: makeIntegrationReportPathResolver(opts, program),
+      withIntegrationLifecycleLock,
+      readIntegrationEvidenceFile,
       // A26: the task-title program marker embeds the SAME collision-resistant segment
       // used for the receipt path, injected as a pure function (lib/ stays subprocess-free).
       programSegment,
