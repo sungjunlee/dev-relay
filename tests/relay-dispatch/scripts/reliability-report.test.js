@@ -153,7 +153,7 @@ function appendScore(repoRoot, runId, round, factor, met = true) {
   });
 }
 
-function setManifestGuidance(repoRoot, runId, guidancePacks) {
+function setManifestGuidance(repoRoot, runId, guidancePacks, profileOverrides = {}) {
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
   const manifest = readManifest(manifestPath).data;
   manifest.advisory = {
@@ -166,6 +166,7 @@ function setManifestGuidance(repoRoot, runId, guidancePacks) {
         domains: ["relay-dispatch"],
         risk_tags: [],
         execution_mode: "standard",
+        ...profileOverrides,
       },
       artifact_path: "guidance-metadata.json",
       source: "prompt",
@@ -2444,4 +2445,55 @@ test("reliability-report --help mentions --by-dispatch", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /--by-dispatch/);
   assert.match(result.stdout, /executor\/model\/provider/);
+});
+
+test("reliability-report publishes path-aware calibration and class decisions", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-calibration-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date().toISOString();
+  const runId = createRunId({
+    branch: "calibration-docs",
+    timestamp: new Date("2026-07-19T04:30:00.000Z"),
+  });
+
+  writeRun(repoRoot, {
+    runId,
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  setManifestGuidance(repoRoot, runId, [], {
+    task_class: "documentation",
+    behavior_path: "lightweight",
+    review_assurance: "compact",
+  });
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
+  const manifest = readManifest(manifestPath).data;
+  manifest.policy.review_assurance = "compact";
+  writeManifest(manifestPath, manifest);
+  writeReviewVerdict(repoRoot, runId, 1, [], {
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    rubric_scores: [],
+  });
+
+  const report = JSON.parse(execFileSync(
+    "node",
+    [SCRIPT, "--repo", repoRoot, "--json"],
+    { encoding: "utf-8" }
+  ));
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], {
+    encoding: "utf-8",
+  });
+
+  assert.equal(report.calibration.by_run[runId].behavior_path, "lightweight");
+  assert.equal(report.calibration.by_run[runId].assurance_tier, "compact");
+  assert.equal(report.calibration.by_run[runId].rubric_mode, "none");
+  assert.equal(
+    report.calibration.promotion_decisions.documentation.status,
+    "continue_calibration"
+  );
+  assert.match(text, /calibration:/);
+  assert.match(text, /documentation=continue_calibration/);
 });

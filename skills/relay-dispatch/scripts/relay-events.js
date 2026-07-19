@@ -57,6 +57,7 @@ const EVENTS = Object.freeze({
   REVIEWER_SWAP: "reviewer_swap",
   RUBRIC_QUALITY: "rubric_quality",
   SCORE_DIVERGENCE: "score_divergence",
+  SAFETY_BOUNDARY_VIOLATION: "safety_boundary_violation",
   SKIP_REVIEW: "skip_review",
   STATE_RECOVERY: "state_recovery",
   UNREGISTERED_ROUTE_USED: "unregistered_route_used",
@@ -129,6 +130,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
   if (!String(eventData?.event || "").trim()) {
     throw new Error("event is required to append a relay event");
   }
+  if (
+    eventData.event === EVENTS.SAFETY_BOUNDARY_VIOLATION
+    && !isNonEmptyEventValue(eventData.boundary)
+  ) {
+    throw new Error("boundary is required for safety_boundary_violation");
+  }
   validateOverrideAuditFields(eventData);
 
   ensureRunLayout(repoRoot, runId);
@@ -142,6 +149,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     head_sha: normalizeEventValue(eventData.head_sha),
     round: normalizeEventValue(eventData.round),
     reason: normalizeEventValue(eventData.reason),
+    ...(eventData.boundary !== undefined
+      ? { boundary: normalizeEventValue(eventData.boundary) }
+      : {}),
     ...(eventData.origin !== undefined
       ? { origin: normalizeEventValue(eventData.origin) }
       : {}),
@@ -611,6 +621,23 @@ function appendScoreDivergence(repoRoot, runId, { round, divergences } = {}) {
   return record;
 }
 
+function appendSafetyBoundaryViolation(repoRoot, runId, {
+  boundary,
+  reason,
+  stateFrom,
+  stateTo = "escalated",
+  headSha = null,
+} = {}) {
+  return appendRunEvent(repoRoot, runId, {
+    event: EVENTS.SAFETY_BOUNDARY_VIOLATION,
+    state_from: stateFrom,
+    state_to: stateTo,
+    head_sha: headSha,
+    boundary,
+    reason,
+  });
+}
+
 function readRunEvents(repoRoot, runId) {
   const eventsPath = getEventsPath(repoRoot, runId);
   // Do NOT short-circuit on fs.existsSync — existsSync follows symlinks, so a
@@ -651,6 +678,7 @@ module.exports = {
   appendIterationScore,
   appendRubricQuality,
   appendRunEvent,
+  appendSafetyBoundaryViolation,
   appendScoreDivergence,
   appendUnregisteredRouteUsedEvent,
   EVENTS,

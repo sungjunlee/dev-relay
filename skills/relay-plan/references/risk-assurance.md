@@ -29,6 +29,8 @@ Do not lower risk because the selected model is newer or stronger. An explicit a
 
 The mapped review caps are 1, 2, and 3 respectively. Hardened handoffs use the existing `--publish-policy after-internal-review` path and a configured adversarial reviewer. Compact and standard use existing immediate publication. These are existing lifecycle routes, not new states.
 
+For calibration, compact records `behavior_path: lightweight`; standard and hardened record `behavior_path: full`. The assurance tier remains separate so reports can compare path behavior without erasing risk.
+
 Permission, sandbox, network, repository, SHA, audit, publication, and merge protections remain invariant across all three paths. Compact changes planning/review depth only: it does not grant network access, widen write scope, bypass repository isolation, weaken stale-SHA gates, suppress audit events, publish without the normal PR path, or auto-merge.
 
 ## Task Profile

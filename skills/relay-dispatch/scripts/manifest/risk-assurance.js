@@ -55,6 +55,7 @@ function normalizeTrustBoundaries(value) {
 function assurancePlan(reviewAssurance) {
   const assurance = normalizeReviewAssurance(reviewAssurance);
   return {
+    behavior_path: assurance === REVIEW_ASSURANCE.COMPACT ? "lightweight" : "full",
     max_review_rounds: reviewRoundLimitForAssurance(assurance),
     publish_policy: assurance === REVIEW_ASSURANCE.HARDENED
       ? "after-internal-review"

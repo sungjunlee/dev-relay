@@ -47,6 +47,8 @@ The command pushes the retained branch, opens or reuses the PR, stamps `git.pr_n
 
 `reliability-report.js --json` includes `round_cost` as an observation-only section for comparing relay shaping changes. It summarizes review rounds, request/leaf linkage, relay-ready leaf counts when the request artifact is available, task-profile guidance size when recorded, execution-evidence preflight failures, review lineage totals, escalation/continue decisions, factor flip counts, and explicitly inferable reviewer rounds avoided by preflight.
 
+The `calibration` section compares full and lightweight behavior by task class, keeps routine Verification separate from Earned Rubric value, applies immediate safety rollback signals, and identifies legacy mechanisms that found unique material defects versus friction only. See `risk-calibration.md`.
+
 For epic #678, compare a baseline window before the task-shaping, evidence-preflight, and review-lineage changes with a later window that includes those runs. The useful operator checks are whether median/average review rounds fall, whether `evidence_preflight_failures.by_type` shifts failures before reviewer invocation, whether `reviewer_rounds_avoided_by_preflight.total` appears only from explicit preflight signals, and whether `lineage_totals.repeat`/`stale` shrink relative to `deepening`/`newly_scoreable`.
 
 These metrics do not change readiness calibration for #439 and are not merge, review, dispatch, or readiness gates. Treat them as trend evidence for planning and routing decisions; a single run with high round cost can still be valid work if its frozen Done Criteria required it.

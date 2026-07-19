@@ -10,6 +10,9 @@ const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { EVENTS, readAllRunEvents } = require("./relay-events");
 const { extractAllFactors } = require("../../relay-plan/scripts/tdd-flavor");
 const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
+const {
+  buildCalibrationReport,
+} = require("./reliability/calibration");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h"] };
@@ -1487,6 +1490,12 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     [...passedRunIds].filter((runId) => recoveredRunIds.has(runId))
   );
   const reviewLineage = buildReviewLineageSummary({ repoRoot, manifests });
+  const calibrationVerdicts = new Map(manifests
+    .filter(({ data }) => data?.run_id)
+    .map(({ data }) => [
+      data.run_id,
+      readReviewVerdictRecords(repoRoot, data.run_id),
+    ]));
 
   const report = {
     repoRoot,
@@ -1525,6 +1534,11 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     round_cost: buildRoundCostSummary({ repoRoot, manifests, events, reviewLineage }),
     advisory_timing: buildAdvisoryTiming(events),
     override_audit: buildOverrideAuditSummary(events),
+    calibration: buildCalibrationReport({
+      manifests,
+      events,
+      verdictsByRun: calibrationVerdicts,
+    }),
   };
 
   return report;
@@ -1780,6 +1794,24 @@ function main() {
       `    factor_flip: total=${factorFlip.total} ` +
       `continue=${factorFlip.continue} ` +
       `escalate=${factorFlip.escalate}`
+    );
+  }
+  if (report.calibration) {
+    const calibration = report.calibration;
+    console.log("  calibration:");
+    console.log(
+      `    coverage: ${formatCountSummary(calibration.coverage.by_task_class) || "n/a"} `
+      + `no_rubric_runs=${calibration.coverage.no_rubric_runs}`
+    );
+    console.log(
+      `    decisions: ${Object.entries(calibration.promotion_decisions)
+        .map(([taskClass, decision]) => `${taskClass}=${decision.status}`)
+        .join(", ")}`
+    );
+    console.log(
+      `    legacy_mechanisms: ${Object.entries(calibration.legacy_mechanisms)
+        .map(([mechanism, summary]) => `${mechanism}=${summary.decision}`)
+        .join(", ")}`
     );
   }
   console.log(`  most_stuck_factor: ${report.factor_analysis.most_stuck_factor ?? "n/a"}`);

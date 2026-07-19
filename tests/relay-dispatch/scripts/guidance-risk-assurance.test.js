@@ -29,6 +29,7 @@ test("risk-aware task profiles derive and persist compact assurance without guid
   const text = prompt([
     "size: S",
     "change_type: docs",
+    "task_class: documentation",
     "authority: workspace",
     "reversibility: easy",
     "blast_radius: isolated",
@@ -38,6 +39,8 @@ test("risk-aware task profiles derive and persist compact assurance without guid
 
   const summary = extractTaskProfileSummaryFromPrompt(text);
   assert.equal(summary.risk_level, "low");
+  assert.equal(summary.task_class, "documentation");
+  assert.equal(summary.behavior_path, "lightweight");
   assert.equal(summary.minimum_review_assurance, "compact");
   assert.equal(summary.review_assurance, "compact");
   assert.deepEqual(summary.trust_boundaries, []);

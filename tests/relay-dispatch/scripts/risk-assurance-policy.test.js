@@ -20,11 +20,13 @@ test("risk assurance derives compact, standard, and hardened from task propertie
   assert.deepEqual({
     risk: low.risk_level,
     assurance: low.review_assurance,
+    path: low.behavior_path,
     rounds: low.max_review_rounds,
     publication: low.publish_policy,
   }, {
     risk: "low",
     assurance: "compact",
+    path: "lightweight",
     rounds: 1,
     publication: "immediate",
   });
@@ -36,11 +38,13 @@ test("risk assurance derives compact, standard, and hardened from task propertie
   assert.deepEqual({
     risk: medium.risk_level,
     assurance: medium.review_assurance,
+    path: medium.behavior_path,
     rounds: medium.max_review_rounds,
     publication: medium.publish_policy,
   }, {
     risk: "medium",
     assurance: "standard",
+    path: "full",
     rounds: 2,
     publication: "immediate",
   });
@@ -54,11 +58,13 @@ test("risk assurance derives compact, standard, and hardened from task propertie
   assert.deepEqual({
     risk: high.risk_level,
     assurance: high.review_assurance,
+    path: high.behavior_path,
     rounds: high.max_review_rounds,
     publication: high.publish_policy,
   }, {
     risk: "high",
     assurance: "hardened",
+    path: "full",
     rounds: 3,
     publication: "after-internal-review",
   });

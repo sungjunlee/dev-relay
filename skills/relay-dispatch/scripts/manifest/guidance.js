@@ -11,7 +11,7 @@ const DISPATCH_PROMPT_FILENAME = "dispatch-prompt.md";
 const SCALAR_FIELDS = new Set([
   "size", "change_type", "execution_mode", "review_assurance",
   "planning_profile", "route_decision", "authority", "reversibility",
-  "blast_radius",
+  "blast_radius", "task_class",
 ]);
 const ARRAY_FIELDS = new Set([
   "domains", "risk_tags", "guidance_packs", "derivation_inputs",
@@ -122,11 +122,15 @@ function buildTaskProfileSummary(profile) {
   if (profile.route_decision) {
     summary.route_decision = profile.route_decision;
   }
+  if (profile.task_class) {
+    summary.task_class = profile.task_class;
+  }
   if (profile.review_assurance) {
     summary.review_assurance = normalizeReviewAssurance(profile.review_assurance);
   }
   if (riskDecision) {
     Object.assign(summary, {
+      behavior_path: riskDecision.behavior_path,
       authority: riskDecision.authority,
       reversibility: riskDecision.reversibility,
       blast_radius: riskDecision.blast_radius,

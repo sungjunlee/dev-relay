@@ -11,6 +11,7 @@ const {
   appendIterationScore,
   appendRubricQuality,
   appendRunEvent,
+  appendSafetyBoundaryViolation,
   appendScoreDivergence,
   EVENTS,
   readRunEvents,
@@ -413,6 +414,29 @@ test("appendRunEvent throws on event name not in EVENTS", () => {
     }),
     /Unknown relay event name "not_a_relay_event"/
   );
+});
+
+test("appendRunEvent records confirmed safety boundary violations for calibration", () => {
+  const { repoRoot, runId } = createContext();
+
+  appendSafetyBoundaryViolation(repoRoot, runId, {
+    stateFrom: "review_pending",
+    boundary: "stale_sha",
+    reason: "reviewed SHA differed from accepted SHA",
+  });
+
+  assert.deepEqual(readRunEvents(repoRoot, runId)[0], {
+    ts: readRunEvents(repoRoot, runId)[0].ts,
+    event: "safety_boundary_violation",
+    actor: "Relay Events Test",
+    run_id: runId,
+    state_from: "review_pending",
+    state_to: "escalated",
+    head_sha: null,
+    round: null,
+    reason: "reviewed SHA differed from accepted SHA",
+    boundary: "stale_sha",
+  });
 });
 
 test("appendEventLineToPath writes explicit events paths through relay event validation", () => {

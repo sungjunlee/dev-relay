@@ -6,6 +6,7 @@ Guidance pack names refer to the compact advisory library in `references/guidanc
 
 ```yaml
 task_profile:
+  task_class: code | design | documentation | operations_security | data_change
   size: S | M | L | XL
   change_type: bugfix | feature | refactor | docs | test | infra | visual | prompt
   domains:
@@ -37,6 +38,7 @@ Build the profile from the same planning evidence used for the rubric:
 - historical signal: use stuck factors, divergence hotspots, and average rounds to choose stronger working-style guidance when quality convergence has historically taken more rounds.
 - task risk: surface trust boundaries, state machines, public APIs, migrations, data loss, prompt contracts, or backward-compatibility concerns as `risk_tags`.
 - assurance risk: derive authority, reversibility, blast radius, and affected trust boundaries using `risk-assurance.md`; never use model identity.
+- calibration class: select the primary observation surface as `task_class`; do not add a second class merely because implementation code is involved.
 - readiness route: when task risk includes `route_decision: ready_light`, default to `size: S` and `execution_mode: quick` unless risk tags require stronger review or fresh context.
 
 ## Planner Boundary
