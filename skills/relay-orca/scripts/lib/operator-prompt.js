@@ -104,14 +104,34 @@ function bodyBlock(task, program, outcome, segmentEncoder) {
     .join("\n");
 }
 
+function integrationGateBlock(lifecycle) {
+  const base = [
+    "Integration-gate lifecycle contract (coordinator-owned):",
+    "The coordinator alone creates/adopts and resolves the canonical Orca gate. The operator writes only deterministic live evidence and sends no gate mutation.",
+    "The canonical gate question is tied to the shared #1016 program-segment/outcome marker and its exact options are [\"passed\",\"failed\"].",
+    "Gate resolution must be observed before worker_done; never use task-update, reset, receipt edits, or manual dispatch replay.",
+  ];
+  if (!lifecycle || !lifecycle.completion_command) {
+    return base.concat("Wait for a fresh coordinator instruction containing the current dispatch provenance before sending worker_done.").join("\n");
+  }
+  return base.concat([
+    `Write the live evidence JSON at this exact path: ${lifecycle.report_path}`,
+    "The JSON must contain passed:true and deterministic evidence text.",
+    "After the coordinator resolves this exact gate to passed, copy-paste the following command exactly once from the current dispatched pane:",
+    lifecycle.completion_command.copy_paste,
+  ]).join("\n");
+}
+
 // Build the full operator prompt for a single task. `outcome` is the original
 // program outcome (carries relay_fleet leaves); `task` is the compiled plan task.
-function buildOperatorPrompt(task, program, outcome = {}, segmentEncoder) {
+function buildOperatorPrompt(task, program, outcome = {}, segmentEncoder, options = {}) {
+  const lifecycle = task.kind === "integration_gate" ? integrationGateBlock(options.integrationGate) : null;
   return [
     headerBlock(task, program, outcome),
     bodyBlock(task, program, outcome, segmentEncoder),
+    lifecycle,
     payloadContractBlock(),
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
 }
 
 module.exports = {

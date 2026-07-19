@@ -10,6 +10,7 @@
 // (D5) and never invokes orchestration reset (D2). Relay remains the sole creator
 // of implementation worktrees and manifests.
 const fs = require("node:fs");
+const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { PlanError } = require("./lib/reasons");
 const { COMMAND_FLAGS, FLAGS } = require("../../relay-dispatch/scripts/cli-schema");
@@ -26,6 +27,7 @@ const {
   receiptExists,
   programSegment,
 } = require("./receipt-io");
+const { integrationReportPath } = require("./lib/integration-lifecycle");
 
 const USAGE_EXIT = 64;
 const RUN_MAX_BUFFER = 4 * 1024 * 1024;
@@ -47,6 +49,7 @@ function runOrca(orcaBin, args, options = {}) {
   const argv = Array.isArray(args) ? args.map(String) : [];
   if (argv.includes("reset")) throw new Error("relay-orca run must never invoke orca orchestration reset (D2)");
   if (argv.includes("worktree")) throw new Error("relay-orca run must never invoke any orca worktree subcommand (D5)");
+  if (argv.includes("task-update")) throw new Error("relay-orca run must never invoke orca orchestration task-update (#1019)");
   const hasInput = options.input !== undefined && options.input !== null;
   try {
     const stdout = execFileSync(orcaBin, argv, {
@@ -70,7 +73,7 @@ function usageError(message) {
   process.stderr.write(`relay-orca run: ${message}\n`);
   process.stderr.write(
     "usage: run.js --program-file <accepted-program.json> [--json] [--concurrency N] " +
-      "[--operator-handle <handle> ...] [--orca-bin <path>]\n",
+      "[--operator-handle <handle> ...] [--coordinator-handle <handle>] [--gate-evidence-dir <dir>] [--orca-bin <path>]\n",
   );
   process.exit(USAGE_EXIT);
 }
@@ -81,6 +84,8 @@ function parseArgs(argv) {
     json: false,
     concurrency: undefined,
     operatorHandles: [],
+    coordinatorHandle: null,
+    gateEvidenceDir: null,
     orcaBin: null,
     repoRoot: null,
     // #947 additive operator-record flags. A decision/authorization record is written
@@ -97,6 +102,8 @@ function parseArgs(argv) {
     else if (arg === "--json") opts.json = true;
     else if (arg === "--concurrency") opts.concurrency = Number(argv[(i += 1)]);
     else if (arg === "--operator-handle") opts.operatorHandles.push(requireValue(argv[(i += 1)], "--operator-handle"));
+    else if (arg === "--coordinator-handle") opts.coordinatorHandle = requireValue(argv[(i += 1)], "--coordinator-handle");
+    else if (arg === "--gate-evidence-dir") opts.gateEvidenceDir = requireValue(argv[(i += 1)], "--gate-evidence-dir");
     else if (arg === "--resolve-decision") opts.resolveDecision = requireValue(argv[(i += 1)], "--resolve-decision");
     else if (arg === "--resolution") opts.resolution = requireValue(argv[(i += 1)], "--resolution");
     else if (arg === "--resolver") opts.resolver = requireValue(argv[(i += 1)], "--resolver");
@@ -175,6 +182,14 @@ function makeReceiptPersistor(opts, program) {
     writeReceiptAtomic(finalPath, serializeReceiptWithRecords(mapping));
     return finalPath;
   };
+}
+
+function makeIntegrationReportPathResolver(opts, program) {
+  const repo = resolveRepoContext({ repoRootOverride: opts.repoRoot });
+  const receiptPath = receiptPathFor(repo.slug, program.id);
+  const configured = opts.gateEvidenceDir || (process.env.RELAY_ORCA_GATE_EVIDENCE_ROOT || "").trim();
+  const root = path.resolve(configured || path.join(path.dirname(receiptPath), "integration-gates"));
+  return (outcomeId) => integrationReportPath(root, outcomeId);
 }
 
 function requireValue(value, flag) {
@@ -258,6 +273,8 @@ function main() {
       orcaBin: opts.orcaBin,
       runOrca,
       persistReceipt,
+      coordinatorHandle: opts.coordinatorHandle,
+      integrationReportPath: makeIntegrationReportPathResolver(opts, program),
       // A26: the task-title program marker embeds the SAME collision-resistant segment
       // used for the receipt path, injected as a pure function (lib/ stays subprocess-free).
       programSegment,

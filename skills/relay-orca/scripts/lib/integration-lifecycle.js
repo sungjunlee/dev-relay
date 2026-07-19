@@ -1,0 +1,427 @@
+"use strict";
+
+// #1019 integration-gate lifecycle. This module owns the coordinator-side transition
+// boundary but receives the subprocess runner from run.js/resume.js. It deliberately
+// never builds task-update, reset, worktree, or raw-payload commands.
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { coordinationMarkerFor, shellQuote } = require("./coordination-marker");
+const { boundedExcerpt } = require("./bounded-excerpt");
+
+const CANONICAL_OPTIONS = Object.freeze(["passed", "failed"]);
+const LOCK_TIMEOUT_MS = 5000;
+const LOCK_POLL_MS = 10;
+
+class IntegrationLifecycleError extends Error {
+  constructor(reasonCode, message, details = {}) {
+    super(message);
+    this.name = "IntegrationLifecycleError";
+    this.reasonCode = reasonCode;
+    this.details = details;
+    this.mutationSafe = false;
+  }
+}
+
+function fail(reasonCode, message, details = {}) {
+  throw new IntegrationLifecycleError(reasonCode, boundedExcerpt(message), details);
+}
+
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function unwrap(value) {
+  return value && typeof value === "object" ? value : {};
+}
+
+function parseEnvelope(proc, command) {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(String(proc && proc.stdout ? proc.stdout : ""));
+  } catch (error) {
+    fail("INTEGRATION_CAPABILITY_GAP", `${command} returned non-JSON output: ${error.message}`);
+  }
+  if (!proc || proc.status !== 0 || !parsed || parsed.ok !== true) {
+    const detail = proc && proc.stderr ? `: ${boundedExcerpt(proc.stderr)}` : "";
+    fail("INTEGRATION_CAPABILITY_GAP", `${command} is unavailable or rejected by the installed Orca contract${detail}`);
+  }
+  return parsed;
+}
+
+function runJson(ctx, args, label) {
+  if (!ctx || typeof ctx.run !== "function" || !nonEmpty(ctx.orcaBin)) {
+    fail("INTEGRATION_CAPABILITY_GAP", `${label} cannot run: injected Orca runner is missing`);
+  }
+  const proc = ctx.run(ctx.orcaBin, args, {});
+  return parseEnvelope(proc, label);
+}
+
+function resultOf(payload) {
+  return unwrap(payload && payload.result);
+}
+
+function runtimeId(payload) {
+  const result = resultOf(payload);
+  const runtime = unwrap(result.runtime);
+  const meta = unwrap(payload && payload._meta);
+  return [runtime.runtimeId, result.runtime_id, meta.runtimeId].find(nonEmpty) || null;
+}
+
+function coordinatorFrom(payload) {
+  const result = resultOf(payload);
+  const coordinator = unwrap(result.coordinator);
+  const runtime = unwrap(result.runtime);
+  const preamble = unwrap(result.preamble);
+  return [
+    result.coordinator_handle,
+    result.coordinatorHandle,
+    coordinator.handle,
+    coordinator.id,
+    runtime.coordinator_handle,
+    runtime.coordinatorHandle,
+    preamble.coordinator_handle,
+    preamble.coordinatorHandle,
+  ].find(nonEmpty) || null;
+}
+
+function taskRows(payload) {
+  const result = resultOf(payload);
+  return Array.isArray(result.tasks) ? result.tasks : null;
+}
+
+function gateRows(payload) {
+  const result = resultOf(payload);
+  return Array.isArray(result.gates) ? result.gates : null;
+}
+
+function gateId(gate) {
+  return gate && [gate.id, gate.gate_id, gate.gateId].find(nonEmpty) || null;
+}
+
+function gateTaskId(gate) {
+  return gate && [gate.task_id, gate.task, gate.taskId].find(nonEmpty) || null;
+}
+
+function gateResolution(gate) {
+  if (!gate || typeof gate !== "object") return { state: "missing", value: null };
+  const explicitValues = [gate.resolution, gate.result, gate.outcome].filter(nonEmpty);
+  const explicitKinds = new Set(explicitValues);
+  if (explicitKinds.size > 1) return { state: "conflict", value: explicitValues.join(",") };
+  const explicit = explicitValues[0] || null;
+  const status = typeof gate.status === "string" ? gate.status : "";
+  if (explicit) {
+    if (!CANONICAL_OPTIONS.includes(explicit)) return { state: "conflict", value: explicit };
+    if (status === "passed" && explicit !== "passed") return { state: "conflict", value: explicit };
+    if (status === "failed" && explicit !== "failed") return { state: "conflict", value: explicit };
+    if (status && ["pending", "ready", "open"].includes(status)) return { state: "conflict", value: explicit };
+    return { state: explicit === "passed" ? "passed" : "failed", value: explicit };
+  }
+  // A status of passed/failed is an explicit terminal result. A generic resolved
+  // status is intentionally NOT completion evidence without its canonical resolution.
+  if (status === "passed") return { state: "passed", value: "passed" };
+  if (status === "failed") return { state: "failed", value: "failed" };
+  if (status === "resolved") return { state: "conflict", value: null };
+  return { state: "pending", value: null };
+}
+
+function sanitizeArtifactName(ref) {
+  return String(ref == null ? "" : ref)
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "gate";
+}
+
+function integrationReportPath(root, outcomeId) {
+  if (!nonEmpty(root) || !path.isAbsolute(root)) {
+    fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "integration evidence root must be an absolute deterministic path");
+  }
+  if (!nonEmpty(outcomeId)) fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "integration evidence outcome id is missing");
+  return path.join(root, `${sanitizeArtifactName(outcomeId)}.json`);
+}
+
+function canonicalIntegrationQuestion(programId, outcomeId, segmentEncoder) {
+  if (!nonEmpty(programId) || !nonEmpty(outcomeId) || typeof segmentEncoder !== "function") {
+    fail("INTEGRATION_CAPABILITY_GAP", "canonical integration gate identity requires program id, outcome id, and the #1016 program-segment encoder");
+  }
+  const marker = coordinationMarkerFor(programId, outcomeId, segmentEncoder);
+  return `Integration evidence for ${marker} passed?`;
+}
+
+function canonicalGateKey({ taskId, question, options = CANONICAL_OPTIONS }) {
+  if (!nonEmpty(taskId) || !nonEmpty(question) || JSON.stringify(options) !== JSON.stringify(CANONICAL_OPTIONS)) {
+    fail("INTEGRATION_CAPABILITY_GAP", "canonical integration gate identity requires the verified task id, exact question, and options [\"passed\",\"failed\"]");
+  }
+  return { task_id: taskId, question, options: [...CANONICAL_OPTIONS] };
+}
+
+function gateIsCanonical(gate, identity) {
+  return gateTaskId(gate) === identity.task_id
+    && gate && gate.question === identity.question
+    && Array.isArray(gate.options)
+    && JSON.stringify(gate.options) === JSON.stringify(identity.options);
+}
+
+function inspectCanonicalGates(gates, identity) {
+  const rows = Array.isArray(gates) ? gates : [];
+  const dedicated = rows.filter((gate) => gateTaskId(gate) === identity.task_id);
+  const exact = dedicated.filter((gate) => gateIsCanonical(gate, identity));
+  if (dedicated.some((gate) => !gateIsCanonical(gate, identity))) {
+    return { ok: false, reasonCode: "INTEGRATION_GATE_NONCANONICAL", message: `dedicated integration task ${identity.task_id} has a noncanonical gate; refusing further mutation` };
+  }
+  if (exact.length > 1) {
+    return { ok: false, reasonCode: "INTEGRATION_GATE_DUPLICATE", message: `dedicated integration task ${identity.task_id} has ${exact.length} exact canonical gates; refusing further mutation` };
+  }
+  if (exact.length === 0) return { ok: true, state: "missing", gate: null, exact: [] };
+  const gate = exact[0];
+  if (!gateId(gate)) return { ok: false, reasonCode: "INTEGRATION_GATE_IDENTITY_UNAVAILABLE", message: "canonical gate has no physical id; the installed Orca contract cannot safely resolve it" };
+  const resolution = gateResolution(gate);
+  if (resolution.state === "conflict") {
+    return { ok: false, reasonCode: "INTEGRATION_GATE_CONFLICT", message: `canonical integration gate ${gateId(gate)} has a conflicting or noncanonical resolution` };
+  }
+  return { ok: true, state: resolution.state, gate, exact };
+}
+
+function lockName(ctx) {
+  const key = `${ctx.programId}\0${ctx.outcomeId}\0${ctx.taskId}`;
+  return crypto.createHash("sha256").update(key).digest("hex");
+}
+
+function sleep(ms) {
+  const shared = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(shared, 0, 0, ms);
+}
+
+function withBoundedLock(ctx, callback) {
+  const root = path.resolve(ctx.lockRoot || path.join(os.tmpdir(), "relay-orca-integration-locks"));
+  const lockPath = path.join(root, `${lockName(ctx)}.lock`);
+  const started = Date.now();
+  let acquired = false;
+  fs.mkdirSync(root, { recursive: true });
+  while (!acquired && Date.now() - started <= LOCK_TIMEOUT_MS) {
+    try {
+      fs.mkdirSync(lockPath);
+      fs.writeFileSync(path.join(lockPath, "owner"), `${process.pid}\n`, "utf8");
+      acquired = true;
+    } catch (error) {
+      if (error.code !== "EEXIST") fail("INTEGRATION_LOCK_UNAVAILABLE", `integration lifecycle lock cannot be acquired: ${error.message}`);
+      sleep(LOCK_POLL_MS);
+    }
+  }
+  if (!acquired) fail("INTEGRATION_LOCK_UNAVAILABLE", `integration lifecycle lock timed out for ${ctx.programId}/${ctx.outcomeId}; no mutation was attempted`);
+  try {
+    return callback();
+  } finally {
+    fs.rmSync(lockPath, { recursive: true, force: true });
+  }
+}
+
+function identityFor(ctx) {
+  return canonicalGateKey({
+    taskId: ctx.taskId,
+    question: canonicalIntegrationQuestion(ctx.programId, ctx.outcomeId, ctx.programSegment),
+  });
+}
+
+function listGates(ctx) {
+  const payload = runJson(ctx, ["orchestration", "gate-list", "--task", ctx.taskId, "--json"], "orca orchestration gate-list");
+  const rows = gateRows(payload);
+  if (!rows) fail("INTEGRATION_CAPABILITY_GAP", "orca orchestration gate-list returned no gates array");
+  const result = resultOf(payload);
+  if (result.count !== undefined && result.count !== rows.length) {
+    fail("INTEGRATION_GATE_CONFLICT", "orca orchestration gate-list count disagrees with its gate array; refusing mutation");
+  }
+  return rows;
+}
+
+function ensureCanonicalGateUnlocked(ctx, identity) {
+  const first = inspectCanonicalGates(listGates(ctx), identity);
+  if (!first.ok) fail(first.reasonCode, first.message);
+  if (first.state === "failed") {
+    fail("INTEGRATION_GATE_CONFLICT", `canonical integration gate ${gateId(first.gate)} resolved failed; refusing further mutation`);
+  }
+  if (first.state !== "missing") return { ...first, adopted: true };
+
+  const createArgs = [
+    "orchestration", "gate-create", "--task", identity.task_id,
+    "--question", identity.question, "--options", JSON.stringify(CANONICAL_OPTIONS), "--json",
+  ];
+  const created = ctx.run(ctx.orcaBin, createArgs, {});
+  // The create response is deliberately non-authoritative. Always re-list, including
+  // an exit/non-JSON response, so a lost response cannot cause a duplicate create.
+  const second = inspectCanonicalGates(listGates(ctx), identity);
+  if (!second.ok) fail(second.reasonCode, second.message);
+  if (second.state === "missing") {
+    const detail = created && created.stderr ? `: ${boundedExcerpt(created.stderr)}` : "";
+    fail("INTEGRATION_GATE_CREATE_UNCONFIRMED", `gate-create did not produce exactly one adoptable canonical gate${detail}`);
+  }
+  if (second.state === "failed") {
+    fail("INTEGRATION_GATE_CONFLICT", `canonical integration gate ${gateId(second.gate)} resolved failed; refusing further mutation`);
+  }
+  return { ...second, adopted: false, create_status: created && created.status };
+}
+
+function ensureCanonicalGate(ctx) {
+  const identity = identityFor(ctx);
+  return withBoundedLock(ctx, () => ensureCanonicalGateUnlocked(ctx, identity));
+}
+
+function currentProvenance(ctx, { requireActive = false } = {}) {
+  const statusPayload = runJson(ctx, ["status", "--json"], "orca status");
+  const currentRuntime = runtimeId(statusPayload);
+  if (!nonEmpty(currentRuntime)) fail("INTEGRATION_RUNTIME_PROVENANCE_MISSING", "live Orca runtime id is unavailable; coordinator mutation is unsafe");
+  if (ctx.runtimeId && currentRuntime !== ctx.runtimeId) fail("INTEGRATION_RUNTIME_PROVENANCE_MISMATCH", `live Orca runtime ${currentRuntime} does not match verified runtime ${ctx.runtimeId}`);
+  const currentCoordinator = coordinatorFrom(statusPayload);
+  if (nonEmpty(currentCoordinator) && currentCoordinator !== ctx.coordinatorHandle) {
+    fail("INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH", `coordinator handle ${ctx.coordinatorHandle} is stale; live coordinator is ${currentCoordinator}`);
+  }
+
+  const taskPayload = runJson(ctx, ["orchestration", "task-list", "--json"], "orca orchestration task-list");
+  const tasks = taskRows(taskPayload);
+  if (!tasks) fail("INTEGRATION_CAPABILITY_GAP", "orca orchestration task-list returned no tasks array");
+  const task = tasks.find((candidate) => candidate && candidate.id === ctx.taskId);
+  if (!task) fail("INTEGRATION_TASK_PROVENANCE_MISMATCH", `verified integration task ${ctx.taskId} is absent from the current task-list`);
+  if (!nonEmpty(ctx.assignee) || !nonEmpty(ctx.dispatchId)) fail("INTEGRATION_DISPATCH_PROVENANCE_MISSING", "fresh integration dispatch id and assignee are required before lifecycle mutation");
+  const dispatchPayload = runJson(ctx, ["orchestration", "dispatch-show", "--task", ctx.taskId, "--preamble", "--from", ctx.assignee, "--json"], "orca orchestration dispatch-show");
+  const result = resultOf(dispatchPayload);
+  const dispatch = unwrap(result.dispatch);
+  const liveTask = dispatch.task_id || dispatch.taskId;
+  const liveDispatch = dispatch.id || dispatch.dispatch_id || dispatch.dispatchId;
+  const liveAssignee = dispatch.assignee_handle || dispatch.assignee || dispatch.to;
+  const dispatchCoordinator = coordinatorFrom(dispatchPayload);
+  const verifiedCoordinator = dispatchCoordinator || currentCoordinator;
+  if (!nonEmpty(verifiedCoordinator)) fail("INTEGRATION_COORDINATOR_PROVENANCE_MISSING", "live/current coordinator handle is unavailable; never infer it from stale receipt or history");
+  if (verifiedCoordinator !== ctx.coordinatorHandle) {
+    fail("INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH", `coordinator handle ${ctx.coordinatorHandle} is stale; live coordinator is ${verifiedCoordinator}`);
+  }
+  if (liveTask !== ctx.taskId || liveDispatch !== ctx.dispatchId || liveAssignee !== ctx.assignee || dispatch.terminal_present === false || result.terminal_present === false) {
+    fail("INTEGRATION_DISPATCH_PROVENANCE_MISMATCH", `fresh dispatch provenance mismatch (task=${liveTask || "missing"}, dispatch=${liveDispatch || "missing"}, assignee=${liveAssignee || "missing"})`);
+  }
+  return { runtimeId: currentRuntime, coordinator: verifiedCoordinator, task, tasks, dispatch };
+}
+
+function readReport(reportPath) {
+  if (!nonEmpty(reportPath)) fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "deterministic integration report path is required");
+  if (!fs.existsSync(reportPath)) return { present: false };
+  let value;
+  try {
+    value = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  } catch (error) {
+    fail("INTEGRATION_REPORT_INVALID", `integration report ${reportPath} is not valid JSON: ${error.message}`);
+  }
+  if (!value || value.passed !== true || !nonEmpty(value.evidence)) {
+    fail("INTEGRATION_REPORT_INVALID", `integration report ${reportPath} must contain passed:true and deterministic evidence text`);
+  }
+  return { present: true, passed: true, evidence: value.evidence };
+}
+
+function completionCommand(ctx) {
+  const marker = coordinationMarkerFor(ctx.programId, ctx.outcomeId, ctx.programSegment);
+  const subject = `worker_done: ${marker}`;
+  const body = `Canonical integration gate passed for ${marker}. Send this command exactly once from the current dispatched pane.`;
+  const argv = [
+    "orchestration", "send", "--to", ctx.coordinatorHandle, "--subject", subject,
+    "--from", ctx.assignee, "--body", body, "--type", "worker_done",
+    "--task-id", ctx.taskId, "--dispatch-id", ctx.dispatchId, "--report-path", ctx.reportPath,
+    "--phase", "integration_gate", "--json",
+  ];
+  const copyPaste = ["orca", ...argv.map((token) => shellQuote(token))].join(" ");
+  return { argv, copy_paste: copyPaste, subject, body };
+}
+
+function completionInstruction(ctx) {
+  const command = completionCommand(ctx);
+  return {
+    argv: [
+      "orchestration", "send", "--to", ctx.assignee, "--subject", `integration_gate ready: ${ctx.outcomeId}`,
+      "--from", ctx.coordinatorHandle, "--body", command.copy_paste,
+      "--type", "integration_gate_completion", "--task-id", ctx.taskId, "--dispatch-id", ctx.dispatchId,
+      "--report-path", ctx.reportPath, "--phase", "integration_gate", "--json",
+    ],
+    command,
+  };
+}
+
+function sendCompletionInstruction(ctx) {
+  const instruction = completionInstruction(ctx);
+  runJson(ctx, instruction.argv, "orca orchestration send integration completion instruction");
+  return instruction;
+}
+
+function prepareIntegrationGate(ctx) {
+  return withBoundedLock(ctx, () => {
+    const provenance = currentProvenance(ctx);
+    const gate = ensureCanonicalGateUnlocked(ctx, identityFor(ctx));
+    return {
+      ok: true,
+      state: gate.state,
+      gate: gate.gate,
+      adopted: gate.adopted,
+      task: provenance.task,
+      coordinator: provenance.coordinator,
+      question: identityFor(ctx).question,
+      report_path: ctx.reportPath,
+      completion_command: completionCommand(ctx),
+    };
+  });
+}
+
+function advanceIntegrationGate(ctx) {
+  return withBoundedLock(ctx, () => {
+    const provenance = currentProvenance(ctx);
+    const report = readReport(ctx.reportPath);
+    const identity = identityFor(ctx);
+    const first = inspectCanonicalGates(listGates(ctx), identity);
+    if (!first.ok) fail(first.reasonCode, first.message);
+    if (!report.present && first.state === "missing") {
+      return { ok: true, state: "awaiting_evidence", gate: null, report_path: ctx.reportPath };
+    }
+    if (!report.present && first.state === "pending") {
+      return { ok: true, state: "awaiting_evidence", gate: first.gate, report_path: ctx.reportPath };
+    }
+    const gate = first.state === "missing" ? ensureCanonicalGateUnlocked(ctx, identity) : first;
+    const resolution = gateResolution(gate.gate);
+    if (provenance.task.status === "completed" && resolution.state !== "passed") {
+      fail("INTEGRATION_WORKER_DONE_BEFORE_GATE", "integration task is already completed before the canonical gate resolved passed; refusing to reorder or repair lifecycle state");
+    }
+    if (resolution.state === "failed") fail("INTEGRATION_GATE_CONFLICT", "canonical integration gate resolved failed; no completion mutation is safe");
+    if (resolution.state === "conflict") fail("INTEGRATION_GATE_CONFLICT", "canonical integration gate has a noncanonical/conflicting resolution");
+    if (resolution.state === "pending") {
+      if (!report.present) return { ok: true, state: "awaiting_evidence", gate: gate.gate, report_path: ctx.reportPath };
+      const resolvePayload = runJson(ctx, ["orchestration", "gate-resolve", "--id", gateId(gate.gate), "--resolution", "passed", "--json"], "orca orchestration gate-resolve");
+      void resolvePayload;
+      const reread = inspectCanonicalGates(listGates(ctx), identityFor(ctx));
+      if (!reread.ok || reread.state !== "passed") fail(reread.reasonCode || "INTEGRATION_GATE_RESOLUTION_UNCONFIRMED", reread.message || "canonical gate resolution was not re-read as passed");
+      sendCompletionInstruction(ctx);
+      const afterInstruction = currentProvenance(ctx, { requireActive: true });
+      if (afterInstruction.task.status !== "completed") {
+        return {
+          ok: false,
+          state: "awaiting_worker_done",
+          reason_code: "INTEGRATION_WORKER_DONE_REQUIRED",
+          gate: reread.gate,
+          report_path: ctx.reportPath,
+          completion_command: completionCommand(ctx),
+        };
+      }
+      return { ok: true, state: "completed", gate: reread.gate, report_path: ctx.reportPath };
+    }
+    if (!report.present) fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "canonical gate is passed but its deterministic live evidence report is unavailable");
+    if (provenance.task.status !== "completed") fail("INTEGRATION_WORKER_DONE_NOT_OBSERVED", "canonical gate is already passed but task-list is still active; refusing to resend worker_done and risk duplicate completion");
+    return { ok: true, state: "completed", gate: gate.gate, report_path: ctx.reportPath };
+  });
+}
+
+module.exports = {
+  CANONICAL_OPTIONS,
+  IntegrationLifecycleError,
+  canonicalIntegrationQuestion,
+  canonicalGateKey,
+  gateResolution,
+  integrationReportPath,
+  inspectCanonicalGates,
+  completionCommand,
+  ensureCanonicalGate,
+  prepareIntegrationGate,
+  advanceIntegrationGate,
+};

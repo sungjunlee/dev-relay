@@ -16,6 +16,7 @@ const { ghIssueView, ghPrView } = require("./gh-reads");
 const { classifyOutcome, deriveProgramState, requiredEvidenceFor } = require("./status-classify");
 const { isTerminalManifestState, isEscalatedManifestState } = require("./manifest-parse");
 const { orderReport } = require("./status-report");
+const { canonicalIntegrationQuestion, inspectCanonicalGates } = require("./integration-lifecycle");
 
 // A17: two runtime ids attribute to the SAME runtime only when both are non-empty
 // strings AND identical. Used to prove every adopted read (task-list, gate-list, and
@@ -131,9 +132,25 @@ function gateBlocksTask(gate, orcaTaskId) {
   return Array.isArray(gate.blocks) && gate.blocks.includes(orcaTaskId);
 }
 
+function canonicalIntegrationAudit(task, runtime, programId, programSegment, strictIntegration) {
+  if (!strictIntegration || task.kind !== "integration_gate") return null;
+  if (!runtime.orcaTrusted) return { ok: false, reasonCode: "INTEGRATION_GATE_UNVERIFIED", state: "unknown", message: "canonical integration gate cannot be verified until the live Orca runtime is attributable" };
+  if (!isNonEmptyString(task.orca_task_id)) {
+    return { ok: false, reasonCode: "INTEGRATION_GATE_IDENTITY_UNAVAILABLE", state: "missing", message: "integration outcome has no verified Orca task id for canonical gate identity" };
+  }
+  const question = canonicalIntegrationQuestion(programId, task.outcome_id, programSegment);
+  const identity = { task_id: task.orca_task_id, question, options: ["passed", "failed"] };
+  const inspected = inspectCanonicalGates(runtime.gates.filter((gate) => gateBlocksTask(gate, task.orca_task_id)), identity);
+  if (!inspected.ok) return { ok: false, reasonCode: inspected.reasonCode, state: "conflict", message: inspected.message };
+  if (inspected.state === "missing") return { ok: false, reasonCode: "INTEGRATION_GATE_MISSING", state: "missing", message: `canonical integration gate for task ${task.orca_task_id} is missing` };
+  if (inspected.state === "pending") return { ok: false, reasonCode: "INTEGRATION_GATE_PENDING", state: "pending", message: `canonical integration gate ${inspected.gate.id} is pending; it must resolve passed before worker_done` };
+  if (inspected.state === "failed") return { ok: false, reasonCode: "INTEGRATION_GATE_FAILED", state: "failed", message: `canonical integration gate ${inspected.gate.id} resolved failed` };
+  return { ok: true, state: "passed", gate: inspected.gate, question, options: identity.options };
+}
+
 // Build the gathered fact bundle for one receipt task.
 function gatherOutcomeFacts(task, ctx) {
-  const { manifestByRunId, fleetManifestById, runtime, gh, orca, urlFor } = ctx;
+  const { manifestByRunId, fleetManifestById, runtime, gh, orca, urlFor, programId, programSegment, strictIntegration } = ctx;
   const mappedRunId = task.relay_ids && task.relay_ids.run ? task.relay_ids.run : null;
   let manifest = null;
   let mappedRunMissing = false;
@@ -174,6 +191,7 @@ function gatherOutcomeFacts(task, ctx) {
   const outcomeGates = runtime.orcaTrusted && task.orca_task_id
     ? runtime.gates.filter((gate) => gateBlocksTask(gate, task.orca_task_id))
     : [];
+  const integrationAudit = canonicalIntegrationAudit(task, runtime, programId, programSegment, strictIntegration);
 
   // relay_fleet outcomes map via relay_ids.fleet to a fleet manifest under the SEPARATE
   // FLEETS root (see receipt-and-status.md § A8) — NOT the runs root. Its `children`
@@ -253,6 +271,8 @@ function gatherOutcomeFacts(task, ctx) {
     dispatchRuntimeUnknown,
     gateBlocking,
     outcomeGates,
+    integrationAudit,
+    strictIntegration: Boolean(strictIntegration),
     fleetManifest,
     mappedFleetId,
     fleetChildren,
@@ -362,7 +382,7 @@ function summarizeLiveDispatch(runtime, facts) {
 // from the SEPARATE fleets root (#945 A8), keyed by fleet id. `liveDispatchSink` is an
 // OPTIONAL Map that, when provided (only `resume` passes it), is populated per outcome
 // with the reconciliation's live dispatch fact — it never changes the returned report.
-function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetManifests = [], orca, gh, urlFor, programSegment, liveDispatchSink }) {
+function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetManifests = [], orca, gh, urlFor, programSegment, liveDispatchSink, strictIntegration = false }) {
   const resolvedUrlFor = typeof urlFor === "function" ? urlFor : () => null;
   const manifestByRunId = new Map(manifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
   const fleetManifestById = new Map(fleetManifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
@@ -370,7 +390,7 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
   const { diagnostics: duplicateDiagnostics, duplicateOutcomeIds } = detectDuplicateMappings(receipt.tasks);
 
   const entries = receipt.tasks.map((task) => {
-    const facts = gatherOutcomeFacts(task, { manifestByRunId, fleetManifestById, runtime, gh, orca, urlFor: resolvedUrlFor });
+    const facts = gatherOutcomeFacts(task, { manifestByRunId, fleetManifestById, runtime, gh, orca, urlFor: resolvedUrlFor, programId, programSegment, strictIntegration });
     if (liveDispatchSink && typeof liveDispatchSink.set === "function") {
       liveDispatchSink.set(task.outcome_id, summarizeLiveDispatch(runtime, facts));
     }

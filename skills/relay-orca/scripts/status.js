@@ -282,6 +282,7 @@ function gatherReconciliation(opts) {
     // A26: the foreign-task marker embeds the SAME collision-resistant segment used for
     // the receipt path, injected as a pure function (lib/ stays subprocess-free).
     programSegment,
+    strictIntegration: opts.gates || opts.finalSummary || opts.strict,
   });
   return { report, receipt, receiptPath, repo };
 }

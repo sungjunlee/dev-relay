@@ -28,6 +28,10 @@ const STOP_PRIORITY = Object.freeze([
 
 const LIFECYCLE_DIAGNOSTICS = new Set(["MISSING_TASK", "MISSING_DISPATCH", "MISSING_TERMINAL", "RUNTIME_MISMATCH"]);
 
+function isLifecycleDiagnostic(code) {
+  return LIFECYCLE_DIAGNOSTICS.has(code) || (typeof code === "string" && code.startsWith("INTEGRATION_"));
+}
+
 function diagnosticCodes(report) {
   return new Set((report.diagnostics || []).map((diagnostic) => diagnostic.code));
 }
@@ -43,7 +47,7 @@ function detectStops({ report, gates, followUps, outcomesComplete }) {
   const present = new Set();
   if (codes.has("DUPLICATE_MAPPING") || (report.repair_candidates || []).length > 0) present.add("graph_ambiguous");
   if (outcomes.some((outcome) => outcome.state === "escalated" || outcome.state === "inconsistent")) present.add("relay_escalated");
-  if (report.runtime === "mismatch" || report.runtime === "foreign_state" || [...codes].some((code) => LIFECYCLE_DIAGNOSTICS.has(code))) {
+  if (report.runtime === "mismatch" || report.runtime === "foreign_state" || [...codes].some(isLifecycleDiagnostic)) {
     present.add("orca_lifecycle_failure");
   }
   if (gatesOfKindFailed(gates, "integration")) present.add("integration_gate_failed");
@@ -108,6 +112,9 @@ function boundedDecision(record) {
 
 function buildBlockingReasons({ report, gateBlocking, followUps, outcomesComplete }) {
   const reasons = [];
+  (report.diagnostics || [])
+    .filter((diagnostic) => isLifecycleDiagnostic(diagnostic.code))
+    .forEach((diagnostic) => reasons.push({ reason_code: diagnostic.code, message: boundedExcerpt(diagnostic.message) }));
   (gateBlocking || []).forEach((reason) => reasons.push({ reason_code: reason.reason_code, message: boundedExcerpt(reason.message) }));
   (report.outcomes || []).forEach((outcome) => {
     if (outcome.state !== "complete_with_evidence" && !["running", "stale_missing"].includes(outcome.state)) {

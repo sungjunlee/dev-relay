@@ -15,6 +15,7 @@
 // It NEVER invokes `orca orchestration reset` (D7) or any `orca worktree` subcommand
 // (D7), never deletes a task/worktree/branch/PR, and never force-closes a relay run.
 const fs = require("node:fs");
+const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const {
   CanonicalizationError,
@@ -43,6 +44,12 @@ const { routeFor, defaultEvidenceFor } = require("./lib/task-kinds");
 const { planResume } = require("./lib/resume-plan");
 const { orderReport } = require("./lib/resume-report");
 const { validateRelayRunMappings, applyRelayRunMappings } = require("./lib/resume-mapping");
+const {
+  IntegrationLifecycleError,
+  prepareIntegrationGate,
+  advanceIntegrationGate,
+  integrationReportPath,
+} = require("./lib/integration-lifecycle");
 
 const READ_TIMEOUT_MS = 15000;
 const READ_MAX_BUFFER = 4 * 1024 * 1024;
@@ -54,7 +61,7 @@ function usageError(message) {
   process.stderr.write(
     "usage: resume.js --program-id <id> [--json] [--operator-handle <handle> ...] " +
       "[--program-file <accepted-program.json>] [--map-relay-run <outcome_id>=<run_id> ...] " +
-      "[--orca-bin <path>] [--gh-bin <path>] [--repo-root <path>]\n",
+      "[--coordinator-handle <handle>] [--gate-evidence-dir <dir>] [--orca-bin <path>] [--gh-bin <path>] [--repo-root <path>]\n",
   );
   process.exit(USAGE_EXIT);
 }
@@ -78,6 +85,8 @@ function parseArgs(argv) {
     programId: null,
     json: false,
     operatorHandles: [],
+    coordinatorHandle: null,
+    gateEvidenceDir: null,
     orcaBin: null,
     ghBin: null,
     repoRoot: null,
@@ -99,6 +108,8 @@ function parseArgs(argv) {
     if (arg === "--program-id" || arg === "-p") opts.programId = requireValue(argv[(i += 1)], "--program-id");
     else if (arg === "--json") opts.json = true;
     else if (arg === "--operator-handle") opts.operatorHandles.push(requireValue(argv[(i += 1)], "--operator-handle"));
+    else if (arg === "--coordinator-handle") opts.coordinatorHandle = requireValue(argv[(i += 1)], "--coordinator-handle");
+    else if (arg === "--gate-evidence-dir") opts.gateEvidenceDir = requireValue(argv[(i += 1)], "--gate-evidence-dir");
     else if (arg === "--resolve-decision") opts.resolveDecision = requireValue(argv[(i += 1)], "--resolve-decision");
     else if (arg === "--resolution") opts.resolution = requireValue(argv[(i += 1)], "--resolution");
     else if (arg === "--resolver") opts.resolver = requireValue(argv[(i += 1)], "--resolver");
@@ -135,6 +146,7 @@ function runOrcaMutating(orcaBin, args, options = {}) {
   const argv = Array.isArray(args) ? args.map(String) : [];
   if (argv.includes("reset")) throw new Error("relay-orca resume must never invoke orca orchestration reset (D7)");
   if (argv.includes("worktree")) throw new Error("relay-orca resume must never invoke any orca worktree subcommand (D7)");
+  if (argv.includes("task-update")) throw new Error("relay-orca resume must never invoke orca orchestration task-update (#1019)");
   const hasInput = options.input !== undefined && options.input !== null;
   try {
     const stdout = execFileSync(orcaBin, argv, {
@@ -226,8 +238,27 @@ function reconcile({ receipt, opts, repo, receiptPath }) {
     urlFor: makeUrlResolver(repo.root),
     programSegment,
     liveDispatchSink: liveDispatch,
+    strictIntegration: true,
   });
   return { report, liveDispatch };
+}
+
+function makeIntegrationReportPathResolver(opts, receiptPath) {
+  const configured = opts.gateEvidenceDir || (process.env.RELAY_ORCA_GATE_EVIDENCE_ROOT || "").trim();
+  const root = path.resolve(configured || path.join(path.dirname(receiptPath), "integration-gates"));
+  return (outcomeId) => integrationReportPath(root, outcomeId);
+}
+
+function requireIntegrationOptions(receipt, opts, receiptPath) {
+  const hasIntegration = receipt.tasks.some((task) => task && task.kind === "integration_gate");
+  if (!hasIntegration) return () => null;
+  if (!opts.coordinatorHandle) {
+    throw new IntegrationLifecycleError(
+      "INTEGRATION_COORDINATOR_PROVENANCE_MISSING",
+      "integration_gate resume requires explicit --coordinator-handle; never infer coordinator identity from stale receipt/history",
+    );
+  }
+  return makeIntegrationReportPathResolver(opts, receiptPath);
 }
 
 // Persist the live receipt object atomically, preserving created_at and any stop record
@@ -377,7 +408,29 @@ function executeAction(action, ctx) {
   receiptTask.dispatch_id = show.dispatchId;
   receiptTask.assignee = show.assignee;
   ctx.persist();
-  const prompt = buildOperatorPrompt(syntheticTask(receiptTask), { id: ctx.receipt.program_id }, {}, programSegment);
+  let integrationGate = null;
+  if (receiptTask.kind === "integration_gate") {
+    try {
+      integrationGate = prepareIntegrationGate({
+        run: ctx.runOrca,
+        orcaBin: ctx.orcaBin,
+        programId: ctx.receipt.program_id,
+        outcomeId: receiptTask.outcome_id,
+        taskId: orcaTaskId,
+        dispatchId: show.dispatchId,
+        assignee: show.assignee,
+        coordinatorHandle: ctx.coordinatorHandle,
+        runtimeId: ctx.receipt.runtime_id,
+        reportPath: ctx.integrationReportPath(receiptTask.outcome_id),
+        programSegment,
+      });
+    } catch (error) {
+      if (!(error instanceof IntegrationLifecycleError)) throw error;
+      ctx.blocking.push(blockingReason(error.reasonCode, `integration lifecycle failed before operator prompt for outcome ${receiptTask.outcome_id}: ${error.message}`));
+      return;
+    }
+  }
+  const prompt = buildOperatorPrompt(syntheticTask(receiptTask), { id: ctx.receipt.program_id }, {}, programSegment, { integrationGate });
   const sent = sendPrompt(ctx.runOrca, ctx.orcaBin, { orcaTaskId, handle, prompt });
   if (!sent.ok) ctx.blocking.push(blockingReason("RESUME_REDISPATCH_FAILED", `operator prompt hand-off failed for outcome ${action.outcome_id}`));
 }
@@ -395,12 +448,42 @@ function executeActions({ receipt, actions, opts, orcaBin, persist }) {
     reportTerminals: [],
     blocking: [],
     persist,
+    coordinatorHandle: opts.coordinatorHandle,
+    integrationReportPath: opts.integrationReportPath,
     taskByOutcome: new Map(receipt.tasks.map((task) => [task.outcome_id, task])),
   };
   actions.forEach((action) => {
     if (action.exec) executeAction(action, ctx);
   });
   return { reportTerminals: ctx.reportTerminals, blocking: ctx.blocking };
+}
+
+function advanceIntegrationTasks({ receipt, opts, orcaBin, persist }) {
+  const blocking = [];
+  receipt.tasks.filter((task) => task && task.kind === "integration_gate").forEach((task) => {
+    try {
+      const result = advanceIntegrationGate({
+        run: runOrcaMutating,
+        orcaBin,
+        programId: receipt.program_id,
+        outcomeId: task.outcome_id,
+        taskId: task.orca_task_id,
+        dispatchId: task.dispatch_id,
+        assignee: task.assignee,
+        coordinatorHandle: opts.coordinatorHandle,
+        runtimeId: receipt.runtime_id,
+        reportPath: opts.integrationReportPath(task.outcome_id),
+        programSegment,
+      });
+      if (!result.ok) {
+        blocking.push(blockingReason(result.reason_code, `${result.reason_code}: operator must send the fresh explicit worker_done command exactly once after gate resolution`));
+      }
+    } catch (error) {
+      if (!(error instanceof IntegrationLifecycleError)) throw error;
+      blocking.push(blockingReason(error.reasonCode, error.message));
+    }
+  });
+  return blocking;
 }
 
 function reportActions(actions) {
@@ -458,6 +541,7 @@ function main() {
     if (receipt.repo && receipt.repo.slug !== repo.slug) {
       rejectReceipt("RECEIPT_REPO_MISMATCH", `receipt repo.slug ${receipt.repo.slug} does not match the current repo slug ${repo.slug}`);
     }
+    opts.integrationReportPath = requireIntegrationOptions(receipt, opts, receiptPath);
     const mappingValidation = validateAndRecordRelayRunMappings(receipt, receiptPath, repo, opts);
     if (!mappingValidation.ok) {
       printReport(mappingFailureReport(opts, receiptPath, receipt, mappingValidation), opts.json);
@@ -470,6 +554,13 @@ function main() {
     ({ report, liveDispatch } = reconcile({ receipt, opts, repo, receiptPath }));
   } catch (error) {
     if (error instanceof StatusError || error instanceof CanonicalizationError) failReceipt(error, opts.json);
+    if (error instanceof IntegrationLifecycleError) {
+      const body = { ok: false, reason_code: error.reasonCode, message: error.message, remediation: "Re-run with fresh coordinator provenance and never use task-update, reset, receipt edits, or manual dispatch replay." };
+      if (opts.json) process.stdout.write(`${JSON.stringify(body, null, 2)}\n`);
+      else process.stderr.write(`relay-orca resume rejected [${error.reasonCode}]: ${error.message}\n`);
+      process.exitCode = 63;
+      return;
+    }
     throw error;
   }
 
@@ -483,6 +574,7 @@ function main() {
     const executed = executeActions({ receipt, actions: plan.actions, opts, orcaBin: resolveOrca(opts), persist });
     terminalsCreated = executed.reportTerminals;
     blockingReasons = executed.blocking;
+    blockingReasons = blockingReasons.concat(advanceIntegrationTasks({ receipt, opts, orcaBin: resolveOrca(opts), persist }));
   }
 
   const body = buildReport({ opts, receiptPath, report, plan, terminalsCreated, blockingReasons, decisions: plan.decisions });

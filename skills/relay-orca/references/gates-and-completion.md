@@ -93,6 +93,56 @@ PROPOSED follow-up: `{ "id", "source_gate" | "source_outcome", "description",
 - A PROPOSED follow-up that targets accepted scope blocks completion; a follow-up recorded
   with `"status": "deferred"` is listed separately (a `deferred` section) and does not block.
 
+## Integration-gate lifecycle (#1019)
+
+`integration_gate` is a coordinator-owned terminal boundary. The read-only integration
+operator writes deterministic live evidence; it never creates or resolves an Orca gate.
+The coordinator must supply an explicit current `--coordinator-handle` and revalidate it
+from live runtime/dispatch reads on every run, resume, redispatch, and restart. A receipt,
+history entry, prior completion message, or stale assignee is never a source for coordinator
+identity.
+
+The physical gate id is not caller-selectable in the installed Orca CLI, so the stable
+logical identity is exactly:
+
+```text
+verified task id + "Integration evidence for relay-orca: <program-segment>/<outcome-id> passed?" + ["passed","failed"]
+```
+
+The coordinator holds a bounded per-program/outcome lock, performs `gate-list` first, and
+creates only when zero exact canonical gates exist. It always re-lists after `gate-create`,
+including a non-zero or lost response, then adopts exactly one physical id. One exact gate is
+adopted. Multiple exact gates, any other gate on the dedicated task, a missing physical id,
+or conflicting/noncanonical results fail closed with no further mutation. A generic
+`status=resolved` is not a passed integration result without the canonical resolution.
+
+The lifecycle ordering is terminal and one-way:
+
+```text
+verified dispatch
+  -> canonical gate create/adopt
+  -> operator writes <outcome-id>.json with {"passed":true,"evidence":"..."}
+  -> fresh runtime/coordinator/task/dispatch/assignee/report revalidation
+  -> coordinator resolves that physical gate to passed
+  -> fresh completion instruction
+  -> operator sends explicit worker_done exactly once
+  -> coordinator re-reads task-list and requires status=completed
+```
+
+The completion instruction contains a concrete command in the authoritative shape, with
+`--from <fresh-assignee>`, `--to <current-coordinator>`, `--type worker_done`, `--task-id`,
+`--dispatch-id`, `--report-path`, `--phase integration_gate`, and `--json`. It does not use
+raw `--payload` JSON. If gate identity, coordinator/dispatch/report provenance, completion
+delivery, or the terminal transition cannot be expressed by the installed contract, the
+coordinator reports the exact missing capability and stops. There is no `task-update`, reset,
+receipt-edit, or manual-dispatch-replay fallback.
+
+`status --final-summary` treats an active integration task, missing/pending/failed canonical
+gate, duplicate/noncanonical gate, generic resolved result, and conflicting result as
+`orca_lifecycle_failure`, even when durable evidence and exit-gate artifacts are green.
+Durable evidence remains completion authority; Orca task state and `worker_done` only prove
+that the lifecycle handoff reached its required terminal state.
+
 ### The `--record-proposals` boundary
 
 Proposals are written to the receipt (under `follow_ups`) ONLY by
