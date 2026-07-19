@@ -79,14 +79,14 @@ This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `re
 | current_phase | outcome | event | next_phase |
 |---------------|---------|-------|------------|
 | Phase 1 | pass | `phase1_pass` | Phase 2 |
-| Round 1, any phase | fail | `phase_fail` | One targeted re-dispatch |
+| Round 1, compact | fail | `repair_cycle_exhausted` | Escalated |
+| Round 1, standard/hardened | fail | `phase_fail` | One targeted re-dispatch |
 | Phase 2 | pass | `phase2_pass` | Converged |
 | Converged (internal) | ready-to-publish verdict emitted | `converged` | `publish_pending` |
 | Converged (post-publication) | ready verdict emitted | `converged` | `ready_to_merge` |
-| Round 2, default policy | fail | `repair_cycle_exhausted` | Escalated |
-| Explicit extended policy | repeated issue or cap hit | `escalated` | Escalated |
+| Configured cap | fail | `repair_cycle_exhausted` | Escalated |
 
-Two phases run in order. The default cycle is one independent review, one targeted re-dispatch when needed, and one review of the corrected result. Each round re-measures against the **original anchor**, not the previous round's state.
+Two phases run in order. Standard assurance uses one independent review, one targeted re-dispatch when needed, and one review of the corrected result. Compact escalates a substantive first-review failure; hardened has an explicit third-round budget for its pre-publication/repair/post-publication path. Each round re-measures against the **original anchor**, not the previous round's state.
 
 ### Phase 1: Spec Compliance
 
@@ -117,13 +117,13 @@ Before any re-dispatch, check:
 - **Scope:** Does the fix address a review issue, or is it scope creep?
 - **Regression:** Are previously passing rubric factors still passing?
 - **Churn:** Is the total diff growing without convergence?
-- **Stuck:** A substantive failure after the corrected-result review escalates under the default policy. Explicit extended policies retain repeated-issue and flip-flop detection.
+- **Stuck:** A substantive failure at the configured cap escalates. Repeated-issue and flip-flop detection remain active.
 
 ### Converge
 
 11. Both phases pass → produce a structured verdict with `verdict=pass` and `issues=[]`. Use `next_action=publish_pending` when the manifest state is `internal_review_pending`; use `next_action=ready_to_merge` when the manifest state is `review_pending`.
 
-**Default cap: 2 review rounds total.** This permits one targeted repair. A higher persisted `review.max_rounds` is an explicit extended policy, not the default.
+**Assurance caps:** compact `1`, standard `2`, hardened `3`. Higher experimental values must be explicitly persisted.
 
 ## Verdict + Audit Trail
 

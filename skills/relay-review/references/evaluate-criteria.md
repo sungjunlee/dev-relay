@@ -39,13 +39,13 @@ Note: The reviewer does NOT fix code directly — all fixes go through the execu
 
 **Re-dispatch rules:** file:line references, what to fix (not how), "do not change anything else".
 
-**Convergence model:** The default allows two review rounds: one independent review,
-one targeted re-dispatch when needed, then one review of the corrected result. A
-substantive failure in the second review escalates for owner judgment.
+**Convergence model:** Compact assurance allows one post-publication review. Standard
+allows two review rounds: one independent review, one targeted re-dispatch when
+needed, then one review of the corrected result. Hardened allows three rounds for
+the existing pre-publication, targeted-repair, and post-publication path.
 
-An explicit extended policy may persist a higher `review.max_rounds` for high-risk or
-experimental work. It retains repeated-issue, flip-flop, SHA, and audit gates; it does
-not become the default.
+An explicit extended policy for experimental work may persist a still-higher `review.max_rounds`. It
+retains repeated-issue, flip-flop, SHA, and audit gates.
 
 **After the configured cap:** Escalate — show the user the PR URL, list unresolved
 issues, and let them decide. More default rounds are not evidence of convergence.

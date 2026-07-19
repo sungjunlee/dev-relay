@@ -95,7 +95,7 @@ function printHelp() {
   console.log(`  add-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
   console.log(`  allow-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}] (deprecated; use add-route)`);
   console.log(`  deny-route <pattern> [--phase <csv> ${modeLabel("--phase")}] [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
-  console.log(`  preset add|remove|show <name> [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--advisory-profile <name> ${modeLabel("--advisory-profile")}] [--review-assurance <standard|hardened> ${modeLabel("--review-assurance")}] [--json ${modeLabel("--json")}]`);
+  console.log(`  preset add|remove|show <name> [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--advisory-profile <name> ${modeLabel("--advisory-profile")}] [--review-assurance <compact|standard|hardened> ${modeLabel("--review-assurance")}] [--json ${modeLabel("--json")}]`);
   console.log("");
   console.log("Supported default paths:");
   console.log("  dispatch.executor, review.reviewer, advisory_review.reviewer");

@@ -9,7 +9,10 @@ const {
   requireValidFleetId,
   requireValidRunId,
 } = require("./paths");
-const { normalizeReviewAssurance } = require("./review-assurance");
+const {
+  normalizeReviewAssurance,
+  reviewRoundLimitForAssurance,
+} = require("./review-assurance");
 
 const RELAY_VERSION = 2;
 const NOTES_TEMPLATE = "# Notes\n\n## Context\n\n## Review History\n";
@@ -185,6 +188,7 @@ function createManifestSkeleton({
 
   const createdAt = nowIso();
   const normalizedRunId = requireValidRunId(runId);
+  const normalizedReviewAssurance = normalizeReviewAssurance(reviewAssurance);
 
   const manifest = {
     relay_version: RELAY_VERSION,
@@ -217,7 +221,7 @@ function createManifestSkeleton({
       merge: mergePolicy,
       cleanup: cleanupPolicy,
       reviewer_write: reviewerWritePolicy,
-      review_assurance: normalizeReviewAssurance(reviewAssurance),
+      review_assurance: normalizedReviewAssurance,
     },
     anchor: {
       done_criteria_source: doneCriteriaSource || (issueNumber ? "issue" : "unknown"),
@@ -226,7 +230,7 @@ function createManifestSkeleton({
     },
     review: {
       rounds: 0,
-      max_rounds: 2,
+      max_rounds: reviewRoundLimitForAssurance(normalizedReviewAssurance),
       latest_verdict: "pending",
       repeated_issue_count: 0,
       last_reviewed_sha: null,

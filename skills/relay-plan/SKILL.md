@@ -115,7 +115,7 @@ Skip this step when the issue or relay-ready handoff already provides the final 
 
 Write the dispatch prompt and evaluation YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Pass the evaluation artifact through the compatibility-named `--rubric-file`; `references/iteration-protocol.md` defines the compact evidence-and-commit contract plus optional TDD flavor.
 
-Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, review assurance level, and the recommended `relay-dispatch` command. Use `--review-assurance hardened` only when task/rubric risk requires stronger verification; never derive it from executor or reviewer identity.
+Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, and the recommended `relay-dispatch` command. Derive compact, standard, or hardened assurance from authority, reversibility, blast radius, and trust boundaries via `references/risk-assurance.md`; never from executor or reviewer identity.
 
 If the recommended executor or reviewer route/model cannot resolve, point the operator to `relay-config` to register the route or set the default before dispatch.
 

@@ -3,12 +3,20 @@ const path = require("path");
 const { nowIso } = require("./paths");
 const { writeTextFileWithoutFollowingSymlinks } = require("./rubric");
 const { normalizeReviewAssurance } = require("./review-assurance");
+const { deriveRiskAssurance } = require("./risk-assurance");
 
 const GUIDANCE_METADATA_FILENAME = "guidance-metadata.json";
 const DISPATCH_PROMPT_FILENAME = "dispatch-prompt.md";
 
-const SCALAR_FIELDS = new Set(["size", "change_type", "execution_mode", "review_assurance", "planning_profile", "route_decision"]);
-const ARRAY_FIELDS = new Set(["domains", "risk_tags", "guidance_packs", "derivation_inputs"]);
+const SCALAR_FIELDS = new Set([
+  "size", "change_type", "execution_mode", "review_assurance",
+  "planning_profile", "route_decision", "authority", "reversibility",
+  "blast_radius",
+]);
+const ARRAY_FIELDS = new Set([
+  "domains", "risk_tags", "guidance_packs", "derivation_inputs",
+  "trust_boundaries",
+]);
 
 function stripYamlScalar(value) {
   const raw = String(value || "").trim();
@@ -97,6 +105,7 @@ function extractTaskProfileBlock(promptText) {
 }
 
 function buildTaskProfileSummary(profile) {
+  const riskDecision = deriveRiskAssurance(profile);
   const summary = {
     size: profile.size || null,
     change_type: profile.change_type || null,
@@ -116,6 +125,22 @@ function buildTaskProfileSummary(profile) {
   if (profile.review_assurance) {
     summary.review_assurance = normalizeReviewAssurance(profile.review_assurance);
   }
+  if (riskDecision) {
+    Object.assign(summary, {
+      authority: riskDecision.authority,
+      reversibility: riskDecision.reversibility,
+      blast_radius: riskDecision.blast_radius,
+      trust_boundaries: riskDecision.trust_boundaries,
+      risk_level: riskDecision.risk_level,
+      minimum_review_assurance: riskDecision.minimum_review_assurance,
+      review_assurance: riskDecision.review_assurance,
+      assurance_reasons: riskDecision.reasons,
+      max_review_rounds: riskDecision.max_review_rounds,
+      publish_policy: riskDecision.publish_policy,
+      review_timing: riskDecision.review_timing,
+      adversarial_review: riskDecision.adversarial_review,
+    });
+  }
   return summary;
 }
 
@@ -131,8 +156,8 @@ function extractReviewAssuranceFromPrompt(promptText) {
   const block = extractTaskProfileBlock(promptText);
   if (!block) return null;
   const profile = parseTaskProfileYaml(block);
-  if (!profile?.review_assurance) return null;
-  return normalizeReviewAssurance(profile.review_assurance);
+  if (!profile) return null;
+  return buildTaskProfileSummary(profile).review_assurance || null;
 }
 
 function extractGuidanceFromPrompt(promptText) {
@@ -152,7 +177,7 @@ function extractGuidanceFromPrompt(promptText) {
 function readExistingGuidance(manifest) {
   const existing = manifest?.advisory?.guidance;
   const guidancePacks = uniqueStrings(existing?.guidance_packs);
-  if (guidancePacks.length === 0) return null;
+  if (guidancePacks.length === 0 && !existing?.task_profile_summary) return null;
   return {
     guidance_packs: guidancePacks,
     task_profile_summary: existing.task_profile_summary || null,
@@ -166,17 +191,18 @@ function buildGuidanceMetadata({
   promptSource,
   rubricPath,
 }) {
+  const promptProfile = extractTaskProfileSummaryFromPrompt(promptText);
   const extracted = extractGuidanceFromPrompt(promptText);
   const selected = extracted || readExistingGuidance(manifest);
-  if (!selected) return null;
+  if (!selected && !promptProfile) return null;
 
   return {
     version: 1,
     captured_at: nowIso(),
-    source: selected.source,
+    source: promptProfile ? "prompt" : selected.source,
     prompt_source: promptSource || null,
-    guidance_packs: selected.guidance_packs,
-    task_profile_summary: selected.task_profile_summary,
+    guidance_packs: selected?.guidance_packs || [],
+    task_profile_summary: promptProfile || selected.task_profile_summary,
     dispatch_prompt_path: DISPATCH_PROMPT_FILENAME,
     rubric_path: rubricPath || null,
   };

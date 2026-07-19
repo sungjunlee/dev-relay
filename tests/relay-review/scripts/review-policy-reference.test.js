@@ -23,9 +23,9 @@ test("review guidance defines reviewer-only scoring and the short default repair
   assert.match(skill, /only persisted Earned Rubric factors/i);
   assert.doesNotMatch(skill, /Safety cap: 20 rounds/i);
   assert.doesNotMatch(skill, /executor\/reviewer divergence/i);
-  assert.match(criteria, /default.*two review rounds/i);
+  assert.match(criteria, /standard\s+allows two review rounds/i);
   assert.match(criteria, /explicit extended policy/i);
-  assert.match(runnerNotes, /defaults to `2`/i);
-  assert.match(architecture, /max_rounds: 2.*explicit higher values/i);
-  assert.match(lifecycleDesign, /max_rounds: 2/i);
+  assert.match(runnerNotes, /compact defaults to `1`.*standard to `2`.*hardened to `3`/i);
+  assert.match(architecture, /max_rounds: 2.*compact=1.*hardened=3/i);
+  assert.match(lifecycleDesign, /max_rounds: 2.*compact=1.*hardened=3/i);
 });

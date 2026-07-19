@@ -308,24 +308,24 @@ test("preset subcommands pass through wrapper shorthand", () => {
   const add = runConfig([
     "preset",
     "add",
-    "hardened",
+    "compact",
     "--review-assurance",
-    "hardened",
+    "compact",
     "--json",
   ], { relayHome });
   assert.equal(add.status, 0, add.combined);
   assert.deepEqual(readRoutes(relayHome), {
     version: 2,
     presets: {
-      hardened: { review_assurance: "hardened" },
+      compact: { review_assurance: "compact" },
     },
   });
 
-  const show = runConfig(["preset", "show", "hardened", "--json"], { relayHome });
+  const show = runConfig(["preset", "show", "compact", "--json"], { relayHome });
   assert.equal(show.status, 0, show.combined);
-  assert.equal(parseJson(show).preset.review_assurance, "hardened");
+  assert.equal(parseJson(show).preset.review_assurance, "compact");
 
-  const remove = runConfig(["preset", "remove", "hardened", "--json"], { relayHome });
+  const remove = runConfig(["preset", "remove", "compact", "--json"], { relayHome });
   assert.equal(remove.status, 0, remove.combined);
   assert.equal(Object.prototype.hasOwnProperty.call(readRoutes(relayHome), "presets"), false);
 });

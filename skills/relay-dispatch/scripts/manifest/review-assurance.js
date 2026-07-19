@@ -1,4 +1,5 @@
 const REVIEW_ASSURANCE = Object.freeze({
+  COMPACT: "compact",
   STANDARD: "standard",
   HARDENED: "hardened",
 });
@@ -19,6 +20,17 @@ function getReviewAssurance(data) {
   return normalizeReviewAssurance(data?.policy?.review_assurance);
 }
 
+function reviewAssuranceRank(value) {
+  return REVIEW_ASSURANCE_LEVELS.indexOf(normalizeReviewAssurance(value));
+}
+
+function reviewRoundLimitForAssurance(value) {
+  const assurance = normalizeReviewAssurance(value);
+  if (assurance === REVIEW_ASSURANCE.COMPACT) return 1;
+  if (assurance === REVIEW_ASSURANCE.HARDENED) return 3;
+  return 2;
+}
+
 function isHardenedReviewAssurance(data) {
   return getReviewAssurance(data) === REVIEW_ASSURANCE.HARDENED;
 }
@@ -30,4 +42,6 @@ module.exports = {
   getReviewAssurance,
   isHardenedReviewAssurance,
   normalizeReviewAssurance,
+  reviewAssuranceRank,
+  reviewRoundLimitForAssurance,
 };

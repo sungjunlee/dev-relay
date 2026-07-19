@@ -24,3 +24,24 @@ test("an explicit extended policy preserves additional review rounds", () => {
   assert.equal(shouldEscalateRepairCycle({ data, round: 2, blocking: true }), false);
   assert.equal(shouldEscalateRepairCycle({ data, round: 5, blocking: true }), true);
 });
+
+test("assurance-derived caps bound compact and hardened repair depth", () => {
+  const compact = { review: { max_rounds: 1 } };
+  const hardened = { review: { max_rounds: 3 } };
+
+  assert.equal(shouldEscalateRepairCycle({
+    data: compact,
+    round: 1,
+    blocking: true,
+  }), true);
+  assert.equal(shouldEscalateRepairCycle({
+    data: hardened,
+    round: 2,
+    blocking: true,
+  }), false);
+  assert.equal(shouldEscalateRepairCycle({
+    data: hardened,
+    round: 3,
+    blocking: true,
+  }), true);
+});

@@ -99,7 +99,7 @@ const FLAGS = [
   { flag: "--require-checks-green", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Require a same-HEAD pending-checks marker plus all-green live checks for same-HEAD recovery; no value is consumed." },
   { flag: "--require-pr-body-change", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Require audited PR body evidence for same-HEAD recovery; no value is consumed." },
   { flag: "--review-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied verdict path; keep the literal argv token." },
-  { flag: "--review-assurance", kind: VALUE, mode: MODE_PARSED, valueName: "<level>", allowedValues: ["standard", "hardened"], rationale: "Run-level review assurance policy; closed selector independent of agent identity." },
+  { flag: "--review-assurance", kind: VALUE, mode: MODE_PARSED, valueName: "<level>", allowedValues: ["compact", "standard", "hardened"], rationale: "Run-level review assurance policy; closed selector independent of agent identity." },
   { flag: "--review", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
   { flag: "--advisory-review", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
   { flag: "--route-intent-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied run route intent JSON path; keep the literal argv token." },
