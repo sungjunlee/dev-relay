@@ -1,7 +1,7 @@
 ---
 id: RELAY-1037
 title: 'backlog: migrate live rubric context to Outcome/Verification/Earned Rubric semantics'
-status: To Do
+status: Done
 labels:
   - documentation
   - enhancement
@@ -23,13 +23,13 @@ Migrate only live operator/backlog context to the current three-channel model. P
 ## Acceptance criteria
 
 <!-- AC:BEGIN -->
-- [ ] `backlog/sprints/_context.md` states that Outcome Contract and Verification are the mandatory execution contract.
-- [ ] The context states that Earned Rubric is optional, observation-derived, and scored only by the independent reviewer.
-- [ ] The context no longer describes executor self-scoring, mandatory rubric factor counts, Quality Card output, or test/build success as quality value.
-- [ ] Local task mirrors for closed GitHub issues #138–#146 are moved from `backlog/tasks/` to `backlog/completed/` with their historical content preserved.
-- [ ] Any live cross-reference to removed `quality-card.js` or mandatory `anchor.rubric_path` semantics is corrected; archived design/history files are not rewritten merely to match current policy.
-- [ ] Exactly one active sprint remains and its plan/progress are not silently broadened.
-- [ ] Backlog status/objective/component checks and skill reachability/lint checks remain green.
+- [x] `backlog/sprints/_context.md` states that Outcome Contract and Verification are the mandatory execution contract.
+- [x] The context states that Earned Rubric is optional, observation-derived, and scored only by the independent reviewer.
+- [x] The context no longer describes executor self-scoring, mandatory rubric factor counts, Quality Card output, or test/build success as quality value.
+- [x] Local task mirrors for closed GitHub issues #138–#146 are moved from `backlog/tasks/` to `backlog/completed/` with their historical content preserved.
+- [x] Any live cross-reference to removed `quality-card.js` or mandatory `anchor.rubric_path` semantics is corrected; archived design/history files are not rewritten merely to match current policy.
+- [x] Exactly one active sprint remains and its plan/progress are not silently broadened.
+- [x] Backlog status/objective/component checks and skill reachability/lint checks remain green.
 <!-- AC:END -->
 
 ## Verification
