@@ -13,7 +13,7 @@ created_date: '2026-07-05'
 ## Description
 ## Problem
 
-The 2026-07-05 packaging audit found ~2,400 lines of dead/misplaced scripts under packaged `skills/` (test-only helpers, archived measurement tools, tested-but-unwired helpers). The existing guard, `docs/script-inventory-and-cleanup.md`, is a manually maintained table and has already drifted: it misses ~20 scripts added since it was written (`advisory-timing.js`, `relay-routing.js`, `relay-policy*.js`, `runtime-dirt.js`, `worktree-health.js`, `executor-model-config.js`, `quality-card.js`, `task-profile.js`, `match-template.js`, `tdd-suggestion.js`, the `review-runner/*` split, …) and still lists a deleted script (`resolve-issue-number.sh`). Manual inventories don't survive this repo's PR cadence; a lint test will.
+The 2026-07-05 packaging audit found ~2,400 lines of dead/misplaced scripts under packaged `skills/` (test-only helpers, archived measurement tools, tested-but-unwired helpers). The existing guard, `docs/script-inventory-and-cleanup.md`, is a manually maintained table and has already drifted: it misses ~20 scripts added since it was written (`advisory-timing.js`, `relay-routing.js`, `relay-policy*.js`, `runtime-dirt.js`, `worktree-health.js`, `executor-model-config.js`, the since-removed `quality-card.js`, `task-profile.js`, `match-template.js`, `tdd-suggestion.js`, the `review-runner/*` split, …) and still lists a deleted script (`resolve-issue-number.sh`). Manual inventories don't survive this repo's PR cadence; a lint test will.
 
 Depends on the three cleanup issues from the same audit landing first (the lint would correctly fail on today's tree).
 
@@ -42,4 +42,3 @@ Design notes:
 - AC6: `docs/script-inventory-and-cleanup.md` carries the superseded-by banner; no other docs edited.
 
 Part of the skills-packaging cleanup audit (2026-07-05).
-
