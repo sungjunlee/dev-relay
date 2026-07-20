@@ -1,7 +1,7 @@
 ---
 id: RELAY-1040
 title: 'relay-merge: hardened gate misclassifies advisory metadata and rejects adversarial profiles'
-status: To Do
+status: Done
 labels:
   - bug
   - workflow
@@ -39,13 +39,13 @@ infer trusted artifacts from a broad filename glob.
 ## Acceptance Criteria
 
 <!-- AC:BEGIN -->
-- [ ] For the latest reviewed round and HEAD, hardened merge validation selects advisory artifacts from matching durable `advisory_review` success events rather than `review-round-*-advisory-*.json` filename discovery.
-- [ ] `request`, `result`, `decision`, and other orchestration metadata JSON files are ignored unless they are explicitly bound as the successful advisory artifact.
-- [ ] The artifact payload profile must equal the event profile; valid `blindspot` and `adversarial` profiles are accepted without a hard-coded profile override.
-- [ ] The artifact must be a non-symlink regular file contained in the run directory and must match the event's path, round, reviewed HEAD, SHA-256 hash, success status, and zero required findings.
-- [ ] Multiple expected gating lanes remain fail-closed: one successful lane cannot mask a missing, failed, stale, or unbound required lane.
-- [ ] Regression coverage reproduces the #981 artifact set with `*-request.json`, `*-result.json`, `*-decision.json`, and a valid adversarial artifact, and proves the corrected gate passes it.
-- [ ] Existing forged, tampered, stale-HEAD, symlink, required-finding, and missing-provenance cases remain blocked.
+- [x] For the latest reviewed round and HEAD, hardened merge validation selects advisory artifacts from matching durable `advisory_review` success events rather than `review-round-*-advisory-*.json` filename discovery.
+- [x] `request`, `result`, `decision`, and other orchestration metadata JSON files are ignored unless they are explicitly bound as the successful advisory artifact.
+- [x] The artifact payload profile must equal the event profile; valid `blindspot` and `adversarial` profiles are accepted without a hard-coded profile override.
+- [x] The artifact must be a non-symlink regular file contained in the run directory and must match the event's path, round, reviewed HEAD, SHA-256 hash, success status, and zero required findings.
+- [x] Multiple expected gating lanes remain fail-closed: one successful lane cannot mask a missing, failed, stale, or unbound required lane.
+- [x] Regression coverage reproduces the #981 artifact set with `*-request.json`, `*-result.json`, `*-decision.json`, and a valid adversarial artifact, and proves the corrected gate passes it.
+- [x] Existing forged, tampered, stale-HEAD, symlink, required-finding, and missing-provenance cases remain blocked.
 <!-- AC:END -->
 
 ## Verification

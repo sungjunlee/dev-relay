@@ -1,6 +1,6 @@
 ---
 milestone: 2026-07 Assurance and Calibration Integrity
-status: active
+status: completed
 started: 2026-07-20
 due: 2026-07-31
 objectives: []
@@ -21,7 +21,7 @@ Make decision-changing advisory evidence and risk-path calibration trustworthy e
 
 ### Batch 1 — restore the hardened merge path
 
-- [ ] #1040 make successful advisory events the hardened gate's provenance root — S/M, ~1 relay run; must accept event-matched `blindspot` and `adversarial` artifacts while preserving all forged/tampered/stale fail-closed cases
+- [x] #1040 make successful advisory events the hardened gate's provenance root — merged in PR #1045 and closed on 2026-07-21 → PR #1045 (merged)
 
 ### Batch 2 — make risk-path calibration comparable
 
@@ -29,7 +29,7 @@ Make decision-changing advisory evidence and risk-path calibration trustworthy e
 
 ### Batch 3 — clean live execution context
 
-- [ ] #1037 migrate live backlog context to Outcome/Verification/Earned Rubric semantics — S, ~1 compact relay run; run after #1035 so the live context describes the calibrated model without reviving superseded mandatory-rubric assumptions
+- [x] #1037 migrate live backlog context to Outcome/Verification/Earned Rubric semantics — merged in PR #1044 and closed on 2026-07-20 → PR #1044 (merged)
 
 ## Running Context
 
@@ -44,6 +44,9 @@ Make decision-changing advisory evidence and risk-path calibration trustworthy e
 
 ## Progress
 
+- 2026-07-21: #1040 dispatched → PR #1045 → reviewed (LGTM, round 11 after four post-publication trust-boundary deepenings) → merged. Durable advisory success events now bind the actual round-resolved lane snapshot, artifact profile/hash/path, reviewed HEAD, and all configured hardened lanes.
+- 2026-07-20: #1037 dispatched → PR #1044 → reviewed (LGTM, round 3) → merged. Live context now uses Outcome Contract + Verification as the mandatory contract and optional reviewer-only Earned Rubric semantics.
 - 2026-07-20: Activated as the single active sprint after the Route Config closeout. Next actionable item is #1040; #1039 and #1035 are already complete.
 - 2026-07-20: External progress reconciled: PR #1038 merged and #1039 closed; PR #1042 merged and #1035 closed. Remaining sprint implementation is #1040; #1037 is implemented and locally verified in its relay worktree, awaiting review/publication.
 - 2026-07-19 planning state: Planned from live GitHub and `origin/main` `edcff70`. Created #1040 with the preserved #981 reproduction contract, created milestone #15, assigned #1039/#1040/#1035/#1037, and kept #954–#957 on their existing multi-track milestone. At that time the sprint remained `planned` pending normal closure of the route-config sprint; it was activated the following day.
+- 2026-07-21: Sprint closed. 4/4 tasks completed.
