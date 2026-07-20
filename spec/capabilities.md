@@ -49,7 +49,7 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 
 ## Capability: planning
 
-**Goal:** A shaped task becomes frozen Done Criteria, a scored rubric, and a dispatch prompt that executor and reviewer can both use without relying on planner memory.
+**Goal:** A shaped task becomes a frozen Outcome Contract in Done Criteria, a Verification plan, an optional Earned Rubric, and a dispatch prompt that executor and reviewer can both use without relying on planner memory.
 
 **In-scope:**
 - `skills/relay-plan/` Done Criteria recovery, ambiguity audit, rubric authoring, and dispatch prompt handoff.
@@ -64,7 +64,8 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 ### Expected Behaviors
 - When planning changes or authors Done Criteria, the same `RUN_ID` is used for persistence and for the downstream `relay-dispatch --run-id` handoff.
 - A dispatch handoff with planner-authored Done Criteria includes `--done-criteria-file <path>` so downstream review uses the frozen file, not re-derived issue prose.
-- Every non-trivial rubric has at least one required factor, concrete criteria, and at least one prerequisite command target that can be run by the executor.
+- Every plan defines the mandatory Outcome Contract and Verification channels: Done Criteria freeze required results and explicit non-goals, while executable checks and observable evidence verify them without changing their scope.
+- Earned Rubric is optional and may have zero factors. Factors are derived only after observing a meaningful quality gradient among contract-satisfying results, and only the independent reviewer scores them.
 
 ### Hard Constraints
 - Never call `relay-dispatch` from `relay-plan`; planning produces handoff artifacts only.

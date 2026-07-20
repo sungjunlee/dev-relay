@@ -11,12 +11,14 @@ When adopting external engineering patterns (e.g., Simon Willison's Agentic Engi
 
 **Implication**: Patterns that target "agent learns over time" have low leverage here. Patterns that tighten the contract between planner/dispatcher/reviewer/report-consumers have high leverage.
 
-**Concrete rule**: Before adding new signal sources, verify existing artifacts actually flow end-to-end. See `docs/agentic-patterns-adoption.md` for the full reframe.
+**Concrete rule**: Before adding new signal sources, verify existing artifacts actually flow end-to-end. See `skills/relay-plan/references/evaluation-channels.md` for the current Outcome Contract, Verification, and Earned Rubric model.
 
 ## Conventions
 
-### Rubric is load-bearing
-The rubric is the shared contract between planner, executor, and reviewer. Any feature that depends on rubric content must verify the rubric actually reaches the reviewer (via `anchor.rubric_path`). Otherwise you're building enforcement layers on a missing artifact.
+### Outcome Contract and Verification are mandatory
+The Outcome Contract is the pass/fail authority: it freezes required results and explicit non-goals in the Done Criteria. Verification is the required evidence channel: executable checks and observable evidence show whether the contract was met but cannot add or relax requirements. Routine test, build, type-check, and lint success belongs to Verification and is not quality value.
+
+Earned Rubric is optional and may have zero factors. Derive a factor only after observing a meaningful quality gradient among contract-satisfying results; do not invent factors to meet a count. Only the independent reviewer scores declared Earned Rubric factors. The executor supplies implementation and Verification evidence, never self-scores quality.
 
 ### No autonomy scoring
 Probe signals (test frameworks, type strictness, linters) are exposed as data, not inferred behavior. Heuristics like "strict tsconfig = high autonomy" are bad proxies. Use deterministic templates keyed to actual executable checks, not LLM-judged autonomy levels.
