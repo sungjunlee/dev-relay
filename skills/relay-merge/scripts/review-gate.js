@@ -208,13 +208,6 @@ function buildRubricGateFailure(prNumber, rubricAnchor) {
   }
 }
 
-function findAdvisoryArtifacts(runDir, round) {
-  if (!runDir || !round || !fs.existsSync(runDir)) return [];
-  return fs.readdirSync(runDir)
-    .filter((entry) => entry.startsWith(`review-round-${round}-advisory-`) && entry.endsWith(".json"))
-    .map((entry) => path.join(runDir, entry));
-}
-
 function readRunDirEvents(runDir) {
   const eventsPath = path.join(runDir, "events.jsonl");
   try {
@@ -238,17 +231,30 @@ function samePath(left, right) {
   return path.resolve(left) === path.resolve(right);
 }
 
-function findSuccessfulAdvisoryEvent(events, { artifactHash, artifactPath, reviewedHead, round }) {
-  if (!artifactHash) return null;
-  return events.find((event) => (
-    event.event === "advisory_review" &&
-    event.status === "success" &&
-    Number(event.round || 0) === Number(round || 0) &&
-    event.head_sha === reviewedHead &&
-    Number(event.required_count || 0) === 0 &&
-    samePath(event.artifact_path, artifactPath) &&
-    event.advisory_artifact_hash === artifactHash
-  ));
+function advisoryLaneKey(event) {
+  const reviewer = typeof event?.reviewer === "string" ? event.reviewer.trim() : "";
+  const laneIndex = Number.isInteger(event?.lane_index) && event.lane_index > 0
+    ? event.lane_index
+    : "legacy";
+  return `${reviewer}\u0000${laneIndex}`;
+}
+
+function findLatestRequiredAdvisoryEvents(events, round) {
+  const latestByLane = new Map();
+  const gatingLanes = new Set();
+  for (const event of events) {
+    if (event.event !== "advisory_review" || Number(event.round) !== round) continue;
+    const laneKey = advisoryLaneKey(event);
+    latestByLane.set(laneKey, event);
+    if (event.gating === true) gatingLanes.add(laneKey);
+  }
+  if (gatingLanes.size > 0) {
+    return [...gatingLanes].map((laneKey) => latestByLane.get(laneKey));
+  }
+  // Events written before lane gating was persisted represent a single
+  // implicit hardened lane. Preserve that contract by validating every latest
+  // legacy lane when no explicit gating lane exists.
+  return [...latestByLane.values()];
 }
 
 function hasTrustedExecutionEvidenceEvent(events, { runDir, reviewedHead }) {
@@ -277,12 +283,37 @@ function hasTrustedExecutionEvidenceEvent(events, { runDir, reviewedHead }) {
   ));
 }
 
-function readHardenedAdvisoryArtifact(artifactPath) {
-  const stat = fs.lstatSync(artifactPath);
+function isPathContained(parentPath, candidatePath) {
+  const relative = path.relative(parentPath, candidatePath);
+  return relative === "" || (
+    !relative.startsWith(`..${path.sep}`) &&
+    relative !== ".." &&
+    !path.isAbsolute(relative)
+  );
+}
+
+function readHardenedAdvisoryArtifact(runDir, artifactPath, profile) {
+  if (!runDir || !artifactPath) {
+    throw new Error("advisory event must bind an artifact path inside the run directory");
+  }
+  const resolvedRunDir = path.resolve(runDir);
+  const resolvedArtifactPath = path.resolve(artifactPath);
+  if (!isPathContained(resolvedRunDir, resolvedArtifactPath)) {
+    throw new Error("advisory artifact path must be contained in the run directory");
+  }
+  const stat = fs.lstatSync(resolvedArtifactPath);
   if (!stat.isFile() || stat.isSymbolicLink()) {
     throw new Error("advisory artifact must be a regular file inside the run directory");
   }
-  return parseAdvisoryReview(fs.readFileSync(artifactPath, "utf-8"), { profile: "blindspot" });
+  const realRunDir = fs.realpathSync(resolvedRunDir);
+  const realArtifactPath = fs.realpathSync(resolvedArtifactPath);
+  if (!isPathContained(realRunDir, realArtifactPath)) {
+    throw new Error("advisory artifact must not resolve outside the run directory");
+  }
+  return {
+    advisory: parseAdvisoryReview(fs.readFileSync(resolvedArtifactPath, "utf-8"), { profile }),
+    artifactPath: resolvedArtifactPath,
+  };
 }
 
 function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
@@ -300,18 +331,75 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       reason: `events.jsonl is not readable hardened provenance: ${error.message}`,
     };
   }
-  const advisoryArtifacts = findAdvisoryArtifacts(runDir, round);
-  if (advisoryArtifacts.length === 0) {
+  const advisoryEvents = findLatestRequiredAdvisoryEvents(events, round);
+  if (advisoryEvents.length === 0) {
     return {
       status: "missing_hardened_advisory",
       pr: prNumber,
       readyToMerge: false,
-      reason: "policy.review_assurance=hardened requires a successful advisory review artifact for the latest round.",
+      reason: "policy.review_assurance=hardened requires a durable advisory_review event for the latest round.",
     };
   }
-  for (const artifactPath of advisoryArtifacts) {
+  for (const event of advisoryEvents) {
+    const reviewer = typeof event?.reviewer === "string" && event.reviewer.trim()
+      ? event.reviewer.trim()
+      : "unknown reviewer";
+    const lane = Number.isInteger(event?.lane_index) && event.lane_index > 0
+      ? ` lane ${event.lane_index}`
+      : "";
+    const eventLabel = `${reviewer}${lane}`;
+    if (event.gating === true && (reviewer === "unknown reviewer" || !lane)) {
+      return {
+        status: "invalid_hardened_advisory",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: `Gating advisory event ${eventLabel} does not have a stable reviewer and lane identity.`,
+      };
+    }
+    if (event.status !== "success" || event.head_sha !== reviewedHead || Number(event.round) !== round) {
+      return {
+        status: "invalid_hardened_advisory",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: `Latest advisory event for ${eventLabel} is not a successful review of round ${round} at ${reviewedHead}.`,
+      };
+    }
+    if (event.required_count !== 0) {
+      if (Number.isInteger(event.required_count) && event.required_count > 0) {
+        return {
+          status: "hardened_advisory_required_findings",
+          pr: prNumber,
+          readyToMerge: false,
+          reason: `Latest advisory event for ${eventLabel} reports ${event.required_count} required finding(s).`,
+        };
+      }
+      return {
+        status: "invalid_hardened_advisory",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: `Latest advisory event for ${eventLabel} does not record a zero required finding count.`,
+      };
+    }
+    if (typeof event.profile !== "string" || !event.profile.trim()) {
+      return {
+        status: "invalid_hardened_advisory",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: `Latest advisory event for ${eventLabel} does not bind an advisory profile.`,
+      };
+    }
     try {
-      const advisory = readHardenedAdvisoryArtifact(artifactPath);
+      const { advisory, artifactPath } = readHardenedAdvisoryArtifact(
+        runDir,
+        event.artifact_path,
+        event.profile,
+      );
+      if (!samePath(event.artifact_path, artifactPath)) {
+        throw new Error("advisory artifact path does not match its advisory_review event");
+      }
+      if (advisory.profile !== event.profile) {
+        throw new Error(`advisory artifact profile '${advisory.profile}' does not match event profile '${event.profile}'`);
+      }
       if (advisory.required_findings.length > 0) {
         return {
           status: "hardened_advisory_required_findings",
@@ -321,12 +409,12 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
         };
       }
       const artifactHash = hashFileSha256(artifactPath);
-      if (!findSuccessfulAdvisoryEvent(events, { artifactHash, artifactPath, reviewedHead, round })) {
+      if (!artifactHash || event.advisory_artifact_hash !== artifactHash) {
         return {
           status: "invalid_hardened_advisory",
           pr: prNumber,
           readyToMerge: false,
-          reason: `${path.basename(artifactPath)} is not bound to a successful advisory_review event and artifact hash for the reviewed HEAD.`,
+          reason: `${path.basename(artifactPath)} does not match the SHA-256 hash bound by its advisory_review event.`,
         };
       }
     } catch (error) {
@@ -334,7 +422,7 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
         status: "invalid_hardened_advisory",
         pr: prNumber,
         readyToMerge: false,
-        reason: `${path.basename(artifactPath)} is not a valid advisory artifact: ${error.message}`,
+        reason: `Advisory artifact for ${eventLabel} is not valid bound evidence: ${error.message}`,
       };
     }
   }
