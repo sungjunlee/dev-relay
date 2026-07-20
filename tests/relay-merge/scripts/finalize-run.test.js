@@ -1298,6 +1298,10 @@ test("finalize-run merges and cleans a ready run", () => {
 test("finalize-run appends, commits, and pushes capability learnings", () => {
   const { repoRoot, manifestPath, branch, headSha, runId } = setupRepo();
   seedCapabilitiesForLearning(repoRoot);
+  const branchBefore = execFileSync("git", ["-C", repoRoot, "symbolic-ref", "--short", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
   const logPath = path.join(repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
     comments: [
@@ -1331,9 +1335,17 @@ test("finalize-run appends, commits, and pushes capability learnings", () => {
   assert.equal(result.learnings.status, "appended");
   assert.equal(result.learnings.durability.status, "pushed");
   assert.match(result.learnings.entry, new RegExp(`run #${runId}`));
-  const lastSubject = execFileSync("git", ["-C", repoRoot, "log", "-1", "--pretty=%s"], { encoding: "utf-8", stdio: "pipe" }).trim();
-  assert.equal(lastSubject, "Record relay learning for PR #123");
-  const remoteMainSubject = execFileSync("git", ["-C", repoRoot, "log", "-1", "--pretty=%s", "origin/main"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  assert.equal(result.learnings.canonicalUntouched, true);
+  const branchAfter = execFileSync("git", ["-C", repoRoot, "symbolic-ref", "--short", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  assert.equal(branchAfter, branchBefore);
+  execFileSync("git", ["-C", repoRoot, "fetch", "origin", "main"], { encoding: "utf-8", stdio: "pipe" });
+  const remoteMainSubject = execFileSync("git", ["-C", repoRoot, "log", "-1", "--pretty=%s", "origin/main"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
   assert.equal(remoteMainSubject, "Record relay learning for PR #123");
 
   const manifest = readManifest(manifestPath).data;
@@ -1344,7 +1356,7 @@ test("finalize-run records manual action when learning push has no remote", () =
   const { repoRoot, branch, headSha } = setupRepo();
   seedCapabilitiesForLearning(repoRoot);
   // Keep origin available for the mandatory merge-freshness fetch, but make
-  // the checked-out base branch's configured learning destination absent.
+  // the base branch's configured learning destination absent.
   execFileSync("git", ["config", "branch.main.remote", "missing"], {
     cwd: repoRoot,
     encoding: "utf-8",
@@ -1383,15 +1395,23 @@ test("finalize-run records manual action when learning push has no remote", () =
   assert.equal(result.learnings.status, "appended");
   assert.equal(result.learnings.durability.status, "manual_action_required");
   assert.equal(result.learnings.durability.reason, "remote_missing");
-  const lastSubject = execFileSync("git", ["-C", repoRoot, "log", "-1", "--pretty=%s"], { encoding: "utf-8", stdio: "pipe" }).trim();
-  assert.equal(lastSubject, "Record relay learning for PR #123");
+  assert.equal(result.learnings.canonicalUntouched, true);
+  // Isolated transaction must not leave a learning commit on the canonical checkout.
+  const lastSubject = execFileSync("git", ["-C", repoRoot, "log", "-1", "--pretty=%s"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  assert.notEqual(lastSubject, "Record relay learning for PR #123");
 });
 
-test("finalize-run refuses to write learnings when repo root has tracked dirt", () => {
-  const { repoRoot, branch, headSha } = setupRepo();
+test("finalize-run writes learnings even when repo root has tracked dirt", () => {
+  const { repoRoot, branch, headSha, runId } = setupRepo();
   seedCapabilitiesForLearning(repoRoot);
   fs.appendFileSync(path.join(repoRoot, "README.md"), "local dirt\n", "utf-8");
-  const before = fs.readFileSync(path.join(repoRoot, "spec", "capabilities.md"), "utf-8");
+  const dirtyBefore = execFileSync("git", ["-C", repoRoot, "status", "--porcelain", "--untracked-files=no"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
   const logPath = path.join(repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
     comments: [
@@ -1422,11 +1442,20 @@ test("finalize-run refuses to write learnings when repo root has tracked dirt", 
   });
 
   const result = JSON.parse(stdout);
-  const after = fs.readFileSync(path.join(repoRoot, "spec", "capabilities.md"), "utf-8");
-  assert.equal(result.learnings.status, "failed");
-  assert.equal(result.learnings.reason, "dirty_worktree");
-  assert.equal(result.learnings.durability.status, "not_written");
-  assert.equal(after, before);
+  const dirtyAfter = execFileSync("git", ["-C", repoRoot, "status", "--porcelain", "--untracked-files=no"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.equal(result.learnings.status, "appended");
+  assert.equal(result.learnings.durability.status, "pushed");
+  assert.equal(dirtyAfter, dirtyBefore);
+  execFileSync("git", ["-C", repoRoot, "fetch", "origin", "main"], { encoding: "utf-8", stdio: "pipe" });
+  const remoteCapabilities = execFileSync(
+    "git",
+    ["-C", repoRoot, "show", "origin/main:spec/capabilities.md"],
+    { encoding: "utf-8", stdio: "pipe" }
+  );
+  assert.match(remoteCapabilities, new RegExp(`run #${runId}`));
 });
 
 test("finalize-run preserves durable learning result when cleanup fails", () => {

@@ -86,7 +86,9 @@ Serialized detached full-suite gate and kill discipline: see [`references/full-g
 
 ### 2. Sprint file update (if available)
 
-If `backlog/sprints/` has an active sprint file, update it. If no sprint file exists, skip this step.
+Update the sprint file that owns this task's track — resolve by the task's
+`component:` / track handle (or the single active sprint when only one is
+active). If no sprint file exists, skip this step.
 
 **Plan section** — mark completed (was `[~]` during review):
 ```markdown

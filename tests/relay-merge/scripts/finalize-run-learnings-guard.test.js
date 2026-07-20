@@ -144,10 +144,10 @@ function setupRepoOnUnexpectedBranch() {
     stdio: "pipe",
   });
 
-  return { repoRoot, branch, headSha, unexpectedBranch };
+  return { repoRoot, branch, headSha, unexpectedBranch, runId };
 }
 
-function writeFakeGh(logPath, { headRefName, commits }) {
+function writeFakeGh(logPath, { headRefName, commits, issueBody = null }) {
   const ghPath = path.join(path.dirname(logPath), "fake-gh.js");
   const statePath = path.join(path.dirname(logPath), "fake-gh-state.json");
   fs.writeFileSync(statePath, JSON.stringify({
@@ -167,6 +167,7 @@ function writeFakeGh(logPath, { headRefName, commits }) {
     statusCheckRollup: [],
     stateAfterMerge: "MERGED",
     mergeCommitAfterMerge: { oid: "merged-sha" },
+    issueBody,
   }), "utf-8");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -203,6 +204,14 @@ if (args[0] === "pr" && args[1] === "list") {
   process.stdout.write("[]");
   process.exit(0);
 }
+if (args[0] === "issue" && args[1] === "view") {
+  const state = loadState();
+  process.stdout.write(JSON.stringify({ body: state.issueBody || "" }));
+  process.exit(0);
+}
+if (args[0] === "issue" && args[1] === "close") {
+  process.exit(0);
+}
 if (args[0] === "repo" && args[1] === "view") {
   const state = loadState();
   process.stdout.write(JSON.stringify({
@@ -229,11 +238,19 @@ function remoteBranchExists(repoRoot, branch) {
   }
 }
 
-test("finalize-run refuses durable learnings when canonical checkout is on an unexpected branch (#809)", () => {
-  const { repoRoot, branch, headSha, unexpectedBranch } = setupRepoOnUnexpectedBranch();
+function currentBranch(repoRoot) {
+  return execFileSync("git", ["-C", repoRoot, "symbolic-ref", "--short", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+}
+
+test("finalize-run writes durable learnings without depending on canonical branch (#955 / #809)", () => {
+  const { repoRoot, branch, headSha, unexpectedBranch, runId } = setupRepoOnUnexpectedBranch();
   const capabilitiesPath = path.join(repoRoot, "spec", "capabilities.md");
   const beforeCapabilities = fs.readFileSync(capabilitiesPath, "utf-8");
   assert.equal(remoteBranchExists(repoRoot, unexpectedBranch), false);
+  assert.equal(currentBranch(repoRoot), unexpectedBranch);
 
   const logPath = path.join(repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
@@ -244,6 +261,7 @@ test("finalize-run refuses durable learnings when canonical checkout is on an un
         committedDate: DEFAULT_COMMIT_DATE,
       },
     ],
+    issueBody: "component: merge-finalize\n\nStandalone derive path.",
   });
 
   const stdout = execFileSync(process.execPath, [
@@ -260,11 +278,140 @@ test("finalize-run refuses durable learnings when canonical checkout is on an un
   });
 
   const result = JSON.parse(stdout);
-  assert.equal(result.learnings.status, "failed");
-  assert.equal(result.learnings.reason, "unexpected_branch");
-  assert.equal(result.learnings.expectedBranch, "main");
-  assert.equal(result.learnings.currentBranch, unexpectedBranch);
-  assert.equal(result.learnings.durability.status, "not_written");
-  assert.equal(fs.readFileSync(capabilitiesPath, "utf-8"), beforeCapabilities);
+  assert.equal(result.learnings.status, "appended");
+  assert.equal(result.learnings.durability.status, "pushed");
+  assert.equal(result.learnings.canonicalUntouched, true);
+  assert.equal(result.learnings.canonicalBranch, unexpectedBranch);
+  assert.equal(currentBranch(repoRoot), unexpectedBranch);
   assert.equal(remoteBranchExists(repoRoot, unexpectedBranch), false);
+  // Canonical checkout file content is unchanged; durability lands on origin/main.
+  assert.equal(fs.readFileSync(capabilitiesPath, "utf-8"), beforeCapabilities);
+  execFileSync("git", ["-C", repoRoot, "fetch", "origin", "main"], { encoding: "utf-8", stdio: "pipe" });
+  const remoteCapabilities = execFileSync(
+    "git",
+    ["-C", repoRoot, "show", "origin/main:spec/capabilities.md"],
+    { encoding: "utf-8", stdio: "pipe" }
+  );
+  assert.match(remoteCapabilities, new RegExp(`run #${runId}`));
+});
+
+test("finalize-run durable learnings succeed while canonical checkout is dirty", () => {
+  const { repoRoot, branch, headSha, unexpectedBranch, runId } = setupRepoOnUnexpectedBranch();
+  fs.appendFileSync(path.join(repoRoot, "README.md"), "local dirt\n", "utf-8");
+  const dirtyBefore = execFileSync("git", ["-C", repoRoot, "status", "--porcelain", "--untracked-files=no"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.match(dirtyBefore, /README\.md/);
+
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    headRefName: branch,
+    commits: [{ oid: headSha, committedDate: DEFAULT_COMMIT_DATE }],
+  });
+
+  const stdout = execFileSync(process.execPath, [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.learnings.status, "appended");
+  assert.equal(result.learnings.durability.status, "pushed");
+  assert.equal(currentBranch(repoRoot), unexpectedBranch);
+  const dirtyAfter = execFileSync("git", ["-C", repoRoot, "status", "--porcelain", "--untracked-files=no"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.equal(dirtyAfter, dirtyBefore);
+  execFileSync("git", ["-C", repoRoot, "fetch", "origin", "main"], { encoding: "utf-8", stdio: "pipe" });
+  const remoteCapabilities = execFileSync(
+    "git",
+    ["-C", repoRoot, "show", "origin/main:spec/capabilities.md"],
+    { encoding: "utf-8", stdio: "pipe" }
+  );
+  assert.match(remoteCapabilities, new RegExp(`run #${runId}`));
+});
+
+test("finalize-run learning push recovers from a just-merged remote advance race", () => {
+  const { repoRoot, branch, headSha, runId } = setupRepoOnUnexpectedBranch();
+  const originRoot = path.join(repoRoot, "origin.git");
+
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    headRefName: branch,
+    commits: [{ oid: headSha, committedDate: DEFAULT_COMMIT_DATE }],
+  });
+
+  // On the first learning push (HEAD:refs/heads/main), advance the bare remote
+  // with an empty commit so the push is rejected non-fast-forward, then retry.
+  const gitWrapper = path.join(repoRoot, "fake-git-race.js");
+  const marker = path.join(repoRoot, "race-fired");
+  fs.writeFileSync(gitWrapper, `#!/usr/bin/env node
+const { spawnSync } = require("child_process");
+const fs = require("fs");
+const args = process.argv.slice(2);
+const marker = ${JSON.stringify(marker)};
+const bare = ${JSON.stringify(originRoot)};
+function gitBare(bareArgs) {
+  return spawnSync("git", ["--git-dir", bare, ...bareArgs], { encoding: "utf-8" });
+}
+const isLearningPush = args.includes("push") && args.some((a) => String(a).startsWith("HEAD:refs/heads/main"));
+if (isLearningPush && !fs.existsSync(marker)) {
+  fs.writeFileSync(marker, "1");
+  const tree = gitBare(["rev-parse", "main^{tree}"]).stdout.trim();
+  const parent = gitBare(["rev-parse", "main"]).stdout.trim();
+  const commit = gitBare(["commit-tree", tree, "-p", parent, "-m", "race advance"]).stdout.trim();
+  gitBare(["update-ref", "refs/heads/main", commit]);
+}
+const result = spawnSync("git", args, { encoding: "utf-8" });
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+process.exit(result.status == null ? 1 : result.status);
+`, "utf-8");
+  fs.chmodSync(gitWrapper, 0o755);
+
+  const stdout = execFileSync(process.execPath, [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      RELAY_GH_BIN: fakeGh,
+      RELAY_GIT_BIN: gitWrapper,
+    },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.learnings.status, "appended");
+  assert.equal(result.learnings.durability.status, "pushed");
+  assert.ok((result.learnings.pushAttempts || result.learnings.durability.attempts) >= 2);
+  assert.equal(fs.existsSync(marker), true);
+  execFileSync("git", ["-C", repoRoot, "fetch", "origin", "main"], { encoding: "utf-8", stdio: "pipe" });
+  const remoteLog = execFileSync("git", ["-C", repoRoot, "log", "--oneline", "origin/main"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.match(remoteLog, /Record relay learning/);
+  assert.match(remoteLog, /race advance/);
+  const remoteCapabilities = execFileSync(
+    "git",
+    ["-C", repoRoot, "show", "origin/main:spec/capabilities.md"],
+    { encoding: "utf-8", stdio: "pipe" }
+  );
+  assert.match(remoteCapabilities, new RegExp(`run #${runId}`));
 });

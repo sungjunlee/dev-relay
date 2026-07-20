@@ -67,7 +67,13 @@ const {
   summarizeRubricAuditForSkip,
 } = require("./review-gate");
 const { STATUS: LEARNING_STATUS, appendLearnings } = require("./append-learnings");
+const {
+  resolveSprintOwner,
+  readManifestOwnership,
+  parseIssueComponent,
+} = require("./sprint-owner");
 const { reapAdvisoryLaneLeases } = require("../../relay-dispatch/scripts/run-runtime-state");
+const os = require("os");
 
 const ALLOWED_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
@@ -763,125 +769,354 @@ function learningCommitMessage(runId, prNumber) {
   return `Record relay learning for PR #${prNumber}\n\nRun: ${runId}`;
 }
 
+const DEFAULT_LEARNING_PUSH_ATTEMPTS = 3;
+const LEARNING_CAPABILITIES_REL = path.join("spec", "capabilities.md");
+
+function isNonFastForwardPushError(error) {
+  const text = `${error?.stderr || ""}\n${error?.message || ""}`.toLowerCase();
+  return text.includes("non-fast-forward")
+    || text.includes("failed to push some refs")
+    || text.includes("fetch first")
+    || text.includes("updates were rejected");
+}
+
+function fetchIssueBody(repoPath, issueNumber, execGhFn = execGh) {
+  if (!issueNumber) return null;
+  try {
+    const raw = execGhFn(repoPath, ["issue", "view", String(issueNumber), "--json", "body"]);
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.body === "string" ? parsed.body : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveLearningOwner({
+  repoPath,
+  manifest,
+  issueNumber,
+  owner = null,
+  issueBody = null,
+  resolveOwnerFn = resolveSprintOwner,
+  execGhFn = execGh,
+}) {
+  const manifestOwner = owner || readManifestOwnership(manifest);
+  let body = issueBody;
+  if (!manifestOwner?.sprint && !manifestOwner?.track && !manifestOwner?.component && !body) {
+    body = fetchIssueBody(repoPath, issueNumber, execGhFn);
+  }
+  return resolveOwnerFn({
+    repo: repoPath,
+    owner: manifestOwner,
+    issueBody: body,
+  });
+}
+
+function cleanupLearningWorktree(repoPath, worktreePath, execGitFn = execGit, rmSyncFn = fs.rmSync) {
+  if (!worktreePath) return;
+  try {
+    execGitFn(repoPath, ["worktree", "remove", "--force", worktreePath]);
+  } catch {
+    try {
+      rmSyncFn(worktreePath, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+    try {
+      execGitFn(repoPath, ["worktree", "prune"]);
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+/**
+ * Durable Learnings write that never switches, commits, or dirties the
+ * operator's canonical checkout. Uses a detached temporary worktree rooted at
+ * a freshly fetched remote base tip, then pushes `HEAD:<base>` with bounded
+ * non-fast-forward retry.
+ */
 function appendDurableLearnings({
   repoPath,
   runId,
   prNumber,
   synthesis,
-  expectedBranch,
+  baseBranch,
+  manifest = null,
+  issueNumber = null,
+  owner = null,
+  issueBody = null,
+  maxPushAttempts = DEFAULT_LEARNING_PUSH_ATTEMPTS,
+  appendLearningsFn = appendLearnings,
+  resolveOwnerFn = resolveSprintOwner,
+  execGitFn = execGit,
+  execGhFn = execGh,
+  mkdtempSyncFn = fs.mkdtempSync,
+  rmSyncFn = fs.rmSync,
 }) {
-  const dryRunResult = appendLearnings({
+  const canonicalBranchBefore = resolveCurrentBranch(repoPath);
+  const canonicalDirtyBefore = trackedStatus(repoPath);
+
+  const ownerResult = resolveLearningOwner({
+    repoPath,
+    manifest,
+    issueNumber,
+    owner,
+    issueBody,
+    resolveOwnerFn,
+    execGhFn,
+  });
+
+  if (!ownerResult.ok) {
+    // Prefer the leaf mapper for consistent skip/fail shapes.
+    const dryMapped = appendLearningsFn({
+      repo: repoPath,
+      runId,
+      pr: String(prNumber),
+      synthesis,
+      dryRun: true,
+      issueBody: issueBody || (issueNumber ? fetchIssueBody(repoPath, issueNumber, execGhFn) : null),
+      resolveOwner: () => ownerResult,
+    });
+    return {
+      ...dryMapped,
+      durability: { status: "not_written" },
+      canonicalBranch: canonicalBranchBefore,
+      canonicalDirty: Boolean(canonicalDirtyBefore),
+    };
+  }
+
+  const worktreeSprintPath = (root) => path.join(root, path.relative(repoPath, ownerResult.sprintPath));
+  const ownerHandlesFor = (root) => ({
+    sprint: worktreeSprintPath(root),
+    owner: {
+      sprint: worktreeSprintPath(root),
+      track: ownerResult.track,
+      component: ownerResult.component,
+      source: ownerResult.source,
+    },
+  });
+
+  const dryRunResult = appendLearningsFn({
     repo: repoPath,
     runId,
     pr: String(prNumber),
     synthesis,
     dryRun: true,
+    ...ownerHandlesFor(repoPath),
   });
-  if (dryRunResult.status !== LEARNING_STATUS.APPENDED) return dryRunResult;
-
-  const currentBranch = resolveCurrentBranch(repoPath);
-  if (!currentBranch) {
+  if (dryRunResult.status !== LEARNING_STATUS.APPENDED) {
     return {
-      status: LEARNING_STATUS.FAILED,
-      reason: "detached_head",
+      ...dryRunResult,
       durability: { status: "not_written" },
-      capabilitiesPath: dryRunResult.capabilitiesPath,
-      sprintFile: dryRunResult.sprintFile,
+      canonicalBranch: canonicalBranchBefore,
+      canonicalDirty: Boolean(canonicalDirtyBefore),
     };
   }
-  if (expectedBranch && currentBranch !== expectedBranch) {
+
+  if (!baseBranch) {
     return {
+      ...dryRunResult,
       status: LEARNING_STATUS.FAILED,
-      reason: "unexpected_branch",
-      expectedBranch,
-      currentBranch,
+      reason: "base_branch_missing",
       durability: { status: "not_written" },
-      capabilitiesPath: dryRunResult.capabilitiesPath,
-      sprintFile: dryRunResult.sprintFile,
-    };
-  }
-  if (!isTrackedPath(repoPath, path.join("spec", "capabilities.md"))) {
-    return {
-      status: LEARNING_STATUS.FAILED,
-      reason: "capabilities_untracked",
-      durability: { status: "not_written" },
-      capabilitiesPath: dryRunResult.capabilitiesPath,
-      sprintFile: dryRunResult.sprintFile,
+      canonicalBranch: canonicalBranchBefore,
     };
   }
 
-  const beforeStatus = trackedStatus(repoPath);
-  if (beforeStatus) {
-    return {
-      status: LEARNING_STATUS.FAILED,
-      reason: "dirty_worktree",
-      durability: { status: "not_written" },
-      dirtyStatus: beforeStatus,
-      capabilitiesPath: dryRunResult.capabilitiesPath,
-      sprintFile: dryRunResult.sprintFile,
-    };
-  }
-
-  const appendResult = appendLearnings({
-    repo: repoPath,
-    runId,
-    pr: String(prNumber),
-    synthesis,
-  });
-  if (appendResult.status !== LEARNING_STATUS.APPENDED) return appendResult;
-
-  try {
-    execGit(repoPath, ["add", "--", path.join("spec", "capabilities.md")]);
-    execGit(repoPath, ["commit", "-m", learningCommitMessage(runId, prNumber)]);
-  } catch (error) {
-    return {
-      ...appendResult,
-      durability: {
-        status: "manual_action_required",
-        reason: "commit_failed",
-        message: summarizeFailure(error),
-      },
-    };
-  }
-
-  const commitSha = execGit(repoPath, ["rev-parse", "HEAD"]);
-  const remoteName = resolveRemoteName(repoPath, currentBranch);
+  const remoteName = resolveRemoteName(repoPath, baseBranch) || "origin";
   if (!remoteName || !hasRemote(repoPath, remoteName)) {
     return {
-      ...appendResult,
-      commitSha,
-      currentBranch,
+      ...dryRunResult,
       remoteName,
-      durability: {
-        status: "manual_action_required",
-        reason: "remote_missing",
-      },
+      baseBranch,
+      durability: { status: "manual_action_required", reason: "remote_missing" },
+      canonicalBranch: canonicalBranchBefore,
+      canonicalDirty: Boolean(canonicalDirtyBefore),
+      canonicalUntouched: true,
     };
   }
 
+  let worktreePath = null;
   try {
-    execGit(repoPath, ["push", remoteName, currentBranch]);
+    try {
+      execGitFn(repoPath, ["fetch", remoteName, baseBranch]);
+    } catch (error) {
+      return {
+        ...dryRunResult,
+        status: LEARNING_STATUS.FAILED,
+        reason: "fetch_failed",
+        durability: {
+          status: "manual_action_required",
+          reason: "fetch_failed",
+          message: summarizeFailure(error),
+        },
+        canonicalBranch: canonicalBranchBefore,
+        canonicalUntouched: true,
+      };
+    }
+
+    const remoteTipRef = `${remoteName}/${baseBranch}`;
+    let remoteTip;
+    try {
+      remoteTip = execGitFn(repoPath, ["rev-parse", "--verify", remoteTipRef]);
+    } catch (error) {
+      return {
+        ...dryRunResult,
+        status: LEARNING_STATUS.FAILED,
+        reason: "base_tip_unresolved",
+        durability: {
+          status: "manual_action_required",
+          reason: "base_tip_unresolved",
+          message: summarizeFailure(error),
+        },
+        canonicalBranch: canonicalBranchBefore,
+        canonicalUntouched: true,
+      };
+    }
+
+    worktreePath = mkdtempSyncFn(path.join(os.tmpdir(), "relay-learn-"));
+    try {
+      execGitFn(repoPath, ["worktree", "add", "--detach", worktreePath, remoteTip]);
+    } catch (error) {
+      cleanupLearningWorktree(repoPath, worktreePath, execGitFn, rmSyncFn);
+      worktreePath = null;
+      return {
+        ...dryRunResult,
+        status: LEARNING_STATUS.FAILED,
+        reason: "worktree_create_failed",
+        durability: {
+          status: "not_written",
+          reason: "worktree_create_failed",
+          message: summarizeFailure(error),
+        },
+        canonicalBranch: canonicalBranchBefore,
+        canonicalUntouched: true,
+      };
+    }
+
+    if (!isTrackedPath(worktreePath, LEARNING_CAPABILITIES_REL)) {
+      return {
+        ...dryRunResult,
+        status: LEARNING_STATUS.FAILED,
+        reason: "capabilities_untracked",
+        durability: { status: "not_written" },
+        canonicalBranch: canonicalBranchBefore,
+        canonicalUntouched: true,
+      };
+    }
+
+    const appendResult = appendLearningsFn({
+      repo: worktreePath,
+      runId,
+      pr: String(prNumber),
+      synthesis,
+      ...ownerHandlesFor(worktreePath),
+    });
+
+    if (appendResult.status === LEARNING_STATUS.SKIPPED && appendResult.reason === "idempotent_match") {
+      return {
+        ...appendResult,
+        durability: { status: "already_present", baseBranch, remoteName },
+        canonicalBranch: canonicalBranchBefore,
+        canonicalDirty: Boolean(canonicalDirtyBefore),
+        canonicalUntouched: true,
+      };
+    }
+    if (appendResult.status !== LEARNING_STATUS.APPENDED) {
+      return {
+        ...appendResult,
+        durability: { status: "not_written" },
+        canonicalBranch: canonicalBranchBefore,
+        canonicalDirty: Boolean(canonicalDirtyBefore),
+        canonicalUntouched: true,
+      };
+    }
+
+    try {
+      execGitFn(worktreePath, ["add", "--", LEARNING_CAPABILITIES_REL]);
+      execGitFn(worktreePath, ["commit", "-m", learningCommitMessage(runId, prNumber)]);
+    } catch (error) {
+      return {
+        ...appendResult,
+        durability: {
+          status: "manual_action_required",
+          reason: "commit_failed",
+          message: summarizeFailure(error),
+        },
+        canonicalBranch: canonicalBranchBefore,
+        canonicalUntouched: true,
+      };
+    }
+
+    let commitSha = execGitFn(worktreePath, ["rev-parse", "HEAD"]);
+    let attempts = 0;
+    let lastPushError = null;
+
+    while (attempts < maxPushAttempts) {
+      attempts += 1;
+      try {
+        execGitFn(worktreePath, ["push", remoteName, `HEAD:refs/heads/${baseBranch}`]);
+        return {
+          ...appendResult,
+          commitSha,
+          baseBranch,
+          remoteName,
+          pushAttempts: attempts,
+          durability: { status: "pushed", baseBranch, remoteName, attempts },
+          canonicalBranch: canonicalBranchBefore,
+          canonicalDirty: Boolean(canonicalDirtyBefore),
+          canonicalUntouched: true,
+        };
+      } catch (error) {
+        lastPushError = error;
+        if (!isNonFastForwardPushError(error) || attempts >= maxPushAttempts) {
+          break;
+        }
+        try {
+          execGitFn(repoPath, ["fetch", remoteName, baseBranch]);
+          execGitFn(worktreePath, ["rebase", `${remoteName}/${baseBranch}`]);
+          commitSha = execGitFn(worktreePath, ["rev-parse", "HEAD"]);
+        } catch (rebaseError) {
+          const rebaseText = `${rebaseError?.stderr || ""}\n${rebaseError?.message || ""}`.toLowerCase();
+          const conflict = rebaseText.includes("conflict") || rebaseText.includes("could not apply");
+          return {
+            ...appendResult,
+            commitSha,
+            baseBranch,
+            remoteName,
+            pushAttempts: attempts,
+            durability: {
+              status: "manual_action_required",
+              reason: conflict ? "push_conflict" : "rebase_failed",
+              message: summarizeFailure(rebaseError),
+              pushMessage: summarizeFailure(error),
+            },
+            canonicalBranch: canonicalBranchBefore,
+            canonicalUntouched: true,
+          };
+        }
+      }
+    }
+
     return {
       ...appendResult,
       commitSha,
-      currentBranch,
+      baseBranch,
       remoteName,
-      durability: {
-        status: "pushed",
-      },
-    };
-  } catch (error) {
-    return {
-      ...appendResult,
-      commitSha,
-      currentBranch,
-      remoteName,
+      pushAttempts: attempts,
       durability: {
         status: "manual_action_required",
         reason: "push_failed",
-        message: summarizeFailure(error),
+        message: summarizeFailure(lastPushError),
+        attempts,
       },
+      canonicalBranch: canonicalBranchBefore,
+      canonicalDirty: Boolean(canonicalDirtyBefore),
+      canonicalUntouched: true,
     };
+  } finally {
+    cleanupLearningWorktree(repoPath, worktreePath, execGitFn, rmSyncFn);
   }
 }
 
@@ -1425,7 +1660,9 @@ function main() {
         runId: updated.run_id,
         prNumber: String(prNumber),
         synthesis: updated.issue?.title || null,
-        expectedBranch: updated.git?.base_branch || null,
+        baseBranch: updated.git?.base_branch || null,
+        manifest: updated,
+        issueNumber: updated.issue?.number || null,
       });
     } catch (error) {
       learningsResult = { status: "failed", reason: "exception", message: summarizeFailure(error) };
@@ -1534,4 +1771,10 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildSquashSubject };
+module.exports = {
+  buildSquashSubject,
+  appendDurableLearnings,
+  resolveLearningOwner,
+  parseIssueComponent,
+  readManifestOwnership,
+};
