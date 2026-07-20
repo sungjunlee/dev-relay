@@ -417,6 +417,21 @@ describe("resolveSprintOwner", () => {
     assert.equal(result.reason, "sprint_state_unavailable");
   });
 
+  it("discovers dev-backlog from Pi's configurable agent directory", () => {
+    const piBin = "/tmp/pi-agent/skills/dev-backlog/scripts/sprint-state.js";
+    const result = discoverSprintStateBin({
+      env: { PI_CODING_AGENT_DIR: "/tmp/pi-agent" },
+      homedir: () => "/tmp/home",
+      existsSync: (candidate) => candidate === piBin,
+      execFileSyncFn: (_node, [candidate]) => {
+        assert.equal(candidate, piBin);
+        return "Usage: sprint-state.js --track <slug> --component <name> --json";
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.path, piBin);
+  });
+
   it("rejects a sprint file whose component contradicts expectedComponent", () => {
     const repo = makeRepo();
     try {

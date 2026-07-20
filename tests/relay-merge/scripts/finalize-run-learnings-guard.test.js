@@ -18,6 +18,7 @@ const {
 const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-merge", "scripts", "finalize-run.js");
+const { appendDurableLearnings } = require(SCRIPT);
 const DEFAULT_COMMIT_DATE = "2026-04-03T08:00:00Z";
 
 function buildReadyToMergeManifest(manifest) {
@@ -603,4 +604,135 @@ process.exit(result.status == null ? 1 : result.status);
     { encoding: "utf-8", stdio: "pipe" }
   );
   assert.match(remoteCapabilities, new RegExp(`run #${runId}`));
+});
+
+function delegatedGit(fail) {
+  return (repoPath, args, opts = {}) => {
+    const injected = fail(repoPath, args, opts);
+    if (injected instanceof Error) throw injected;
+    if (injected !== undefined) return injected;
+    const output = execFileSync("git", ["-C", repoPath, ...args], {
+      encoding: "utf-8",
+      stdio: "pipe",
+      ...(opts.env ? { env: opts.env } : {}),
+    });
+    return opts.raw ? output : output.trim();
+  };
+}
+
+function directLearning(repoRoot, overrides = {}) {
+  return appendDurableLearnings({
+    repoPath: repoRoot,
+    runId: "issue-955-test",
+    prNumber: 955,
+    synthesis: "durability failure coverage",
+    baseBranch: "main",
+    issueBody: "component: merge-finalize\n",
+    resolveOwnerFn: ({ repo }) => ({
+      ok: true,
+      sprintPath: path.join(repo, "backlog", "sprints", "2026-05-test.md"),
+      track: "2026-05-test",
+      component: "merge-finalize",
+      source: "issue_component",
+    }),
+    ...overrides,
+  });
+}
+
+test("durable learning reports fetch and base-tip failures without touching canonical checkout", () => {
+  for (const target of ["fetch", "rev-parse"]) {
+    const { repoRoot } = setupRepoOnUnexpectedBranch();
+    const result = directLearning(repoRoot, {
+      execGitFn: delegatedGit((_repo, args) => {
+        if (args[0] === target) return new Error(`${target} unavailable`);
+        return undefined;
+      }),
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(result.reason, target === "fetch" ? "fetch_failed" : "base_tip_unresolved");
+    assert.equal(result.durability.status, "manual_action_required");
+    assert.equal(result.canonicalUntouched, true);
+  }
+});
+
+test("commit failure preserves a durable recovery patch before cleaning the worktree", () => {
+  const { repoRoot, runId } = setupRepoOnUnexpectedBranch();
+  const result = directLearning(repoRoot, {
+    runId,
+    execGitFn: delegatedGit((_repo, args) => {
+      if (args[0] === "commit") return new Error("commit unavailable");
+      return undefined;
+    }),
+  });
+  assert.equal(result.durability.reason, "commit_failed");
+  assert.ok(result.recoveryPatch);
+  assert.equal(fs.existsSync(result.recoveryPatch), true);
+  assert.match(fs.readFileSync(result.recoveryPatch, "utf-8"), new RegExp(`run #${runId}`));
+});
+
+test("NFF retry pins Git's locale and reports a rebase conflict", () => {
+  const { repoRoot } = setupRepoOnUnexpectedBranch();
+  let pushOptions = null;
+  const result = directLearning(repoRoot, {
+    execGitFn: delegatedGit((_repo, args, opts) => {
+      if (args[0] === "push") {
+        pushOptions = opts;
+        const error = new Error("non-fast-forward");
+        error.stderr = "non-fast-forward";
+        return error;
+      }
+      if (args[0] === "rebase") {
+        const error = new Error("CONFLICT");
+        error.stderr = "CONFLICT: content";
+        return error;
+      }
+      return undefined;
+    }),
+  });
+  assert.equal(pushOptions.env.LC_ALL, "C");
+  assert.equal(pushOptions.env.LANG, "C");
+  assert.equal(result.durability.reason, "push_conflict");
+  assert.equal(result.canonicalUntouched, true);
+});
+
+test("multi-sprint durable learning exercises discovered sprint-state end to end", () => {
+  const { repoRoot } = setupRepoOnUnexpectedBranch();
+  const second = path.join(repoRoot, "backlog", "sprints", "2026-05-other.md");
+  fs.writeFileSync(second, "---\nstatus: active\ncomponent: other\n---\n", "utf-8");
+  execFileSync("git", ["add", second], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "Add second sprint"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["push", "origin", "HEAD:main"], { cwd: repoRoot, stdio: "pipe" });
+
+  const sprintState = path.join(repoRoot, "fake-sprint-state.js");
+  fs.writeFileSync(sprintState, `#!/usr/bin/env node
+if (process.argv.includes("--help")) {
+  console.log("Usage: --track <slug> --component <name> --json");
+} else {
+  console.log(JSON.stringify({
+    schema_version: 2,
+    active_sprint: {
+      path: "backlog/sprints/2026-05-test.md",
+      frontmatter: { component: "merge-finalize" }
+    }
+  }));
+}
+`, "utf-8");
+  const previous = process.env.RELAY_SPRINT_STATE_BIN;
+  process.env.RELAY_SPRINT_STATE_BIN = sprintState;
+  try {
+    const result = appendDurableLearnings({
+      repoPath: repoRoot,
+      runId: "issue-955-integration",
+      prNumber: 955,
+      synthesis: "external sprint-state integration",
+      baseBranch: "main",
+      issueBody: "component: merge-finalize\n",
+    });
+    assert.equal(result.status, "appended");
+    assert.equal(result.durability.status, "pushed");
+    assert.equal(result.owner.component, "merge-finalize");
+  } finally {
+    if (previous === undefined) delete process.env.RELAY_SPRINT_STATE_BIN;
+    else process.env.RELAY_SPRINT_STATE_BIN = previous;
+  }
 });

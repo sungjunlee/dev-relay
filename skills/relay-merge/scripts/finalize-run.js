@@ -783,6 +783,31 @@ function isNonFastForwardPushError(error) {
     || text.includes("current branch is behind");
 }
 
+function persistLearningRecoveryPatch({
+  repoPath,
+  worktreePath,
+  runId,
+  execGitFn = execGit,
+}) {
+  try {
+    const patch = execGitFn(worktreePath, [
+      "diff",
+      "HEAD",
+      "--binary",
+      "--",
+      LEARNING_CAPABILITIES_REL,
+    ], { raw: true });
+    if (!String(patch || "").trim()) return null;
+    const runDir = getRunDir(repoPath, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    const recoveryPath = path.join(runDir, "learning-recovery.patch");
+    fs.writeFileSync(recoveryPath, patch, { encoding: "utf-8", flag: "wx" });
+    return recoveryPath;
+  } catch {
+    return null;
+  }
+}
+
 function fetchIssueBody(repoPath, issueNumber, execGhFn = execGh) {
   if (!issueNumber) return null;
   try {
@@ -1062,12 +1087,20 @@ function appendDurableLearnings({
       execGitFn(worktreePath, ["add", "--", LEARNING_CAPABILITIES_REL]);
       execGitFn(worktreePath, ["commit", "-m", learningCommitMessage(runId, prNumber)]);
     } catch (error) {
+      const recoveryPatch = persistLearningRecoveryPatch({
+        repoPath,
+        worktreePath,
+        runId,
+        execGitFn,
+      });
       return {
         ...withDurableOwnerPaths(appendResult, durable),
+        ...(recoveryPatch ? { recoveryPatch } : {}),
         durability: {
           status: "manual_action_required",
           reason: "commit_failed",
           message: summarizeFailure(error),
+          ...(recoveryPatch ? { recoveryPatch } : {}),
         },
         canonicalUntouched: true,
       };
@@ -1080,7 +1113,11 @@ function appendDurableLearnings({
     while (attempts < maxPushAttempts) {
       attempts += 1;
       try {
-        execGitFn(worktreePath, ["push", remoteName, `HEAD:refs/heads/${baseBranch}`]);
+        // Git's rejection text is localized. Pin the command locale so the
+        // deliberately narrow NFF classifier below receives stable signals.
+        execGitFn(worktreePath, ["push", remoteName, `HEAD:refs/heads/${baseBranch}`], {
+          env: { ...process.env, LC_ALL: "C", LANG: "C" },
+        });
         return {
           ...withDurableOwnerPaths(appendResult, durable),
           commitSha,

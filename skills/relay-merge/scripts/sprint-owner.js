@@ -155,6 +155,7 @@ function listSprintStateCandidates({
     path.join(home, ".agents", "skills", "dev-backlog", "scripts", "sprint-state.js"),
     path.join(home, ".claude", "skills", "dev-backlog", "scripts", "sprint-state.js"),
     path.join(home, ".codex", "skills", "dev-backlog", "scripts", "sprint-state.js"),
+    path.join(env.PI_CODING_AGENT_DIR || path.join(home, ".pi", "agent"), "skills", "dev-backlog", "scripts", "sprint-state.js"),
   ];
 
   const seen = new Set();
