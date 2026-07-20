@@ -37,9 +37,9 @@ If no wording matches, list configured presets from routes config and ask/contin
 
 ## Step 1: Re-Anchor and Route
 
-Run `git fetch origin`; if a sprint file exists, re-read Running Context and completed/in-flight status changes. Apply any previous-task context before proceeding.
+Run `git fetch origin`. Task evidence: collect the first available source—local task file, `gh issue view <N>`, or user description—and use its `track:` or `component:` value as the sprint ownership handle. If no issue number, use a descriptive branch name and skip issue-close in merge.
 
-Task evidence: use the first available source: local task file, `gh issue view <N>`, or user description. If `backlog/sprints/` has an active sprint, read Running Context and batch info; otherwise skip sprint tracking. If no issue number, use a descriptive branch name and skip issue-close in merge.
+Before any sprint read, invoke the resolved dev-backlog `sprint-state.js --track <track> --json backlog` or `sprint-state.js --component <component> --json backlog` and use `active_sprint.path` as the owning sprint. With no handle, use `sprint-state.js --json backlog` only when exactly one sprint is active; if a selector lookup is unavailable or unresolved, allow that same fallback only when the single sprint's track/component matches. Never choose an arbitrary/global active sprint or parse sprint markdown in relay to resolve ownership. If no owner resolves, skip sprint tracking; otherwise re-read that sprint's Running Context, batch information, and completed/in-flight changes and apply previous-task context.
 
 Run the deterministic route preflight; if readiness is already covered by a prior relay-ready artifact, explicit `--bypass-readiness`, or sprint-batch handoff, add `--bypass-readiness --skip-readiness-reason <reason>`.
 
@@ -83,7 +83,7 @@ Check the manifest/result:
 - `status: "completed"`/`"completed-with-warning"` and `runState: "internal_review_pending"` → proceed to Step 4 (on warning, the executor timed out but made progress; check the worktree)
 - `status: "failed"` and `runState: "escalated"` → inspect the dispatch error / manifest, fix and re-dispatch
 
-Capture `runId`, `manifestPath`, `runState`; do not create or look up a PR yet (publication happens only after internal review LGTM). The manifest is under `~/.relay/runs/<repo-slug>/`; if a sprint file exists, mark the plan item in-flight.
+Capture `runId`, `manifestPath`, `runState`; do not create or look up a PR yet (publication happens only after internal review LGTM). The manifest is under `~/.relay/runs/<repo-slug>/`. Before an in-flight write, resolve the owner through the same dev-backlog `sprint-state.js --track/--component --json` contract and matching-selector N==1 failure fallback, then update only its `active_sprint.path`; skip when no owner resolves.
 
 ## Step 4: Review (relay-review)
 
