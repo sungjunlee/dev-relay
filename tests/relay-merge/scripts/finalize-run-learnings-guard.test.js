@@ -552,15 +552,31 @@ const args = process.argv.slice(2);
 const marker = ${JSON.stringify(marker)};
 const bare = ${JSON.stringify(originRoot)};
 function gitBare(bareArgs) {
-  return spawnSync("git", ["--git-dir", bare, ...bareArgs], { encoding: "utf-8" });
+  return spawnSync("git", ["--git-dir", bare, ...bareArgs], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Relay Race Test",
+      GIT_AUTHOR_EMAIL: "relay-race@example.com",
+      GIT_COMMITTER_NAME: "Relay Race Test",
+      GIT_COMMITTER_EMAIL: "relay-race@example.com"
+    }
+  });
+}
+function must(result, operation) {
+  if (result.status !== 0) {
+    process.stderr.write(operation + " failed: " + (result.stderr || result.stdout || ""));
+    process.exit(result.status == null ? 1 : result.status);
+  }
+  return result.stdout.trim();
 }
 const isLearningPush = args.includes("push") && args.some((a) => String(a).startsWith("HEAD:refs/heads/main"));
 if (isLearningPush && !fs.existsSync(marker)) {
   fs.writeFileSync(marker, "1");
-  const tree = gitBare(["rev-parse", "main^{tree}"]).stdout.trim();
-  const parent = gitBare(["rev-parse", "main"]).stdout.trim();
-  const commit = gitBare(["commit-tree", tree, "-p", parent, "-m", "race advance"]).stdout.trim();
-  gitBare(["update-ref", "refs/heads/main", commit]);
+  const tree = must(gitBare(["rev-parse", "main^{tree}"]), "rev-parse tree");
+  const parent = must(gitBare(["rev-parse", "main"]), "rev-parse parent");
+  const commit = must(gitBare(["commit-tree", tree, "-p", parent, "-m", "race advance"]), "commit-tree");
+  must(gitBare(["update-ref", "refs/heads/main", commit]), "update-ref");
 }
 const result = spawnSync("git", args, { encoding: "utf-8" });
 if (result.stdout) process.stdout.write(result.stdout);
@@ -668,6 +684,24 @@ test("owner-resolution skips carry their reason into durability metadata", () =>
   });
 });
 
+test("owner-resolution failures remap transient worktree paths to durable repo paths", () => {
+  const { repoRoot } = setupRepoOnUnexpectedBranch();
+  const result = directLearning(repoRoot, {
+    resolveOwnerFn: ({ repo }) => ({
+      ok: false,
+      reason: "component_empty",
+      sprintPath: path.join(repo, "backlog", "sprints", "2026-05-test.md"),
+    }),
+    appendLearningsFn: ({ repo }) => ({
+      status: "skipped",
+      reason: "component_empty",
+      sprintFile: path.join(repo, "backlog", "sprints", "2026-05-test.md"),
+    }),
+  });
+  assert.equal(result.sprintFile, path.join(repoRoot, "backlog", "sprints", "2026-05-test.md"));
+  assert.doesNotMatch(result.sprintFile, /relay-learn-/);
+});
+
 test("commit failure preserves a durable recovery patch before cleaning the worktree", () => {
   const { repoRoot, runId } = setupRepoOnUnexpectedBranch();
   let learningWorktree = null;
@@ -690,14 +724,15 @@ test("commit failure preserves a durable recovery patch before cleaning the work
 });
 
 test("NFF retry pins Git's locale and reports a rebase conflict", () => {
-  const { repoRoot } = setupRepoOnUnexpectedBranch();
+  const { repoRoot, runId } = setupRepoOnUnexpectedBranch();
   let pushOptions = null;
   const result = directLearning(repoRoot, {
+    runId,
     execGitFn: delegatedGit((_repo, args, opts) => {
       if (args[0] === "push") {
         pushOptions = opts;
-        const error = new Error("non-fast-forward");
-        error.stderr = "non-fast-forward";
+        const error = new Error("Updates were rejected because a pushed branch tip is behind its remote counterpart.");
+        error.stderr = "Updates were rejected because a pushed branch tip is behind its remote counterpart.";
         return error;
       }
       if (args[0] === "rebase") {
@@ -711,13 +746,16 @@ test("NFF retry pins Git's locale and reports a rebase conflict", () => {
   assert.equal(pushOptions.env.LC_ALL, "C");
   assert.equal(pushOptions.env.LANG, "C");
   assert.equal(result.durability.reason, "push_conflict");
+  assert.ok(result.recoveryPatch);
+  assert.equal(fs.existsSync(result.recoveryPatch), true);
   assert.equal(result.canonicalUntouched, true);
 });
 
 test("repeated NFF races exhaust the bounded retry loop with actionable attempts", () => {
-  const { repoRoot } = setupRepoOnUnexpectedBranch();
+  const { repoRoot, runId } = setupRepoOnUnexpectedBranch();
   let pushes = 0;
   const result = directLearning(repoRoot, {
+    runId,
     maxPushAttempts: 3,
     execGitFn: delegatedGit((_repo, args) => {
       if (args[0] === "push") {
@@ -732,6 +770,8 @@ test("repeated NFF races exhaust the bounded retry loop with actionable attempts
   assert.equal(pushes, 3);
   assert.equal(result.durability.reason, "push_failed");
   assert.equal(result.durability.attempts, 3);
+  assert.ok(result.recoveryPatch);
+  assert.equal(fs.existsSync(result.recoveryPatch), true);
   assert.equal(result.canonicalUntouched, true);
 });
 

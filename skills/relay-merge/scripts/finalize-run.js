@@ -780,6 +780,7 @@ function isNonFastForwardPushError(error) {
   return text.includes("non-fast-forward")
     || text.includes("fetch first")
     || text.includes("tip of your current branch is behind")
+    || text.includes("pushed branch tip is behind")
     || text.includes("current branch is behind");
 }
 
@@ -790,22 +791,55 @@ function persistLearningRecoveryPatch({
   execGitFn = execGit,
 }) {
   try {
-    const patch = execGitFn(worktreePath, [
+    let patch = execGitFn(worktreePath, [
       "diff",
       "HEAD",
       "--binary",
       "--",
       LEARNING_CAPABILITIES_REL,
     ], { raw: true });
+    if (!String(patch || "").trim()) {
+      patch = execGitFn(worktreePath, [
+        "format-patch",
+        "-1",
+        "--stdout",
+        "HEAD",
+        "--",
+        LEARNING_CAPABILITIES_REL,
+      ], { raw: true });
+    }
     if (!String(patch || "").trim()) return null;
     const runDir = getRunDir(repoPath, runId);
     fs.mkdirSync(runDir, { recursive: true });
     const recoveryPath = path.join(runDir, "learning-recovery.patch");
-    fs.writeFileSync(recoveryPath, patch, { encoding: "utf-8", flag: "wx" });
+    fs.writeFileSync(recoveryPath, patch, { encoding: "utf-8" });
     return recoveryPath;
   } catch {
     return null;
   }
+}
+
+function remapTransientLearningPaths(result, repoPath, worktreePath) {
+  if (!result || typeof result !== "object") return result;
+  const remap = (candidate) => {
+    if (typeof candidate !== "string") return candidate;
+    const rel = path.relative(worktreePath, candidate);
+    if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      return candidate;
+    }
+    return path.join(repoPath, rel);
+  };
+  return {
+    ...result,
+    ...(result.sprintFile ? { sprintFile: remap(result.sprintFile) } : {}),
+    ...(result.capabilitiesPath ? { capabilitiesPath: remap(result.capabilitiesPath) } : {}),
+    ...(result.owner ? {
+      owner: {
+        ...result.owner,
+        ...(result.owner.sprintPath ? { sprintPath: remap(result.owner.sprintPath) } : {}),
+      },
+    } : {}),
+  };
 }
 
 function fetchIssueBody(repoPath, issueNumber, execGhFn = execGh) {
@@ -1017,7 +1051,7 @@ function appendDurableLearnings({
         resolveOwner: () => ownerResult,
       });
       return {
-        ...dryMapped,
+        ...remapTransientLearningPaths(dryMapped, repoPath, worktreePath),
         durability: {
           status: "not_written",
           reason: dryMapped.reason || ownerResult.reason || "owner_unresolved",
@@ -1113,6 +1147,12 @@ function appendDurableLearnings({
     }
 
     let commitSha = execGitFn(worktreePath, ["rev-parse", "HEAD"]);
+    const recoveryPatch = persistLearningRecoveryPatch({
+      repoPath,
+      worktreePath,
+      runId,
+      execGitFn,
+    });
     let attempts = 0;
     let lastPushError = null;
 
@@ -1124,6 +1164,9 @@ function appendDurableLearnings({
         execGitFn(worktreePath, ["push", remoteName, `HEAD:refs/heads/${baseBranch}`], {
           env: { ...process.env, LC_ALL: "C", LANG: "C" },
         });
+        if (recoveryPatch) {
+          try { fs.unlinkSync(recoveryPatch); } catch {}
+        }
         return {
           ...withDurableOwnerPaths(appendResult, durable),
           commitSha,
@@ -1151,11 +1194,13 @@ function appendDurableLearnings({
             baseBranch,
             remoteName,
             pushAttempts: attempts,
+            ...(recoveryPatch ? { recoveryPatch } : {}),
             durability: {
               status: "manual_action_required",
               reason: conflict ? "push_conflict" : "rebase_failed",
               message: summarizeFailure(rebaseError),
               pushMessage: summarizeFailure(error),
+              ...(recoveryPatch ? { recoveryPatch } : {}),
             },
             canonicalUntouched: true,
           };
@@ -1169,11 +1214,13 @@ function appendDurableLearnings({
       baseBranch,
       remoteName,
       pushAttempts: attempts,
+      ...(recoveryPatch ? { recoveryPatch } : {}),
       durability: {
         status: "manual_action_required",
         reason: "push_failed",
         message: summarizeFailure(lastPushError),
         attempts,
+        ...(recoveryPatch ? { recoveryPatch } : {}),
       },
       canonicalUntouched: true,
     };

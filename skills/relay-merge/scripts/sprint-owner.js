@@ -388,7 +388,7 @@ function validateSprintStatePayload(payload, {
 
   return buildOwner({
     sprintPath,
-    track: trackSlug,
+    track: returnedTrack,
     component: components[0],
     source: track ? OWNER_SOURCES.EXPLICIT_TRACK : OWNER_SOURCES.EXPLICIT_COMPONENT,
     schemaVersion,
@@ -427,6 +427,7 @@ function invokeSprintState({
     stdout = execFileSyncFn(nodeBin, args, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
     });
   } catch (error) {
     const stderr = String(error.stderr || error.message || "").trim();

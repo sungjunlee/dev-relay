@@ -206,6 +206,19 @@ describe("validateSprintStatePayload", () => {
     assert.equal(mismatch.reason, "contradictory_owner");
     assert.match(mismatch.detail, /track selector/);
   });
+
+  it("preserves the track identity returned by sprint-state", () => {
+    const result = validateSprintStatePayload({
+      schema_version: 2,
+      active_sprint: {
+        path: "/repo/backlog/sprints/file-slug.md",
+        track: "canonical-track",
+        frontmatter: { component: "auth" },
+      },
+    }, { track: "canonical-track" });
+    assert.equal(result.ok, true);
+    assert.equal(result.track, "canonical-track");
+  });
 });
 
 describe("invokeSprintState", () => {
@@ -219,6 +232,19 @@ describe("invokeSprintState", () => {
     assert.equal(result.ok, false);
     assert.equal(result.reason, "sprint_state_invalid");
     assert.match(result.detail, /JSON parse failed/);
+  });
+
+  it("bounds the real sprint-state invocation", () => {
+    const result = invokeSprintState({
+      binPath: "/fake/sprint-state.js",
+      backlogDir: "/repo/backlog",
+      component: "auth",
+      execFileSyncFn: (_node, _args, options) => {
+        assert.equal(options.timeout, 10_000);
+        return JSON.stringify({});
+      },
+    });
+    assert.equal(result.reason, "sprint_state_unsupported_schema");
   });
 
   it("surfaces non-object JSON and ambiguous unresolved selection", () => {
