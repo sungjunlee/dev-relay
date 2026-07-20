@@ -4,7 +4,10 @@ const { hashFileSha256 } = require("../../relay-dispatch/scripts/execution-evide
 const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/manifest/rubric");
 const { isHardenedReviewAssurance } = require("../../relay-dispatch/scripts/manifest/review-assurance");
 const { parseAdvisoryReview } = require("../../relay-review/scripts/advisory-review-schema");
-const { resolveAdvisoryConfig } = require("../../relay-review/scripts/review-runner/advisory-orchestration");
+const {
+  createAdvisoryConfigSnapshot,
+  resolveAdvisoryConfig,
+} = require("../../relay-review/scripts/review-runner/advisory-orchestration");
 const { computeQualityExecutionStatus } = require("../../relay-review/scripts/review-runner/execution-evidence");
 
 const REVIEW_MARKER_PATTERN = /^\s*<!-- relay-review(?:-round)? -->\s*$/m;
@@ -254,7 +257,43 @@ function readRunRoutePlan(runDir) {
   }
 }
 
-function findExpectedAdvisoryLanes(manifestData, routePlan) {
+function findAdvisoryConfigSnapshot(events, round, reviewedHead) {
+  const snapshotEvents = events.filter((event) => (
+    event.event === "advisory_review" &&
+    Number(event.round) === round &&
+    (
+      event.advisory_lanes !== undefined ||
+      event.advisory_config_hash !== undefined
+    )
+  ));
+  if (snapshotEvents.length === 0) return null;
+  const event = snapshotEvents.at(-1);
+  if (event.head_sha !== reviewedHead) {
+    throw new Error(`latest advisory lane configuration is not bound to reviewed HEAD ${reviewedHead}`);
+  }
+  if (!Array.isArray(event.advisory_lanes) || typeof event.advisory_config_hash !== "string") {
+    throw new Error("latest advisory lane configuration is incomplete");
+  }
+  const snapshot = createAdvisoryConfigSnapshot({
+    headSha: event.head_sha,
+    lanes: event.advisory_lanes,
+    round: event.round,
+  });
+  if (snapshot.advisory_config_hash !== event.advisory_config_hash) {
+    throw new Error("latest advisory lane configuration hash does not match its round/HEAD-bound snapshot");
+  }
+  return snapshot;
+}
+
+function findExpectedAdvisoryLanes(manifestData, routePlan, snapshot = null) {
+  if (snapshot) {
+    return snapshot.lanes.map((lane) => ({
+      gating: lane.gating,
+      lane_index: lane.lane_index,
+      profile: lane.profile,
+      reviewer: lane.reviewer,
+    }));
+  }
   const { lanes } = resolveAdvisoryConfig({
     data: manifestData,
     routePlan,
@@ -267,7 +306,7 @@ function findExpectedAdvisoryLanes(manifestData, routePlan) {
   }));
 }
 
-function findLatestRequiredAdvisoryEvents(events, round, manifestData, routePlan) {
+function findLatestRequiredAdvisoryEvents(events, round, reviewedHead, manifestData, routePlan) {
   const latestByLane = new Map();
   const gatingLanes = new Set();
   for (const event of events) {
@@ -276,17 +315,20 @@ function findLatestRequiredAdvisoryEvents(events, round, manifestData, routePlan
     latestByLane.set(laneKey, event);
     if (event.gating === true) gatingLanes.add(laneKey);
   }
-  const expectedLanes = findExpectedAdvisoryLanes(manifestData, routePlan);
+  const snapshot = findAdvisoryConfigSnapshot(events, round, reviewedHead);
+  const expectedLanes = findExpectedAdvisoryLanes(manifestData, routePlan, snapshot);
   if (expectedLanes.length > 0) {
     return expectedLanes.map((expectedLane) => ({
       event: latestByLane.get(advisoryLaneKey(expectedLane)) || null,
       expectedLane,
+      expectedConfigHash: snapshot?.advisory_config_hash || null,
     }));
   }
   if (gatingLanes.size > 0) {
     return [...gatingLanes].map((laneKey) => ({
       event: latestByLane.get(laneKey),
       expectedLane: null,
+      expectedConfigHash: null,
     }));
   }
   // Events written before advisory lanes were configured represent a single
@@ -295,6 +337,7 @@ function findLatestRequiredAdvisoryEvents(events, round, manifestData, routePlan
   return [...latestByLane.values()].map((event) => ({
     event,
     expectedLane: null,
+    expectedConfigHash: null,
   }));
 }
 
@@ -388,7 +431,13 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
   }
   let advisoryEvents;
   try {
-    advisoryEvents = findLatestRequiredAdvisoryEvents(events, round, manifestData, routePlan);
+    advisoryEvents = findLatestRequiredAdvisoryEvents(
+      events,
+      round,
+      reviewedHead,
+      manifestData,
+      routePlan,
+    );
   } catch (error) {
     return {
       status: "invalid_hardened_advisory",
@@ -405,7 +454,7 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       reason: "policy.review_assurance=hardened requires a durable advisory_review event for the latest round.",
     };
   }
-  for (const { event, expectedLane } of advisoryEvents) {
+  for (const { event, expectedLane, expectedConfigHash } of advisoryEvents) {
     if (!event) {
       const expectedReviewer = expectedLane.reviewer || "unknown reviewer";
       return {
@@ -422,6 +471,14 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       ? ` lane ${event.lane_index}`
       : "";
     const eventLabel = `${reviewer}${lane}`;
+    if (expectedConfigHash && event.advisory_config_hash !== expectedConfigHash) {
+      return {
+        status: "invalid_hardened_advisory",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: `Latest advisory event for required hardened lane ${eventLabel} is not bound to the round's effective advisory configuration.`,
+      };
+    }
     if (expectedLane?.gating === true && event.gating !== true) {
       return {
         status: "invalid_hardened_advisory",

@@ -364,6 +364,12 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
     ...(eventData.gating !== undefined
       ? { gating: eventData.gating === true }
       : {}),
+    ...(eventData.advisory_lanes !== undefined
+      ? { advisory_lanes: normalizeEventValue(eventData.advisory_lanes) }
+      : {}),
+    ...(eventData.advisory_config_hash !== undefined
+      ? { advisory_config_hash: normalizeEventValue(eventData.advisory_config_hash) }
+      : {}),
     ...(eventData.lane_index !== undefined
       ? { lane_index: normalizeEventValue(eventData.lane_index) }
       : {}),

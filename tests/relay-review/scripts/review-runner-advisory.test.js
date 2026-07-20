@@ -420,10 +420,17 @@ setTimeout(() => {
   return filePath;
 }
 
-function writeFakeAdvisoryCli(repoRoot, name, { delayMs = 0, logPath = null, invalidJson = false, mutate = false, requiredFinding = false } = {}) {
+function writeFakeAdvisoryCli(repoRoot, name, {
+  delayMs = 0,
+  logPath = null,
+  invalidJson = false,
+  mutate = false,
+  profile = "blindspot",
+  requiredFinding = false,
+} = {}) {
   const filePath = path.join(repoRoot, `fake-${name}.js`);
   const advisoryPayload = `JSON.stringify({
-      profile: "blindspot",
+      profile: ${JSON.stringify(profile)},
       summary: ${JSON.stringify(`${name} advisory blind spot.`)},
       required_findings: ${requiredFinding ? `[{ title: ${JSON.stringify(`${name} required fix`)}, body: "Must fix before merge.", file: "README.md", line: 1, severity: "P2", category: "bypass", confidence: 0.9 }]` : "[]"},
       advisory_findings: [{
@@ -1791,6 +1798,56 @@ test("review-runner accepts pi advisory review when route policy allows the revi
   assert.equal(event.reviewer_policy.adapter, "pi");
   assert.equal(event.reviewer_policy.phase, "advisory_review");
   assert.equal(event.reviewer_policy.safe, true);
+});
+
+test("hardened review events snapshot the CLI advisory configuration over the route plan", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo({
+    modelPolicy: "allow-pi-advisory",
+    reviewAssurance: "hardened",
+    strictEvidence: true,
+  });
+  writeJson(path.join(runDir, "route-plan.json"), {
+    version: 1,
+    phases: {
+      advisory_review: {
+        reviewer: "opencode",
+        model: "example/opencode-model-fast",
+        profile: "blindspot",
+        gating: false,
+      },
+    },
+  });
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const piScript = writeFakeAdvisoryCli(repoRoot, "pi", { profile: "adversarial" });
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript: null,
+    piScript,
+    advisoryReviewer: "pi",
+    extraArgs: [
+      "--advisory-profile", "adversarial",
+      "--advisory-reviewer-model", "openai/gpt-5",
+      "--advisory-timeout", "30",
+    ],
+  });
+  const event = readRunEvents(repoRoot, runId)
+    .find((record) => record.event === EVENTS.ADVISORY_REVIEW);
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.deepEqual(event.advisory_lanes, [{
+    lane_index: 1,
+    reviewer: "pi",
+    profile: "adversarial",
+    gating: true,
+  }]);
+  assert.match(event.advisory_config_hash, /^[a-f0-9]{64}$/);
+  assert.equal(event.profile, "adversarial");
+  assert.equal(event.reviewer, "pi");
 });
 
 test("review-runner accepts antigravity advisory review when route policy allows the reviewer model", () => {

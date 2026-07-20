@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   ADVISORY_PROFILE_DEFAULTS,
+  createAdvisoryConfigSnapshot,
   resolveHardenedBindingWaitMs,
   resolveAdvisoryConfig,
   resolveAdvisoryTimeoutSeconds,
@@ -10,6 +11,37 @@ const {
 const {
   validateRouteConfig,
 } = require("../../../skills/relay-dispatch/scripts/relay-routing");
+
+test("createAdvisoryConfigSnapshot binds effective lanes to the round and HEAD", () => {
+  const snapshot = createAdvisoryConfigSnapshot({
+    headSha: "a".repeat(40),
+    round: 3,
+    lanes: [{
+      index: 1,
+      reviewer: "pi",
+      profile: "adversarial",
+      gating: true,
+    }],
+  });
+
+  assert.deepEqual(snapshot.lanes, [{
+    lane_index: 1,
+    reviewer: "pi",
+    profile: "adversarial",
+    gating: true,
+  }]);
+  assert.equal(snapshot.head_sha, "a".repeat(40));
+  assert.equal(snapshot.round, 3);
+  assert.match(snapshot.advisory_config_hash, /^[a-f0-9]{64}$/);
+  assert.notEqual(
+    snapshot.advisory_config_hash,
+    createAdvisoryConfigSnapshot({
+      headSha: "b".repeat(40),
+      round: 3,
+      lanes: snapshot.lanes,
+    }).advisory_config_hash,
+  );
+});
 
 test("resolveHardenedBindingWaitMs defaults to 10000ms when the env var is unset", () => {
   assert.equal(resolveHardenedBindingWaitMs({}), 10000);

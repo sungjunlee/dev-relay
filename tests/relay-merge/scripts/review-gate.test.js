@@ -7,6 +7,9 @@ const path = require("path");
 
 const { buildSkipComment, evaluateReviewGate } = require("../../../skills/relay-merge/scripts/review-gate");
 const {
+  createAdvisoryConfigSnapshot,
+} = require("../../../skills/relay-review/scripts/review-runner/advisory-orchestration");
+const {
   createGrandfatheredRubricAnchor,
 } = require("../../relay-dispatch/scripts/test-support");
 
@@ -80,6 +83,9 @@ function appendEvent(runDir, event) {
 
 function createHardenedGateFixture({
   advisory = "valid",
+  advisoryConfigHeadSha = null,
+  advisoryConfigLanes = null,
+  advisoryConfigRound = null,
   advisoryHeadSha = null,
   advisoryProvenance = true,
   advisoryStatus = "success",
@@ -90,6 +96,7 @@ function createHardenedGateFixture({
   laneIndex = undefined,
   omitPayloadProfile = false,
   profile = "blindspot",
+  reviewer = "opencode",
   routePlanAdvisory = null,
   tamperAdvisoryAfterEvent = false,
   withMetadataFiles = false,
@@ -107,7 +114,7 @@ function createHardenedGateFixture({
       selected: {
         advisory_review: [
           {
-            reviewer: "opencode",
+            reviewer,
             profile,
             ...(gating === undefined ? {} : { gating }),
           },
@@ -128,7 +135,14 @@ function createHardenedGateFixture({
       },
     }, null, 2), "utf-8");
   }
-  const advisoryPath = path.join(runDir, "review-round-1-advisory-opencode.json");
+  const advisoryConfigSnapshot = advisoryConfigLanes
+    ? createAdvisoryConfigSnapshot({
+      headSha: advisoryConfigHeadSha || headSha,
+      lanes: advisoryConfigLanes,
+      round: advisoryConfigRound || 1,
+    })
+    : null;
+  const advisoryPath = path.join(runDir, `review-round-1-advisory-${reviewer}.json`);
   const resolvedArtifactProfile = artifactProfile || profile;
   const resolvedEventProfile = eventProfile || profile;
   if (advisory === "valid" || advisory === "required" || advisory === "forged-valid") {
@@ -175,8 +189,14 @@ function createHardenedGateFixture({
         event: "advisory_review",
         head_sha: headSha,
         round: 1,
-        reviewer: "opencode",
+        reviewer,
         profile: resolvedEventProfile,
+        ...(advisoryConfigSnapshot
+          ? {
+            advisory_lanes: advisoryConfigSnapshot.lanes,
+            advisory_config_hash: advisoryConfigSnapshot.advisory_config_hash,
+          }
+          : {}),
         status: "success",
         artifact_path: outside,
         advisory_artifact_hash: hashFile(outside),
@@ -197,9 +217,15 @@ function createHardenedGateFixture({
       head_sha: advisoryHeadSha || headSha,
       round: 1,
       ...(laneIndex === undefined ? {} : { lane_index: laneIndex }),
-      reviewer: "opencode",
+      reviewer,
       profile: resolvedEventProfile,
       ...(gating === undefined ? {} : { gating }),
+      ...(advisoryConfigSnapshot
+        ? {
+          advisory_lanes: advisoryConfigSnapshot.lanes,
+          advisory_config_hash: advisoryConfigSnapshot.advisory_config_hash,
+        }
+        : {}),
       status: advisoryStatus,
       artifact_path: advisoryPath,
       advisory_artifact_hash: hashFile(advisoryPath),
@@ -216,7 +242,7 @@ function createHardenedGateFixture({
   if (withMetadataFiles) {
     for (const suffix of ["request", "result", "decision"]) {
       fs.writeFileSync(
-        path.join(runDir, `review-round-1-advisory-opencode-${suffix}.json`),
+        path.join(runDir, `review-round-1-advisory-${reviewer}-${suffix}.json`),
         `${JSON.stringify({ kind: suffix, orchestration_metadata: true }, null, 2)}\n`,
         "utf-8"
       );
@@ -383,6 +409,20 @@ test("evaluateReviewGate enforces hardened advisory and strict execution evidenc
     { label: "outside-run advisory", options: { advisory: "outside" }, status: "invalid_hardened_advisory" },
     { label: "event and payload profile mismatch", options: { eventProfile: "adversarial" }, status: "invalid_hardened_advisory" },
     { label: "payload profile missing", options: { omitPayloadProfile: true }, status: "invalid_hardened_advisory" },
+    {
+      label: "advisory configuration snapshot bound to stale HEAD",
+      options: {
+        advisoryConfigHeadSha: "b".repeat(40),
+        advisoryConfigLanes: [{
+          index: 1,
+          reviewer: "opencode",
+          profile: "blindspot",
+          gating: false,
+        }],
+        laneIndex: 1,
+      },
+      status: "invalid_hardened_advisory",
+    },
     { label: "required advisory finding", options: { advisory: "required" }, status: "hardened_advisory_required_findings" },
     { label: "weak execution evidence", options: { strictEvidence: false }, status: "hardened_execution_evidence_failed" },
     { label: "strict execution evidence without provenance", options: { evidenceProvenance: false }, status: "hardened_execution_evidence_failed" },
@@ -578,6 +618,49 @@ test("evaluateReviewGate binds a route-plan gating lane to its planned profile",
   assert.equal(result.status, "invalid_hardened_advisory");
   assert.equal(result.readyToMerge, false);
   assert.match(result.reason, /binds profile 'blindspot' instead of configured profile 'adversarial'/);
+});
+
+test("evaluateReviewGate uses the round-bound CLI advisory snapshot over an older route plan", () => {
+  const advisoryConfigLanes = [{
+    index: 1,
+    reviewer: "pi",
+    profile: "adversarial",
+    gating: true,
+  }];
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({
+    advisoryConfigLanes,
+    gating: true,
+    laneIndex: 1,
+    profile: "adversarial",
+    reviewer: "pi",
+    routePlanAdvisory: {
+      reviewer: "opencode",
+      profile: "blindspot",
+      gating: false,
+    },
+  });
+  delete manifestData.routing;
+
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "lgtm");
+  assert.equal(result.readyToMerge, true);
 });
 
 test("evaluateReviewGate requires every explicit gating advisory lane to validate", async (t) => {

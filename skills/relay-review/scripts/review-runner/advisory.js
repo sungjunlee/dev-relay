@@ -144,6 +144,7 @@ function sleepSync(ms) {
 }
 
 function startAdvisoryReview({
+  advisoryConfigSnapshot = null,
   artifactReviewerName = null,
   gating = false,
   headSha,
@@ -174,6 +175,7 @@ function startAdvisoryReview({
   const startedAt = Date.now();
   const effectiveReviewerPolicy = reviewerPolicy || buildAdvisoryReviewerPolicy(reviewerName);
   const request = {
+    advisoryConfigSnapshot,
     artifactReviewerName: artifactName,
     decisionPath: paths.decisionPath,
     gating: gating === true,
@@ -374,6 +376,10 @@ function advisorySuccessBindingFailure(advisoryRun, result) {
     Number(event.round || 0) === Number(advisoryRun.round || 0) &&
     event.head_sha === advisoryRun.headSha &&
     event.reviewer === advisoryRun.reviewerName &&
+    (
+      !advisoryRun.advisoryConfigSnapshot ||
+      event.advisory_config_hash === advisoryRun.advisoryConfigSnapshot.advisory_config_hash
+    ) &&
     samePath(event.artifact_path, result.artifactPath) &&
     event.advisory_artifact_hash === result.artifactHash &&
     Number(event.required_count || 0) === Number(result.required_count || 0) &&
@@ -741,6 +747,12 @@ function executeAdvisoryRequest(request) {
       profile: request.profile,
       trigger: request.trigger || "every_round",
       gating: request.gating === true,
+      ...(request.advisoryConfigSnapshot
+        ? {
+          advisory_lanes: request.advisoryConfigSnapshot.lanes,
+          advisory_config_hash: request.advisoryConfigSnapshot.advisory_config_hash,
+        }
+        : {}),
       status,
       artifact_path: artifactPath,
       advisory_artifact_hash: artifactHash,
