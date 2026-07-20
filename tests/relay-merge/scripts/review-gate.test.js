@@ -80,7 +80,9 @@ function appendEvent(runDir, event) {
 
 function createHardenedGateFixture({
   advisory = "valid",
+  advisoryHeadSha = null,
   advisoryProvenance = true,
+  advisoryStatus = "success",
   artifactProfile = null,
   eventProfile = null,
   extraGatingLane = null,
@@ -192,13 +194,13 @@ function createHardenedGateFixture({
   ) {
     appendEvent(runDir, {
       event: "advisory_review",
-      head_sha: headSha,
+      head_sha: advisoryHeadSha || headSha,
       round: 1,
       ...(laneIndex === undefined ? {} : { lane_index: laneIndex }),
       reviewer: "opencode",
       profile: resolvedEventProfile,
       ...(gating === undefined ? {} : { gating }),
-      status: "success",
+      status: advisoryStatus,
       artifact_path: advisoryPath,
       advisory_artifact_hash: hashFile(advisoryPath),
       required_count: advisory === "required" ? 1 : 0,
@@ -616,6 +618,84 @@ test("evaluateReviewGate requires every explicit gating advisory lane to validat
 
       assert.equal(result.status, "invalid_hardened_advisory");
       assert.equal(result.readyToMerge, false);
+    });
+  }
+});
+
+test("evaluateReviewGate requires non-gating and gating configured lanes under hardened assurance", async (t) => {
+  const cases = [
+    {
+      label: "both lanes valid",
+      options: {},
+      status: "lgtm",
+      readyToMerge: true,
+    },
+    {
+      label: "non-gating blindspot event missing",
+      options: { advisory: "missing" },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+    {
+      label: "non-gating blindspot event failed",
+      options: { advisoryStatus: "failed" },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+    {
+      label: "non-gating blindspot event stale",
+      options: { advisoryHeadSha: "b".repeat(40) },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+    {
+      label: "non-gating blindspot artifact tampered",
+      options: { tamperAdvisoryAfterEvent: true },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+    {
+      label: "non-gating blindspot has required findings",
+      options: { advisory: "required" },
+      status: "hardened_advisory_required_findings",
+      readyToMerge: false,
+    },
+    {
+      label: "gating adversarial event missing",
+      options: { extraGatingLane: "missing" },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.label, () => {
+      const { headSha, runDir, manifestData } = createHardenedGateFixture({
+        extraGatingLane: "valid",
+        gating: false,
+        laneIndex: 1,
+        ...entry.options,
+      });
+      const result = evaluateReviewGate({
+        prNumber: 40,
+        comments: [
+          {
+            body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+            createdAt: "2026-04-03T08:00:00Z",
+          },
+        ],
+        commits: [
+          {
+            oid: headSha,
+            committedDate: "2026-04-03T07:00:00Z",
+          },
+        ],
+        manifestData,
+        runDir,
+      });
+
+      assert.equal(result.status, entry.status);
+      assert.equal(result.readyToMerge, entry.readyToMerge);
     });
   }
 });

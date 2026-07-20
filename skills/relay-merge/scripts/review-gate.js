@@ -254,20 +254,17 @@ function readRunRoutePlan(runDir) {
   }
 }
 
-function findExpectedGatingAdvisoryLanes(manifestData, routePlan) {
+function findExpectedAdvisoryLanes(manifestData, routePlan) {
   const { lanes } = resolveAdvisoryConfig({
     data: manifestData,
     routePlan,
   });
-  return lanes.flatMap((lane) => (
-    lane.gating === true
-      ? [{
-          lane_index: lane.index,
-          profile: lane.profile,
-          reviewer: lane.reviewer,
-        }]
-      : []
-  ));
+  return lanes.map((lane) => ({
+    gating: lane.gating,
+    lane_index: lane.index,
+    profile: lane.profile,
+    reviewer: lane.reviewer,
+  }));
 }
 
 function findLatestRequiredAdvisoryEvents(events, round, manifestData, routePlan) {
@@ -279,9 +276,9 @@ function findLatestRequiredAdvisoryEvents(events, round, manifestData, routePlan
     latestByLane.set(laneKey, event);
     if (event.gating === true) gatingLanes.add(laneKey);
   }
-  const expectedGatingLanes = findExpectedGatingAdvisoryLanes(manifestData, routePlan);
-  if (expectedGatingLanes.length > 0) {
-    return expectedGatingLanes.map((expectedLane) => ({
+  const expectedLanes = findExpectedAdvisoryLanes(manifestData, routePlan);
+  if (expectedLanes.length > 0) {
+    return expectedLanes.map((expectedLane) => ({
       event: latestByLane.get(advisoryLaneKey(expectedLane)) || null,
       expectedLane,
     }));
@@ -292,9 +289,9 @@ function findLatestRequiredAdvisoryEvents(events, round, manifestData, routePlan
       expectedLane: null,
     }));
   }
-  // Events written before lane gating was persisted represent a single
-  // implicit hardened lane. Preserve that contract by validating every latest
-  // legacy lane when no explicit gating lane exists.
+  // Events written before advisory lanes were configured represent a single
+  // implicit hardened lane. Preserve that historical contract by validating
+  // every latest legacy lane when no configured lane exists.
   return [...latestByLane.values()].map((event) => ({
     event,
     expectedLane: null,
@@ -415,7 +412,7 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
         status: "invalid_hardened_advisory",
         pr: prNumber,
         readyToMerge: false,
-        reason: `Required gating advisory lane ${expectedReviewer} lane ${expectedLane.lane_index} has no advisory_review event for round ${round}.`,
+        reason: `Required hardened advisory lane ${expectedReviewer} lane ${expectedLane.lane_index} has no advisory_review event for round ${round}.`,
       };
     }
     const reviewer = typeof event?.reviewer === "string" && event.reviewer.trim()
@@ -425,12 +422,12 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       ? ` lane ${event.lane_index}`
       : "";
     const eventLabel = `${reviewer}${lane}`;
-    if (expectedLane && event.gating !== true) {
+    if (expectedLane?.gating === true && event.gating !== true) {
       return {
         status: "invalid_hardened_advisory",
         pr: prNumber,
         readyToMerge: false,
-        reason: `Latest advisory event for required gating lane ${eventLabel} is not marked as gating.`,
+        reason: `Latest advisory event for configured gating lane ${eventLabel} is not marked as gating.`,
       };
     }
     if (event.gating === true && (reviewer === "unknown reviewer" || !lane)) {
@@ -478,7 +475,7 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
         status: "invalid_hardened_advisory",
         pr: prNumber,
         readyToMerge: false,
-        reason: `Latest advisory event for required gating lane ${eventLabel} binds profile '${event.profile}' instead of configured profile '${expectedLane.profile || "missing"}'.`,
+        reason: `Latest advisory event for required hardened lane ${eventLabel} binds profile '${event.profile}' instead of configured profile '${expectedLane.profile || "missing"}'.`,
       };
     }
     try {
