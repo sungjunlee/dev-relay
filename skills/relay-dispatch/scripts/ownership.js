@@ -29,10 +29,18 @@ function normalizeSprintPath(value, label) {
     throw new OwnershipValidationError(`${label}.sprint must not contain dot path segments`);
   }
 
-  const anchored = `/${sprint}`;
-  const marker = "/backlog/sprints/";
-  const markerIndex = anchored.lastIndexOf(marker);
-  const relative = markerIndex === -1 ? null : anchored.slice(markerIndex + marker.length);
+  const canonicalPrefix = "backlog/sprints/";
+  const absoluteMarker = `/${canonicalPrefix}`;
+  const isAbsolute = sprint.startsWith("/") || /^[A-Za-z]:\//.test(sprint);
+  let relative = null;
+
+  if (sprint.startsWith(canonicalPrefix)) {
+    relative = sprint.slice(canonicalPrefix.length);
+  } else if (isAbsolute) {
+    const markerParts = sprint.split(absoluteMarker);
+    if (markerParts.length === 2) relative = markerParts[1];
+  }
+
   if (
     !relative
     || relative.includes("/")
@@ -44,7 +52,7 @@ function normalizeSprintPath(value, label) {
       `${label}.sprint must identify one markdown file under backlog/sprints/`
     );
   }
-  return sprint;
+  return `${canonicalPrefix}${relative}`;
 }
 
 function normalizeSlug(value, field, label) {

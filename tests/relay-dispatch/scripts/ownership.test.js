@@ -8,6 +8,10 @@ const {
   ownershipsEqual,
   parseOwnershipJson,
 } = require("../../../skills/relay-dispatch/scripts/ownership");
+const {
+  OWNER_SOURCES,
+  readManifestOwnership,
+} = require("../../../skills/relay-merge/scripts/sprint-owner");
 
 const OWNER = Object.freeze({
   sprint: "backlog/sprints/2026-07-relay-fleet.md",
@@ -25,6 +29,34 @@ test("normalizeOwnership returns the exact typed fleet owner", () => {
   assert.deepEqual(owner, OWNER);
   assert.equal(Object.isFrozen(owner), true);
   assert.equal(ownershipsEqual(owner, OWNER), true);
+});
+
+test("normalizeOwnership canonicalizes absolute and repo-relative sprint spellings", () => {
+  const relative = normalizeOwnership(OWNER);
+  const absolute = normalizeOwnership({
+    ...OWNER,
+    sprint: "/tmp/example-repo/backlog/sprints/2026-07-relay-fleet.md",
+  });
+
+  assert.deepEqual(relative, OWNER);
+  assert.deepEqual(absolute, OWNER);
+  assert.equal(ownershipsEqual(relative, absolute), true);
+  assert.deepEqual(readManifestOwnership({ ownership: absolute }), {
+    ...OWNER,
+    source: OWNER_SOURCES.FLEET,
+  });
+});
+
+test("normalizeOwnership rejects prefixed relative and repeated sprint markers", () => {
+  for (const sprint of [
+    "other/backlog/sprints/2026-07-relay-fleet.md",
+    "/tmp/backlog/sprints/nested/backlog/sprints/2026-07-relay-fleet.md",
+  ]) {
+    assert.throws(
+      () => normalizeOwnership({ ...OWNER, sprint }),
+      /must identify one markdown file under backlog\/sprints\//
+    );
+  }
 });
 
 test("normalizeOwnership rejects missing, opaque, extra, and malformed owner fields", () => {

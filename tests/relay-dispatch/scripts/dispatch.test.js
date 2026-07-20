@@ -8609,7 +8609,7 @@ test("resolveReasoningEffort override returns directly and silences unparseable 
   assert.equal(writes.join(""), "");
 });
 
-test("dispatch persists typed fleet ownership and rejects resume-time drift", () => {
+test("dispatch canonicalizes typed fleet ownership and rejects only real resume-time drift", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -8620,12 +8620,16 @@ test("dispatch persists typed fleet ownership and rejects resume-time drift", ()
     track: "2026-07-relay-fleet",
     component: "relay-fleet",
   };
+  const absoluteOwnership = {
+    ...ownership,
+    sprint: path.join(repoRoot, ownership.sprint),
+  };
 
   const first = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-957-ownership",
     "--prompt", "persist fleet ownership",
     "--fleet-id", "fleet-957-ownership",
-    "--ownership-json", JSON.stringify(ownership),
+    "--ownership-json", JSON.stringify(absoluteOwnership),
     "--publish-policy", "after-internal-review",
     "--json",
   ], env));
@@ -8639,6 +8643,17 @@ test("dispatch persists typed fleet ownership and rejects resume-time drift", ()
     "ownership_resume_test"
   );
   writeManifest(first.manifestPath, changesRequested, record.body);
+
+  const equivalent = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--manifest", first.manifestPath,
+    "--prompt", "resume equivalent fleet ownership",
+    "--ownership-json", JSON.stringify(ownership),
+    "--dry-run",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.equal(equivalent.status, 0, equivalent.stderr);
+  assert.deepEqual(JSON.parse(equivalent.stdout).ownership, ownership);
 
   const drifted = { ...ownership, component: "other-component" };
   const rejected = spawnSync(process.execPath, [SCRIPT, repoRoot,

@@ -864,6 +864,26 @@ test("relay-fleet rejects missing and mixed ownership before manifest or dispatc
       },
       pattern: /contradictory ownership within track.*leaf-01=.*leaf-02=/i,
     },
+    {
+      name: "prefixed-relative-sprint",
+      mutate(leaves) {
+        leaves[0].ownership = {
+          ...TEST_OWNERSHIP,
+          sprint: `other/${TEST_OWNERSHIP.sprint}`,
+        };
+      },
+      pattern: /must identify one markdown file under backlog\/sprints\//i,
+    },
+    {
+      name: "repeated-sprint-marker",
+      mutate(leaves) {
+        leaves[0].ownership = {
+          ...TEST_OWNERSHIP,
+          sprint: `/tmp/backlog/sprints/nested/${TEST_OWNERSHIP.sprint}`,
+        };
+      },
+      pattern: /must identify one markdown file under backlog\/sprints\//i,
+    },
   ]) {
     const { relayHome, repoRoot } = setupRepo(`relay-fleet-owner-${fixture.name}-`);
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-owner-fake-"));
