@@ -17,7 +17,7 @@ Relay resolves and carries an owning sprint track explicitly across standalone f
 
 ### Batch 0 — eliminate the finalize singleton
 
-- [ ] #955 append-learnings: resolve and carry the owning sprint without canonical-checkout branch dependence
+- [~] #955 append-learnings: resolve and carry the owning sprint without canonical-checkout branch dependence → run issue-955-20260720171527060-5631994b, branch issue-955
 
 ### Batch 1 — align operator contracts
 
@@ -41,4 +41,5 @@ Relay resolves and carries an owning sprint track explicitly across standalone f
 
 ## Progress
 
+- 2026-07-21: #955 dispatched through the hardened cursor + cline adversarial route as run `issue-955-20260720171527060-5631994b`; frozen criteria include standalone multi-track resolution and canonical-branch/push-race-independent Learnings durability.
 - 2026-07-21: Activated after #1036 merged in PR #1048. Live GitHub recheck confirmed #954–#957 remain open under milestone #13 and dev-backlog#291 is closed.
