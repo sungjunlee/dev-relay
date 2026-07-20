@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
 const { classifyPostDecisionPhase } = require("../../../relay-dispatch/scripts/advisory-timing");
 const { ADAPTER_PHASES } = require("../../../relay-dispatch/scripts/agent-adapters");
@@ -146,6 +147,63 @@ function assignArtifactReviewerNames(lanes) {
         : lane.reviewer,
     };
   });
+}
+
+function createAdvisoryConfigSnapshot({ headSha, lanes, round }) {
+  const normalizedHeadSha = nonEmptyString(headSha);
+  if (!normalizedHeadSha) {
+    throw new Error("advisory configuration snapshot requires headSha");
+  }
+  const normalizedRound = Number(round);
+  if (!Number.isSafeInteger(normalizedRound) || normalizedRound <= 0) {
+    throw new Error("advisory configuration snapshot requires a positive round");
+  }
+  if (!Array.isArray(lanes) || lanes.length === 0) {
+    throw new Error("advisory configuration snapshot requires at least one lane");
+  }
+  const laneKeys = new Set();
+  const normalizedLanes = lanes.map((lane, index) => {
+    const laneIndex = Number(lane?.lane_index ?? lane?.index);
+    if (!Number.isSafeInteger(laneIndex) || laneIndex <= 0) {
+      throw new Error(`advisory configuration snapshot lane ${index + 1} requires a positive lane index`);
+    }
+    const reviewer = nonEmptyString(lane?.reviewer);
+    if (!reviewer) {
+      throw new Error(`advisory configuration snapshot lane ${index + 1} requires reviewer`);
+    }
+    const configuredProfile = nonEmptyString(lane?.profile);
+    if (!configuredProfile) {
+      throw new Error(`advisory configuration snapshot lane ${index + 1} requires profile`);
+    }
+    const profile = validateAdvisoryProfile(configuredProfile);
+    if (typeof lane?.gating !== "boolean") {
+      throw new Error(`advisory configuration snapshot lane ${index + 1} requires boolean gating`);
+    }
+    const laneKey = `${reviewer}\u0000${laneIndex}`;
+    if (laneKeys.has(laneKey)) {
+      throw new Error(`advisory configuration snapshot has duplicate reviewer/lane identity ${reviewer}/${laneIndex}`);
+    }
+    laneKeys.add(laneKey);
+    return {
+      lane_index: laneIndex,
+      reviewer,
+      profile,
+      gating: lane.gating,
+    };
+  });
+  const payload = {
+    version: 1,
+    head_sha: normalizedHeadSha,
+    round: normalizedRound,
+    lanes: normalizedLanes,
+  };
+  return {
+    ...payload,
+    advisory_config_hash: crypto
+      .createHash("sha256")
+      .update(JSON.stringify(payload))
+      .digest("hex"),
+  };
 }
 
 function resolveAdvisoryConfig({
@@ -312,6 +370,11 @@ function startConfiguredAdvisory({
   const lanePreflights = preflightConfiguredAdvisoryLanes({ config, data, runRepoPath })
     .filter(({ lane }) => lane.trigger === trigger);
   if (!lanePreflights.length) return { advisoryRuns: [], resultAdvisory: undefined };
+  const advisoryConfigSnapshot = createAdvisoryConfigSnapshot({
+    headSha: reviewedHeadSha,
+    lanes: config.lanes,
+    round,
+  });
   const advisoryRuns = [];
   const resultAdvisories = [];
   for (const { advisoryModel, lane, policyDecision, reviewerPolicy, reviewerScript } of lanePreflights) {
@@ -327,6 +390,7 @@ function startConfiguredAdvisory({
       rubricLoad,
     });
     const advisoryRun = startAdvisoryReview({
+      advisoryConfigSnapshot,
       artifactReviewerName: lane.artifactReviewerName,
       gating: lane.gating,
       headSha: reviewedHeadSha,
@@ -509,6 +573,7 @@ async function settleConfiguredAdvisories({ advisoryRuns, config, currentState, 
 module.exports = {
   ADVISORY_PROFILE_DEFAULTS,
   appendAdvisoryRunsForTrigger,
+  createAdvisoryConfigSnapshot,
   createAdvisorySettlementDeadline,
   preflightConfiguredAdvisoryLanes,
   resolveAdvisoryConfig,

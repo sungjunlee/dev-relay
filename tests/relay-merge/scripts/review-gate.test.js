@@ -7,6 +7,9 @@ const path = require("path");
 
 const { buildSkipComment, evaluateReviewGate } = require("../../../skills/relay-merge/scripts/review-gate");
 const {
+  createAdvisoryConfigSnapshot,
+} = require("../../../skills/relay-review/scripts/review-runner/advisory-orchestration");
+const {
   createGrandfatheredRubricAnchor,
 } = require("../../relay-dispatch/scripts/test-support");
 
@@ -80,8 +83,23 @@ function appendEvent(runDir, event) {
 
 function createHardenedGateFixture({
   advisory = "valid",
+  advisoryConfigHeadSha = null,
+  advisoryConfigLanes = null,
+  advisoryConfigRound = null,
+  advisoryHeadSha = null,
   advisoryProvenance = true,
+  advisoryStatus = "success",
+  artifactProfile = null,
+  eventProfile = null,
+  extraGatingLane = null,
+  gating = undefined,
+  laneIndex = undefined,
+  omitPayloadProfile = false,
+  profile = "blindspot",
+  reviewer = "opencode",
+  routePlanAdvisory = null,
   tamperAdvisoryAfterEvent = false,
+  withMetadataFiles = false,
   evidenceProvenance = true,
   strictEvidence = true,
   verificationRuns = false,
@@ -91,10 +109,45 @@ function createHardenedGateFixture({
   manifestData.policy = { review_assurance: "hardened" };
   manifestData.review.rounds = 1;
   manifestData.review.last_reviewed_sha = headSha;
-  const advisoryPath = path.join(runDir, "review-round-1-advisory-opencode.json");
+  if (gating !== undefined || extraGatingLane) {
+    manifestData.routing = {
+      selected: {
+        advisory_review: [
+          {
+            reviewer,
+            profile,
+            ...(gating === undefined ? {} : { gating }),
+          },
+          ...(extraGatingLane ? [{
+            reviewer: "claude",
+            profile: "adversarial",
+            gating: true,
+          }] : []),
+        ],
+      },
+    };
+  }
+  if (routePlanAdvisory) {
+    fs.writeFileSync(path.join(runDir, "route-plan.json"), JSON.stringify({
+      version: 1,
+      phases: {
+        advisory_review: routePlanAdvisory,
+      },
+    }, null, 2), "utf-8");
+  }
+  const advisoryConfigSnapshot = advisoryConfigLanes
+    ? createAdvisoryConfigSnapshot({
+      headSha: advisoryConfigHeadSha || headSha,
+      lanes: advisoryConfigLanes,
+      round: advisoryConfigRound || 1,
+    })
+    : null;
+  const advisoryPath = path.join(runDir, `review-round-1-advisory-${reviewer}.json`);
+  const resolvedArtifactProfile = artifactProfile || profile;
+  const resolvedEventProfile = eventProfile || profile;
   if (advisory === "valid" || advisory === "required" || advisory === "forged-valid") {
     fs.writeFileSync(advisoryPath, JSON.stringify({
-      profile: "blindspot",
+      ...(omitPayloadProfile ? {} : { profile: resolvedArtifactProfile }),
       summary: "advisory",
       required_findings: advisory === "required" ? [{
         title: "Required",
@@ -108,26 +161,6 @@ function createHardenedGateFixture({
       advisory_findings: [],
       duplicate_or_low_confidence: [],
     }, null, 2), "utf-8");
-    if (advisory !== "forged-valid" && advisoryProvenance) {
-      appendEvent(runDir, {
-        event: "advisory_review",
-        head_sha: headSha,
-        round: 1,
-        reviewer: "opencode",
-        profile: "blindspot",
-        status: "success",
-        artifact_path: advisoryPath,
-        advisory_artifact_hash: hashFile(advisoryPath),
-        required_count: advisory === "required" ? 1 : 0,
-        advisory_count: 0,
-        duplicate_low_confidence_count: 0,
-      });
-      if (tamperAdvisoryAfterEvent) {
-        const tampered = JSON.parse(fs.readFileSync(advisoryPath, "utf-8"));
-        tampered.summary = "tampered after advisory event";
-        fs.writeFileSync(advisoryPath, `${JSON.stringify(tampered, null, 2)}\n`, "utf-8");
-      }
-    }
   } else if (advisory === "invalid") {
     fs.writeFileSync(advisoryPath, "not json\n", "utf-8");
   } else if (advisory === "forged") {
@@ -142,6 +175,118 @@ function createHardenedGateFixture({
       duplicate_or_low_confidence: [],
     }), "utf-8");
     fs.symlinkSync(outside, advisoryPath);
+  } else if (advisory === "outside") {
+    const outside = path.join(os.tmpdir(), `relay-review-advisory-outside-${process.pid}-${Date.now()}.json`);
+    fs.writeFileSync(outside, JSON.stringify({
+      profile,
+      summary: "outside advisory",
+      required_findings: [],
+      advisory_findings: [],
+      duplicate_or_low_confidence: [],
+    }), "utf-8");
+    if (advisoryProvenance) {
+      appendEvent(runDir, {
+        event: "advisory_review",
+        head_sha: headSha,
+        round: 1,
+        reviewer,
+        profile: resolvedEventProfile,
+        ...(advisoryConfigSnapshot
+          ? {
+            advisory_lanes: advisoryConfigSnapshot.lanes,
+            advisory_config_hash: advisoryConfigSnapshot.advisory_config_hash,
+          }
+          : {}),
+        status: "success",
+        artifact_path: outside,
+        advisory_artifact_hash: hashFile(outside),
+        required_count: 0,
+        advisory_count: 0,
+        duplicate_low_confidence_count: 0,
+      });
+    }
+  }
+  if (
+    advisoryProvenance &&
+    advisory !== "missing" &&
+    advisory !== "forged-valid" &&
+    advisory !== "outside"
+  ) {
+    appendEvent(runDir, {
+      event: "advisory_review",
+      head_sha: advisoryHeadSha || headSha,
+      round: 1,
+      ...(laneIndex === undefined ? {} : { lane_index: laneIndex }),
+      reviewer,
+      profile: resolvedEventProfile,
+      ...(gating === undefined ? {} : { gating }),
+      ...(advisoryConfigSnapshot
+        ? {
+          advisory_lanes: advisoryConfigSnapshot.lanes,
+          advisory_config_hash: advisoryConfigSnapshot.advisory_config_hash,
+        }
+        : {}),
+      status: advisoryStatus,
+      artifact_path: advisoryPath,
+      advisory_artifact_hash: hashFile(advisoryPath),
+      required_count: advisory === "required" ? 1 : 0,
+      advisory_count: 0,
+      duplicate_low_confidence_count: 0,
+    });
+    if (tamperAdvisoryAfterEvent) {
+      const tampered = JSON.parse(fs.readFileSync(advisoryPath, "utf-8"));
+      tampered.summary = "tampered after advisory event";
+      fs.writeFileSync(advisoryPath, `${JSON.stringify(tampered, null, 2)}\n`, "utf-8");
+    }
+  }
+  if (withMetadataFiles) {
+    for (const suffix of ["request", "result", "decision"]) {
+      fs.writeFileSync(
+        path.join(runDir, `review-round-1-advisory-${reviewer}-${suffix}.json`),
+        `${JSON.stringify({ kind: suffix, orchestration_metadata: true }, null, 2)}\n`,
+        "utf-8"
+      );
+    }
+  }
+  if (extraGatingLane && extraGatingLane !== "missing") {
+    const extraArtifactPath = path.join(runDir, "review-round-1-advisory-claude.json");
+    fs.writeFileSync(extraArtifactPath, JSON.stringify({
+      profile: "adversarial",
+      summary: "second gating lane",
+      required_findings: [],
+      advisory_findings: [],
+      duplicate_or_low_confidence: [],
+    }, null, 2), "utf-8");
+    appendEvent(runDir, {
+      event: "advisory_review",
+      head_sha: headSha,
+      round: 1,
+      lane_index: 2,
+      reviewer: "claude",
+      profile: "adversarial",
+      gating: true,
+      status: "success",
+      artifact_path: extraArtifactPath,
+      advisory_artifact_hash: hashFile(extraArtifactPath),
+      required_count: 0,
+      advisory_count: 0,
+      duplicate_low_confidence_count: 0,
+    });
+    appendEvent(runDir, {
+      event: "advisory_review",
+      head_sha: extraGatingLane === "stale" ? "b".repeat(40) : headSha,
+      round: 1,
+      lane_index: 2,
+      reviewer: "claude",
+      profile: "adversarial",
+      gating: true,
+      status: extraGatingLane === "failed" ? "failed" : "success",
+      artifact_path: extraGatingLane === "unbound" ? null : extraArtifactPath,
+      advisory_artifact_hash: extraGatingLane === "unbound" ? null : hashFile(extraArtifactPath),
+      required_count: 0,
+      advisory_count: 0,
+      duplicate_low_confidence_count: 0,
+    });
   }
   const evidencePath = path.join(runDir, "execution-evidence.json");
   fs.writeFileSync(evidencePath, JSON.stringify({
@@ -258,9 +403,26 @@ test("evaluateReviewGate enforces hardened advisory and strict execution evidenc
     { label: "missing advisory", options: { advisory: "missing" }, status: "missing_hardened_advisory" },
     { label: "invalid advisory", options: { advisory: "invalid" }, status: "invalid_hardened_advisory" },
     { label: "forged advisory", options: { advisory: "forged" }, status: "invalid_hardened_advisory" },
-    { label: "valid-shaped advisory without provenance", options: { advisory: "forged-valid" }, status: "invalid_hardened_advisory" },
+    { label: "valid-shaped advisory without provenance", options: { advisory: "forged-valid" }, status: "missing_hardened_advisory" },
     { label: "advisory tampered after provenance event", options: { tamperAdvisoryAfterEvent: true }, status: "invalid_hardened_advisory" },
     { label: "symlink advisory", options: { advisory: "symlink" }, status: "invalid_hardened_advisory" },
+    { label: "outside-run advisory", options: { advisory: "outside" }, status: "invalid_hardened_advisory" },
+    { label: "event and payload profile mismatch", options: { eventProfile: "adversarial" }, status: "invalid_hardened_advisory" },
+    { label: "payload profile missing", options: { omitPayloadProfile: true }, status: "invalid_hardened_advisory" },
+    {
+      label: "advisory configuration snapshot bound to stale HEAD",
+      options: {
+        advisoryConfigHeadSha: "b".repeat(40),
+        advisoryConfigLanes: [{
+          index: 1,
+          reviewer: "opencode",
+          profile: "blindspot",
+          gating: false,
+        }],
+        laneIndex: 1,
+      },
+      status: "invalid_hardened_advisory",
+    },
     { label: "required advisory finding", options: { advisory: "required" }, status: "hardened_advisory_required_findings" },
     { label: "weak execution evidence", options: { strictEvidence: false }, status: "hardened_execution_evidence_failed" },
     { label: "strict execution evidence without provenance", options: { evidenceProvenance: false }, status: "hardened_execution_evidence_failed" },
@@ -359,6 +521,266 @@ test("evaluateReviewGate accepts hardened PASS when advisory and strict evidence
 
   assert.equal(result.status, "lgtm");
   assert.equal(result.readyToMerge, true);
+});
+
+test("evaluateReviewGate accepts #981 adversarial artifact while ignoring orchestration metadata", () => {
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({
+    gating: true,
+    laneIndex: 1,
+    profile: "adversarial",
+    withMetadataFiles: true,
+  });
+  const result = evaluateReviewGate({
+    prNumber: 1014,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "lgtm");
+  assert.equal(result.readyToMerge, true);
+});
+
+test("evaluateReviewGate binds an explicit gating lane to its configured profile", () => {
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({
+    artifactProfile: "blindspot",
+    eventProfile: "blindspot",
+    gating: true,
+    laneIndex: 1,
+    profile: "adversarial",
+  });
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "invalid_hardened_advisory");
+  assert.equal(result.readyToMerge, false);
+  assert.match(result.reason, /binds profile 'blindspot' instead of configured profile 'adversarial'/);
+});
+
+test("evaluateReviewGate binds a route-plan gating lane to its planned profile", () => {
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({
+    artifactProfile: "blindspot",
+    eventProfile: "blindspot",
+    gating: true,
+    laneIndex: 1,
+    routePlanAdvisory: {
+      reviewer: "opencode",
+      profile: "adversarial",
+      gating: true,
+    },
+  });
+  delete manifestData.routing;
+
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "invalid_hardened_advisory");
+  assert.equal(result.readyToMerge, false);
+  assert.match(result.reason, /binds profile 'blindspot' instead of configured profile 'adversarial'/);
+});
+
+test("evaluateReviewGate uses the round-bound CLI advisory snapshot over an older route plan", () => {
+  const advisoryConfigLanes = [{
+    index: 1,
+    reviewer: "pi",
+    profile: "adversarial",
+    gating: true,
+  }];
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({
+    advisoryConfigLanes,
+    gating: true,
+    laneIndex: 1,
+    profile: "adversarial",
+    reviewer: "pi",
+    routePlanAdvisory: {
+      reviewer: "opencode",
+      profile: "blindspot",
+      gating: false,
+    },
+  });
+  delete manifestData.routing;
+
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "lgtm");
+  assert.equal(result.readyToMerge, true);
+});
+
+test("evaluateReviewGate requires every explicit gating advisory lane to validate", async (t) => {
+  for (const extraGatingLane of ["missing", "failed", "stale", "unbound"]) {
+    await t.test(extraGatingLane, () => {
+      const { headSha, runDir, manifestData } = createHardenedGateFixture({
+        extraGatingLane,
+        gating: true,
+        laneIndex: 1,
+      });
+      if (extraGatingLane === "missing") {
+        const events = fs.readFileSync(path.join(runDir, "events.jsonl"), "utf-8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        assert.equal(
+          events.some((event) => event.event === "advisory_review" && event.reviewer === "claude"),
+          false,
+        );
+      }
+      const result = evaluateReviewGate({
+        prNumber: 40,
+        comments: [
+          {
+            body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+            createdAt: "2026-04-03T08:00:00Z",
+          },
+        ],
+        commits: [
+          {
+            oid: headSha,
+            committedDate: "2026-04-03T07:00:00Z",
+          },
+        ],
+        manifestData,
+        runDir,
+      });
+
+      assert.equal(result.status, "invalid_hardened_advisory");
+      assert.equal(result.readyToMerge, false);
+    });
+  }
+});
+
+test("evaluateReviewGate requires non-gating and gating configured lanes under hardened assurance", async (t) => {
+  const cases = [
+    {
+      label: "both lanes valid",
+      options: {},
+      status: "lgtm",
+      readyToMerge: true,
+    },
+    {
+      label: "non-gating blindspot event missing",
+      options: { advisory: "missing" },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+    {
+      label: "non-gating blindspot event failed",
+      options: { advisoryStatus: "failed" },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+    {
+      label: "non-gating blindspot event stale",
+      options: { advisoryHeadSha: "b".repeat(40) },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+    {
+      label: "non-gating blindspot artifact tampered",
+      options: { tamperAdvisoryAfterEvent: true },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+    {
+      label: "non-gating blindspot has required findings",
+      options: { advisory: "required" },
+      status: "hardened_advisory_required_findings",
+      readyToMerge: false,
+    },
+    {
+      label: "gating adversarial event missing",
+      options: { extraGatingLane: "missing" },
+      status: "invalid_hardened_advisory",
+      readyToMerge: false,
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.label, () => {
+      const { headSha, runDir, manifestData } = createHardenedGateFixture({
+        extraGatingLane: "valid",
+        gating: false,
+        laneIndex: 1,
+        ...entry.options,
+      });
+      const result = evaluateReviewGate({
+        prNumber: 40,
+        comments: [
+          {
+            body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+            createdAt: "2026-04-03T08:00:00Z",
+          },
+        ],
+        commits: [
+          {
+            oid: headSha,
+            committedDate: "2026-04-03T07:00:00Z",
+          },
+        ],
+        manifestData,
+        runDir,
+      });
+
+      assert.equal(result.status, entry.status);
+      assert.equal(result.readyToMerge, entry.readyToMerge);
+    });
+  }
 });
 
 test("evaluateReviewGate trusts operator-recorded execution evidence provenance", () => {
