@@ -4,7 +4,7 @@ status: completed
 started: 2026-07-09
 due: TBD
 objectives: []
-component: "fleet-orchestration"
+component: "dispatch-execution"
 ---
 
 # fleet-hygiene-reliability

@@ -24,6 +24,12 @@ Probe signals (test frameworks, type strictness, linters) are exposed as data, n
 ### No auto-mutation of shared files
 Sprint files and `_context.md` are human-curated. Relay reports candidates at sprint close; humans promote. Auto-append creates stale-review queues.
 
+### Unified route configuration is the single source of truth
+`routes.json` drives dispatch and review routing. It maps into the existing policy-shaped object in memory; do not generate a derived `policy.json`, and keep `evaluateRelayRoute()` behavior stable. Legacy `policy.json` holders retain legacy precedence until explicitly migrated.
+
+### Route-facing documentation requires the full repository gate
+Relay configuration vocabulary is exposed through both `skills/relay-config/` and the delegated core under `skills/relay-dispatch/`. Changes to either surface, especially SKILL.md wording, must run the serialized full repository suite because sibling suites pin the public prose and aliases.
+
 ## Known Gotchas
 
 ### `rubric-lifecycle-gap`

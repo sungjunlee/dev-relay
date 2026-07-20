@@ -1,18 +1,18 @@
 ---
 id: RELAY-782
 title: 'Route presets: --route-preset, /relay natural-language mapping, model catalog (Phase B)'
-status: To Do
+status: Done
 labels:
   - enhancement
   - workflow
 priority: medium
-milestone: 
+milestone: Route Config Simplification
 created_date: '2026-07-05'
 ---
 ## Description
 ## Context
 
-Design: [docs/route-config-simplification-design.md](../blob/main/docs/route-config-simplification-design.md) (Phase B). Depends on Phase A (#781: unified routes.json with `presets`).
+Design: [docs/route-config-simplification-design.md](../../docs/route-config-simplification-design.md) (Phase B). Depends on Phase A (#781: unified routes.json with `presets`).
 
 Per-run routing intent today costs three remembered flags (`--executor --model --advisory-reviewer ...`). Presets make it one word, and `/relay` maps natural language onto that word.
 
@@ -26,14 +26,15 @@ Per-run routing intent today costs three remembered flags (`--executor --model -
 
 ## Acceptance Criteria
 
-- [ ] `--route-preset light` alone dispatches the preset executor+model; `--route-preset light --executor codex` dispatches codex (flag precedence).
-- [ ] Preset expansion visible in route-plan snapshot with per-field `source: "preset:light"`.
-- [ ] Unknown preset name fails with the available-preset list (no partial dispatch).
-- [ ] A preset carrying `advisory_review` causes review-runner to start the advisory lane without extra flags.
-- [ ] `/relay` SKILL.md contains the natural-language → preset mapping table (full repo suite guards prose contracts).
-- [ ] model-catalog.md carries date, staleness note, and non-authority disclaimer.
+- [x] `--route-preset light` alone dispatches the preset executor+model; `--route-preset light --executor codex` dispatches codex (flag precedence).
+- [x] Preset expansion visible in route-plan snapshot with per-field `source: "preset:light"`.
+- [x] Unknown preset name fails with the available-preset list (no partial dispatch).
+- [x] A preset carrying `advisory_review` causes review-runner to start the advisory lane without extra flags.
+- [x] `/relay` SKILL.md contains the natural-language → preset mapping table (full repo suite guards prose contracts).
+- [x] model-catalog.md carries date, staleness note, and non-authority disclaimer.
 
 ## Dependencies
 
 Blocked by Phase A (#781). Related: #109 (per-phase model hints — presets deliver the per-run cost/quality intent it described at the bundle level).
 
+Completion evidence: PR #813 merged and GitHub issue #782 closed on 2026-07-07.

@@ -1,6 +1,6 @@
 ---
 milestone: Route Config Simplification
-status: active
+status: completed
 started: 2026-07-05
 due: TBD
 objectives: []
@@ -29,21 +29,21 @@ Route selection is one user-facing concept: a single routes.json schema drives d
 
 ### Batch 4 — self-audit (Phase C, now unblocked)
 
-- [ ] #783 relay-config revise mode: gaps --json, conversational amendments, migrate (Phase C) — M; deps satisfied (Phase A/B merged; #825 provider-aware model resolution merged). Keep `gaps`/`migrate` additive. Do not absorb #833/#834 into this issue unless AC is explicitly amended.
+- [ ] #783 relay-config revise mode: gaps --json, conversational amendments, migrate (Phase C) — **deferred to backlog 2026-07-20**; stale PR #848 closed unmerged and its relay run closed. Replan from current main rather than replaying the conflicting branch.
 
 ### Batch 5 — linked-worktree base correctness
 
-- [ ] #809 linked-worktree dispatch records invalid local-only base branch — S/M; fix remote-valid base resolution and prevent `worktree-*` durability side effects. Coordinate with #795 semantics, but do not silently broaden into all local-ahead behavior unless the same small fix naturally covers it.
+- [x] #809 linked-worktree dispatch records invalid local-only base branch — closed 2026-07-09 after the remote-valid base and linked-worktree corrections landed.
 
 ### Batch 6 — provider-aware model resolution hardening
 
-- [ ] #833 fixture-drive live model-list parser coverage — S; do before #834 so freshness reporting can distinguish parser drift from catalog staleness.
-- [ ] #834 model catalog freshness reporting — S; informational doctor/report only, no route auto-update and no dispatch/review blocking.
+- [x] #833 fixture-drive live model-list parser coverage — closed by PR #837.
+- [x] #834 model catalog freshness reporting — closed by PR #837.
 
 ### Unplanned (found during Batch 1 execution)
 
 - [x] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; superseded by #785 (other session's three-case worktree matrix, PR #797); PR #789 closed unmerged, part 2 follow-up tracked in #785's thread
-- [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — related to #809 but still deferred unless #809's remote-base fix naturally covers it; avoid broad base-policy refactor without a current failing repro.
+- [x] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — closed 2026-07-09 after the base-resolution work removed the reported behavior.
 - [x] #805 validateManifestPaths rejects relay worktrees for runs dispatched from a linked worktree (basename mismatch) — PR #810 merged; fix proven live by gate-check passing for PR #811 via normal --repo resolution
 - [x] #809 promoted into Batch 5 after #815/#819 closed and #825 landed; work status is tracked by the Batch 5 Plan item.
 - [x] #807 finalize-run post-merge crash — resolved via PR #814.
@@ -62,6 +62,11 @@ Route selection is one user-facing concept: a single routes.json schema drives d
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-20 (closeout reconciliation)
+- Reconciled the sprint against current GitHub state: #795 and #809 were already closed on 2026-07-09, and #833/#834 were closed by PR #837. PR #1038 for the #816-adjacent audit fix has also merged.
+- Deferred #783 without claiming completion. PR #848 was 79 commits behind current main and conflicting after the risk-adaptive redesign, so it was closed unmerged; relay run `issue-783-20260708123338704-4521864f` was closed through the normal validated transition. #783 remains open and unmilestoned for a fresh current-main replan.
+- With every remaining milestone item completed or explicitly returned to backlog, this sprint can close early and the Assurance and Calibration Integrity sprint can become the single active execution hub.
 
 ### 2026-07-19 (#816 rebaseline and narrow audit fix)
 - Rebaselined `edcff70` in a clean WSL2 Linux ext4 clone with Node v22.22.3. Relay-fleet solo passed 89/89 with no fixture processes before or after.
@@ -149,3 +154,4 @@ Route selection is one user-facing concept: a single routes.json schema drives d
 - Note: another session is running relay on this repo today (#768 run 06:08, #765 recovery commit) — expect push races; rebase before push.
 - 06:42 incident: both Batch 1 background dispatches SIGTERM-killed pre-commit. dispatch.js cleanup() removed worktrees but left manifests `dispatched`; close-run then threw on the missing worktree path. Recovered via temporary detached worktrees + close-run + fresh re-dispatch (runs `...c4ed5772` #784, `...aefaea7c` #781-A1). Zero executor work lost (verified: branch commits were only origin/main advances).
 - Filed #786 for the recovery gap: close-run misses `acceptPrunedRelayOwned: true` (escape hatch exists in validateManifestPaths; cleanup-worktrees already uses it). Part 1 dispatched as third parallel run (branch issue-786); part 2 (signal-handler manifest stamping in dispatch.js) deferred behind A1 to avoid file collision.
+- 2026-07-20: Sprint closed. 15/16 tasks completed.

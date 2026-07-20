@@ -1,19 +1,19 @@
 ---
 id: RELAY-781
 title: 'Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A)'
-status: To Do
+status: Done
 labels:
   - enhancement
   - epic
   - workflow
 priority: high
-milestone: 
+milestone: Route Config Simplification
 created_date: '2026-07-05'
 ---
 ## Description
 ## Context
 
-Design: [docs/route-config-simplification-design.md](../blob/main/docs/route-config-simplification-design.md) (Phase A). Supersedes in part `docs/model-route-policy.md`.
+Design: [docs/route-config-simplification-design.md](../../docs/route-config-simplification-design.md) (Phase A). Supersedes in part `docs/model-route-policy.md`.
 
 The route plumbing exists at four layers, but the user-facing model is fragmented across `~/.relay/policy.json`, `~/.relay/projects/<slug>/routes.json`, and `~/.relay/executors.json`, and the no-config default is fail-closed for unmanaged executors — which is why a live machine ended up with pi installed but `policy-disallowed` and opencode routes registered but model-less. Nothing in the operational surfaces points to `relay-config` (zero references outside the skill itself).
 
@@ -29,16 +29,17 @@ The route plumbing exists at four layers, but the user-facing model is fragmente
 
 ## Acceptance Criteria
 
-- [ ] No config: `dispatch --executor pi --model <route>` runs, emits `UNREGISTERED_ROUTE_USED`, route-plan snapshot records the tuple.
-- [ ] `strict: true`: same invocation denied before spawn, denial JSON byte-parity with today plus `hint` field.
-- [ ] Legacy `policy.json` only (no routes.json): current behavior preserved verbatim (existing policy tests pass unmodified).
-- [ ] Project `strict: true` overrides global `strict: false`.
-- [ ] `executor_defaults` supplies the model where `~/.relay/executors.json` used to (and wins over it when both exist... routes.json presence ignores executors.json entirely per loading order).
-- [ ] EVENTS enum addition has write-time validation coverage.
-- [ ] Full repo test suite passes (sibling suites pin SKILL.md prose — PR #746 incident).
+- [x] No config: `dispatch --executor pi --model <route>` runs, emits `UNREGISTERED_ROUTE_USED`, route-plan snapshot records the tuple.
+- [x] `strict: true`: same invocation denied before spawn, denial JSON byte-parity with today plus `hint` field.
+- [x] Legacy `policy.json` only (no routes.json): current behavior preserved verbatim (existing policy tests pass unmodified).
+- [x] Project `strict: true` overrides global `strict: false`.
+- [x] `executor_defaults` supplies the model where `~/.relay/executors.json` used to (and wins over it when both exist... routes.json presence ignores executors.json entirely per loading order).
+- [x] EVENTS enum addition has write-time validation coverage.
+- [x] Full repo test suite passes (sibling suites pin SKILL.md prose — PR #746 incident).
 
 ## Dependencies
 
 Blocks #782 (Phase B presets) and #783 (Phase C revise mode). Probe timeout defect tracked separately in #784. Related prior art: #109 (per-phase model hints — partially shipped as `model_hints`), #22 (cross-model review).
 
+Completion evidence: Phase A shipped through PRs #792, #804, and #811; GitHub issue #781 is closed.
 

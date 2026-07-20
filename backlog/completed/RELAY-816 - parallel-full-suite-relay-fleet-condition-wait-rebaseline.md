@@ -20,3 +20,12 @@ After #819 and #815, rebaseline the parallel full-suite flake report. If current
 - [x] Any widened wait window has a short deflake justification. (N/A: no fleet/advisory timeout was widened.)
 - [x] Document command shape only if it changes. (No command-shape change.)
 - [x] Final evidence confirms no `relay-codex` / `relay-final-gate` / `relay-child` fixture processes survive.
+
+## Completion Evidence
+
+- Environment/time: 2026-07-19, clean WSL2 Linux ext4 clone at `edcff70`, Node v22.22.3.
+- Solo command: `node --test tests/relay-fleet/scripts/*.test.js` → 89 passed, 0 failed.
+- Parallel command: the current CI test globs with Node's default file concurrency → 2,555 tests, 2,553 passed, 0 failed, 2 skipped.
+- Fixture checks before and after found 0 matching `relay-codex`, `relay-final-gate`, or `relay-child` processes.
+- No relay-fleet condition-wait failure reproduced. The parallel run separately reproduced the standard gating advisory audit race tracked as #1039 and fixed by PR #1038.
+- Durable evidence: [GitHub issue #816 closeout comment](https://github.com/sungjunlee/dev-relay/issues/816#issuecomment-5015561410).
