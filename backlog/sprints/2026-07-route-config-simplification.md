@@ -25,7 +25,7 @@ Route selection is one user-facing concept: a single routes.json schema drives d
 
 ### Batch 3 — stability rebaseline before more broad relay-config work
 
-- [ ] #816 parallel full-suite / relay-fleet condition-wait rebaseline — S/M; run current-main evidence after #815/#819 fixes. If no longer reproducible, close with evidence. If still reproducible, make the smallest wait-window or command-shape fix with pgrep evidence.
+- [x] #816 parallel full-suite / relay-fleet condition-wait rebaseline — Linux fleet solo 89/89; no fleet failure reproduced, so closed with evidence and no fleet wait or command-shape change. Adjacent advisory audit race split to #1039 → PR #1038 (reviewing).
 
 ### Batch 4 — self-audit (Phase C, now unblocked)
 
@@ -62,6 +62,13 @@ Route selection is one user-facing concept: a single routes.json schema drives d
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-19 (#816 rebaseline and narrow audit fix)
+- Rebaselined `edcff70` in a clean WSL2 Linux ext4 clone with Node v22.22.3. Relay-fleet solo passed 89/89 with no fixture processes before or after.
+- The current CI globs without `--test-concurrency=1` reproduced no fleet wait failure. It exposed the tracked advisory-family race instead: the standard gating lane had already demoted the verdict while `ADVISORY_REVIEW` was still absent.
+- Added a deterministic RED→GREEN regression and reused the existing event-binding wait for decision-changing gating successes. Hardened behavior remains unchanged; standard non-gating paths remain lightweight.
+- Final Linux evidence: advisory file 81/81; explicit parallel full suite 2,555 tests, 2,553 passed, 0 failed, 2 skipped; fixture processes 0 before/after. Independent code review PASS with no findings.
+- Closed #816 on rebaseline evidence. Registered the distinct advisory defect as #1039 and kept its implementation/review lifecycle in PR #1038.
 
 ### 2026-07-08 (replanned after #825/#826/#815/#819 landed)
 - Refreshed the open follow-up set against current main and GitHub state: #825/#820-#824 closed by PR #831, #826/#827-#830 closed by PR #832, #819 closed by PR #835, and #815 closed by PR #836. The remaining sprint work should not rebuild those surfaces.

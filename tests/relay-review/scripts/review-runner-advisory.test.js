@@ -32,6 +32,7 @@ const {
 } = require("../../../skills/relay-review/scripts/review-runner/advisory");
 const { reapTimeoutAdvisoryLane } = require("../../../skills/relay-review/scripts/review-runner/advisory-lane-reap");
 const { buildAdvisoryPrompt } = require("../../../skills/relay-review/scripts/review-runner/advisory-prompt");
+const { settleAdvisoryForVerdict } = require("../../../skills/relay-review/scripts/review-runner/advisory-orchestration");
 const { applyReviewAssurancePolicy } = require("../../../skills/relay-review/scripts/review-runner/assurance");
 const { installFakeGhOnPath } = require("../fixtures/fake-gh");
 
@@ -2372,6 +2373,99 @@ test("standard review applies the primary verdict when advisory times out during
   assert.match(result.advisoryReview.failureReason, /reviewer advisory_review timed out after 1s/);
   assert.equal(event.status, "timeout");
   assert.equal(event.consumed_by_phase, "review");
+});
+
+test("standard gating advisory waits for its audit event before returning decision-changing success", async () => {
+  const { repoRoot, manifestPath, runDir, runId } = setupRepo();
+  const manifest = readManifest(manifestPath).data;
+  const artifactPath = path.join(runDir, "review-round-1-advisory-opencode.json");
+  const resultPath = path.join(runDir, "review-round-1-advisory-opencode-result.json");
+  const decisionPath = path.join(runDir, "review-round-1-advisory-opencode-decision.json");
+  fs.writeFileSync(artifactPath, `${JSON.stringify({
+    profile: "blindspot",
+    summary: "One required finding.",
+    required_findings: [{
+      title: "Decision-changing advisory finding",
+      body: "The gating lane must leave durable audit provenance.",
+      file: "README.md",
+      line: 1,
+      severity: "P1",
+      category: "correctness",
+      confidence: 0.95,
+    }],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }, null, 2)}\n`, "utf-8");
+  const result = {
+    artifactHash: hashFile(artifactPath),
+    artifactPath,
+    advisory_count: 0,
+    duplicate_low_confidence_count: 0,
+    failureReason: null,
+    gating: true,
+    lane_index: 1,
+    model: "example/opencode-model-fast",
+    profile: "blindspot",
+    rawResponsePath: null,
+    required_count: 1,
+    reviewer: "opencode",
+    status: "success",
+    trigger: "on_pass",
+  };
+  fs.writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf-8");
+
+  setTimeout(() => {
+    appendRunEvent(repoRoot, runId, {
+      event: EVENTS.ADVISORY_REVIEW,
+      state_from: STATES.REVIEW_PENDING,
+      state_to: STATES.REVIEW_PENDING,
+      head_sha: manifest.git.head_sha,
+      round: 1,
+      lane_index: 1,
+      reviewer: "opencode",
+      model: "example/opencode-model-fast",
+      profile: "blindspot",
+      trigger: "on_pass",
+      gating: true,
+      status: "success",
+      artifact_path: artifactPath,
+      advisory_artifact_hash: result.artifactHash,
+      raw_response_path: null,
+      failure_reason: null,
+      required_count: 1,
+      advisory_count: 0,
+      duplicate_low_confidence_count: 0,
+    });
+  }, 75);
+
+  const settled = await settleAdvisoryForVerdict({
+    advisoryRun: {
+      decisionPath,
+      gating: true,
+      headSha: manifest.git.head_sha,
+      laneIndex: 1,
+      profile: "blindspot",
+      resultPath,
+      reviewerModel: "example/opencode-model-fast",
+      reviewerName: "opencode",
+      round: 1,
+      runId,
+      runRepoPath: repoRoot,
+      startedAt: Date.now(),
+      trigger: "on_pass",
+    },
+    config: { graceSeconds: 1, timeoutSeconds: 1 },
+    currentState: STATES.REVIEW_PENDING,
+    hardenedAssurance: false,
+    verdict: passVerdict(),
+  });
+
+  assert.equal(settled.advisoryResult.status, "success");
+  assert.equal(
+    readRunEvents(repoRoot, runId).filter((event) => event.event === EVENTS.ADVISORY_REVIEW).length,
+    1,
+    "decision-changing gating success returned before its advisory audit event was durable"
+  );
 });
 
 test("hardened advisory finish does not expose success before event provenance is written", async () => {

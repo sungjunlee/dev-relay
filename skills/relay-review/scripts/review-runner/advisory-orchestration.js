@@ -429,7 +429,8 @@ async function settleOneAdvisoryForVerdict({ advisoryRun, config, currentState, 
       phaseDecisionWaited: criticalPathWaitMs > 0,
     };
   }
-  if (hardenedAssurance && advisoryResult?.status === "success") {
+  // Gating success can change the verdict, so do not expose it before its audit event is durable.
+  if ((hardenedAssurance || advisoryRun.gating) && advisoryResult?.status === "success") {
     advisoryResult = await finishAdvisoryReview({
       advisoryRun,
       consumedByPhase: "review",
