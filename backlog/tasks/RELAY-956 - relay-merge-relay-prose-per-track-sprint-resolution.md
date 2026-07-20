@@ -1,7 +1,7 @@
 ---
 id: RELAY-956
 title: 'relay-merge/relay prose: per-track sprint resolution for reads/writes'
-status: To Do
+status: In Progress
 labels:
   - enhancement
   - backlog

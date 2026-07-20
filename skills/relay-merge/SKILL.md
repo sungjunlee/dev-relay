@@ -86,21 +86,19 @@ Serialized detached full-suite gate and kill discipline: see [`references/full-g
 
 ### 2. Sprint file update (if available)
 
-Update the sprint file that owns this task's track — resolve by the task's
-`component:` / track handle (or the single active sprint when only one is
-active). If no sprint file exists, skip this step.
+Before any Plan, Progress, or Running Context write, resolve the task's owning sprint by invoking the resolved dev-backlog `sprint-state.js --track <track> --json backlog` or `sprint-state.js --component <component> --json backlog`; use its `active_sprint.path` as the sole write target. Only when neither handle is available, invoke `sprint-state.js --json backlog` and accept `active_sprint.path` only when exactly one sprint is active. Never choose an arbitrary/global active sprint or add relay-side track/component markdown parsing. If no owner resolves, skip this step.
 
-**Plan section** — mark completed (was `[~]` during review):
+**Plan section in that resolved sprint** — mark completed (was `[~]` during review):
 ```markdown
 - [x] #38 OAuth2 flow → PR #87 (merged)
 ```
 
-**Progress section** — structured log entry with review round count:
+**Progress section in that same sprint** — structured log entry with review round count:
 ```markdown
 - 2026-03-25 10:50: #38 dispatched → PR #87 → reviewed (LGTM, round 1) → merged
 ```
 
-**Running Context section** — capture learnings for remaining tasks:
+**Running Context section in that same sprint** — capture learnings for remaining tasks:
 ```markdown
 - OAuth2: PKCE flow using jose library. Tokens in httpOnly cookies.
 ```
