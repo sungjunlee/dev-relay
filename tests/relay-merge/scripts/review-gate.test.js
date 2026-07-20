@@ -85,6 +85,7 @@ function createHardenedGateFixture({
   extraGatingLane = null,
   gating = undefined,
   laneIndex = undefined,
+  omitPayloadProfile = false,
   profile = "blindspot",
   tamperAdvisoryAfterEvent = false,
   withMetadataFiles = false,
@@ -97,11 +98,29 @@ function createHardenedGateFixture({
   manifestData.policy = { review_assurance: "hardened" };
   manifestData.review.rounds = 1;
   manifestData.review.last_reviewed_sha = headSha;
+  if (gating !== undefined || extraGatingLane) {
+    manifestData.routing = {
+      selected: {
+        advisory_review: [
+          {
+            reviewer: "opencode",
+            profile,
+            ...(gating === undefined ? {} : { gating }),
+          },
+          ...(extraGatingLane ? [{
+            reviewer: "claude",
+            profile: "adversarial",
+            gating: true,
+          }] : []),
+        ],
+      },
+    };
+  }
   const advisoryPath = path.join(runDir, "review-round-1-advisory-opencode.json");
   const resolvedEventProfile = eventProfile || profile;
   if (advisory === "valid" || advisory === "required" || advisory === "forged-valid") {
     fs.writeFileSync(advisoryPath, JSON.stringify({
-      profile,
+      ...(omitPayloadProfile ? {} : { profile }),
       summary: "advisory",
       required_findings: advisory === "required" ? [{
         title: "Required",
@@ -190,7 +209,7 @@ function createHardenedGateFixture({
       );
     }
   }
-  if (extraGatingLane) {
+  if (extraGatingLane && extraGatingLane !== "missing") {
     const extraArtifactPath = path.join(runDir, "review-round-1-advisory-claude.json");
     fs.writeFileSync(extraArtifactPath, JSON.stringify({
       profile: "adversarial",
@@ -229,9 +248,6 @@ function createHardenedGateFixture({
       advisory_count: 0,
       duplicate_low_confidence_count: 0,
     });
-    if (extraGatingLane === "missing") {
-      fs.unlinkSync(extraArtifactPath);
-    }
   }
   const evidencePath = path.join(runDir, "execution-evidence.json");
   fs.writeFileSync(evidencePath, JSON.stringify({
@@ -353,6 +369,7 @@ test("evaluateReviewGate enforces hardened advisory and strict execution evidenc
     { label: "symlink advisory", options: { advisory: "symlink" }, status: "invalid_hardened_advisory" },
     { label: "outside-run advisory", options: { advisory: "outside" }, status: "invalid_hardened_advisory" },
     { label: "event and payload profile mismatch", options: { eventProfile: "adversarial" }, status: "invalid_hardened_advisory" },
+    { label: "payload profile missing", options: { omitPayloadProfile: true }, status: "invalid_hardened_advisory" },
     { label: "required advisory finding", options: { advisory: "required" }, status: "hardened_advisory_required_findings" },
     { label: "weak execution evidence", options: { strictEvidence: false }, status: "hardened_execution_evidence_failed" },
     { label: "strict execution evidence without provenance", options: { evidenceProvenance: false }, status: "hardened_execution_evidence_failed" },
@@ -490,6 +507,16 @@ test("evaluateReviewGate requires every explicit gating advisory lane to validat
         gating: true,
         laneIndex: 1,
       });
+      if (extraGatingLane === "missing") {
+        const events = fs.readFileSync(path.join(runDir, "events.jsonl"), "utf-8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        assert.equal(
+          events.some((event) => event.event === "advisory_review" && event.reviewer === "claude"),
+          false,
+        );
+      }
       const result = evaluateReviewGate({
         prNumber: 40,
         comments: [

@@ -91,6 +91,7 @@ function parseAdvisoryReview(text, {
   adapter = "advisory",
   phase = "advisory_review",
   profile = "blindspot",
+  requireExplicitProfile = false,
 } = {}) {
   const expectedProfile = validateAdvisoryProfile(profile);
   const context = formatAdapterPhase({ adapter, phase });
@@ -100,11 +101,17 @@ function parseAdvisoryReview(text, {
       phase,
       description: "advisory review",
     });
-    const actualProfile = (
+    const missingProfile = (
       parsed.profile === undefined ||
       parsed.profile === null ||
       (typeof parsed.profile === "string" && !parsed.profile.trim())
-    ) ? expectedProfile : requireString(parsed.profile, "profile");
+    );
+    if (requireExplicitProfile && missingProfile) {
+      throw new Error("profile must be explicitly provided");
+    }
+    const actualProfile = missingProfile
+      ? expectedProfile
+      : requireString(parsed.profile, "profile");
     if (actualProfile !== expectedProfile) {
       throw new Error(`profile must be '${expectedProfile}', got '${actualProfile}'`);
     }

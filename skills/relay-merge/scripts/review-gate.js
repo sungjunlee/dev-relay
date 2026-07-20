@@ -239,7 +239,22 @@ function advisoryLaneKey(event) {
   return `${reviewer}\u0000${laneIndex}`;
 }
 
-function findLatestRequiredAdvisoryEvents(events, round) {
+function findExpectedGatingAdvisoryLanes(manifestData) {
+  const selected = manifestData?.routing?.selected?.advisory_review;
+  const lanes = Array.isArray(selected)
+    ? selected
+    : (selected && typeof selected === "object" ? [selected] : []);
+  return lanes.flatMap((lane, index) => (
+    lane?.gating === true
+      ? [{
+          lane_index: index + 1,
+          reviewer: typeof lane.reviewer === "string" ? lane.reviewer.trim() : "",
+        }]
+      : []
+  ));
+}
+
+function findLatestRequiredAdvisoryEvents(events, round, manifestData) {
   const latestByLane = new Map();
   const gatingLanes = new Set();
   for (const event of events) {
@@ -248,13 +263,26 @@ function findLatestRequiredAdvisoryEvents(events, round) {
     latestByLane.set(laneKey, event);
     if (event.gating === true) gatingLanes.add(laneKey);
   }
+  const expectedGatingLanes = findExpectedGatingAdvisoryLanes(manifestData);
+  if (expectedGatingLanes.length > 0) {
+    return expectedGatingLanes.map((expectedLane) => ({
+      event: latestByLane.get(advisoryLaneKey(expectedLane)) || null,
+      expectedLane,
+    }));
+  }
   if (gatingLanes.size > 0) {
-    return [...gatingLanes].map((laneKey) => latestByLane.get(laneKey));
+    return [...gatingLanes].map((laneKey) => ({
+      event: latestByLane.get(laneKey),
+      expectedLane: null,
+    }));
   }
   // Events written before lane gating was persisted represent a single
   // implicit hardened lane. Preserve that contract by validating every latest
   // legacy lane when no explicit gating lane exists.
-  return [...latestByLane.values()];
+  return [...latestByLane.values()].map((event) => ({
+    event,
+    expectedLane: null,
+  }));
 }
 
 function hasTrustedExecutionEvidenceEvent(events, { runDir, reviewedHead }) {
@@ -311,7 +339,10 @@ function readHardenedAdvisoryArtifact(runDir, artifactPath, profile) {
     throw new Error("advisory artifact must not resolve outside the run directory");
   }
   return {
-    advisory: parseAdvisoryReview(fs.readFileSync(resolvedArtifactPath, "utf-8"), { profile }),
+    advisory: parseAdvisoryReview(fs.readFileSync(resolvedArtifactPath, "utf-8"), {
+      profile,
+      requireExplicitProfile: true,
+    }),
     artifactPath: resolvedArtifactPath,
   };
 }
@@ -331,7 +362,7 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       reason: `events.jsonl is not readable hardened provenance: ${error.message}`,
     };
   }
-  const advisoryEvents = findLatestRequiredAdvisoryEvents(events, round);
+  const advisoryEvents = findLatestRequiredAdvisoryEvents(events, round, manifestData);
   if (advisoryEvents.length === 0) {
     return {
       status: "missing_hardened_advisory",
@@ -340,7 +371,16 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       reason: "policy.review_assurance=hardened requires a durable advisory_review event for the latest round.",
     };
   }
-  for (const event of advisoryEvents) {
+  for (const { event, expectedLane } of advisoryEvents) {
+    if (!event) {
+      const expectedReviewer = expectedLane.reviewer || "unknown reviewer";
+      return {
+        status: "invalid_hardened_advisory",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: `Required gating advisory lane ${expectedReviewer} lane ${expectedLane.lane_index} has no advisory_review event for round ${round}.`,
+      };
+    }
     const reviewer = typeof event?.reviewer === "string" && event.reviewer.trim()
       ? event.reviewer.trim()
       : "unknown reviewer";
@@ -348,6 +388,14 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       ? ` lane ${event.lane_index}`
       : "";
     const eventLabel = `${reviewer}${lane}`;
+    if (expectedLane && event.gating !== true) {
+      return {
+        status: "invalid_hardened_advisory",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: `Latest advisory event for required gating lane ${eventLabel} is not marked as gating.`,
+      };
+    }
     if (event.gating === true && (reviewer === "unknown reviewer" || !lane)) {
       return {
         status: "invalid_hardened_advisory",
