@@ -4,7 +4,7 @@ status: completed
 started: 2026-07-11
 due: 2026-07-12
 objectives: []
-component: "fleet-reliability"
+component: "dispatch-execution"
 ---
 
 # follow-up-quartet

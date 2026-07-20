@@ -4,7 +4,7 @@ status: completed
 started: 2026-07-10
 due: TBD
 objectives: []
-component: "fleet-reliability"
+component: "dispatch-execution"
 ---
 
 # fleet-closure-trio
