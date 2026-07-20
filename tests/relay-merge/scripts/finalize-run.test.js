@@ -1392,7 +1392,10 @@ test("finalize-run records manual action when learning push has no remote", () =
   });
 
   const result = JSON.parse(stdout);
-  assert.equal(result.learnings.status, "appended");
+  // Without a usable remote we cannot fetch a remote-tip worktree, so the
+  // durable write fails closed with an actionable reason (no canonical write).
+  assert.equal(result.learnings.status, "failed");
+  assert.equal(result.learnings.reason, "remote_missing");
   assert.equal(result.learnings.durability.status, "manual_action_required");
   assert.equal(result.learnings.durability.reason, "remote_missing");
   assert.equal(result.learnings.canonicalUntouched, true);

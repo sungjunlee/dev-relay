@@ -13,6 +13,7 @@ const {
   ensureRunLayout,
   updateManifestState,
   writeManifest,
+  readManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
 
@@ -144,7 +145,108 @@ function setupRepoOnUnexpectedBranch() {
     stdio: "pipe",
   });
 
-  return { repoRoot, branch, headSha, unexpectedBranch, runId };
+  return { repoRoot, branch, headSha, unexpectedBranch, runId, manifestPath };
+}
+
+/**
+ * Canonical checkout genuinely diverges from origin/main: the stray branch
+ * lacks backlog/sprints and the capability block that exist on the remote base.
+ */
+function setupRepoWithDivergentCanonicalCheckout() {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-finalize-divergent-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const originRoot = path.join(repoRoot, "origin.git");
+  execFileSync("git", ["init", "--bare", originRoot], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Merge Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-merge@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", originRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const rootCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+
+  // Seed learning files onto main / origin only (after recording the root).
+  seedCapabilitiesForLearning(repoRoot);
+
+  const branch = "issue-42";
+  const worktreePath = path.join(repoRoot, "wt", branch);
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(worktreePath, "smoke.txt"), "ok\n", "utf-8");
+  execFileSync("git", ["-C", worktreePath, "add", "smoke.txt"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", worktreePath, "commit", "-m", "Add smoke"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", worktreePath, "push", "-u", "origin", branch], { encoding: "utf-8", stdio: "pipe" });
+  const headSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+
+  const runId = createRunId({
+    branch,
+    timestamp: new Date("2026-04-03T07:00:00.000Z"),
+  });
+  const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+  let manifest = createManifestSkeleton({
+    repoRoot,
+    runId,
+    branch,
+    baseBranch: "main",
+    issueNumber: 42,
+    worktreePath,
+    orchestrator: "codex",
+    executor: "codex",
+    reviewer: "codex",
+  });
+  manifest.anchor = createEnforcementFixture({
+    repoRoot,
+    runId,
+    state: "loaded",
+  }).anchor;
+  manifest.git.pr_number = 123;
+  manifest.git.head_sha = headSha;
+  manifest = buildReadyToMergeManifest(manifest);
+  writeManifest(manifestPath, manifest);
+
+  // Move the canonical checkout back to the pre-seed root so it lacks
+  // backlog/capabilities that exist on origin/main.
+  const unexpectedBranch = "divergent-no-backlog";
+  execFileSync("git", ["checkout", "-b", unexpectedBranch, rootCommit], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.appendFileSync(path.join(repoRoot, "README.md"), "local dirt\n", "utf-8");
+
+  assert.equal(fs.existsSync(path.join(repoRoot, "spec", "capabilities.md")), false);
+  assert.equal(fs.existsSync(path.join(repoRoot, "backlog", "sprints")), false);
+
+  return { repoRoot, branch, headSha, unexpectedBranch, runId, manifestPath };
+}
+
+function snapshotCanonical(repoRoot) {
+  const head = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  const branch = currentBranch(repoRoot);
+  // Tracked-only: finalize cleanup may remove retained worktrees / create
+  // untracked helper files; those must not mask canonical-independence checks.
+  const trackedStatus = execFileSync(
+    "git",
+    ["-C", repoRoot, "status", "--porcelain", "--untracked-files=no"],
+    { encoding: "utf-8", stdio: "pipe" }
+  );
+  return { head, branch, trackedStatus };
 }
 
 function writeFakeGh(logPath, { headRefName, commits, issueBody = null }) {
@@ -247,10 +349,11 @@ function currentBranch(repoRoot) {
 
 test("finalize-run writes durable learnings without depending on canonical branch (#955 / #809)", () => {
   const { repoRoot, branch, headSha, unexpectedBranch, runId } = setupRepoOnUnexpectedBranch();
+  const before = snapshotCanonical(repoRoot);
   const capabilitiesPath = path.join(repoRoot, "spec", "capabilities.md");
   const beforeCapabilities = fs.readFileSync(capabilitiesPath, "utf-8");
   assert.equal(remoteBranchExists(repoRoot, unexpectedBranch), false);
-  assert.equal(currentBranch(repoRoot), unexpectedBranch);
+  assert.equal(before.branch, unexpectedBranch);
 
   const logPath = path.join(repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
@@ -281,8 +384,9 @@ test("finalize-run writes durable learnings without depending on canonical branc
   assert.equal(result.learnings.status, "appended");
   assert.equal(result.learnings.durability.status, "pushed");
   assert.equal(result.learnings.canonicalUntouched, true);
-  assert.equal(result.learnings.canonicalBranch, unexpectedBranch);
-  assert.equal(currentBranch(repoRoot), unexpectedBranch);
+  assert.equal(result.learnings.sprintFile, path.join(repoRoot, "backlog", "sprints", "2026-05-test.md"));
+  assert.doesNotMatch(String(result.learnings.sprintFile || ""), /relay-learn-/);
+  assert.deepEqual(snapshotCanonical(repoRoot), before);
   assert.equal(remoteBranchExists(repoRoot, unexpectedBranch), false);
   // Canonical checkout file content is unchanged; durability lands on origin/main.
   assert.equal(fs.readFileSync(capabilitiesPath, "utf-8"), beforeCapabilities);
@@ -298,11 +402,8 @@ test("finalize-run writes durable learnings without depending on canonical branc
 test("finalize-run durable learnings succeed while canonical checkout is dirty", () => {
   const { repoRoot, branch, headSha, unexpectedBranch, runId } = setupRepoOnUnexpectedBranch();
   fs.appendFileSync(path.join(repoRoot, "README.md"), "local dirt\n", "utf-8");
-  const dirtyBefore = execFileSync("git", ["-C", repoRoot, "status", "--porcelain", "--untracked-files=no"], {
-    encoding: "utf-8",
-    stdio: "pipe",
-  });
-  assert.match(dirtyBefore, /README\.md/);
+  const before = snapshotCanonical(repoRoot);
+  assert.match(before.trackedStatus, /README\.md/);
 
   const logPath = path.join(repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
@@ -326,12 +427,100 @@ test("finalize-run durable learnings succeed while canonical checkout is dirty",
   const result = JSON.parse(stdout);
   assert.equal(result.learnings.status, "appended");
   assert.equal(result.learnings.durability.status, "pushed");
-  assert.equal(currentBranch(repoRoot), unexpectedBranch);
-  const dirtyAfter = execFileSync("git", ["-C", repoRoot, "status", "--porcelain", "--untracked-files=no"], {
+  assert.deepEqual(snapshotCanonical(repoRoot), before);
+  execFileSync("git", ["-C", repoRoot, "fetch", "origin", "main"], { encoding: "utf-8", stdio: "pipe" });
+  const remoteCapabilities = execFileSync(
+    "git",
+    ["-C", repoRoot, "show", "origin/main:spec/capabilities.md"],
+    { encoding: "utf-8", stdio: "pipe" }
+  );
+  assert.match(remoteCapabilities, new RegExp(`run #${runId}`));
+});
+
+test("finalize-run writes learnings from remote tip when canonical backlog/capabilities diverge", () => {
+  const { repoRoot, branch, headSha, unexpectedBranch, runId } = setupRepoWithDivergentCanonicalCheckout();
+  const before = snapshotCanonical(repoRoot);
+  assert.equal(before.branch, unexpectedBranch);
+  assert.equal(fs.existsSync(path.join(repoRoot, "spec", "capabilities.md")), false);
+  assert.equal(fs.existsSync(path.join(repoRoot, "backlog", "sprints")), false);
+
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    headRefName: branch,
+    commits: [{ oid: headSha, committedDate: DEFAULT_COMMIT_DATE }],
+    issueBody: "component: merge-finalize\n\nDerive despite divergent checkout.",
+  });
+
+  const stdout = execFileSync(process.execPath, [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
     encoding: "utf-8",
     stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
   });
-  assert.equal(dirtyAfter, dirtyBefore);
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.learnings.status, "appended");
+  assert.equal(result.learnings.durability.status, "pushed");
+  assert.equal(result.learnings.sprintFile, path.join(repoRoot, "backlog", "sprints", "2026-05-test.md"));
+  assert.doesNotMatch(String(result.learnings.sprintFile || ""), /\/tmp\/relay-learn-/);
+  assert.deepEqual(snapshotCanonical(repoRoot), before);
+  assert.equal(fs.existsSync(path.join(repoRoot, "spec", "capabilities.md")), false);
+  assert.equal(fs.existsSync(path.join(repoRoot, "backlog", "sprints")), false);
+
+  execFileSync("git", ["-C", repoRoot, "fetch", "origin", "main"], { encoding: "utf-8", stdio: "pipe" });
+  const remoteCapabilities = execFileSync(
+    "git",
+    ["-C", repoRoot, "show", "origin/main:spec/capabilities.md"],
+    { encoding: "utf-8", stdio: "pipe" }
+  );
+  assert.match(remoteCapabilities, new RegExp(`run #${runId}`));
+});
+
+test("finalize-run threads manifest ownership through the durable learnings seam", () => {
+  const { repoRoot, branch, headSha, runId, manifestPath } = setupRepoOnUnexpectedBranch();
+  const before = snapshotCanonical(repoRoot);
+
+  const record = readManifest(manifestPath);
+  record.data.ownership = {
+    sprint: "backlog/sprints/2026-05-test.md",
+    component: "merge-finalize",
+  };
+  writeManifest(manifestPath, record.data, record.body);
+
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    headRefName: branch,
+    commits: [{ oid: headSha, committedDate: DEFAULT_COMMIT_DATE }],
+    // No issue body — ownership must come from the manifest seam.
+    issueBody: null,
+  });
+
+  const stdout = execFileSync(process.execPath, [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.learnings.status, "appended");
+  assert.equal(result.learnings.durability.status, "pushed");
+  assert.equal(result.learnings.owner?.source, "fleet");
+  assert.equal(result.learnings.owner?.component, "merge-finalize");
+  assert.equal(result.learnings.sprintFile, path.join(repoRoot, "backlog", "sprints", "2026-05-test.md"));
+  assert.deepEqual(snapshotCanonical(repoRoot), before);
   execFileSync("git", ["-C", repoRoot, "fetch", "origin", "main"], { encoding: "utf-8", stdio: "pipe" });
   const remoteCapabilities = execFileSync(
     "git",

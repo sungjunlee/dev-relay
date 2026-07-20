@@ -14,9 +14,9 @@
  *     [--synthesis "<one-line>"] [--date YYYY-MM-DD] [--dry-run] [--json]
  *
  * Ownership resolution (see sprint-owner.js):
- *   explicit sprint → explicit track/component via sprint-state.js JSON →
- *   issue-body `component:` (when provided by caller) → exactly-one-active
- *   fallback. `multiple_active_sprints` only when N>1 and no owner resolves.
+ *   caller/CLI sprint|track|component → manifest/fleet owner →
+ *   issue-body `component:` → exactly-one-active fallback.
+ *   `multiple_active_sprints` only when N>1 and no owner resolves.
  *
  * Graceful no-ops (status: skipped, exit 0):
  *   - spec/capabilities.md missing

@@ -6,15 +6,18 @@
  * other per-track writers do not assume a global singleton.
  *
  * Precedence (first decisive win):
- *   1. Explicit owner object (fleet/manifest injection)
- *   2. Explicit --sprint path
- *   3. Explicit --track OR --component (mutually exclusive; both → reject)
- *   4. Structured issue `component:` metadata (standalone derivation)
- *   5. Exactly-one-active sprint fallback
+ *   1. Caller/CLI `--sprint` / `--track` / `--component` (operator override)
+ *   2. Manifest/fleet owner object (no-flag default when #957 injects it)
+ *   3. Structured issue `component:` metadata (standalone derivation)
+ *   4. Exactly-one-active sprint fallback
+ *
+ * Within the winning source, contradictory fields are rejected. Losing-source
+ * fields must not override or contradict the explicit choice.
  *
  * Track/component lookups consume validated dev-backlog sprint-state.js JSON
  * (schema_version >= 2). Relay does not grow a second multi-sprint markdown
- * parser for those lookups.
+ * parser for those lookups. Every sprint path is normalized to the target
+ * repo's `backlog/sprints/` directory (cwd-independent; escape rejected).
  */
 
 "use strict";
@@ -216,9 +219,94 @@ function discoverSprintStateBin({
   });
 }
 
-function validateSprintStatePayload(payload, { track = null, component = null } = {}) {
-  if (!payload || typeof payload !== "object") {
-    return buildFailure("sprint_state_invalid", { detail: "payload is not an object" });
+/**
+ * Resolve a sprint path against the target repo and require containment under
+ * `<repo>/backlog/sprints/` (realpath-aware). Relative paths resolve against
+ * `repo`, never `process.cwd()`. Absolute paths that escape may remap when they
+ * still end with `backlog/sprints/<file>`.
+ */
+function normalizeRepoSprintPath(repo, sprintPath, {
+  existsSync = fs.existsSync,
+  realpathSync = fs.realpathSync,
+} = {}) {
+  if (!repo) return buildFailure("repo_missing");
+  if (typeof sprintPath !== "string" || !sprintPath.trim()) {
+    return buildFailure("sprint_path_invalid", {
+      detail: "sprint path is empty",
+      sprintPath,
+    });
+  }
+  if (sprintPath.includes("\0")) {
+    return buildFailure("sprint_path_invalid", {
+      detail: "sprint path contains NUL",
+      sprintPath,
+    });
+  }
+
+  const sprintsDir = path.join(repo, "backlog", "sprints");
+  const raw = sprintPath.trim();
+  const posix = raw.replace(/\\/g, "/");
+  const marker = "backlog/sprints/";
+  const markerIdx = posix.lastIndexOf(marker);
+
+  function tryContainment(absPath) {
+    if (!existsSync(sprintsDir)) {
+      return buildFailure("sprint_path_missing", { sprintPath: absPath, sprintsDir });
+    }
+    if (!existsSync(absPath)) {
+      return buildFailure("sprint_path_missing", { sprintPath: absPath });
+    }
+    let realSprints;
+    let realFile;
+    try {
+      realSprints = realpathSync(sprintsDir);
+      realFile = realpathSync(absPath);
+    } catch (error) {
+      return buildFailure("sprint_path_missing", {
+        sprintPath: absPath,
+        detail: error.message,
+      });
+    }
+    const rel = path.relative(realSprints, realFile);
+    if (
+      !rel
+      || rel === ".."
+      || rel.startsWith(`..${path.sep}`)
+      || path.isAbsolute(rel)
+      || rel.split(path.sep).includes("..")
+    ) {
+      return buildFailure("sprint_path_escaped", {
+        detail: `sprint path must resolve under ${sprintsDir}`,
+        sprintPath: absPath,
+        sprintsDir,
+      });
+    }
+    return {
+      ok: true,
+      sprintPath: path.join(sprintsDir, rel),
+      trackSlug: path.basename(rel, ".md"),
+    };
+  }
+
+  const candidate = path.isAbsolute(raw) ? raw : path.resolve(repo, raw);
+  let result = tryContainment(candidate);
+  if (!result.ok && path.isAbsolute(raw) && markerIdx !== -1) {
+    result = tryContainment(path.join(repo, posix.slice(markerIdx)));
+  }
+  return result;
+}
+
+function validateSprintStatePayload(payload, {
+  track = null,
+  component = null,
+  repo = null,
+  existsSync = fs.existsSync,
+  realpathSync = fs.realpathSync,
+} = {}) {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return buildFailure("sprint_state_invalid", {
+      detail: "payload is not an object",
+    });
   }
   const schemaVersion = Number(payload.schema_version);
   if (!Number.isFinite(schemaVersion) || schemaVersion < MIN_SCHEMA_VERSION) {
@@ -229,7 +317,7 @@ function validateSprintStatePayload(payload, { track = null, component = null } 
   }
 
   const active = payload.active_sprint;
-  if (!active || typeof active !== "object" || !active.path) {
+  if (!active || typeof active !== "object" || Array.isArray(active) || !active.path) {
     return buildFailure("sprint_state_unresolved", {
       schemaVersion,
       track,
@@ -248,6 +336,7 @@ function validateSprintStatePayload(payload, { track = null, component = null } 
     return buildFailure("component_empty", {
       sprintPath: active.path,
       schemaVersion,
+      detail: "active_sprint frontmatter has empty/missing component",
     });
   }
   if (components.length > 1) {
@@ -255,6 +344,7 @@ function validateSprintStatePayload(payload, { track = null, component = null } 
       sprintPath: active.path,
       components,
       schemaVersion,
+      detail: `active_sprint lists multiple components: ${components.join(", ")}`,
     });
   }
   if (component && components[0] !== component) {
@@ -266,9 +356,36 @@ function validateSprintStatePayload(payload, { track = null, component = null } 
     });
   }
 
-  const trackSlug = path.basename(active.path, ".md");
+  let sprintPath = active.path;
+  let trackSlug = path.basename(String(active.path).replace(/\\/g, "/"), ".md");
+  if (repo) {
+    const normalized = normalizeRepoSprintPath(repo, active.path, { existsSync, realpathSync });
+    if (!normalized.ok) return { ...normalized, schemaVersion };
+    sprintPath = normalized.sprintPath;
+    trackSlug = normalized.trackSlug;
+  }
+
+  // Prefer an explicit track identity from the payload when present; otherwise
+  // the normalized sprint slug. Never invent agreement from basename alone when
+  // a --track selector was supplied.
+  const returnedTrack = typeof active.track === "string" && active.track.trim()
+    ? active.track.trim()
+    : (typeof fm.track === "string" && fm.track.trim() ? fm.track.trim() : trackSlug);
+  if (track) {
+    const trackMatches = track === returnedTrack || track === trackSlug || track === components[0];
+    if (!trackMatches) {
+      return buildFailure("contradictory_owner", {
+        detail: `track selector '${track}' does not match returned track '${returnedTrack}' (slug '${trackSlug}', component '${components[0]}')`,
+        sprintPath,
+        track,
+        component: components[0],
+        schemaVersion,
+      });
+    }
+  }
+
   return buildOwner({
-    sprintPath: active.path,
+    sprintPath,
     track: trackSlug,
     component: components[0],
     source: track ? OWNER_SOURCES.EXPLICIT_TRACK : OWNER_SOURCES.EXPLICIT_COMPONENT,
@@ -279,10 +396,13 @@ function validateSprintStatePayload(payload, { track = null, component = null } 
 function invokeSprintState({
   binPath,
   backlogDir,
+  repo = null,
   track = null,
   component = null,
   execFileSyncFn = execFileSync,
   nodeBin = process.execPath,
+  existsSync = fs.existsSync,
+  realpathSync = fs.realpathSync,
 }) {
   if (track && component) {
     return buildFailure("contradictory_owner", {
@@ -326,7 +446,14 @@ function invokeSprintState({
     });
   }
 
-  const validated = validateSprintStatePayload(payload, { track, component });
+  const targetRepo = repo || path.dirname(backlogDir);
+  const validated = validateSprintStatePayload(payload, {
+    track,
+    component,
+    repo: targetRepo,
+    existsSync,
+    realpathSync,
+  });
   if (!validated.ok) return validated;
   return {
     ...validated,
@@ -336,38 +463,64 @@ function invokeSprintState({
 
 function resolveFromSprintFile(sprintPath, {
   source,
+  repo = null,
   readFile = fs.readFileSync,
   existsSync = fs.existsSync,
+  realpathSync = fs.realpathSync,
   expectedComponent = null,
+  expectedTrack = null,
 } = {}) {
   if (!sprintPath) {
     return buildFailure("sprint_path_missing", { detail: "sprint path is empty" });
   }
-  if (!existsSync(sprintPath)) {
-    return buildFailure("sprint_path_missing", { sprintPath });
+
+  let resolvedPath = sprintPath;
+  let trackSlug = path.basename(String(sprintPath).replace(/\\/g, "/"), ".md");
+  if (repo) {
+    const normalized = normalizeRepoSprintPath(repo, sprintPath, { existsSync, realpathSync });
+    if (!normalized.ok) return normalized;
+    resolvedPath = normalized.sprintPath;
+    trackSlug = normalized.trackSlug;
+  } else if (!existsSync(resolvedPath)) {
+    return buildFailure("sprint_path_missing", { sprintPath: resolvedPath });
   }
-  const content = readFile(sprintPath, "utf-8");
+
+  const content = readFile(resolvedPath, "utf-8");
   const fm = parseFrontmatter(content);
   if (!fm) {
-    return buildFailure("sprint_frontmatter_missing", { sprintPath });
+    return buildFailure("sprint_frontmatter_missing", { sprintPath: resolvedPath });
   }
   const components = parseComponents(readFrontmatterField(fm, "component"));
   if (components.length === 0) {
-    return buildFailure("component_empty", { sprintPath });
+    return buildFailure("component_empty", {
+      sprintPath: resolvedPath,
+      detail: "sprint frontmatter has empty/missing component",
+    });
   }
   if (components.length > 1) {
-    return buildFailure("multiple_components", { sprintPath, components });
+    return buildFailure("multiple_components", {
+      sprintPath: resolvedPath,
+      components,
+      detail: `sprint lists multiple components: ${components.join(", ")}`,
+    });
   }
   if (expectedComponent && components[0] !== expectedComponent) {
     return buildFailure("contradictory_owner", {
       detail: `sprint component '${components[0]}' contradicts expected '${expectedComponent}'`,
-      sprintPath,
+      sprintPath: resolvedPath,
       component: components[0],
     });
   }
+  if (expectedTrack && expectedTrack !== trackSlug && expectedTrack !== components[0]) {
+    return buildFailure("contradictory_owner", {
+      detail: `sprint path track '${trackSlug}' contradicts track '${expectedTrack}'`,
+      sprintPath: resolvedPath,
+      track: expectedTrack,
+    });
+  }
   return buildOwner({
-    sprintPath,
-    track: path.basename(sprintPath, ".md"),
+    sprintPath: resolvedPath,
+    track: trackSlug,
     component: components[0],
     source,
   });
@@ -404,8 +557,10 @@ function resolveSingleActiveFallback(repo, fsDeps = {}) {
   }
   return resolveFromSprintFile(active[0], {
     source: OWNER_SOURCES.SINGLE_ACTIVE,
+    repo,
     readFile: fsDeps.readFile || fs.readFileSync,
     existsSync: fsDeps.existsSync || fs.existsSync,
+    realpathSync: fsDeps.realpathSync || fs.realpathSync,
   });
 }
 
@@ -432,6 +587,7 @@ function resolveSprintOwner({
   discoverBin = discoverSprintStateBin,
   readFile = fs.readFileSync,
   existsSync = fs.existsSync,
+  realpathSync = fs.realpathSync,
   readdir = fs.readdirSync,
   execFileSyncFn = execFileSync,
   nodeBin = process.execPath,
@@ -440,7 +596,7 @@ function resolveSprintOwner({
 } = {}) {
   if (!repo) return buildFailure("repo_missing");
 
-  const fsDeps = { readFile, existsSync, readdir };
+  const fsDeps = { readFile, existsSync, readdir, realpathSync };
   const backlogDir = path.join(repo, "backlog");
 
   const runSprintState = sprintState || ((selector) => {
@@ -449,52 +605,63 @@ function resolveSprintOwner({
     return invokeSprintState({
       binPath: discovered.path,
       backlogDir,
+      repo,
       track: selector.track || null,
       component: selector.component || null,
       execFileSyncFn,
       nodeBin,
+      existsSync,
+      realpathSync,
     });
   });
 
-  // Normalize injected owner / fleet flags into a single first-class handle set.
   const injected = owner && typeof owner === "object" ? owner : null;
-  let explicitSprint = sprint || injected?.sprint || injected?.sprintPath || null;
-  let explicitTrack = track || injected?.track || null;
-  let explicitComponent = component || injected?.component || null;
-  const injectedSource = injected?.source || null;
+  const hasCallerOverride = Boolean(sprint || track || component);
 
-  // When a concrete sprint path is present it wins; track/component are only
-  // validated against that file. Bare track+component without sprint: prefer
-  // component for sprint-state lookup, then require track agreement when both
-  // are present (fleet may supply both). Reject only when they disagree after
-  // resolution, or when both are CLI selectors without an owner object.
-  const cliTrackAndComponent = Boolean(track && component && !sprint && !injected);
-  if (cliTrackAndComponent) {
-    return buildFailure("contradictory_owner", {
-      detail: "Use only one of --track / --component on the CLI.",
-      track: explicitTrack,
-      component: explicitComponent,
-    });
+  // Caller/CLI flags win wholesale over fleet/manifest. Do not merge fields
+  // across sources — a losing-source track must not contradict a CLI component.
+  let explicitSprint = null;
+  let explicitTrack = null;
+  let explicitComponent = null;
+  let winningSource = null;
+
+  if (hasCallerOverride) {
+    explicitSprint = sprint || null;
+    explicitTrack = track || null;
+    explicitComponent = component || null;
+    winningSource = "caller";
+  } else if (injected) {
+    explicitSprint = injected.sprint || injected.sprintPath || null;
+    explicitTrack = injected.track || null;
+    explicitComponent = injected.component || null;
+    winningSource = injected.source === OWNER_SOURCES.FLEET ? OWNER_SOURCES.FLEET : "injected";
+  }
+
+  if (explicitTrack && explicitComponent && !explicitSprint) {
+    // Within the winning source, track+component without a concrete sprint must
+    // agree after resolution. CLI also rejects both selectors (matches CLI UX).
+    if (winningSource === "caller") {
+      return buildFailure("contradictory_owner", {
+        detail: "Use only one of --track / --component on the CLI.",
+        track: explicitTrack,
+        component: explicitComponent,
+      });
+    }
   }
 
   if (explicitSprint) {
-    const resolvedPath = path.isAbsolute(explicitSprint)
-      ? explicitSprint
-      : path.resolve(repo, explicitSprint);
-    const fromFile = resolveFromSprintFile(resolvedPath, {
-      source: injectedSource === OWNER_SOURCES.FLEET ? OWNER_SOURCES.FLEET : OWNER_SOURCES.EXPLICIT_SPRINT,
+    const fromFile = resolveFromSprintFile(explicitSprint, {
+      source: winningSource === OWNER_SOURCES.FLEET
+        ? OWNER_SOURCES.FLEET
+        : OWNER_SOURCES.EXPLICIT_SPRINT,
+      repo,
       readFile,
       existsSync,
+      realpathSync,
       expectedComponent: explicitComponent || null,
+      expectedTrack: explicitTrack || null,
     });
     if (!fromFile.ok) return fromFile;
-    if (explicitTrack && fromFile.track !== explicitTrack && path.basename(resolvedPath, ".md") !== explicitTrack) {
-      return buildFailure("contradictory_owner", {
-        detail: `sprint path track '${fromFile.track}' contradicts track '${explicitTrack}'`,
-        sprintPath: fromFile.sprintPath,
-        track: explicitTrack,
-      });
-    }
     return fromFile;
   }
 
@@ -504,15 +671,18 @@ function resolveSprintOwner({
       : { track: explicitTrack };
     const resolved = runSprintState(selector);
     if (!resolved.ok) return resolved;
-    if (explicitTrack && explicitComponent && resolved.track !== explicitTrack) {
-      return buildFailure("contradictory_owner", {
-        detail: `track '${explicitTrack}' does not match resolved sprint '${resolved.track}' for component '${explicitComponent}'`,
-        track: explicitTrack,
-        component: explicitComponent,
-        sprintPath: resolved.sprintPath,
-      });
+    if (explicitTrack && explicitComponent) {
+      const trackOk = explicitTrack === resolved.track || explicitTrack === resolved.component;
+      if (!trackOk) {
+        return buildFailure("contradictory_owner", {
+          detail: `track '${explicitTrack}' does not match resolved sprint '${resolved.track}' for component '${explicitComponent}'`,
+          track: explicitTrack,
+          component: explicitComponent,
+          sprintPath: resolved.sprintPath,
+        });
+      }
     }
-    if (injectedSource === OWNER_SOURCES.FLEET) {
+    if (winningSource === OWNER_SOURCES.FLEET) {
       return { ...resolved, source: OWNER_SOURCES.FLEET };
     }
     return {
@@ -561,6 +731,7 @@ module.exports = {
   listSprintStateCandidates,
   probeSprintStateBinary,
   discoverSprintStateBin,
+  normalizeRepoSprintPath,
   validateSprintStatePayload,
   invokeSprintState,
   resolveFromSprintFile,

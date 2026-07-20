@@ -744,18 +744,6 @@ function resolveFinalizeManifestRecord({
   }
 }
 
-function resolveCurrentBranch(repoPath) {
-  try {
-    return execGit(repoPath, ["symbolic-ref", "--short", "HEAD"]);
-  } catch (error) {
-    return null;
-  }
-}
-
-function trackedStatus(repoPath) {
-  return execGit(repoPath, ["status", "--porcelain", "--untracked-files=no"]);
-}
-
 function isTrackedPath(repoPath, relativePath) {
   try {
     execGit(repoPath, ["ls-files", "--error-unmatch", "--", relativePath]);
@@ -772,12 +760,27 @@ function learningCommitMessage(runId, prNumber) {
 const DEFAULT_LEARNING_PUSH_ATTEMPTS = 3;
 const LEARNING_CAPABILITIES_REL = path.join("spec", "capabilities.md");
 
+/**
+ * Narrow NFF detection: require an actual non-fast-forward / behind-tip signal.
+ * Generic "failed to push" / "updates were rejected" alone also covers
+ * protected-branch, permission, and hook declines — those must not burn retry
+ * cycles or be labeled as an NFF race.
+ */
 function isNonFastForwardPushError(error) {
   const text = `${error?.stderr || ""}\n${error?.message || ""}`.toLowerCase();
+  if (
+    text.includes("protected branch")
+    || text.includes("permission denied")
+    || text.includes("hook declined")
+    || text.includes("pre-receive hook")
+    || text.includes("pre-receive-hook")
+  ) {
+    return false;
+  }
   return text.includes("non-fast-forward")
-    || text.includes("failed to push some refs")
     || text.includes("fetch first")
-    || text.includes("updates were rejected");
+    || text.includes("tip of your current branch is behind")
+    || text.includes("current branch is behind");
 }
 
 function fetchIssueBody(repoPath, issueNumber, execGhFn = execGh) {
@@ -830,11 +833,50 @@ function cleanupLearningWorktree(repoPath, worktreePath, execGitFn = execGit, rm
   }
 }
 
+function durableOwnerPaths(repoPath, worktreePath, ownerResult) {
+  const relSprint = path.relative(worktreePath, ownerResult.sprintPath);
+  const durableSprint = path.join(repoPath, relSprint);
+  return {
+    repoPath,
+    sprintPath: durableSprint,
+    capabilitiesPath: path.join(repoPath, "spec", "capabilities.md"),
+    owner: {
+      sprintPath: durableSprint,
+      track: ownerResult.track,
+      component: ownerResult.component,
+      source: ownerResult.source,
+    },
+  };
+}
+
+function withDurableOwnerPaths(result, durable) {
+  if (!result || typeof result !== "object") return result;
+  const next = { ...result };
+  if (durable.sprintPath) {
+    next.sprintFile = durable.sprintPath;
+  }
+  if (durable.capabilitiesPath) {
+    next.capabilitiesPath = durable.capabilitiesPath;
+  }
+  if (result.owner || durable.owner) {
+    next.owner = {
+      ...(result.owner || {}),
+      ...durable.owner,
+    };
+  }
+  return next;
+}
+
 /**
  * Durable Learnings write that never switches, commits, or dirties the
- * operator's canonical checkout. Uses a detached temporary worktree rooted at
- * a freshly fetched remote base tip, then pushes `HEAD:<base>` with bounded
- * non-fast-forward retry.
+ * operator's canonical checkout. Fetches the remote base first, creates an
+ * isolated worktree at that tip, then resolves ownership and runs both
+ * dry-run/write against that worktree. Does not inspect canonical HEAD/status.
+ *
+ * Crash mid-flight can leave a `relay-learn-*` worktree registration; the
+ * finally block is best-effort (`worktree remove` → rm → `worktree prune`).
+ * Operators recover with `git worktree prune` / removing stale `/tmp/relay-learn-*`
+ * dirs — finalize does not install process-global signal handlers.
  */
 function appendDurableLearnings({
   repoPath,
@@ -854,85 +896,23 @@ function appendDurableLearnings({
   mkdtempSyncFn = fs.mkdtempSync,
   rmSyncFn = fs.rmSync,
 }) {
-  const canonicalBranchBefore = resolveCurrentBranch(repoPath);
-  const canonicalDirtyBefore = trackedStatus(repoPath);
-
-  const ownerResult = resolveLearningOwner({
-    repoPath,
-    manifest,
-    issueNumber,
-    owner,
-    issueBody,
-    resolveOwnerFn,
-    execGhFn,
-  });
-
-  if (!ownerResult.ok) {
-    // Prefer the leaf mapper for consistent skip/fail shapes.
-    const dryMapped = appendLearningsFn({
-      repo: repoPath,
-      runId,
-      pr: String(prNumber),
-      synthesis,
-      dryRun: true,
-      issueBody: issueBody || (issueNumber ? fetchIssueBody(repoPath, issueNumber, execGhFn) : null),
-      resolveOwner: () => ownerResult,
-    });
-    return {
-      ...dryMapped,
-      durability: { status: "not_written" },
-      canonicalBranch: canonicalBranchBefore,
-      canonicalDirty: Boolean(canonicalDirtyBefore),
-    };
-  }
-
-  const worktreeSprintPath = (root) => path.join(root, path.relative(repoPath, ownerResult.sprintPath));
-  const ownerHandlesFor = (root) => ({
-    sprint: worktreeSprintPath(root),
-    owner: {
-      sprint: worktreeSprintPath(root),
-      track: ownerResult.track,
-      component: ownerResult.component,
-      source: ownerResult.source,
-    },
-  });
-
-  const dryRunResult = appendLearningsFn({
-    repo: repoPath,
-    runId,
-    pr: String(prNumber),
-    synthesis,
-    dryRun: true,
-    ...ownerHandlesFor(repoPath),
-  });
-  if (dryRunResult.status !== LEARNING_STATUS.APPENDED) {
-    return {
-      ...dryRunResult,
-      durability: { status: "not_written" },
-      canonicalBranch: canonicalBranchBefore,
-      canonicalDirty: Boolean(canonicalDirtyBefore),
-    };
-  }
-
   if (!baseBranch) {
     return {
-      ...dryRunResult,
       status: LEARNING_STATUS.FAILED,
       reason: "base_branch_missing",
       durability: { status: "not_written" },
-      canonicalBranch: canonicalBranchBefore,
+      canonicalUntouched: true,
     };
   }
 
   const remoteName = resolveRemoteName(repoPath, baseBranch) || "origin";
   if (!remoteName || !hasRemote(repoPath, remoteName)) {
     return {
-      ...dryRunResult,
+      status: LEARNING_STATUS.FAILED,
+      reason: "remote_missing",
       remoteName,
       baseBranch,
       durability: { status: "manual_action_required", reason: "remote_missing" },
-      canonicalBranch: canonicalBranchBefore,
-      canonicalDirty: Boolean(canonicalDirtyBefore),
       canonicalUntouched: true,
     };
   }
@@ -943,7 +923,6 @@ function appendDurableLearnings({
       execGitFn(repoPath, ["fetch", remoteName, baseBranch]);
     } catch (error) {
       return {
-        ...dryRunResult,
         status: LEARNING_STATUS.FAILED,
         reason: "fetch_failed",
         durability: {
@@ -951,7 +930,6 @@ function appendDurableLearnings({
           reason: "fetch_failed",
           message: summarizeFailure(error),
         },
-        canonicalBranch: canonicalBranchBefore,
         canonicalUntouched: true,
       };
     }
@@ -962,7 +940,6 @@ function appendDurableLearnings({
       remoteTip = execGitFn(repoPath, ["rev-parse", "--verify", remoteTipRef]);
     } catch (error) {
       return {
-        ...dryRunResult,
         status: LEARNING_STATUS.FAILED,
         reason: "base_tip_unresolved",
         durability: {
@@ -970,7 +947,6 @@ function appendDurableLearnings({
           reason: "base_tip_unresolved",
           message: summarizeFailure(error),
         },
-        canonicalBranch: canonicalBranchBefore,
         canonicalUntouched: true,
       };
     }
@@ -982,7 +958,6 @@ function appendDurableLearnings({
       cleanupLearningWorktree(repoPath, worktreePath, execGitFn, rmSyncFn);
       worktreePath = null;
       return {
-        ...dryRunResult,
         status: LEARNING_STATUS.FAILED,
         reason: "worktree_create_failed",
         durability: {
@@ -990,18 +965,72 @@ function appendDurableLearnings({
           reason: "worktree_create_failed",
           message: summarizeFailure(error),
         },
-        canonicalBranch: canonicalBranchBefore,
+        canonicalUntouched: true,
+      };
+    }
+
+    // Ownership + dry-run/write all target the isolated remote-tip worktree —
+    // never the operator's canonical checkout (which may lack backlog/capabilities).
+    const ownerResult = resolveLearningOwner({
+      repoPath: worktreePath,
+      manifest,
+      issueNumber,
+      owner,
+      issueBody,
+      resolveOwnerFn,
+      execGhFn,
+    });
+
+    if (!ownerResult.ok) {
+      const dryMapped = appendLearningsFn({
+        repo: worktreePath,
+        runId,
+        pr: String(prNumber),
+        synthesis,
+        dryRun: true,
+        issueBody: issueBody || (issueNumber ? fetchIssueBody(repoPath, issueNumber, execGhFn) : null),
+        resolveOwner: () => ownerResult,
+      });
+      return {
+        ...dryMapped,
+        durability: { status: "not_written" },
+        canonicalUntouched: true,
+      };
+    }
+
+    const durable = durableOwnerPaths(repoPath, worktreePath, ownerResult);
+    const ownerHandles = {
+      sprint: ownerResult.sprintPath,
+      owner: {
+        sprint: ownerResult.sprintPath,
+        track: ownerResult.track,
+        component: ownerResult.component,
+        source: ownerResult.source,
+      },
+    };
+
+    const dryRunResult = appendLearningsFn({
+      repo: worktreePath,
+      runId,
+      pr: String(prNumber),
+      synthesis,
+      dryRun: true,
+      ...ownerHandles,
+    });
+    if (dryRunResult.status !== LEARNING_STATUS.APPENDED) {
+      return {
+        ...withDurableOwnerPaths(dryRunResult, durable),
+        durability: { status: "not_written" },
         canonicalUntouched: true,
       };
     }
 
     if (!isTrackedPath(worktreePath, LEARNING_CAPABILITIES_REL)) {
       return {
-        ...dryRunResult,
+        ...withDurableOwnerPaths(dryRunResult, durable),
         status: LEARNING_STATUS.FAILED,
         reason: "capabilities_untracked",
         durability: { status: "not_written" },
-        canonicalBranch: canonicalBranchBefore,
         canonicalUntouched: true,
       };
     }
@@ -1011,24 +1040,20 @@ function appendDurableLearnings({
       runId,
       pr: String(prNumber),
       synthesis,
-      ...ownerHandlesFor(worktreePath),
+      ...ownerHandles,
     });
 
     if (appendResult.status === LEARNING_STATUS.SKIPPED && appendResult.reason === "idempotent_match") {
       return {
-        ...appendResult,
+        ...withDurableOwnerPaths(appendResult, durable),
         durability: { status: "already_present", baseBranch, remoteName },
-        canonicalBranch: canonicalBranchBefore,
-        canonicalDirty: Boolean(canonicalDirtyBefore),
         canonicalUntouched: true,
       };
     }
     if (appendResult.status !== LEARNING_STATUS.APPENDED) {
       return {
-        ...appendResult,
+        ...withDurableOwnerPaths(appendResult, durable),
         durability: { status: "not_written" },
-        canonicalBranch: canonicalBranchBefore,
-        canonicalDirty: Boolean(canonicalDirtyBefore),
         canonicalUntouched: true,
       };
     }
@@ -1038,13 +1063,12 @@ function appendDurableLearnings({
       execGitFn(worktreePath, ["commit", "-m", learningCommitMessage(runId, prNumber)]);
     } catch (error) {
       return {
-        ...appendResult,
+        ...withDurableOwnerPaths(appendResult, durable),
         durability: {
           status: "manual_action_required",
           reason: "commit_failed",
           message: summarizeFailure(error),
         },
-        canonicalBranch: canonicalBranchBefore,
         canonicalUntouched: true,
       };
     }
@@ -1058,14 +1082,12 @@ function appendDurableLearnings({
       try {
         execGitFn(worktreePath, ["push", remoteName, `HEAD:refs/heads/${baseBranch}`]);
         return {
-          ...appendResult,
+          ...withDurableOwnerPaths(appendResult, durable),
           commitSha,
           baseBranch,
           remoteName,
           pushAttempts: attempts,
           durability: { status: "pushed", baseBranch, remoteName, attempts },
-          canonicalBranch: canonicalBranchBefore,
-          canonicalDirty: Boolean(canonicalDirtyBefore),
           canonicalUntouched: true,
         };
       } catch (error) {
@@ -1081,7 +1103,7 @@ function appendDurableLearnings({
           const rebaseText = `${rebaseError?.stderr || ""}\n${rebaseError?.message || ""}`.toLowerCase();
           const conflict = rebaseText.includes("conflict") || rebaseText.includes("could not apply");
           return {
-            ...appendResult,
+            ...withDurableOwnerPaths(appendResult, durable),
             commitSha,
             baseBranch,
             remoteName,
@@ -1092,7 +1114,6 @@ function appendDurableLearnings({
               message: summarizeFailure(rebaseError),
               pushMessage: summarizeFailure(error),
             },
-            canonicalBranch: canonicalBranchBefore,
             canonicalUntouched: true,
           };
         }
@@ -1100,7 +1121,7 @@ function appendDurableLearnings({
     }
 
     return {
-      ...appendResult,
+      ...withDurableOwnerPaths(appendResult, durable),
       commitSha,
       baseBranch,
       remoteName,
@@ -1111,8 +1132,6 @@ function appendDurableLearnings({
         message: summarizeFailure(lastPushError),
         attempts,
       },
-      canonicalBranch: canonicalBranchBefore,
-      canonicalDirty: Boolean(canonicalDirtyBefore),
       canonicalUntouched: true,
     };
   } finally {
