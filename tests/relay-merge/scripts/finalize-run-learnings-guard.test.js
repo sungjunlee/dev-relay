@@ -655,10 +655,28 @@ test("durable learning reports fetch and base-tip failures without touching cano
   }
 });
 
+test("owner-resolution skips carry their reason into durability metadata", () => {
+  const { repoRoot } = setupRepoOnUnexpectedBranch();
+  const result = directLearning(repoRoot, {
+    resolveOwnerFn: () => ({ ok: false, reason: "active_sprint_absent" }),
+    appendLearningsFn: () => ({ status: "skipped", reason: "active_sprint_absent" }),
+  });
+  assert.equal(result.status, "skipped");
+  assert.deepEqual(result.durability, {
+    status: "not_written",
+    reason: "active_sprint_absent",
+  });
+});
+
 test("commit failure preserves a durable recovery patch before cleaning the worktree", () => {
   const { repoRoot, runId } = setupRepoOnUnexpectedBranch();
+  let learningWorktree = null;
   const result = directLearning(repoRoot, {
     runId,
+    mkdtempSyncFn: (prefix) => {
+      learningWorktree = fs.mkdtempSync(prefix);
+      return learningWorktree;
+    },
     execGitFn: delegatedGit((_repo, args) => {
       if (args[0] === "commit") return new Error("commit unavailable");
       return undefined;
@@ -668,6 +686,7 @@ test("commit failure preserves a durable recovery patch before cleaning the work
   assert.ok(result.recoveryPatch);
   assert.equal(fs.existsSync(result.recoveryPatch), true);
   assert.match(fs.readFileSync(result.recoveryPatch, "utf-8"), new RegExp(`run #${runId}`));
+  assert.equal(fs.existsSync(learningWorktree), false);
 });
 
 test("NFF retry pins Git's locale and reports a rebase conflict", () => {
@@ -695,6 +714,27 @@ test("NFF retry pins Git's locale and reports a rebase conflict", () => {
   assert.equal(result.canonicalUntouched, true);
 });
 
+test("repeated NFF races exhaust the bounded retry loop with actionable attempts", () => {
+  const { repoRoot } = setupRepoOnUnexpectedBranch();
+  let pushes = 0;
+  const result = directLearning(repoRoot, {
+    maxPushAttempts: 3,
+    execGitFn: delegatedGit((_repo, args) => {
+      if (args[0] === "push") {
+        pushes += 1;
+        const error = new Error("non-fast-forward");
+        error.stderr = "non-fast-forward";
+        return error;
+      }
+      return undefined;
+    }),
+  });
+  assert.equal(pushes, 3);
+  assert.equal(result.durability.reason, "push_failed");
+  assert.equal(result.durability.attempts, 3);
+  assert.equal(result.canonicalUntouched, true);
+});
+
 test("multi-sprint durable learning exercises discovered sprint-state end to end", () => {
   const { repoRoot } = setupRepoOnUnexpectedBranch();
   const second = path.join(repoRoot, "backlog", "sprints", "2026-05-other.md");
@@ -704,10 +744,13 @@ test("multi-sprint durable learning exercises discovered sprint-state end to end
   execFileSync("git", ["push", "origin", "HEAD:main"], { cwd: repoRoot, stdio: "pipe" });
 
   const sprintState = path.join(repoRoot, "fake-sprint-state.js");
+  const sprintStateArgs = path.join(repoRoot, "fake-sprint-state-args.json");
   fs.writeFileSync(sprintState, `#!/usr/bin/env node
+const fs = require("fs");
 if (process.argv.includes("--help")) {
   console.log("Usage: --track <slug> --component <name> --json");
 } else {
+  fs.writeFileSync(${JSON.stringify(sprintStateArgs)}, JSON.stringify(process.argv.slice(2)));
   console.log(JSON.stringify({
     schema_version: 2,
     active_sprint: {
@@ -731,6 +774,8 @@ if (process.argv.includes("--help")) {
     assert.equal(result.status, "appended");
     assert.equal(result.durability.status, "pushed");
     assert.equal(result.owner.component, "merge-finalize");
+    const invokedArgs = JSON.parse(fs.readFileSync(sprintStateArgs, "utf-8"));
+    assert.match(invokedArgs.at(-1), /relay-learn-.*\/backlog$/);
   } finally {
     if (previous === undefined) delete process.env.RELAY_SPRINT_STATE_BIN;
     else process.env.RELAY_SPRINT_STATE_BIN = previous;

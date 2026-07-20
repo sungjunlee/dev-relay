@@ -1018,7 +1018,10 @@ function appendDurableLearnings({
       });
       return {
         ...dryMapped,
-        durability: { status: "not_written" },
+        durability: {
+          status: "not_written",
+          reason: dryMapped.reason || ownerResult.reason || "owner_unresolved",
+        },
         canonicalUntouched: true,
       };
     }

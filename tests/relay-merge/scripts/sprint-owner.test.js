@@ -105,6 +105,21 @@ describe("normalizeRepoSprintPath", () => {
       fs.rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  it("remaps a stale absolute checkout path by its backlog/sprints suffix", () => {
+    const repo = makeRepo();
+    try {
+      const sprint = writeSprint(repo, "2026-07-auth", { component: "auth" });
+      const result = normalizeRepoSprintPath(
+        repo,
+        "/stale/checkout/backlog/sprints/2026-07-auth.md"
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.sprintPath, sprint);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("validateSprintStatePayload", () => {
@@ -423,8 +438,9 @@ describe("resolveSprintOwner", () => {
       env: { PI_CODING_AGENT_DIR: "/tmp/pi-agent" },
       homedir: () => "/tmp/home",
       existsSync: (candidate) => candidate === piBin,
-      execFileSyncFn: (_node, [candidate]) => {
+      execFileSyncFn: (_node, [candidate], options) => {
         assert.equal(candidate, piBin);
+        assert.equal(options.timeout, 10_000);
         return "Usage: sprint-state.js --track <slug> --component <name> --json";
       },
     });

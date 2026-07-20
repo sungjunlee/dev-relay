@@ -177,6 +177,7 @@ function probeSprintStateBinary(binPath, {
     help = execFileSyncFn(nodeBin, [binPath, "--help"], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
     });
   } catch (error) {
     help = `${error.stdout || ""}${error.stderr || ""}${error.message || ""}`;
