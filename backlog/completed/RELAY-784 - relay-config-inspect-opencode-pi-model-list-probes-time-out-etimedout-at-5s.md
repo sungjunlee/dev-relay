@@ -1,13 +1,13 @@
 ---
 id: RELAY-784
 title: 'relay-config inspect: opencode/pi model-list probes time out (ETIMEDOUT at 5s)'
-status: To Do
+status: Done
 labels:
   - bug
   - opencode
   - pi
 priority: medium
-milestone: 
+milestone: Route Config Simplification
 created_date: '2026-07-05'
 ---
 ## Description
@@ -15,7 +15,7 @@ created_date: '2026-07-05'
 
 `relay-config inspect --json` on a machine with opencode and pi installed:
 
-```
+```text
 optional model-list probe failed for opencode (opencode models) after 5000ms: spawnSync /Users/sjlee/.opencode/bin/opencode ETIMEDOUT
 optional model-list probe failed for pi (pi --list-models) after 5000ms: spawnSync .../bin/pi ETIMEDOUT
 ```
@@ -34,7 +34,8 @@ Model-list probes succeed on installed CLIs, or degrade with a clearly actionabl
 
 ## Acceptance Criteria
 
-- [ ] Root cause identified and stated in the PR (measured cold-start time or corrected invocation).
-- [ ] On this machine's setup, inspect reports model lists (or a non-timeout, actionable warning) for opencode and pi.
-- [ ] Probe budget change, if any, is configurable with a documented default.
+- [x] Root cause identified and stated in the PR (measured cold-start time or corrected invocation).
+- [x] On this machine's setup, inspect reports model lists (or a non-timeout, actionable warning) for opencode and pi.
+- [x] Probe budget change, if any, is configurable with a documented default.
 
+Completion evidence: PR #791 merged and GitHub issue #784 closed on 2026-07-05.

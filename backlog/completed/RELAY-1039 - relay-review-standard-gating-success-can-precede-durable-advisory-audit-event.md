@@ -20,11 +20,11 @@ This was observed while rebaselining #816 with the default-parallel full suite. 
 
 ## Done Criteria
 
-- [ ] Standard gating success is not returned until a matching durable `ADVISORY_REVIEW` event exists.
-- [ ] Event binding validates the existing run/head/round/reviewer/artifact provenance contract.
-- [ ] Standard non-gating lanes remain lightweight; hardened behavior remains unchanged.
-- [ ] A deterministic regression proves result-first/event-later ordering fails before and passes after the fix.
-- [ ] No timeout widening or CI command-shape change.
+- [x] Standard gating success is not returned until a matching durable `ADVISORY_REVIEW` event exists.
+- [x] Event binding validates the existing run/head/round/reviewer/artifact provenance contract.
+- [x] Standard non-gating lanes remain lightweight; hardened behavior remains unchanged.
+- [x] A deterministic regression proves result-first/event-later ordering fails before and passes after the fix.
+- [x] No timeout widening or CI command-shape change.
 
 ## Evidence target
 
@@ -33,3 +33,5 @@ This was observed while rebaselining #816 with the default-parallel full suite. 
 - Default-parallel Linux full suite.
 
 Discovered during #816 rebaseline.
+
+Completion evidence: PR #1038 merged and GitHub issue #1039 closed on 2026-07-20.

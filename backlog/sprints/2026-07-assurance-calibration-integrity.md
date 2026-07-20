@@ -46,4 +46,4 @@ Make decision-changing advisory evidence and risk-path calibration trustworthy e
 
 - 2026-07-20: Activated as the single active sprint after the Route Config closeout. Next actionable item is #1040; #1039 and #1035 are already complete.
 - 2026-07-20: External progress reconciled: PR #1038 merged and #1039 closed; PR #1042 merged and #1035 closed. Remaining sprint implementation is #1040 then #1037.
-- 2026-07-19: Planned from live GitHub and `origin/main` `edcff70`. Created #1040 with the preserved #981 reproduction contract, created milestone #15, assigned #1039/#1040/#1035/#1037, and kept #954–#957 on their existing multi-track milestone. The sprint is deliberately `planned`, not `active`, until the route-config sprint is closed through the normal lifecycle.
+- 2026-07-19 planning state: Planned from live GitHub and `origin/main` `edcff70`. Created #1040 with the preserved #981 reproduction contract, created milestone #15, assigned #1039/#1040/#1035/#1037, and kept #954–#957 on their existing multi-track milestone. At that time the sprint remained `planned` pending normal closure of the route-config sprint; it was activated the following day.

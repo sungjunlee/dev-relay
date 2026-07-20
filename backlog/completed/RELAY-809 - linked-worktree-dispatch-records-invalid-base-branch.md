@@ -1,7 +1,7 @@
 ---
 id: RELAY-809
 title: 'dispatch.js from a linked worktree records base_branch that does not exist on origin'
-status: To Do
+status: Done
 labels:
   - bug
   - priority:high
@@ -16,8 +16,10 @@ Dispatching from a linked local worktree can record a local-only `worktree-*` br
 
 ## Acceptance Criteria
 
-- [ ] Linked-worktree dispatch from a local-only `worktree-*` branch records a remote-valid base branch.
-- [ ] PR creation uses the resolved remote-valid base, not the local-only branch.
-- [ ] Learnings/durability push paths do not publish `worktree-*` branches as a finalize side effect.
-- [ ] The behavior is coordinated with #795 so local-ahead and local-only branch rules do not conflict.
-- [ ] Recovery guidance covers cleanup for stale `origin/worktree-*` branches.
+- [x] Linked-worktree dispatch from a local-only `worktree-*` branch records a remote-valid base branch.
+- [x] PR creation uses the resolved remote-valid base, not the local-only branch.
+- [x] Learnings/durability push paths do not publish `worktree-*` branches as a finalize side effect.
+- [x] The behavior is coordinated with #795 so local-ahead and local-only branch rules do not conflict.
+- [x] Recovery guidance covers cleanup for stale `origin/worktree-*` branches.
+
+Completion evidence: resolved in PR #865; GitHub issue #809 closed on 2026-07-09.

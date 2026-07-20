@@ -35,8 +35,10 @@ Migrate only live operator/backlog context to the current three-channel model. P
 ## Verification
 
 - Confirm GitHub #138–#146 are closed before moving mirrors.
+- Verify every #138–#146 local mirror moved to `backlog/completed/` with its historical content preserved.
 - Search live (non-archive) context for stale mandatory-rubric and Quality Card claims.
-- Run the dev-backlog status/consistency checks and relevant documentation contract tests.
+- Confirm exactly one active sprint remains and its Plan/Progress scope was not broadened.
+- Run backlog status/objective/component checks, skill reachability/lint checks, and relevant documentation contract tests.
 
 ## Context
 

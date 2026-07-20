@@ -24,12 +24,12 @@ Compare compact runs only with full-path controls that were themselves compact-e
 ## Acceptance criteria
 
 <!-- AC:BEGIN -->
-- [ ] Calibration records expose a task-derived compact-eligibility/comparison field using existing risk-assurance data; no model/provider identity is used.
-- [ ] A compact run is compared only with same-task-class full runs whose derived assurance floor was also compact-eligible.
-- [ ] Medium/high/unknown-risk full runs remain reported but are excluded from lightweight promotion calculations.
-- [ ] When either comparable path lacks the minimum sample, the decision remains `continue_calibration` with an explicit non-comparable/insufficient-cohort reason.
-- [ ] Tests prove that a risk-skewed full cohort cannot create `promote_lightweight_candidate` or `retain_full` for the comparable low-risk cohort.
-- [ ] No new numeric quality score, propensity matching, automatic promotion, or route mutation is introduced.
+- [x] Calibration records expose a task-derived compact-eligibility/comparison field using existing risk-assurance data; no model/provider identity is used.
+- [x] A compact run is compared only with same-task-class full runs whose derived assurance floor was also compact-eligible.
+- [x] Medium/high/unknown-risk full runs remain reported but are excluded from lightweight promotion calculations.
+- [x] When either comparable path lacks the minimum sample, the decision remains `continue_calibration` with an explicit non-comparable/insufficient-cohort reason.
+- [x] Tests prove that a risk-skewed full cohort cannot create `promote_lightweight_candidate` or `retain_full` for the comparable low-risk cohort.
+- [x] No new numeric quality score, propensity matching, automatic promotion, or route mutation is introduced.
 <!-- AC:END -->
 
 ## Verification
@@ -37,6 +37,8 @@ Compare compact runs only with full-path controls that were themselves compact-e
 - Focused calibration unit tests cover compact-eligible full controls, higher-risk exclusions, unknown-risk fail-closed behavior, and insufficient comparable samples.
 - Existing reliability-report and risk-assurance suites remain green.
 - A fixture/report example makes included and excluded cohort counts observable to an operator.
+
+Completion evidence: PR #1042 merged and GitHub issue #1035 closed on 2026-07-20.
 
 ## Context
 
