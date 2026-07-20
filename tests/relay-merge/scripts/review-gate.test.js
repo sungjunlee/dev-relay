@@ -88,6 +88,7 @@ function createHardenedGateFixture({
   laneIndex = undefined,
   omitPayloadProfile = false,
   profile = "blindspot",
+  routePlanAdvisory = null,
   tamperAdvisoryAfterEvent = false,
   withMetadataFiles = false,
   evidenceProvenance = true,
@@ -116,6 +117,14 @@ function createHardenedGateFixture({
         ],
       },
     };
+  }
+  if (routePlanAdvisory) {
+    fs.writeFileSync(path.join(runDir, "route-plan.json"), JSON.stringify({
+      version: 1,
+      phases: {
+        advisory_review: routePlanAdvisory,
+      },
+    }, null, 2), "utf-8");
   }
   const advisoryPath = path.join(runDir, "review-round-1-advisory-opencode.json");
   const resolvedArtifactProfile = artifactProfile || profile;
@@ -509,6 +518,43 @@ test("evaluateReviewGate binds an explicit gating lane to its configured profile
     laneIndex: 1,
     profile: "adversarial",
   });
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "invalid_hardened_advisory");
+  assert.equal(result.readyToMerge, false);
+  assert.match(result.reason, /binds profile 'blindspot' instead of configured profile 'adversarial'/);
+});
+
+test("evaluateReviewGate binds a route-plan gating lane to its planned profile", () => {
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({
+    artifactProfile: "blindspot",
+    eventProfile: "blindspot",
+    gating: true,
+    laneIndex: 1,
+    routePlanAdvisory: {
+      reviewer: "opencode",
+      profile: "adversarial",
+      gating: true,
+    },
+  });
+  delete manifestData.routing;
+
   const result = evaluateReviewGate({
     prNumber: 40,
     comments: [

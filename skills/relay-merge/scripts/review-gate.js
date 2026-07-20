@@ -4,6 +4,7 @@ const { hashFileSha256 } = require("../../relay-dispatch/scripts/execution-evide
 const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/manifest/rubric");
 const { isHardenedReviewAssurance } = require("../../relay-dispatch/scripts/manifest/review-assurance");
 const { parseAdvisoryReview } = require("../../relay-review/scripts/advisory-review-schema");
+const { resolveAdvisoryConfig } = require("../../relay-review/scripts/review-runner/advisory-orchestration");
 const { computeQualityExecutionStatus } = require("../../relay-review/scripts/review-runner/execution-evidence");
 
 const REVIEW_MARKER_PATTERN = /^\s*<!-- relay-review(?:-round)? -->\s*$/m;
@@ -239,23 +240,37 @@ function advisoryLaneKey(event) {
   return `${reviewer}\u0000${laneIndex}`;
 }
 
-function findExpectedGatingAdvisoryLanes(manifestData) {
-  const selected = manifestData?.routing?.selected?.advisory_review;
-  const lanes = Array.isArray(selected)
-    ? selected
-    : (selected && typeof selected === "object" ? [selected] : []);
-  return lanes.flatMap((lane, index) => (
-    lane?.gating === true
+function readRunRoutePlan(runDir) {
+  const routePlanPath = path.join(runDir, "route-plan.json");
+  try {
+    const stat = fs.lstatSync(routePlanPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error("route-plan.json must be a regular file inside the run directory");
+    }
+    return JSON.parse(fs.readFileSync(routePlanPath, "utf-8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function findExpectedGatingAdvisoryLanes(manifestData, routePlan) {
+  const { lanes } = resolveAdvisoryConfig({
+    data: manifestData,
+    routePlan,
+  });
+  return lanes.flatMap((lane) => (
+    lane.gating === true
       ? [{
-          lane_index: index + 1,
-          profile: typeof lane.profile === "string" ? lane.profile.trim() : "",
-          reviewer: typeof lane.reviewer === "string" ? lane.reviewer.trim() : "",
+          lane_index: lane.index,
+          profile: lane.profile,
+          reviewer: lane.reviewer,
         }]
       : []
   ));
 }
 
-function findLatestRequiredAdvisoryEvents(events, round, manifestData) {
+function findLatestRequiredAdvisoryEvents(events, round, manifestData, routePlan) {
   const latestByLane = new Map();
   const gatingLanes = new Set();
   for (const event of events) {
@@ -264,7 +279,7 @@ function findLatestRequiredAdvisoryEvents(events, round, manifestData) {
     latestByLane.set(laneKey, event);
     if (event.gating === true) gatingLanes.add(laneKey);
   }
-  const expectedGatingLanes = findExpectedGatingAdvisoryLanes(manifestData);
+  const expectedGatingLanes = findExpectedGatingAdvisoryLanes(manifestData, routePlan);
   if (expectedGatingLanes.length > 0) {
     return expectedGatingLanes.map((expectedLane) => ({
       event: latestByLane.get(advisoryLaneKey(expectedLane)) || null,
@@ -353,6 +368,7 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
   const round = Number(manifestData.review?.rounds || 0);
   const reviewedHead = manifestData.review?.last_reviewed_sha || null;
   let events;
+  let routePlan;
   try {
     events = readRunDirEvents(runDir);
   } catch (error) {
@@ -363,7 +379,27 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       reason: `events.jsonl is not readable hardened provenance: ${error.message}`,
     };
   }
-  const advisoryEvents = findLatestRequiredAdvisoryEvents(events, round, manifestData);
+  try {
+    routePlan = readRunRoutePlan(runDir);
+  } catch (error) {
+    return {
+      status: "invalid_hardened_advisory",
+      pr: prNumber,
+      readyToMerge: false,
+      reason: `route-plan.json is not readable hardened configuration: ${error.message}`,
+    };
+  }
+  let advisoryEvents;
+  try {
+    advisoryEvents = findLatestRequiredAdvisoryEvents(events, round, manifestData, routePlan);
+  } catch (error) {
+    return {
+      status: "invalid_hardened_advisory",
+      pr: prNumber,
+      readyToMerge: false,
+      reason: `hardened advisory lane configuration is invalid: ${error.message}`,
+    };
+  }
   if (advisoryEvents.length === 0) {
     return {
       status: "missing_hardened_advisory",
