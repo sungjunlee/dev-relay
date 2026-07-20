@@ -423,21 +423,25 @@ function advanceIntegrationGate(ctx) {
     const identity = identityFor(ctx);
     const first = inspectCanonicalGates(listGates(ctx), identity);
     if (!first.ok) fail(first.reasonCode, first.message);
-    if (!report.present && first.state === "missing") {
-      return { ok: true, state: "awaiting_evidence", gate: null, report_path: ctx.reportPath };
-    }
-    if (!report.present && first.state === "pending") {
-      return { ok: true, state: "awaiting_evidence", gate: first.gate, report_path: ctx.reportPath };
-    }
+    // A verified live integration dispatch must always carry exactly one canonical gate, and the
+    // documented operator ordering is gate-before-evidence. Materialize it here — create-or-adopt
+    // through the same post-create re-read and duplicate/conflict defenses — instead of returning
+    // awaiting_evidence against no gate at all, which left the lifecycle contract unsatisfied and
+    // gave the operator nothing to write evidence against. (#1019 R4)
     const gate = first.state === "missing" ? ensureCanonicalGateUnlocked(ctx, identity) : first;
     const resolution = gateResolution(gate.gate);
+    // The canonical gate now exists but no live evidence has landed: resolve nothing, complete
+    // nothing, and hand the operator back the same gate on every later pass (idempotent).
+    if (!report.present && resolution.state === "pending") {
+      return { ok: true, state: "awaiting_evidence", gate: gate.gate, report_path: ctx.reportPath };
+    }
     if (provenance.task.status === "completed" && resolution.state !== "passed") {
       fail("INTEGRATION_WORKER_DONE_BEFORE_GATE", "integration task is already completed before the canonical gate resolved passed; refusing to reorder or repair lifecycle state");
     }
     if (resolution.state === "failed") fail("INTEGRATION_GATE_CONFLICT", "canonical integration gate resolved failed; no completion mutation is safe");
     if (resolution.state === "conflict") fail("INTEGRATION_GATE_CONFLICT", "canonical integration gate has a noncanonical/conflicting resolution");
     if (resolution.state === "pending") {
-      if (!report.present) return { ok: true, state: "awaiting_evidence", gate: gate.gate, report_path: ctx.reportPath };
+      // report.present is guaranteed here: a pending gate without evidence already returned above.
       const resolvePayload = runJson(ctx, ["orchestration", "gate-resolve", "--id", gateId(gate.gate), "--resolution", "passed", "--json"], "orca orchestration gate-resolve");
       void resolvePayload;
       const reread = inspectCanonicalGates(listGates(ctx), identityFor(ctx));

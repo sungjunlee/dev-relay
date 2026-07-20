@@ -413,6 +413,62 @@ test("#1019 R3 same-dispatch evidence stays valid across a coordinator restart",
   }
 });
 
+// #1019 R4: exactly one canonical gate is a lifecycle invariant of a verified live integration
+// dispatch, and the operator ordering is gate-before-evidence. Awaiting evidence against NO gate
+// left the invariant unsatisfied and gave the operator nothing to write evidence against, so the
+// gate must be materialized first — and materialized only once, however many times resume runs.
+test("#1019 R4 a live dispatch with no gate and no evidence materializes exactly one canonical gate and still awaits evidence", () => {
+  const fake = installFakeOrcaIntegrationLifecycle(initialState());
+  const absentDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-r4-absent-report-"));
+  const reportPath = path.join(absentDir, "integration.json");
+  try {
+    assert.equal(fake.readState().gates.length, 0, "precondition: the live dispatch carries no canonical gate");
+    assert.equal(fs.existsSync(reportPath), false, "precondition: no deterministic evidence artifact exists yet");
+
+    const first = advanceIntegrationGate(context(fake, reportPath));
+    assert.equal(first.ok, true);
+    assert.equal(first.state, "awaiting_evidence");
+    assert.ok(first.gate, "awaiting_evidence must carry the materialized canonical gate, never null");
+    assert.equal(first.gate.question, canonicalIntegrationQuestion(PROGRAM_ID, OUTCOME_ID, programSegment));
+    assert.deepEqual(first.gate.options, ["passed", "failed"]);
+    assert.equal(first.report_path, reportPath);
+    assert.equal(fake.readState().gates.length, 1, "exactly one canonical gate is created");
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-create").length, 1);
+    // Materializing the gate must resolve and complete nothing.
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-resolve").length, 0);
+    assert.deepEqual(fake.readSends(), [], "no completion instruction or worker_done before evidence");
+    assert.equal(fake.readState().tasks[0].status, "ready");
+    assert.equal(fake.readPoison(), null);
+
+    // Idempotency: the next pass adopts the same gate instead of creating a second one.
+    const second = advanceIntegrationGate(context(fake, reportPath));
+    assert.equal(second.ok, true);
+    assert.equal(second.state, "awaiting_evidence");
+    assert.equal(second.gate.id, first.gate.id, "the same canonical gate is adopted, not duplicated");
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-create").length, 1, "no duplicate gate-create");
+    assert.equal(fake.readState().gates.length, 1);
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-resolve").length, 0);
+    assert.deepEqual(fake.readSends(), []);
+    assert.equal(fake.readState().tasks[0].status, "ready");
+    assert.equal(fake.readPoison(), null);
+
+    // The gate materialized ahead of the evidence is the very gate that evidence later resolves:
+    // no second gate appears once the operator writes its provenance-bound artifact.
+    writeReport(reportPath, { passed: true, evidence: "integration fixture passed", ...LIVE_PROVENANCE });
+    const advanced = advanceIntegrationGate(context(fake, reportPath));
+    assert.equal(advanced.ok, false);
+    assert.equal(advanced.reason_code, "INTEGRATION_WORKER_DONE_REQUIRED");
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-create").length, 1);
+    assert.equal(fake.readState().gates.length, 1);
+    assert.equal(fake.readState().gates[0].id, first.gate.id);
+    assert.equal(fake.readState().gates[0].resolution, "passed");
+    assert.equal(fake.readPoison(), null);
+  } finally {
+    fake.cleanup();
+    fs.rmSync(absentDir, { recursive: true, force: true });
+  }
+});
+
 // The advancement selection matrix. Eligibility is the CONJUNCTION of planResume's own verdict
 // (only `reused`/`redispatched` leave a currently verified live dispatch behind), the shared
 // wave blanket, and recorded dispatch provenance. Each inert row below flips exactly one
