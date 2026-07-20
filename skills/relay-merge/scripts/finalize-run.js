@@ -1013,7 +1013,7 @@ function appendDurableLearnings({
         pr: String(prNumber),
         synthesis,
         dryRun: true,
-        issueBody: issueBody || (issueNumber ? fetchIssueBody(repoPath, issueNumber, execGhFn) : null),
+        issueBody: issueBody || (issueNumber ? fetchIssueBody(worktreePath, issueNumber, execGhFn) : null),
         resolveOwner: () => ownerResult,
       });
       return {
@@ -1035,6 +1035,9 @@ function appendDurableLearnings({
         component: ownerResult.component,
         source: ownerResult.source,
       },
+      // Reuse the owner resolved on the fetched remote-tip worktree. This
+      // prevents append-learnings from reinterpreting its source/precedence.
+      resolveOwner: () => ownerResult,
     };
 
     const dryRunResult = appendLearningsFn({

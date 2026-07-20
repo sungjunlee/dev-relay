@@ -568,6 +568,47 @@ component: "billing"
     }
   });
 
+  it("explicit track traverses appendLearnings through the sprint-state selector", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth" });
+      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-billing.md"), `---
+status: active
+component: "billing"
+---
+
+# Billing
+`);
+      let called = 0;
+      const result = appendLearnings({
+        repo,
+        runId: "rTrack",
+        pr: "702",
+        track: "2026-05-billing",
+        date: "2026-05-23",
+        sprintState: ({ track, component }) => {
+          called += 1;
+          assert.equal(track, "2026-05-billing");
+          assert.equal(component, undefined);
+          return {
+            ok: true,
+            sprintPath: path.join(repo, "backlog", "sprints", "2026-05-billing.md"),
+            track: "2026-05-billing",
+            component: "billing",
+            source: "explicit_track",
+            schemaVersion: 2,
+          };
+        },
+      });
+      assert.equal(called, 1);
+      assert.equal(result.status, STATUS.APPENDED);
+      assert.equal(result.primaryComponent, "billing");
+      assert.equal(result.owner.source, "explicit_track");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("issueBody component derivation threads through appendLearnings", () => {
     const repo = makeRepo();
     try {
