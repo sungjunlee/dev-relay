@@ -1,7 +1,7 @@
 ---
 id: RELAY-1036
 title: 'dogfood: run a real risk-adaptive relay observation window'
-status: To Do
+status: Done
 labels:
   - enhancement
   - backlog
@@ -30,14 +30,14 @@ For each target class, gather at least three compact runs and three compact-elig
 ## Acceptance criteria
 
 <!-- AC:BEGIN -->
-- [ ] #1035 is complete and the report exposes comparable included/excluded cohorts.
-- [ ] Code, design, and documentation each have at least 3 real compact runs and 3 compact-eligible full controls, or the report explicitly records why a class remains under-sampled.
-- [ ] Design observations inspect rendered output, relevant flows/viewports, hierarchy, consistency, and task-specific user impact rather than relying on build/test success.
-- [ ] Routine test/build/lint success is recorded only as Verification, never as Earned Rubric value.
-- [ ] Zero-factor Earned Rubric runs remain valid when observation finds no consequential quality gradient.
-- [ ] Every earned factor is audited for task-specific evidence and a meaningful weak/adequate/strong distinction; generic filler is rejected.
-- [ ] The final report separates outcome quality, Verification, harness friction, independent-review yield, rubric decision value, and safety violations.
-- [ ] No automatic route promotion, safeguard deletion, publication, or merge occurs from the report.
+- [x] #1035 is complete and the report exposes comparable included/excluded cohorts.
+- [x] Code, design, and documentation each have at least 3 real compact runs and 3 compact-eligible full controls, or the report explicitly records why a class remains under-sampled.
+- [x] Design observations inspect rendered output, relevant flows/viewports, hierarchy, consistency, and task-specific user impact rather than relying on build/test success.
+- [x] Routine test/build/lint success is recorded only as Verification, never as Earned Rubric value.
+- [x] Zero-factor Earned Rubric runs remain valid when observation finds no consequential quality gradient.
+- [x] Every earned factor is audited for task-specific evidence and a meaningful weak/adequate/strong distinction; generic filler is rejected.
+- [x] The final report separates outcome quality, Verification, harness friction, independent-review yield, rubric decision value, and safety violations.
+- [x] No automatic route promotion, safeguard deletion, publication, or merge occurs from the report.
 <!-- AC:END -->
 
 ## Decision output
