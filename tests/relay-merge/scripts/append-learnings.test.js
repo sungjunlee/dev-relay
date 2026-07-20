@@ -83,16 +83,32 @@ describe("parseArgs", () => {
   it("parses required + optional flags", () => {
     const parsed = parseArgs([
       "--repo", "/x", "--run-id", "r1", "--pr", "42",
-      "--synthesis", "did the thing", "--date", "2026-05-23",
+      "--sprint", "/sprints/a.md", "--synthesis", "did the thing", "--date", "2026-05-23",
       "--dry-run", "--json",
     ]);
     assert.equal(parsed.repo, "/x");
     assert.equal(parsed.runId, "r1");
     assert.equal(parsed.pr, "42");
+    assert.equal(parsed.sprint, "/sprints/a.md");
     assert.equal(parsed.synthesis, "did the thing");
     assert.equal(parsed.date, "2026-05-23");
     assert.equal(parsed.dryRun, true);
     assert.equal(parsed.json, true);
+  });
+
+  it("parses --track and --component", () => {
+    const track = parseArgs(["--repo", "/x", "--run-id", "r1", "--pr", "1", "--track", "auth"]);
+    assert.equal(track.track, "auth");
+    const component = parseArgs(["--repo", "/x", "--run-id", "r1", "--pr", "1", "--component", "billing"]);
+    assert.equal(component.component, "billing");
+  });
+
+  it("rejects combined --track and --component", () => {
+    const parsed = parseArgs([
+      "--repo", "/x", "--run-id", "r1", "--pr", "1",
+      "--track", "auth", "--component", "billing",
+    ]);
+    assert.match(parsed.error, /only one of --track \/ --component/);
   });
 
   it("accepts the = form", () => {
@@ -100,6 +116,13 @@ describe("parseArgs", () => {
     assert.equal(parsed.repo, "/x");
     assert.equal(parsed.runId, "r1");
     assert.equal(parsed.pr, "42");
+  });
+
+  it("rejects empty ownership selectors in equals form", () => {
+    for (const flag of ["--sprint=", "--track=", "--component=", "--track=   "]) {
+      const parsed = parseArgs(["--repo=/x", "--run-id=r1", "--pr=42", flag]);
+      assert.match(parsed.error, /Empty value/);
+    }
   });
 
   it("errors on unknown argument", () => {
@@ -473,6 +496,220 @@ component: "billing"
       assert.equal(result.status, STATUS.FAILED);
       assert.equal(result.reason, "multiple_active_sprints");
       assert.equal(after, before);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("explicit sprint targets the correct capability among two active tracks", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth" });
+      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-billing.md"), `---
+status: active
+component: "billing"
+---
+
+# Billing
+`);
+      const billingSprint = path.join(repo, "backlog", "sprints", "2026-05-billing.md");
+      const result = appendLearnings({
+        repo,
+        runId: "rBill",
+        pr: "700",
+        sprint: billingSprint,
+        synthesis: "billing learning",
+        date: "2026-05-23",
+      });
+      assert.equal(result.status, STATUS.APPENDED);
+      assert.equal(result.primaryComponent, "billing");
+      assert.equal(result.owner.source, "explicit_sprint");
+      const written = fs.readFileSync(path.join(repo, "spec", "capabilities.md"), "utf-8");
+      assert.match(written, /## Capability: billing[\s\S]*?run #rBill/);
+      const authBlock = written.slice(
+        written.indexOf("## Capability: auth"),
+        written.indexOf("## Capability: billing")
+      );
+      assert.doesNotMatch(authBlock, /run #rBill/);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("explicit component uses injectable sprint-state and does not self-discover", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth" });
+      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-billing.md"), `---
+status: active
+component: "billing"
+---
+
+# Billing
+`);
+      let called = 0;
+      const result = appendLearnings({
+        repo,
+        runId: "rComp",
+        pr: "701",
+        component: "billing",
+        date: "2026-05-23",
+        sprintState: ({ component }) => {
+          called += 1;
+          assert.equal(component, "billing");
+          return {
+            ok: true,
+            sprintPath: path.join(repo, "backlog", "sprints", "2026-05-billing.md"),
+            track: "2026-05-billing",
+            component: "billing",
+            source: "explicit_component",
+            schemaVersion: 2,
+          };
+        },
+      });
+      assert.equal(called, 1);
+      assert.equal(result.status, STATUS.APPENDED);
+      assert.equal(result.primaryComponent, "billing");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("explicit track traverses appendLearnings through the sprint-state selector", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth" });
+      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-billing.md"), `---
+status: active
+component: "billing"
+---
+
+# Billing
+`);
+      let called = 0;
+      const result = appendLearnings({
+        repo,
+        runId: "rTrack",
+        pr: "702",
+        track: "2026-05-billing",
+        date: "2026-05-23",
+        sprintState: ({ track, component }) => {
+          called += 1;
+          assert.equal(track, "2026-05-billing");
+          assert.equal(component, undefined);
+          return {
+            ok: true,
+            sprintPath: path.join(repo, "backlog", "sprints", "2026-05-billing.md"),
+            track: "2026-05-billing",
+            component: "billing",
+            source: "explicit_track",
+            schemaVersion: 2,
+          };
+        },
+      });
+      assert.equal(called, 1);
+      assert.equal(result.status, STATUS.APPENDED);
+      assert.equal(result.primaryComponent, "billing");
+      assert.equal(result.owner.source, "explicit_track");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("issueBody component derivation threads through appendLearnings", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth" });
+      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-billing.md"), `---
+status: active
+component: "billing"
+---
+
+# Billing
+`);
+      const result = appendLearnings({
+        repo,
+        runId: "rIssue",
+        pr: "702",
+        issueBody: "component: billing\n\nDo the thing.",
+        date: "2026-05-23",
+        sprintState: ({ component }) => ({
+          ok: true,
+          sprintPath: path.join(repo, "backlog", "sprints", "2026-05-billing.md"),
+          track: "2026-05-billing",
+          component,
+          source: "explicit_component",
+          schemaVersion: 2,
+        }),
+      });
+      assert.equal(result.status, STATUS.APPENDED);
+      assert.equal(result.owner.source, "issue_component");
+      assert.equal(result.primaryComponent, "billing");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("fleet owner injection seam is honored", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth" });
+      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-billing.md"), `---
+status: active
+component: "billing"
+---
+
+# Billing
+`);
+      const result = appendLearnings({
+        repo,
+        runId: "rFleet",
+        pr: "703",
+        owner: {
+          component: "billing",
+          source: "fleet",
+        },
+        date: "2026-05-23",
+        sprintState: ({ component }) => ({
+          ok: true,
+          sprintPath: path.join(repo, "backlog", "sprints", "2026-05-billing.md"),
+          track: "2026-05-billing",
+          component,
+          source: "explicit_component",
+          schemaVersion: 2,
+        }),
+      });
+      assert.equal(result.status, STATUS.APPENDED);
+      assert.equal(result.owner.source, "fleet");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces missing sprint-state dependency when component resolution is required", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth" });
+      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-billing.md"), `---
+status: active
+component: "billing"
+---
+
+# Billing
+`);
+      const result = appendLearnings({
+        repo,
+        runId: "rDep",
+        pr: "704",
+        component: "billing",
+        sprintState: () => ({
+          ok: false,
+          reason: "sprint_state_unavailable",
+          detail: "no binary",
+        }),
+      });
+      assert.equal(result.status, STATUS.FAILED);
+      assert.equal(result.reason, "sprint_state_unavailable");
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

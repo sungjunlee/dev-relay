@@ -9,18 +9,14 @@
  * v0.1 design doc — anti-adversarial-Goodhart defense.
  *
  * Usage:
- *   ./append-learnings.js --repo <path> --run-id <id> --pr <number> [--synthesis "<one-line>"] [--date YYYY-MM-DD] [--dry-run] [--json]
+ *   ./append-learnings.js --repo <path> --run-id <id> --pr <number>
+ *     [--sprint <path>] [--track <slug>] [--component <slug>]
+ *     [--synthesis "<one-line>"] [--date YYYY-MM-DD] [--dry-run] [--json]
  *
- * Resolution flow:
- *   1. Find the active sprint file (status: active) under <repo>/backlog/sprints/
- *   2. Require exactly one active sprint, then read its single primary
- *      `component:` frontmatter handle. Comma-separated multi-component values
- *      fail because the field is a routing address, not prose.
- *   3. Locate <repo>/spec/capabilities.md and the matching `## Capability: <name>`
- *      block. Capability names are kebab-case (`[a-z0-9][a-z0-9-]*`). Require
- *      the block's LEARN:BEGIN/LEARN:END marker pair to be intact.
- *   4. If no entry already exists for run-id (`run #<id>` substring), append a
- *      new line in schema-bound format inside the markers.
+ * Ownership resolution (see sprint-owner.js):
+ *   caller/CLI sprint|track|component → manifest/fleet owner →
+ *   issue-body `component:` → exactly-one-active fallback.
+ *   `multiple_active_sprints` only when N>1 and no owner resolves.
  *
  * Graceful no-ops (status: skipped, exit 0):
  *   - spec/capabilities.md missing
@@ -29,10 +25,11 @@
  *   - entry for this run-id already present (idempotent)
  *
  * Loud failures (status: failed, exit 1):
- *   - multiple active sprint files (ambiguous component target)
+ *   - multiple active sprint files with no resolvable owner
+ *   - contradictory explicit handles
  *   - multiple component values in sprint frontmatter
  *   - markers missing or out of order in the matching block (tampering)
- *   - malformed inputs
+ *   - malformed inputs / sprint-state dependency failures when required
  *
  * Designed to be invoked from finalize-run.js; failure must not block merge
  * cleanup. The caller treats a non-zero exit as a warning, not a fatal error.
@@ -40,6 +37,15 @@
 
 const fs = require("fs");
 const path = require("path");
+const {
+  OWNER_SOURCES,
+  resolveSprintOwner,
+  parseFrontmatter,
+  readFrontmatterField,
+  parseComponents,
+  isValidCapabilityName,
+  listActiveSprintFiles,
+} = require("./sprint-owner");
 
 const STATUS = Object.freeze({
   APPENDED: "appended",
@@ -52,7 +58,11 @@ const MARKER_END = "<!-- LEARN:END -->";
 const CAPABILITY_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function usage() {
-  return "Usage: append-learnings.js --repo <path> --run-id <id> --pr <number> [--synthesis TEXT] [--date YYYY-MM-DD] [--dry-run] [--json]";
+  return [
+    "Usage: append-learnings.js --repo <path> --run-id <id> --pr <number>",
+    "  [--sprint <path>] [--track <slug> | --component <slug>]",
+    "  [--synthesis TEXT] [--date YYYY-MM-DD] [--dry-run] [--json]",
+  ].join(" ");
 }
 
 function parseArgs(args) {
@@ -60,6 +70,9 @@ function parseArgs(args) {
     repo: null,
     runId: null,
     pr: null,
+    sprint: null,
+    track: null,
+    component: null,
     synthesis: null,
     date: null,
     dryRun: false,
@@ -87,6 +100,7 @@ function parseArgs(args) {
 
     const handlers = [
       ["--repo", "repo"], ["--run-id", "runId"], ["--pr", "pr"],
+      ["--sprint", "sprint"], ["--track", "track"], ["--component", "component"],
       ["--synthesis", "synthesis"], ["--date", "date"],
     ];
     let handled = false;
@@ -106,34 +120,19 @@ function parseArgs(args) {
     if (!options.repo)  return { ...options, error: `Missing --repo. ${usage()}` };
     if (!options.runId) return { ...options, error: `Missing --run-id. ${usage()}` };
     if (!options.pr)    return { ...options, error: `Missing --pr. ${usage()}` };
+    for (const [flag, key] of [["--sprint", "sprint"], ["--track", "track"], ["--component", "component"]]) {
+      if (typeof options[key] === "string" && !options[key].trim()) {
+        return { ...options, error: `Empty value for ${flag}. ${usage()}` };
+      }
+    }
+    if (options.track && options.component) {
+      return {
+        ...options,
+        error: `Use only one of --track / --component. ${usage()}`,
+      };
+    }
   }
   return options;
-}
-
-function parseFrontmatter(content) {
-  if (!content.startsWith("---\n")) return null;
-  const end = content.indexOf("\n---\n", 4);
-  if (end === -1) return null;
-  return content.slice(4, end);
-}
-
-function readFrontmatterField(fm, field) {
-  if (!fm) return null;
-  const match = fm.match(new RegExp(`^${field}:\\s*(.*)$`, "m"));
-  if (!match) return null;
-  let raw = match[1].trim();
-  if (raw.startsWith('"') && raw.endsWith('"')) raw = raw.slice(1, -1);
-  if (raw.startsWith("'") && raw.endsWith("'")) raw = raw.slice(1, -1);
-  return raw;
-}
-
-function parseComponents(fmValue) {
-  if (!fmValue) return [];
-  return fmValue.split(",").map((s) => s.trim()).filter(Boolean);
-}
-
-function isValidCapabilityName(name) {
-  return CAPABILITY_NAME_PATTERN.test(name);
 }
 
 function parseCapabilityHeading(line) {
@@ -147,25 +146,25 @@ function isCapabilityBoundary(line) {
   return /^## Capability:\s+/.test(line);
 }
 
+/**
+ * Legacy single-active discovery kept for N==1 fallback and tests.
+ * Returns one active sprint, null, or a multiple_active_sprints failure.
+ */
 function resolveActiveSprint(sprintsDir, { readdir = fs.readdirSync, readFile = fs.readFileSync, fileExists = fs.existsSync } = {}) {
-  if (!fileExists(sprintsDir)) return null;
-  const files = readdir(sprintsDir)
-    .filter((f) => f.endsWith(".md") && !f.startsWith("_"))
-    .map((f) => path.join(sprintsDir, f))
-    .sort();
-  const active = [];
-  for (const file of files) {
-    const content = readFile(file, "utf-8");
-    const fm = parseFrontmatter(content);
-    if (!fm) continue;
-    if (/^status:\s*active\s*$/m.test(fm)) active.push({ file, content });
-  }
-  if (active.length > 1) {
+  const activeFiles = listActiveSprintFiles(sprintsDir, {
+    readdir,
+    readFile,
+    existsSync: fileExists,
+  });
+  if (activeFiles.length > 1) {
     return buildFailure("multiple_active_sprints", {
-      sprintFiles: active.map((entry) => entry.file),
+      sprintFiles: activeFiles,
     });
   }
-  if (active.length === 1) return active[0];
+  if (activeFiles.length === 1) {
+    const file = activeFiles[0];
+    return { file, content: readFile(file, "utf-8") };
+  }
   return null;
 }
 
@@ -260,6 +259,21 @@ function appendLearningsCore({
   };
 }
 
+function mapOwnerFailure(ownerResult) {
+  const skipReasons = new Set([
+    "active_sprint_absent",
+    "component_empty",
+    "capabilities_absent",
+  ]);
+  const reason = ownerResult.reason || "owner_unresolved";
+  const extras = { ...ownerResult };
+  delete extras.ok;
+  if (skipReasons.has(reason)) {
+    return buildSkip(reason, extras);
+  }
+  return buildFailure(reason, extras);
+}
+
 function appendLearnings({
   repo,
   runId,
@@ -267,38 +281,41 @@ function appendLearnings({
   synthesis = null,
   date = null,
   dryRun = false,
+  sprint = null,
+  track = null,
+  component = null,
+  owner = null,
+  issueBody = null,
+  resolveOwner = resolveSprintOwner,
+  sprintState = null,
   readFile = fs.readFileSync,
   writeFile = fs.writeFileSync,
   fileExists = fs.existsSync,
   readdir = fs.readdirSync,
 } = {}) {
-  const fsDeps = { readFile, writeFile, fileExists, readdir };
-
   const capabilitiesPath = path.join(repo, "spec", "capabilities.md");
   if (!fileExists(capabilitiesPath)) {
     return buildSkip("capabilities_absent", { capabilitiesPath });
   }
 
-  const sprintsDir = path.join(repo, "backlog", "sprints");
-  const sprint = findActiveSprint(sprintsDir, fsDeps);
-  if (sprint?.status === STATUS.FAILED) return { ...sprint, sprintsDir };
-  if (!sprint) return buildSkip("active_sprint_absent", { sprintsDir });
+  const ownerResult = resolveOwner({
+    repo,
+    sprint,
+    track,
+    component,
+    owner,
+    issueBody,
+    sprintState,
+    readFile,
+    existsSync: fileExists,
+    readdir,
+  });
 
-  const fm = parseFrontmatter(sprint.content);
-  const componentRaw = readFrontmatterField(fm, "component");
-  const components = parseComponents(componentRaw);
-  if (components.length === 0) {
-    return buildSkip("component_empty", { sprintFile: sprint.file });
-  }
-  if (components.length > 1) {
-    return buildFailure("multiple_components", {
-      sprintFile: sprint.file,
-      components,
-      detail: "component: accepts one primary capability slug; put secondary touches in sprint prose",
-    });
+  if (!ownerResult.ok) {
+    return mapOwnerFailure(ownerResult);
   }
 
-  const [primaryComponent] = components;
+  const primaryComponent = ownerResult.component;
   const capabilitiesContent = readFile(capabilitiesPath, "utf-8");
 
   const coreResult = appendLearningsCore({
@@ -310,7 +327,17 @@ function appendLearnings({
     date,
   });
 
-  const result = { ...coreResult, capabilitiesPath, sprintFile: sprint.file };
+  const result = {
+    ...coreResult,
+    capabilitiesPath,
+    sprintFile: ownerResult.sprintPath,
+    owner: {
+      sprintPath: ownerResult.sprintPath,
+      track: ownerResult.track,
+      component: ownerResult.component,
+      source: ownerResult.source,
+    },
+  };
   if (result.status !== STATUS.APPENDED) return result;
 
   if (!dryRun) {
@@ -326,6 +353,9 @@ function formatHumanReport(result) {
       `Appended to ${result.capabilitiesPath} (capability: ${result.primaryComponent}):`,
       `  ${result.entry}`,
     ];
+    if (result.owner?.source) {
+      lines.push(`  owner: ${result.owner.source} → ${result.sprintFile}`);
+    }
     return lines.join("\n");
   }
   if (result.status === STATUS.SKIPPED) {
@@ -356,6 +386,7 @@ module.exports = {
   STATUS,
   MARKER_BEGIN,
   MARKER_END,
+  OWNER_SOURCES,
   parseArgs,
   parseFrontmatter,
   readFrontmatterField,

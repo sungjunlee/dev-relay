@@ -67,7 +67,13 @@ const {
   summarizeRubricAuditForSkip,
 } = require("./review-gate");
 const { STATUS: LEARNING_STATUS, appendLearnings } = require("./append-learnings");
+const {
+  resolveSprintOwner,
+  readManifestOwnership,
+  parseIssueComponent,
+} = require("./sprint-owner");
 const { reapAdvisoryLaneLeases } = require("../../relay-dispatch/scripts/run-runtime-state");
+const os = require("os");
 
 const ALLOWED_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
@@ -738,18 +744,6 @@ function resolveFinalizeManifestRecord({
   }
 }
 
-function resolveCurrentBranch(repoPath) {
-  try {
-    return execGit(repoPath, ["symbolic-ref", "--short", "HEAD"]);
-  } catch (error) {
-    return null;
-  }
-}
-
-function trackedStatus(repoPath) {
-  return execGit(repoPath, ["status", "--porcelain", "--untracked-files=no"]);
-}
-
 function isTrackedPath(repoPath, relativePath) {
   try {
     execGit(repoPath, ["ls-files", "--error-unmatch", "--", relativePath]);
@@ -763,125 +757,485 @@ function learningCommitMessage(runId, prNumber) {
   return `Record relay learning for PR #${prNumber}\n\nRun: ${runId}`;
 }
 
+const DEFAULT_LEARNING_PUSH_ATTEMPTS = 3;
+const LEARNING_CAPABILITIES_REL = path.join("spec", "capabilities.md");
+
+/**
+ * Narrow NFF detection: require an actual non-fast-forward / behind-tip signal.
+ * Generic "failed to push" / "updates were rejected" alone also covers
+ * protected-branch, permission, and hook declines — those must not burn retry
+ * cycles or be labeled as an NFF race.
+ */
+function isNonFastForwardPushError(error) {
+  const text = `${error?.stderr || ""}\n${error?.message || ""}`.toLowerCase();
+  if (
+    text.includes("protected branch")
+    || text.includes("permission denied")
+    || text.includes("hook declined")
+    || text.includes("pre-receive hook")
+    || text.includes("pre-receive-hook")
+  ) {
+    return false;
+  }
+  return text.includes("non-fast-forward")
+    || text.includes("fetch first")
+    || text.includes("tip of your current branch is behind")
+    || text.includes("pushed branch tip is behind")
+    || text.includes("current branch is behind");
+}
+
+function persistLearningRecoveryPatch({
+  repoPath,
+  worktreePath,
+  runId,
+  execGitFn = execGit,
+}) {
+  try {
+    let patch = execGitFn(worktreePath, [
+      "diff",
+      "HEAD",
+      "--binary",
+      "--",
+      LEARNING_CAPABILITIES_REL,
+    ], { raw: true });
+    if (!String(patch || "").trim()) {
+      patch = execGitFn(worktreePath, [
+        "format-patch",
+        "-1",
+        "--stdout",
+        "HEAD",
+        "--",
+        LEARNING_CAPABILITIES_REL,
+      ], { raw: true });
+    }
+    if (!String(patch || "").trim()) return null;
+    const runDir = getRunDir(repoPath, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    const recoveryPath = path.join(runDir, "learning-recovery.patch");
+    fs.writeFileSync(recoveryPath, patch, { encoding: "utf-8" });
+    return recoveryPath;
+  } catch {
+    return null;
+  }
+}
+
+function remapTransientLearningPaths(result, repoPath, worktreePath) {
+  if (!result || typeof result !== "object") return result;
+  const remap = (candidate) => {
+    if (typeof candidate !== "string") return candidate;
+    const rel = path.relative(worktreePath, candidate);
+    if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      return candidate;
+    }
+    return path.join(repoPath, rel);
+  };
+  return {
+    ...result,
+    ...(result.sprintFile ? { sprintFile: remap(result.sprintFile) } : {}),
+    ...(result.capabilitiesPath ? { capabilitiesPath: remap(result.capabilitiesPath) } : {}),
+    ...(result.owner ? {
+      owner: {
+        ...result.owner,
+        ...(result.owner.sprintPath ? { sprintPath: remap(result.owner.sprintPath) } : {}),
+      },
+    } : {}),
+  };
+}
+
+function fetchIssueBody(repoPath, issueNumber, execGhFn = execGh) {
+  if (!issueNumber) return null;
+  try {
+    const raw = execGhFn(repoPath, ["issue", "view", String(issueNumber), "--json", "body"]);
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.body === "string" ? parsed.body : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveLearningOwner({
+  repoPath,
+  manifest,
+  issueNumber,
+  owner = null,
+  issueBody = null,
+  resolveOwnerFn = resolveSprintOwner,
+  execGhFn = execGh,
+}) {
+  const manifestOwner = owner || readManifestOwnership(manifest);
+  let body = issueBody;
+  if (!manifestOwner?.sprint && !manifestOwner?.track && !manifestOwner?.component && !body) {
+    body = fetchIssueBody(repoPath, issueNumber, execGhFn);
+  }
+  return resolveOwnerFn({
+    repo: repoPath,
+    owner: manifestOwner,
+    issueBody: body,
+  });
+}
+
+function cleanupLearningWorktree(repoPath, worktreePath, execGitFn = execGit, rmSyncFn = fs.rmSync) {
+  if (!worktreePath) return;
+  try {
+    execGitFn(repoPath, ["worktree", "remove", "--force", worktreePath]);
+  } catch {
+    try {
+      rmSyncFn(worktreePath, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+    try {
+      execGitFn(repoPath, ["worktree", "prune"]);
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+function durableOwnerPaths(repoPath, worktreePath, ownerResult) {
+  const relSprint = path.relative(worktreePath, ownerResult.sprintPath);
+  const durableSprint = path.join(repoPath, relSprint);
+  return {
+    repoPath,
+    sprintPath: durableSprint,
+    capabilitiesPath: path.join(repoPath, "spec", "capabilities.md"),
+    owner: {
+      sprintPath: durableSprint,
+      track: ownerResult.track,
+      component: ownerResult.component,
+      source: ownerResult.source,
+    },
+  };
+}
+
+function withDurableOwnerPaths(result, durable) {
+  if (!result || typeof result !== "object") return result;
+  const next = { ...result };
+  if (durable.sprintPath) {
+    next.sprintFile = durable.sprintPath;
+  }
+  if (durable.capabilitiesPath) {
+    next.capabilitiesPath = durable.capabilitiesPath;
+  }
+  if (result.owner || durable.owner) {
+    next.owner = {
+      ...(result.owner || {}),
+      ...durable.owner,
+    };
+  }
+  return next;
+}
+
+/**
+ * Durable Learnings write that never switches, commits, or dirties the
+ * operator's canonical checkout. Fetches the remote base first, creates an
+ * isolated worktree at that tip, then resolves ownership and runs both
+ * dry-run/write against that worktree. Does not inspect canonical HEAD/status.
+ *
+ * Crash mid-flight can leave a `relay-learn-*` worktree registration; the
+ * finally block is best-effort (`worktree remove` → rm → `worktree prune`).
+ * Operators recover with `git worktree prune` / removing stale `/tmp/relay-learn-*`
+ * dirs — finalize does not install process-global signal handlers.
+ */
 function appendDurableLearnings({
   repoPath,
   runId,
   prNumber,
   synthesis,
-  expectedBranch,
+  baseBranch,
+  manifest = null,
+  issueNumber = null,
+  owner = null,
+  issueBody = null,
+  maxPushAttempts = DEFAULT_LEARNING_PUSH_ATTEMPTS,
+  appendLearningsFn = appendLearnings,
+  resolveOwnerFn = resolveSprintOwner,
+  execGitFn = execGit,
+  execGhFn = execGh,
+  mkdtempSyncFn = fs.mkdtempSync,
+  rmSyncFn = fs.rmSync,
 }) {
-  const dryRunResult = appendLearnings({
-    repo: repoPath,
-    runId,
-    pr: String(prNumber),
-    synthesis,
-    dryRun: true,
-  });
-  if (dryRunResult.status !== LEARNING_STATUS.APPENDED) return dryRunResult;
-
-  const currentBranch = resolveCurrentBranch(repoPath);
-  if (!currentBranch) {
+  if (!baseBranch) {
     return {
       status: LEARNING_STATUS.FAILED,
-      reason: "detached_head",
+      reason: "base_branch_missing",
       durability: { status: "not_written" },
-      capabilitiesPath: dryRunResult.capabilitiesPath,
-      sprintFile: dryRunResult.sprintFile,
-    };
-  }
-  if (expectedBranch && currentBranch !== expectedBranch) {
-    return {
-      status: LEARNING_STATUS.FAILED,
-      reason: "unexpected_branch",
-      expectedBranch,
-      currentBranch,
-      durability: { status: "not_written" },
-      capabilitiesPath: dryRunResult.capabilitiesPath,
-      sprintFile: dryRunResult.sprintFile,
-    };
-  }
-  if (!isTrackedPath(repoPath, path.join("spec", "capabilities.md"))) {
-    return {
-      status: LEARNING_STATUS.FAILED,
-      reason: "capabilities_untracked",
-      durability: { status: "not_written" },
-      capabilitiesPath: dryRunResult.capabilitiesPath,
-      sprintFile: dryRunResult.sprintFile,
+      canonicalUntouched: true,
     };
   }
 
-  const beforeStatus = trackedStatus(repoPath);
-  if (beforeStatus) {
-    return {
-      status: LEARNING_STATUS.FAILED,
-      reason: "dirty_worktree",
-      durability: { status: "not_written" },
-      dirtyStatus: beforeStatus,
-      capabilitiesPath: dryRunResult.capabilitiesPath,
-      sprintFile: dryRunResult.sprintFile,
-    };
-  }
-
-  const appendResult = appendLearnings({
-    repo: repoPath,
-    runId,
-    pr: String(prNumber),
-    synthesis,
-  });
-  if (appendResult.status !== LEARNING_STATUS.APPENDED) return appendResult;
-
-  try {
-    execGit(repoPath, ["add", "--", path.join("spec", "capabilities.md")]);
-    execGit(repoPath, ["commit", "-m", learningCommitMessage(runId, prNumber)]);
-  } catch (error) {
-    return {
-      ...appendResult,
-      durability: {
-        status: "manual_action_required",
-        reason: "commit_failed",
-        message: summarizeFailure(error),
-      },
-    };
-  }
-
-  const commitSha = execGit(repoPath, ["rev-parse", "HEAD"]);
-  const remoteName = resolveRemoteName(repoPath, currentBranch);
+  const remoteName = resolveRemoteName(repoPath, baseBranch) || "origin";
   if (!remoteName || !hasRemote(repoPath, remoteName)) {
     return {
-      ...appendResult,
-      commitSha,
-      currentBranch,
+      status: LEARNING_STATUS.FAILED,
+      reason: "remote_missing",
       remoteName,
-      durability: {
-        status: "manual_action_required",
-        reason: "remote_missing",
-      },
+      baseBranch,
+      durability: { status: "manual_action_required", reason: "remote_missing" },
+      canonicalUntouched: true,
     };
   }
 
+  let worktreePath = null;
   try {
-    execGit(repoPath, ["push", remoteName, currentBranch]);
-    return {
-      ...appendResult,
-      commitSha,
-      currentBranch,
-      remoteName,
-      durability: {
-        status: "pushed",
+    try {
+      execGitFn(repoPath, ["fetch", remoteName, baseBranch]);
+    } catch (error) {
+      return {
+        status: LEARNING_STATUS.FAILED,
+        reason: "fetch_failed",
+        durability: {
+          status: "manual_action_required",
+          reason: "fetch_failed",
+          message: summarizeFailure(error),
+        },
+        canonicalUntouched: true,
+      };
+    }
+
+    const remoteTipRef = `${remoteName}/${baseBranch}`;
+    let remoteTip;
+    try {
+      remoteTip = execGitFn(repoPath, ["rev-parse", "--verify", remoteTipRef]);
+    } catch (error) {
+      return {
+        status: LEARNING_STATUS.FAILED,
+        reason: "base_tip_unresolved",
+        durability: {
+          status: "manual_action_required",
+          reason: "base_tip_unresolved",
+          message: summarizeFailure(error),
+        },
+        canonicalUntouched: true,
+      };
+    }
+
+    worktreePath = mkdtempSyncFn(path.join(os.tmpdir(), "relay-learn-"));
+    try {
+      execGitFn(repoPath, ["worktree", "add", "--detach", worktreePath, remoteTip]);
+    } catch (error) {
+      cleanupLearningWorktree(repoPath, worktreePath, execGitFn, rmSyncFn);
+      worktreePath = null;
+      return {
+        status: LEARNING_STATUS.FAILED,
+        reason: "worktree_create_failed",
+        durability: {
+          status: "not_written",
+          reason: "worktree_create_failed",
+          message: summarizeFailure(error),
+        },
+        canonicalUntouched: true,
+      };
+    }
+
+    // Ownership + dry-run/write all target the isolated remote-tip worktree —
+    // never the operator's canonical checkout (which may lack backlog/capabilities).
+    const ownerResult = resolveLearningOwner({
+      repoPath: worktreePath,
+      manifest,
+      issueNumber,
+      owner,
+      issueBody,
+      resolveOwnerFn,
+      execGhFn,
+    });
+
+    if (!ownerResult.ok) {
+      const dryMapped = appendLearningsFn({
+        repo: worktreePath,
+        runId,
+        pr: String(prNumber),
+        synthesis,
+        dryRun: true,
+        issueBody: issueBody || (issueNumber ? fetchIssueBody(worktreePath, issueNumber, execGhFn) : null),
+        resolveOwner: () => ownerResult,
+      });
+      return {
+        ...remapTransientLearningPaths(dryMapped, repoPath, worktreePath),
+        durability: {
+          status: "not_written",
+          reason: dryMapped.reason || ownerResult.reason || "owner_unresolved",
+        },
+        canonicalUntouched: true,
+      };
+    }
+
+    const durable = durableOwnerPaths(repoPath, worktreePath, ownerResult);
+    const ownerHandles = {
+      sprint: ownerResult.sprintPath,
+      owner: {
+        sprint: ownerResult.sprintPath,
+        track: ownerResult.track,
+        component: ownerResult.component,
+        source: ownerResult.source,
       },
+      // Reuse the owner resolved on the fetched remote-tip worktree. This
+      // prevents append-learnings from reinterpreting its source/precedence.
+      resolveOwner: () => ownerResult,
     };
-  } catch (error) {
+
+    const dryRunResult = appendLearningsFn({
+      repo: worktreePath,
+      runId,
+      pr: String(prNumber),
+      synthesis,
+      dryRun: true,
+      ...ownerHandles,
+    });
+    if (dryRunResult.status === LEARNING_STATUS.SKIPPED && dryRunResult.reason === "idempotent_match") {
+      return {
+        ...withDurableOwnerPaths(dryRunResult, durable),
+        durability: { status: "already_present", baseBranch, remoteName },
+        canonicalUntouched: true,
+      };
+    }
+    if (dryRunResult.status !== LEARNING_STATUS.APPENDED) {
+      return {
+        ...withDurableOwnerPaths(dryRunResult, durable),
+        durability: { status: "not_written" },
+        canonicalUntouched: true,
+      };
+    }
+
+    if (!isTrackedPath(worktreePath, LEARNING_CAPABILITIES_REL)) {
+      return {
+        ...withDurableOwnerPaths(dryRunResult, durable),
+        status: LEARNING_STATUS.FAILED,
+        reason: "capabilities_untracked",
+        durability: { status: "not_written" },
+        canonicalUntouched: true,
+      };
+    }
+
+    const appendResult = appendLearningsFn({
+      repo: worktreePath,
+      runId,
+      pr: String(prNumber),
+      synthesis,
+      ...ownerHandles,
+    });
+
+    if (appendResult.status === LEARNING_STATUS.SKIPPED && appendResult.reason === "idempotent_match") {
+      return {
+        ...withDurableOwnerPaths(appendResult, durable),
+        durability: { status: "already_present", baseBranch, remoteName },
+        canonicalUntouched: true,
+      };
+    }
+    if (appendResult.status !== LEARNING_STATUS.APPENDED) {
+      return {
+        ...withDurableOwnerPaths(appendResult, durable),
+        durability: { status: "not_written" },
+        canonicalUntouched: true,
+      };
+    }
+
+    try {
+      execGitFn(worktreePath, ["add", "--", LEARNING_CAPABILITIES_REL]);
+      execGitFn(worktreePath, ["commit", "-m", learningCommitMessage(runId, prNumber)]);
+    } catch (error) {
+      const recoveryPatch = persistLearningRecoveryPatch({
+        repoPath,
+        worktreePath,
+        runId,
+        execGitFn,
+      });
+      return {
+        ...withDurableOwnerPaths(appendResult, durable),
+        ...(recoveryPatch ? { recoveryPatch } : {}),
+        durability: {
+          status: "manual_action_required",
+          reason: "commit_failed",
+          message: summarizeFailure(error),
+          ...(recoveryPatch ? { recoveryPatch } : {}),
+        },
+        canonicalUntouched: true,
+      };
+    }
+
+    let commitSha = execGitFn(worktreePath, ["rev-parse", "HEAD"]);
+    const recoveryPatch = persistLearningRecoveryPatch({
+      repoPath,
+      worktreePath,
+      runId,
+      execGitFn,
+    });
+    let attempts = 0;
+    let lastPushError = null;
+
+    while (attempts < maxPushAttempts) {
+      attempts += 1;
+      try {
+        // Git's rejection text is localized. Pin the command locale so the
+        // deliberately narrow NFF classifier below receives stable signals.
+        // Push from the canonical repository so relative remote URLs retain
+        // their configured resolution base. The detached worktree commit is
+        // available through the shared object database.
+        execGitFn(repoPath, ["push", remoteName, `${commitSha}:refs/heads/${baseBranch}`], {
+          env: { ...process.env, LC_ALL: "C", LANG: "C" },
+        });
+        if (recoveryPatch) {
+          try { fs.unlinkSync(recoveryPatch); } catch {}
+        }
+        return {
+          ...withDurableOwnerPaths(appendResult, durable),
+          commitSha,
+          baseBranch,
+          remoteName,
+          pushAttempts: attempts,
+          durability: { status: "pushed", baseBranch, remoteName, attempts },
+          canonicalUntouched: true,
+        };
+      } catch (error) {
+        lastPushError = error;
+        if (!isNonFastForwardPushError(error) || attempts >= maxPushAttempts) {
+          break;
+        }
+        try {
+          execGitFn(repoPath, ["fetch", remoteName, baseBranch]);
+          execGitFn(worktreePath, ["rebase", `${remoteName}/${baseBranch}`]);
+          commitSha = execGitFn(worktreePath, ["rev-parse", "HEAD"]);
+        } catch (rebaseError) {
+          const rebaseText = `${rebaseError?.stderr || ""}\n${rebaseError?.message || ""}`.toLowerCase();
+          const conflict = rebaseText.includes("conflict") || rebaseText.includes("could not apply");
+          return {
+            ...withDurableOwnerPaths(appendResult, durable),
+            commitSha,
+            baseBranch,
+            remoteName,
+            pushAttempts: attempts,
+            ...(recoveryPatch ? { recoveryPatch } : {}),
+            durability: {
+              status: "manual_action_required",
+              reason: conflict ? "push_conflict" : "rebase_failed",
+              message: summarizeFailure(rebaseError),
+              pushMessage: summarizeFailure(error),
+              ...(recoveryPatch ? { recoveryPatch } : {}),
+            },
+            canonicalUntouched: true,
+          };
+        }
+      }
+    }
+
     return {
-      ...appendResult,
+      ...withDurableOwnerPaths(appendResult, durable),
       commitSha,
-      currentBranch,
+      baseBranch,
       remoteName,
+      pushAttempts: attempts,
+      ...(recoveryPatch ? { recoveryPatch } : {}),
       durability: {
         status: "manual_action_required",
         reason: "push_failed",
-        message: summarizeFailure(error),
+        message: summarizeFailure(lastPushError),
+        attempts,
+        ...(recoveryPatch ? { recoveryPatch } : {}),
       },
+      canonicalUntouched: true,
     };
+  } finally {
+    cleanupLearningWorktree(repoPath, worktreePath, execGitFn, rmSyncFn);
   }
 }
 
@@ -1425,7 +1779,9 @@ function main() {
         runId: updated.run_id,
         prNumber: String(prNumber),
         synthesis: updated.issue?.title || null,
-        expectedBranch: updated.git?.base_branch || null,
+        baseBranch: updated.git?.base_branch || null,
+        manifest: updated,
+        issueNumber: updated.issue?.number || null,
       });
     } catch (error) {
       learningsResult = { status: "failed", reason: "exception", message: summarizeFailure(error) };
@@ -1534,4 +1890,10 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildSquashSubject };
+module.exports = {
+  buildSquashSubject,
+  appendDurableLearnings,
+  resolveLearningOwner,
+  parseIssueComponent,
+  readManifestOwnership,
+};
