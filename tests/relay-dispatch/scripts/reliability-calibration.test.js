@@ -6,6 +6,14 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/reliability/calibration");
 
 function manifest(runId, taskClass, assurance, overrides = {}) {
+  const taskProfileSummary = {
+    task_class: taskClass,
+    behavior_path: assurance === "compact" ? "lightweight" : "full",
+  };
+  if (overrides.minimumReviewAssurance !== null) {
+    taskProfileSummary.minimum_review_assurance =
+      overrides.minimumReviewAssurance || "compact";
+  }
   return {
     data: {
       run_id: runId,
@@ -14,10 +22,7 @@ function manifest(runId, taskClass, assurance, overrides = {}) {
       review: { rounds: overrides.rounds || 1 },
       advisory: {
         guidance: {
-          task_profile_summary: {
-            task_class: taskClass,
-            behavior_path: assurance === "compact" ? "lightweight" : "full",
-          },
+          task_profile_summary: taskProfileSummary,
         },
       },
     },
@@ -93,6 +98,7 @@ test("calibration records behavior path and assurance while separating verificat
     task_class: "documentation",
     behavior_path: "lightweight",
     assurance_tier: "compact",
+    comparison_eligibility: "included",
     rubric_mode: "none",
     outcome_quality: {
       contract: "pass",
@@ -161,6 +167,85 @@ test("calibration covers representative task classes and makes promotion decisio
   );
   assert.equal(report.by_task_class.code.paths.lightweight.sample_size, 3);
   assert.equal(report.by_task_class.code.paths.full.sample_size, 4);
+  assert.equal(report.by_task_class.code.paths.full.observed_sample_size, 4);
+  assert.equal(report.by_task_class.code.paths.full.excluded_sample_size, 0);
+});
+
+test("risk-skewed full observations stay visible without deciding for the compact cohort", () => {
+  const manifests = [];
+  const verdictsByRun = new Map();
+  for (let index = 1; index <= 3; index += 1) {
+    const lightRun = `skew-light-${index}`;
+    const highFullRun = `skew-high-full-${index}`;
+    manifests.push(manifest(lightRun, "code", "compact"));
+    manifests.push(manifest(highFullRun, "code", "hardened", {
+      minimumReviewAssurance: "hardened",
+    }));
+    verdictsByRun.set(lightRun, [verdict()]);
+    verdictsByRun.set(highFullRun, [verdict({
+      contract: "fail",
+      issues: [materialIssue()],
+    })]);
+  }
+  for (let index = 1; index <= 2; index += 1) {
+    const comparableFullRun = `skew-comparable-full-${index}`;
+    manifests.push(manifest(comparableFullRun, "code", "standard"));
+    verdictsByRun.set(comparableFullRun, [verdict()]);
+  }
+
+  const report = buildCalibrationReport({
+    manifests,
+    verdictsByRun,
+    events: [{
+      run_id: "skew-high-full-1",
+      event: "safety_boundary_violation",
+      boundary: "stale_sha",
+    }],
+  });
+
+  assert.deepEqual(report.promotion_decisions.code, {
+    status: "continue_calibration",
+    reasons: ["insufficient_comparable_full_samples"],
+  });
+  assert.equal(report.by_task_class.code.paths.full.observed_sample_size, 5);
+  assert.equal(report.by_task_class.code.paths.full.sample_size, 2);
+  assert.equal(report.by_task_class.code.paths.full.excluded_sample_size, 3);
+  assert.equal(
+    report.by_run["skew-high-full-1"].comparison_eligibility,
+    "excluded_non_compact_floor"
+  );
+  assert.deepEqual(
+    report.by_run["skew-high-full-1"].safety_boundary_violations,
+    ["stale_sha"]
+  );
+});
+
+test("unknown risk floors are excluded fail-closed from compact comparison", () => {
+  const manifests = [];
+  const verdictsByRun = new Map();
+  for (let index = 1; index <= 3; index += 1) {
+    const lightRun = `unknown-light-${index}`;
+    const unknownFullRun = `unknown-full-${index}`;
+    manifests.push(manifest(lightRun, "documentation", "compact"));
+    manifests.push(manifest(unknownFullRun, "documentation", "standard", {
+      minimumReviewAssurance: null,
+    }));
+    verdictsByRun.set(lightRun, [verdict()]);
+    verdictsByRun.set(unknownFullRun, [verdict()]);
+  }
+
+  const report = buildCalibrationReport({ manifests, events: [], verdictsByRun });
+
+  assert.deepEqual(report.promotion_decisions.documentation, {
+    status: "continue_calibration",
+    reasons: ["insufficient_comparable_full_samples"],
+  });
+  assert.equal(
+    report.by_run["unknown-full-1"].comparison_eligibility,
+    "excluded_unknown_floor"
+  );
+  assert.equal(report.by_task_class.documentation.paths.full.sample_size, 0);
+  assert.equal(report.by_task_class.documentation.paths.full.observed_sample_size, 3);
 });
 
 test("a single lightweight safety violation rolls back its task class", () => {
@@ -212,7 +297,7 @@ test("success without required observation is an immediate lightweight rollback"
   );
 });
 
-test("full-path adversarial defects block lightweight promotion for that class", () => {
+test("compact-eligible full-path adversarial defects block lightweight promotion", () => {
   const manifests = [];
   const verdictsByRun = new Map();
   for (let index = 1; index <= 3; index += 1) {

@@ -1809,6 +1809,16 @@ function main() {
       + `no_rubric_runs=${calibration.coverage.no_rubric_runs}`
     );
     console.log(
+      `    comparable (included/observed/excluded): ${Object.entries(calibration.by_task_class)
+        .filter(([, summary]) => Object.values(summary.paths)
+          .some((pathSummary) => pathSummary.observed_sample_size > 0))
+        .map(([taskClass, summary]) => (
+          `${taskClass}=full:${summary.paths.full.sample_size}/${summary.paths.full.observed_sample_size}/${summary.paths.full.excluded_sample_size},`
+          + `lightweight:${summary.paths.lightweight.sample_size}/${summary.paths.lightweight.observed_sample_size}/${summary.paths.lightweight.excluded_sample_size}`
+        ))
+        .join(" ") || "n/a"}`
+    );
+    console.log(
       `    decisions: ${Object.entries(calibration.promotion_decisions)
         .map(([taskClass, decision]) => `${taskClass}=${decision.status}`)
         .join(", ")}`

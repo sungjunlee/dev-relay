@@ -2427,6 +2427,7 @@ test("reliability-report publishes path-aware calibration and class decisions", 
   setManifestGuidance(repoRoot, runId, [], {
     task_class: "documentation",
     behavior_path: "lightweight",
+    minimum_review_assurance: "compact",
     review_assurance: "compact",
   });
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
@@ -2451,11 +2452,24 @@ test("reliability-report publishes path-aware calibration and class decisions", 
 
   assert.equal(report.calibration.by_run[runId].behavior_path, "lightweight");
   assert.equal(report.calibration.by_run[runId].assurance_tier, "compact");
+  assert.equal(report.calibration.by_run[runId].comparison_eligibility, "included");
   assert.equal(report.calibration.by_run[runId].rubric_mode, "none");
+  assert.equal(
+    report.calibration.by_task_class.documentation.paths.lightweight.observed_sample_size,
+    1
+  );
+  assert.equal(
+    report.calibration.by_task_class.documentation.paths.lightweight.excluded_sample_size,
+    0
+  );
   assert.equal(
     report.calibration.promotion_decisions.documentation.status,
     "continue_calibration"
   );
   assert.match(text, /calibration:/);
+  assert.match(
+    text,
+    /comparable \(included\/observed\/excluded\):.*documentation=full:0\/0\/0,lightweight:1\/1\/0/
+  );
   assert.match(text, /documentation=continue_calibration/);
 });
