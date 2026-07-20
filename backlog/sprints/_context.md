@@ -11,7 +11,7 @@ When adopting external engineering patterns (e.g., Simon Willison's Agentic Engi
 
 **Implication**: Patterns that target "agent learns over time" have low leverage here. Patterns that tighten the contract between planner/dispatcher/reviewer/report-consumers have high leverage.
 
-**Concrete rule**: Before adding new signal sources, verify existing artifacts actually flow end-to-end. See `docs/agentic-patterns-adoption.md` for the full reframe.
+**Concrete rule**: Before adding new signal sources, verify existing artifacts actually flow end-to-end. See `skills/relay-plan/references/evaluation-channels.md` for the current Outcome Contract, Verification, and Earned Rubric model.
 
 ## Conventions
 
