@@ -37,7 +37,7 @@ If no wording matches, list configured presets from routes config and ask/contin
 
 ## Step 1: Re-Anchor and Route
 
-Run `git fetch origin`. Collect task evidence from the first available source: local task file, `gh issue view <N>`, or user description; its `track:` or `component:` value is the sprint ownership handle. If no issue number, use a descriptive branch name and skip issue-close in merge.
+Run `git fetch origin`. Task evidence: collect the first available source—local task file, `gh issue view <N>`, or user description—and use its `track:` or `component:` value as the sprint ownership handle. If no issue number, use a descriptive branch name and skip issue-close in merge.
 
 Before any sprint read, invoke the resolved dev-backlog `sprint-state.js --track <track> --json backlog` or `sprint-state.js --component <component> --json backlog` and use `active_sprint.path` as the owning sprint. Only when neither handle is available, invoke `sprint-state.js --json backlog` and accept `active_sprint.path` only when exactly one sprint is active. Never choose an arbitrary/global active sprint or parse sprint markdown in relay to resolve ownership. If no owner resolves, skip sprint tracking; otherwise re-read that sprint's Running Context, batch information, and completed/in-flight changes and apply previous-task context.
 
