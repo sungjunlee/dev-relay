@@ -21,7 +21,12 @@ const {
   requireValidFleetId,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const { STATES: RUN_STATES } = require("../../relay-dispatch/scripts/manifest/lifecycle");
-const { readManifest, writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
+const {
+  readManifest,
+  withManifestTransaction,
+  writeManifest,
+  writeManifestUnlocked,
+} = require("../../relay-dispatch/scripts/manifest/store");
 const { execGh } = require("../../relay-dispatch/scripts/exec");
 const {
   formatOwnership,
@@ -1192,10 +1197,27 @@ function missingLegacyOwnershipError(record, leafRef, expected) {
 
 function applyManifestOwnershipBackfills(backfills) {
   for (const backfill of backfills) {
-    writeManifest(backfill.record.manifestPath, {
-      ...backfill.record.data,
-      ownership: backfill.ownership,
-    }, backfill.record.body);
+    withManifestTransaction(backfill.record.manifestPath, () => {
+      const current = readManifest(backfill.record.manifestPath);
+      const actual = readRunRecordOwnership({
+        manifestPath: backfill.record.manifestPath,
+        data: current.data,
+      }, backfill.leafRef);
+      if (actual) {
+        if (!ownershipsEqual(actual, backfill.ownership)) {
+          throw new FleetInputError(
+            `ownership drift for leaf '${backfill.leafRef}' run '${runRecordLabel(backfill.record)}': ` +
+            `manifest=${formatOwnership(actual)} leaf=${formatOwnership(backfill.ownership)}; ` +
+            "refusing to rewrite the child owner"
+          );
+        }
+        return;
+      }
+      writeManifestUnlocked(backfill.record.manifestPath, {
+        ...current.data,
+        ownership: backfill.ownership,
+      }, current.body);
+    });
   }
 }
 
@@ -1301,7 +1323,7 @@ function validateFleetRunOwnership(repoRoot, fleetId, leaves, { allowLegacyBackf
         throw missingLegacyOwnershipError(missingRecords[0], leafRef, expected);
       }
       for (const record of missingRecords) {
-        manifestBackfills.push({ record, ownership: expected });
+        manifestBackfills.push({ record, ownership: expected, leafRef });
       }
     }
     if (leaf && !leaf.ownership && expected) {

@@ -28,9 +28,12 @@ const {
   getRunDir,
 } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const {
+  acquireManifestLock,
   createManifestSkeleton,
   readManifest,
+  releaseManifestLock,
   writeManifest,
+  writeManifestUnlocked,
 } = require("../../../skills/relay-dispatch/scripts/manifest/store");
 const {
   STATES: RUN_STATES,
@@ -1010,6 +1013,87 @@ test("relay-fleet requires explicit ownership to migrate an active legacy child,
   assert.deepEqual(readManifest(getManifestPath(repoRoot, runId)).data.ownership, TEST_OWNERSHIP);
   const persisted = JSON.parse(fs.readFileSync(getFleetLeavesStorePath(repoRoot, fleetId), "utf-8"));
   assert.deepEqual(persisted.leaves.map((entry) => entry.ownership), [TEST_OWNERSHIP]);
+});
+
+test("relay-fleet legacy ownership backfill preserves a concurrent child manifest transition", async () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-backfill-race-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-owner-backfill-race-hook-"));
+  const preloadPath = writeReadMarkerPreload(tmpDir);
+  const markerPath = path.join(tmpDir, "manifest-read.flag");
+  const fleetId = "fleet-owner-backfill-race";
+  const leaf = makeLeaf(repoRoot, 1, {
+    issue_number: 593,
+    leaf_ref: "leaf-legacy",
+    leaf_id: "leaf-legacy",
+  });
+  const runId = "issue-593-20260721010101000-a1b2c3d4";
+  writeChildRun(repoRoot, {
+    runId,
+    branch: leaf.branch,
+    issueNumber: leaf.issue_number,
+    leafId: leaf.leaf_id,
+    fleetId,
+  });
+  const childManifestPath = getManifestPath(repoRoot, runId);
+  const childRecord = readManifest(childManifestPath);
+  const { ownership: _legacyOwnership, ...legacyManifest } = childRecord.data;
+  writeManifest(childManifestPath, legacyManifest, childRecord.body);
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
+  });
+  advanceFleetManifestState(repoRoot, fleetId, FLEET_STATES.DISPATCHED);
+  const { ownership: _persistedOwnership, ...legacyLeaf } = leaf;
+  writePersistedFleetLeaves(repoRoot, fleetId, [legacyLeaf]);
+
+  const lock = acquireManifestLock(childManifestPath);
+  const child = spawn(process.execPath, [
+    RELAY_FLEET_SCRIPT,
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", writeLeavesFile(repoRoot, [leaf]),
+    "--finalize-script", writeFakeFinalizeScript(tmpDir),
+    "--json",
+  ], {
+    env: {
+      ...process.env,
+      RELAY_HOME: relayHome,
+      RELAY_SOURCE_ROOT: REPO_ROOT,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preloadPath}`].filter(Boolean).join(" "),
+      RELAY_FLEET_MARK_READ_PATH: childManifestPath,
+      RELAY_FLEET_READ_MARKER_PATH: markerPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const childResult = captureChildResult(child);
+
+  try {
+    await waitFor(() => fs.existsSync(markerPath));
+    const current = readManifest(childManifestPath);
+    const transitioned = updateManifestState(
+      {
+        ...current.data,
+        review: {
+          ...(current.data.review || {}),
+          rounds: 2,
+          latest_verdict: "concurrent-review-pass",
+        },
+      },
+      RUN_STATES.READY_TO_MERGE,
+      "concurrent_review_complete"
+    );
+    writeManifestUnlocked(childManifestPath, transitioned, current.body);
+  } finally {
+    releaseManifestLock(lock);
+  }
+
+  const result = await childResult;
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const migrated = readManifest(childManifestPath).data;
+  assert.equal(migrated.state, RUN_STATES.MERGED);
+  assert.equal(migrated.review.rounds, 2);
+  assert.equal(migrated.review.latest_verdict, "concurrent-review-pass");
+  assert.deepEqual(migrated.ownership, TEST_OWNERSHIP);
 });
 
 test("relay-fleet re-run with the same leaves file reconciles and continues without re-dispatching", () => {
