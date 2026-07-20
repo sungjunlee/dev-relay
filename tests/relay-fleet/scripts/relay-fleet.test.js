@@ -924,6 +924,94 @@ test("relay-fleet rejects child manifest ownership drift without rewriting it", 
   assert.deepEqual(readManifest(getManifestPath(repoRoot, runId)).data.ownership, driftedOwnership);
 });
 
+test("relay-fleet resumes a terminal pre-ownership fleet without re-asserting its legacy child", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-terminal-legacy-");
+  const fleetId = "fleet-owner-terminal-legacy";
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 591, leaf_ref: "leaf-legacy", leaf_id: "leaf-legacy" });
+  const runId = "issue-591-20260721010101000-a1b2c3d4";
+  writeChildRun(repoRoot, {
+    runId,
+    branch: leaf.branch,
+    issueNumber: leaf.issue_number,
+    leafId: leaf.leaf_id,
+    fleetId,
+    state: RUN_STATES.CLOSED,
+  });
+  const childManifestPath = getManifestPath(repoRoot, runId);
+  const childRecord = readManifest(childManifestPath);
+  const { ownership: _legacyOwnership, ...legacyManifest } = childRecord.data;
+  writeManifest(childManifestPath, legacyManifest, childRecord.body);
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
+  });
+  advanceFleetManifestState(repoRoot, fleetId, FLEET_STATES.DISPATCHED);
+  const { ownership: _persistedOwnership, ...legacyLeaf } = leaf;
+  writePersistedFleetLeaves(repoRoot, fleetId, [legacyLeaf]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--resume",
+    "--json",
+  ], { relayHome });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(JSON.parse(result.stdout).summary.fleet_state, FLEET_STATES.CLOSED);
+  assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.ownership, undefined);
+});
+
+test("relay-fleet requires explicit ownership to migrate an active legacy child, then backfills both stores", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-active-legacy-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-owner-active-legacy-fake-"));
+  const fleetId = "fleet-owner-active-legacy";
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 592, leaf_ref: "leaf-legacy", leaf_id: "leaf-legacy" });
+  const runId = "issue-592-20260721010101000-a1b2c3d4";
+  writeChildRun(repoRoot, {
+    runId,
+    branch: leaf.branch,
+    issueNumber: leaf.issue_number,
+    leafId: leaf.leaf_id,
+    fleetId,
+  });
+  const childManifestPath = getManifestPath(repoRoot, runId);
+  const childRecord = readManifest(childManifestPath);
+  const { ownership: _legacyOwnership, ...legacyManifest } = childRecord.data;
+  writeManifest(childManifestPath, legacyManifest, childRecord.body);
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
+  });
+  advanceFleetManifestState(repoRoot, fleetId, FLEET_STATES.DISPATCHED);
+  const { ownership: _persistedOwnership, ...legacyLeaf } = leaf;
+  writePersistedFleetLeaves(repoRoot, fleetId, [legacyLeaf]);
+
+  const blocked = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--resume",
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /legacy ownership is missing.*--leaves-file.*backfill/i);
+  assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.ownership, undefined);
+
+  const migrated = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", writeLeavesFile(repoRoot, [leaf]),
+    "--review-script", writeFakeReviewScript(tmpDir),
+    "--finalize-script", writeFakeFinalizeScript(tmpDir),
+    "--json",
+  ], { relayHome });
+
+  assert.equal(migrated.status, 0, `${migrated.stderr}\n${migrated.stdout}`);
+  assert.deepEqual(readManifest(getManifestPath(repoRoot, runId)).data.ownership, TEST_OWNERSHIP);
+  const persisted = JSON.parse(fs.readFileSync(getFleetLeavesStorePath(repoRoot, fleetId), "utf-8"));
+  assert.deepEqual(persisted.leaves.map((entry) => entry.ownership), [TEST_OWNERSHIP]);
+});
+
 test("relay-fleet re-run with the same leaves file reconciles and continues without re-dispatching", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-drive-rerun-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-drive-rerun-fake-"));
