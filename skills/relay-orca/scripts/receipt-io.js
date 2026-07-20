@@ -182,52 +182,55 @@ function integrationSleep(ms) {
   Atomics.wait(shared, 0, 0, ms);
 }
 
+// Read the recorded owner pid of a held lock. Returns null for EVERY ambiguous shape — an
+// absent owner file (the crash window between `mkdirSync` publishing the lock and the owner
+// write landing), an unreadable file, or a non-numeric/out-of-range/trailing-garbage value.
+// A null owner is NEVER reclaimed: an ambiguous lock is left to time out fail-closed rather
+// than stolen from a possibly-live holder. There is deliberately no mtime lease fallback —
+// an old mtime is not evidence that the owner is gone. (#1019 R3)
 function readIntegrationLockOwnerPid(lockPath) {
+  let raw;
   try {
-    const raw = fs.readFileSync(path.join(lockPath, "owner"), "utf8").trim();
-    const pid = Number.parseInt(raw, 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    raw = fs.readFileSync(path.join(lockPath, "owner"), "utf8");
   } catch {
     return null;
   }
+  const trimmed = raw.trim();
+  if (!/^[1-9][0-9]*$/.test(trimmed)) return null;
+  const pid = Number(trimmed);
+  return Number.isSafeInteger(pid) ? pid : null;
 }
 
-// `process.kill(pid, 0)` performs the OS liveness check without delivering a signal:
-// ESRCH means the owner is gone, EPERM means it exists under another user (still alive).
-// Anything ambiguous is treated as alive so a live holder is never stolen (fail closed).
-function integrationLockOwnerAlive(pid) {
-  if (pid === process.pid) return true;
+// A process is "provably gone" ONLY when `process.kill(pid, 0)` — the OS liveness check that
+// delivers no signal — reports exactly ESRCH. EPERM means the pid is live under another user,
+// and any other error is ambiguous; both are treated as alive so contention still fails closed.
+// Our own pid is never considered gone.
+function integrationLockOwnerIsGone(pid) {
+  if (pid === process.pid) return false;
   try {
     process.kill(pid, 0);
-    return true;
+    return false;
   } catch (error) {
-    return error && error.code === "ESRCH" ? false : true;
+    return Boolean(error) && error.code === "ESRCH";
   }
 }
 
-// A lock directory is reclaimable ONLY when its owner is provably gone. A readable owner PID
-// that no longer maps to a live process (a crashed/killed coordinator) is stale. An unreadable
-// owner — the narrow window where a crash struck between mkdir and the owner write, or a torn
-// write — falls back to a bounded mtime lease so the directory can never strand the lifecycle
-// forever, while a lock younger than the lease is left alone (a live holder mid-acquisition).
-function integrationLockIsStale(lockPath, timeoutMs) {
+// Reclaim a lock whose recorded owner is provably dead. The rename-then-remove makes the
+// reclaim atomic: among racing reclaimers exactly one rename succeeds, and every loser sees
+// ENOENT and simply keeps polling (it can then contend for the lock normally). Renaming
+// rather than removing in place also means a lock freshly acquired by a competitor can never
+// be deleted out from under it by a half-completed reclaim.
+function reclaimAbandonedIntegrationLock(root, lockPath) {
   const pid = readIntegrationLockOwnerPid(lockPath);
-  if (pid !== null) return !integrationLockOwnerAlive(pid);
+  if (pid === null || !integrationLockOwnerIsGone(pid)) return false;
+  const grave = path.join(root, `.reclaimed-${process.pid}-${crypto.randomBytes(6).toString("hex")}`);
   try {
-    return Date.now() - fs.statSync(lockPath).mtimeMs > timeoutMs;
+    fs.renameSync(lockPath, grave);
   } catch {
     return false;
   }
-}
-
-function reclaimStaleIntegrationLock(lockPath, timeoutMs) {
-  if (!integrationLockIsStale(lockPath, timeoutMs)) return false;
-  try {
-    fs.rmSync(lockPath, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
-  }
+  fs.rmSync(grave, { recursive: true, force: true });
+  return true;
 }
 
 function withIntegrationLifecycleLock({ programId, outcomeId, taskId, lockRoot, timeoutMs, pollMs }, callback) {
@@ -237,24 +240,34 @@ function withIntegrationLifecycleLock({ programId, outcomeId, taskId, lockRoot, 
   const poll = Number.isInteger(pollMs) && pollMs > 0 ? pollMs : INTEGRATION_LOCK_POLL_MS;
   const started = Date.now();
   let acquired = false;
+  let lastOwner = null;
   fs.mkdirSync(root, { recursive: true });
   while (!acquired) {
     try {
+      // `mkdirSync` is the atomic publish; the owner stamp follows immediately so an
+      // abandoned lock is reclaimable without manual deletion.
       fs.mkdirSync(lockPath);
       fs.writeFileSync(path.join(lockPath, "owner"), `${process.pid}\n`, "utf8");
       acquired = true;
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
+      lastOwner = readIntegrationLockOwnerPid(lockPath);
       // A crash/kill between mkdirSync and the finally rmSync would otherwise strand this
       // directory forever, failing every later run/resume closed with no reset-free recovery.
-      // Reclaim it iff its owner is provably gone, then retry immediately; a live owner keeps
-      // the lock and we fall through to the bounded poll/timeout.
-      if (reclaimStaleIntegrationLock(lockPath, timeout)) continue;
+      // Reclaim it iff its owner is provably gone; a live or ambiguous owner keeps the lock.
+      const reclaimed = reclaimAbandonedIntegrationLock(root, lockPath);
+      // The timeout bounds EVERY path, reclaim included, so a pathological stream of
+      // dead-owner locks can never spin here forever.
       if (Date.now() - started > timeout) break;
-      integrationSleep(poll);
+      // Retry immediately after a successful reclaim; otherwise back off and let the live (or
+      // ambiguous) owner finish, which fails closed at the timeout.
+      if (!reclaimed) integrationSleep(poll);
     }
   }
-  if (!acquired) throw new Error(`integration lifecycle lock timed out for ${programId}/${outcomeId}`);
+  if (!acquired) {
+    const held = lastOwner === null ? "an unidentifiable owner" : `owner pid ${lastOwner}`;
+    throw new Error(`integration lifecycle lock timed out for ${programId}/${outcomeId} (held by ${held})`);
+  }
   try {
     return callback();
   } finally {

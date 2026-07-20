@@ -17,7 +17,7 @@ const { REASONS: RESUME_REASONS } = require(path.join(SCRIPTS, "lib", "resume-re
 const { RECEIPT_NOTE, parseReceipt, serializeReceipt, serializeReceiptWithStop } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
 const { programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
-const { integrationBlockingEntry } = require(RESUME_JS);
+const { integrationBlockingEntry, integrationTasksToAdvance } = require(RESUME_JS);
 const { installFakeOrcaResume } = require(path.join(__dirname, "..", "fixtures", "fake-orca-resume.js"));
 const { installFakeGh } = require(path.join(__dirname, "..", "fixtures", "fake-gh.js"));
 const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
@@ -1422,4 +1422,226 @@ test("#1019 integrationBlockingEntry omits completion_command when the lifecycle
   });
   assert.equal(entry.reason_code, "INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH");
   assert.equal("completion_command" in entry, false);
+});
+
+// --- #1019 R3: integration-gate advancement eligibility -----------------------------
+
+// The selection matrix for advancement. Eligibility is the CONJUNCTION of the plan's own
+// verdict (only `reused`/`redispatched` leave a live dispatch behind), the shared wave
+// blanket, and recorded dispatch provenance. Each row below flips exactly one conjunct.
+test("#1019 R3 only wave-eligible integration tasks holding a verified live dispatch advance", () => {
+  const dispatched = { dispatch_id: "disp-1", assignee: "term-1" };
+  const report = {
+    outcomes: [
+      { outcome_id: "w1", wave: 1, state: "dispatched" },
+      { outcome_id: "w1done", wave: 1, state: "complete_with_evidence" },
+    ],
+  };
+  const cases = [
+    { label: "wave 1, reused, dispatched", task: { wave: 1, ...dispatched }, action: "reused", expected: true },
+    { label: "wave 1, redispatched, dispatched", task: { wave: 1, ...dispatched }, action: "redispatched", expected: true },
+    // Wave 2 while a wave-1 outcome is still incomplete: ineligible even though the plan
+    // reused a perfectly live mapping. This is the conjunct a mapping-only filter misses.
+    { label: "wave 2 with wave 1 incomplete", task: { wave: 2, ...dispatched }, action: "reused", expected: false },
+    { label: "undispatched (no dispatch_id)", task: { wave: 1, dispatch_id: null, assignee: "term-1" }, action: "reused", expected: false },
+    { label: "undispatched (no assignee)", task: { wave: 1, dispatch_id: "disp-1", assignee: null }, action: "reused", expected: false },
+    { label: "blank dispatch provenance", task: { wave: 1, dispatch_id: "   ", assignee: "term-1" }, action: "reused", expected: false },
+    { label: "plan skipped the outcome", task: { wave: 1, ...dispatched }, action: "skipped", expected: false },
+    { label: "plan requires a decision", task: { wave: 1, ...dispatched }, action: "decision_required", expected: false },
+  ];
+  for (const scenario of cases) {
+    const receipt = { tasks: [{ outcome_id: "w1", kind: "integration_gate", ...scenario.task }] };
+    const actions = [{ outcome_id: "w1", action: scenario.action }];
+    const selected = integrationTasksToAdvance({ receipt, report, actions });
+    assert.equal(selected.length, scenario.expected ? 1 : 0, scenario.label);
+  }
+
+  // The wave blanket opens once every earlier-wave outcome is durably complete.
+  const eligibleWave2 = integrationTasksToAdvance({
+    receipt: { tasks: [{ outcome_id: "w2", kind: "integration_gate", wave: 2, ...dispatched }] },
+    report: { outcomes: [{ outcome_id: "w1done", wave: 1, state: "complete_with_evidence" }] },
+    actions: [{ outcome_id: "w2", action: "reused" }],
+  });
+  assert.equal(eligibleWave2.length, 1, "wave 2 advances once wave 1 is complete_with_evidence");
+
+  // Non-integration kinds are never advanced regardless of how eligible they look.
+  const nonIntegration = integrationTasksToAdvance({
+    receipt: { tasks: [{ outcome_id: "w1", kind: "relay_run", wave: 1, ...dispatched }] },
+    report,
+    actions: [{ outcome_id: "w1", action: "reused" }],
+  });
+  assert.deepEqual(nonIntegration, []);
+});
+
+// Lifecycle-mutating Orca subcommands. gate-LIST is a READ the status reconciliation
+// performs for every integration outcome, so it is deliberately excluded — only creation,
+// resolution, and orchestration sends mutate the lifecycle.
+function integrationMutationLines(log) {
+  return log.filter(
+    (line) =>
+      line.startsWith("orchestration gate-create") ||
+      line.startsWith("orchestration gate-resolve") ||
+      line.startsWith("orchestration send"),
+  );
+}
+
+// A wave-2 integration gate with a fully live mapping would be `reused` by the plan, so a
+// kind-only filter advances it — resolving a gate and driving a task to completion while
+// wave 1 is still running. The wave blanket must hold it back with zero lifecycle mutation.
+// Write the evidence artifact the integration lifecycle would consume, stamped with the
+// provenance of the outcome's live fixture dispatch. Its presence is what makes these
+// scenarios DISCRIMINATING: with a live coordinator and valid evidence, an over-broad
+// advancement filter really does create and resolve a gate, which the log audit catches.
+function writeGateEvidence(world, outcomeId, overrides = {}) {
+  const dir = path.join(world.base, "gate-evidence");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, `${outcomeId}.json`),
+    `${JSON.stringify({
+      passed: true,
+      evidence: `integration evidence for ${outcomeId}`,
+      runtime_id: DEFAULT_RUNTIME_ID,
+      task_id: `orca-live-${outcomeId}`,
+      dispatch_id: `disp-orca-live-${outcomeId}`,
+      assignee: `term-orca-live-${outcomeId}`,
+      ...overrides,
+    })}\n`,
+    "utf-8",
+  );
+  return dir;
+}
+
+test("#1019 R3 a wave-2 integration task is not advanced while wave 1 is incomplete", () => {
+  const programId = "epic-1019-r3-wave-blanket";
+  const world = buildWorld({
+    programId,
+    orcaScenario: {
+      // A runtime that CAN complete the lifecycle: live coordinator + resolvable gates.
+      coordinator: "coord-current",
+      tasks: [orcaTask(programId, "w1"), orcaTask(programId, "w2int")],
+    },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: "w1", kind: "relay_run", wave: 1 },
+      { outcome_id: "w2int", kind: "integration_gate", wave: 2, assignee: "term-orca-live-w2int" },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const evidenceDir = writeGateEvidence(world, "w2int");
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--coordinator-handle", "coord-current", "--gate-evidence-dir", evidenceDir]);
+    assert.equal(r.status, 0);
+    // wave 1 is merely dispatched — never complete_with_evidence — so wave 2 stays shut.
+    assert.notEqual(actionFor(r.body, "w1").action, "skipped");
+    assert.deepEqual(
+      integrationMutationLines(world.orca.readLog()),
+      [],
+      "an ineligible later-wave integration gate must never be created, resolved, or sent to",
+    );
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "no dispatch/terminal mutation either");
+    assert.deepEqual(r.body.blocking_reasons, [], "an ineligible outcome is left untouched, not failed closed");
+    assert.equal(r.body.ok, true);
+    assert.equal(world.receiptOnDisk(), before, "the receipt is left byte-identical");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// The same world with wave 1 durably complete is the positive control: the wave blanket
+// opens and the very same integration outcome DOES advance through the lifecycle. Without
+// it, the test above could pass for the wrong reason (e.g. a lifecycle that never runs).
+test("#1019 R3 positive control: the same integration task advances once wave 1 is complete", () => {
+  const programId = "epic-1019-r3-wave-open";
+  const runId = "run-w1";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: runId, state: "merged", pr_number: 77, issue_number: 777 }],
+    orcaScenario: {
+      coordinator: "coord-current",
+      tasks: [
+        orcaTask(programId, "w1", { status: "completed", worker_done: true }),
+        orcaTask(programId, "w2int"),
+      ],
+    },
+    ghScenario: {
+      prs: { 77: { state: "MERGED", mergedAt: "2026-07-14T01:00:00Z" } },
+      issues: { 777: { state: "CLOSED" } },
+    },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: "w1", kind: "relay_run", wave: 1, run: runId },
+      { outcome_id: "w2int", kind: "integration_gate", wave: 2, assignee: "term-orca-live-w2int" },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const evidenceDir = writeGateEvidence(world, "w2int");
+  try {
+    world.run(["--coordinator-handle", "coord-current", "--gate-evidence-dir", evidenceDir]);
+    const log = world.orca.readLog();
+    assert.ok(
+      log.some((line) => line.startsWith("orchestration gate-create")),
+      `the eligible integration gate is created: ${JSON.stringify(log)}`,
+    );
+    assert.ok(log.some((line) => line.startsWith("orchestration gate-resolve")), "and resolved once evidence is valid");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// An integration outcome that was never dispatched has no live dispatch to bind evidence
+// or a completion instruction to. It must be left completely untouched — not merely fail
+// closed after reading live state.
+test("#1019 R3 an undispatched integration task is skipped with zero lifecycle mutation", () => {
+  const programId = "epic-1019-r3-undispatched";
+  const world = buildWorld({
+    programId,
+    // An unmapped relay run back-pointer keeps the absent outcome `skipped` rather than
+    // re-dispatched, so the plan stays at exit 0 and advancement is actually reached.
+    manifests: [{ run_id: "run-unmapped", state: "dispatched", pr_number: 40, issue_number: 400, body: `relay-orca program ${programId} operator run` }],
+    orcaScenario: {
+      coordinator: "coord-current",
+      tasks: [orcaTask(programId, "w1int")],
+      dispatch: absentDispatch("w1int"),
+    },
+    ghScenario: { prs: { 40: { state: "OPEN" } }, issues: { 400: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [{ outcome_id: "w1int", kind: "integration_gate", wave: 1, dispatch_id: null, assignee: null }],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const evidenceDir = writeGateEvidence(world, "w1int");
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--coordinator-handle", "coord-current", "--gate-evidence-dir", evidenceDir]);
+    assert.equal(r.status, 0);
+    assert.equal(actionFor(r.body, "w1int").action, "skipped");
+    assert.deepEqual(
+      integrationMutationLines(world.orca.readLog()),
+      [],
+      "an undispatched integration task must not create, resolve, or send anything",
+    );
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "and must not be re-dispatched");
+    // Left UNTOUCHED, not merely failed closed: an undispatched outcome that reached the
+    // lifecycle would surface INTEGRATION_DISPATCH_PROVENANCE_MISSING here.
+    assert.deepEqual(r.body.blocking_reasons, []);
+    assert.equal(r.body.ok, true);
+    assert.equal(world.receiptOnDisk(), before, "the receipt is left byte-identical");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
 });

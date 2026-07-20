@@ -282,39 +282,45 @@ function currentProvenance(ctx) {
   return { runtimeId: currentRuntime, coordinator: verifiedCoordinator, task, tasks, dispatch };
 }
 
-function reportField(value, keys) {
-  for (const key of keys) {
-    if (value && Object.prototype.hasOwnProperty.call(value, key)) return value[key];
-  }
-  return undefined;
-}
+// The evidence artifact lives at a DETERMINISTIC path derived from the program/outcome alone,
+// so the same path is reused across runtimes, dispatches, and restarts. The path is therefore
+// NOT proof of freshness: a reused evidence directory or a prior-run artifact for the same
+// outcome would otherwise authorize gate-resolve on a new canonical gate. Every field below
+// must be present AND equal to the freshly verified live provenance. (#1019 R3)
+const EVIDENCE_PROVENANCE_FIELDS = Object.freeze(["runtime_id", "task_id", "dispatch_id", "assignee"]);
 
-// Bind the evidence artifact to the live dispatch provenance. The deterministic
-// <outcome-id>.json path alone is NOT proof of freshness: a reused evidence directory or a
-// prior-run artifact for the same outcome would otherwise authorize gate-resolve on a new
-// canonical gate. The artifact must therefore carry the CURRENT runtime/task/dispatch identity
-// (already re-verified live by currentProvenance); a missing id fails closed as
-// INTEGRATION_REPORT_PROVENANCE_MISSING and a mismatched id as
-// INTEGRATION_REPORT_PROVENANCE_MISMATCH, so stale evidence can never resolve a gate. Crash
-// recovery for the SAME dispatch still passes because the ids are re-emitted unchanged.
-function bindReportProvenance(ctx, provenance, value) {
-  const expected = {
-    runtime_id: (provenance && provenance.runtimeId) || ctx.runtimeId || null,
+// `provenance` is the result of the immediately preceding currentProvenance() read, which has
+// already proven that ctx.taskId/dispatchId/assignee are the LIVE trio. Binding the artifact to
+// it therefore binds it to live state, not to caller-supplied hopes.
+function expectedEvidenceProvenance(ctx, provenance) {
+  return {
+    runtime_id: provenance.runtimeId,
     task_id: ctx.taskId,
     dispatch_id: ctx.dispatchId,
+    assignee: ctx.assignee,
   };
-  const recorded = {
-    runtime_id: reportField(value, ["runtime_id", "runtimeId"]),
-    task_id: reportField(value, ["task_id", "taskId"]),
-    dispatch_id: reportField(value, ["dispatch_id", "dispatchId"]),
-  };
-  for (const field of ["runtime_id", "task_id", "dispatch_id"]) {
-    if (!nonEmpty(recorded[field])) {
-      fail("INTEGRATION_REPORT_PROVENANCE_MISSING", `integration report ${ctx.reportPath} is missing ${field}; deterministic evidence must be bound to the live runtime/task/dispatch`);
-    }
-    if (!nonEmpty(expected[field]) || recorded[field] !== expected[field]) {
-      fail("INTEGRATION_REPORT_PROVENANCE_MISMATCH", `integration report ${field} ${recorded[field]} does not match the live dispatch provenance ${expected[field] || "missing"}; refusing to authorize gate-resolve on stale evidence`);
-    }
+}
+
+function describeProvenance(fields, source) {
+  return fields.map((field) => `${field}=${source[field]}`).join(", ");
+}
+
+// A missing id fails closed as INTEGRATION_REPORT_PROVENANCE_MISSING and a contradicting id as
+// INTEGRATION_REPORT_PROVENANCE_MISMATCH, so stale evidence can never resolve a gate. Crash
+// recovery for the SAME dispatch still passes: a restart of the same runtime/task/dispatch/
+// assignee re-reads its own artifact and still matches.
+function bindReportProvenance(ctx, provenance, value) {
+  const expected = expectedEvidenceProvenance(ctx, provenance || {});
+  const missing = EVIDENCE_PROVENANCE_FIELDS.filter((field) => !nonEmpty(value[field]));
+  if (missing.length) {
+    fail("INTEGRATION_REPORT_PROVENANCE_MISSING", `integration report ${ctx.reportPath} omits required lifecycle provenance (${missing.join(", ")}); deterministic evidence must be bound to the live runtime/task/dispatch/assignee`);
+  }
+  const mismatched = EVIDENCE_PROVENANCE_FIELDS.filter((field) => !nonEmpty(expected[field]) || value[field] !== expected[field]);
+  if (mismatched.length) {
+    fail(
+      "INTEGRATION_REPORT_PROVENANCE_MISMATCH",
+      `integration report ${ctx.reportPath} was written by a different lifecycle (${describeProvenance(mismatched, value)}); the current lifecycle is ${describeProvenance(mismatched, expected)}; refusing to authorize gate-resolve on stale evidence`,
+    );
   }
 }
 
@@ -381,11 +387,8 @@ function prepareIntegrationGate(ctx) {
       // The exact identity the deterministic evidence artifact must carry so a later advance
       // can bind it to THIS dispatch (#1019 H2). Surfaced here so the operator prompt can quote
       // the required values; without them the artifact fails closed instead of resolving a gate.
-      evidence_provenance: {
-        runtime_id: provenance.runtimeId,
-        task_id: ctx.taskId,
-        dispatch_id: ctx.dispatchId,
-      },
+      // The advance-side readReport rejects anything else. (#1019 R3)
+      evidence_provenance: expectedEvidenceProvenance(ctx, provenance),
     };
   });
 }
@@ -414,6 +417,8 @@ function reissueCompletionInstruction(ctx, gateRow) {
 function advanceIntegrationGate(ctx) {
   return withBoundedLock(ctx, () => {
     const provenance = currentProvenance(ctx);
+    // Evidence is validated and provenance-bound BEFORE any gate inspection or mutation,
+    // so a stale artifact fails closed with zero lifecycle mutation.
     const report = readReport(ctx, provenance);
     const identity = identityFor(ctx);
     const first = inspectCanonicalGates(listGates(ctx), identity);
@@ -451,6 +456,7 @@ function advanceIntegrationGate(ctx) {
 
 module.exports = {
   CANONICAL_OPTIONS,
+  EVIDENCE_PROVENANCE_FIELDS,
   IntegrationLifecycleError,
   canonicalIntegrationQuestion,
   canonicalGateKey,

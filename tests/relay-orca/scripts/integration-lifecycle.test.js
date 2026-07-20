@@ -29,20 +29,31 @@ const DISPATCH_ID = "dispatch_integration_1019";
 const ASSIGNEE = "term-integration-fresh";
 const COORDINATOR = "coord-current";
 
-// Evidence artifacts are provenance-bound (#1019 H2): the deterministic path alone is not
-// proof of freshness, so the artifact must carry the live runtime/task/dispatch identity.
-// `provenance` overrides let a test forge a stale/incomplete artifact.
+// The lifecycle provenance the CURRENT fixture dispatch stamps into its evidence artifact.
+const LIVE_PROVENANCE = Object.freeze({
+  runtime_id: DEFAULT_RUNTIME_ID,
+  task_id: TASK_ID,
+  dispatch_id: DISPATCH_ID,
+  assignee: ASSIGNEE,
+});
+
+function writeReport(reportPath, body) {
+  fs.writeFileSync(reportPath, JSON.stringify(body) + "\n", "utf8");
+}
+
+// Evidence artifacts are provenance-bound (#1019 H2/R3): the deterministic path alone is not
+// proof of freshness, so the artifact must carry the live runtime/task/dispatch/assignee
+// identity. `provenance` overrides let a test forge a stale/incomplete artifact; a key present
+// with value `undefined` forges an OMITTED field.
 function reportFile(passed = true, provenance = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-integration-report-"));
   const reportPath = path.join(dir, "integration.json");
-  const body = {
+  writeReport(reportPath, {
     passed,
     evidence: passed ? "integration fixture passed" : "integration fixture failed",
-    runtime_id: "runtime_id" in provenance ? provenance.runtime_id : DEFAULT_RUNTIME_ID,
-    task_id: "task_id" in provenance ? provenance.task_id : TASK_ID,
-    dispatch_id: "dispatch_id" in provenance ? provenance.dispatch_id : DISPATCH_ID,
-  };
-  fs.writeFileSync(reportPath, JSON.stringify(body) + "\n", "utf8");
+    ...LIVE_PROVENANCE,
+    ...provenance,
+  });
   return { dir, reportPath };
 }
 
@@ -304,13 +315,19 @@ test("#1019 final summary vetoes active integration task and generic resolved ga
   }
 });
 
-test("#1019 H2 evidence not bound to the live runtime/task/dispatch fails closed before gate-resolve", () => {
+// #1019 R3: the evidence path is deterministic, so an artifact left behind by an EARLIER
+// runtime/task/dispatch/assignee sits exactly where the current lifecycle looks. Each stale
+// variant must be rejected BEFORE gate inspection or resolution, with a provenance reason code
+// (not the lock's) and a completely clean invocation log.
+test("#1019 H2/R3 evidence not bound to the live runtime/task/dispatch/assignee fails closed before gate-resolve", () => {
   const question = canonicalIntegrationQuestion(PROGRAM_ID, OUTCOME_ID, programSegment);
   const staleCases = [
     { label: "prior-run runtime", provenance: { runtime_id: "runtime-prior-run" }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISMATCH" },
     { label: "prior-run task", provenance: { task_id: "task-prior-run" }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISMATCH" },
     { label: "reused-dir dispatch", provenance: { dispatch_id: "dispatch-prior-run" }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISMATCH" },
+    { label: "previous pane assignee", provenance: { assignee: "term-previous-pane" }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISMATCH" },
     { label: "missing dispatch id", provenance: { dispatch_id: undefined }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISSING" },
+    { label: "missing assignee", provenance: { assignee: undefined }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISSING" },
   ];
   for (const scenario of staleCases) {
     // A canonical gate already exists pending; only fresh, provenance-bound evidence may resolve it.
@@ -332,6 +349,26 @@ test("#1019 H2 evidence not bound to the live runtime/task/dispatch fails closed
       fs.rmSync(report.dir, { recursive: true, force: true });
     }
   }
+
+  // An artifact with no provenance at all cannot be attributed to any dispatch, so it is a
+  // missing-provenance failure rather than a silently-accepted legacy shape. The gate is
+  // absent here too, proving the rejection precedes gate CREATION as well as resolution.
+  const unbound = installFakeOrcaIntegrationLifecycle(initialState());
+  const unboundReport = reportFile();
+  writeReport(unboundReport.reportPath, { passed: true, evidence: "unbound legacy evidence" });
+  try {
+    assert.throws(() => advanceIntegrationGate(context(unbound, unboundReport.reportPath)), (error) => {
+      assert.equal(error.reasonCode, "INTEGRATION_REPORT_PROVENANCE_MISSING");
+      return true;
+    });
+    assert.deepEqual(unbound.readLog().filter((argv) => ["gate-create", "gate-resolve", "send"].includes(argv[1])), []);
+    assert.equal(unbound.readState().gates.length, 0, "an unbound artifact must not even create a gate");
+    assert.equal(unbound.readPoison(), null);
+  } finally {
+    unbound.cleanup();
+    fs.rmSync(unboundReport.dir, { recursive: true, force: true });
+  }
+
   // The SAME dispatch's fresh, provenance-bound evidence still resolves the gate (crash recovery preserved).
   const fresh = installFakeOrcaIntegrationLifecycle(initialState({
     gates: [{ id: "g1", task_id: TASK_ID, question, options: ["passed", "failed"], status: "pending" }],
@@ -349,7 +386,38 @@ test("#1019 H2 evidence not bound to the live runtime/task/dispatch fails closed
   }
 });
 
-test("#1019 H1 resume leaves a materialized, undispatched or wave-ineligible integration gate inert", () => {
+// The counterpart guarantee: binding evidence to the dispatch must NOT break crash recovery.
+// A restart against the SAME runtime/task/dispatch/assignee re-reads its own artifact and
+// drives the lifecycle all the way to completed.
+test("#1019 R3 same-dispatch evidence stays valid across a coordinator restart", () => {
+  const fake = installFakeOrcaIntegrationLifecycle(initialState());
+  const report = reportFile();
+  try {
+    // "Restart": a brand-new context object over the same live dispatch and the artifact the
+    // previous coordinator process already wrote.
+    const first = advanceIntegrationGate(context(fake, report.reportPath));
+    assert.equal(first.ok, false);
+    assert.equal(first.reason_code, "INTEGRATION_WORKER_DONE_REQUIRED");
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-resolve").length, 1);
+
+    const command = completionCommand(context(fake, report.reportPath));
+    assert.equal(fake.run(command.argv).status, 0);
+    const completed = advanceIntegrationGate(context(fake, report.reportPath));
+    assert.equal(completed.ok, true);
+    assert.equal(completed.state, "completed");
+    assert.equal(fake.readState().tasks[0].status, "completed");
+    assert.equal(fake.readPoison(), null);
+  } finally {
+    fake.cleanup();
+    fs.rmSync(report.dir, { recursive: true, force: true });
+  }
+});
+
+// The advancement selection matrix. Eligibility is the CONJUNCTION of planResume's own verdict
+// (only `reused`/`redispatched` leave a currently verified live dispatch behind), the shared
+// wave blanket, and recorded dispatch provenance. Each inert row below flips exactly one
+// conjunct while the others stay satisfied, so a filter that drops any conjunct fails here.
+test("#1019 H1/R3 resume leaves an action-ineligible, undispatched, or wave-ineligible integration gate inert", () => {
   const receiptFor = (integrationTask) => ({
     program_id: PROGRAM_ID,
     runtime_id: DEFAULT_RUNTIME_ID,
@@ -358,27 +426,42 @@ test("#1019 H1 resume leaves a materialized, undispatched or wave-ineligible int
       integrationTask,
     ],
   });
-  // Wave 1 has not completed_with_evidence, so the wave-2 integration gate is not yet eligible.
-  const report = { outcomes: [{ outcome_id: "impl", wave: 1, state: "reused" }, { outcome_id: OUTCOME_ID, wave: 2, state: "pending" }] };
+  // Wave 1 has not completed_with_evidence, so a wave-2 integration gate is not yet eligible.
+  const waveShut = { outcomes: [{ outcome_id: "impl", wave: 1, state: "reused" }, { outcome_id: OUTCOME_ID, wave: 2, state: "pending" }] };
+  // Wave 1 durably complete: the wave blanket is OPEN, so only the other conjuncts can hold.
+  const waveOpen = { outcomes: [{ outcome_id: "impl", wave: 1, state: "complete_with_evidence" }] };
   const lockRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-h1-lock-"));
   const opts = {
     coordinatorHandle: COORDINATOR,
     integrationLockRoot: lockRoot,
     integrationReportPath: () => path.join(os.tmpdir(), "relay-orca-h1-nonexistent-report.json"),
   };
+  const dispatched = { dispatch_id: DISPATCH_ID, assignee: ASSIGNEE };
   const inertCases = [
-    { label: "undispatched wave-2 gate (the #1019 live shape)", task: { outcome_id: OUTCOME_ID, kind: "integration_gate", wave: 2, orca_task_id: TASK_ID, dispatch_id: null, assignee: null } },
-    { label: "dispatched wave-2 gate before earlier waves complete", task: { outcome_id: OUTCOME_ID, kind: "integration_gate", wave: 2, orca_task_id: TASK_ID, dispatch_id: DISPATCH_ID, assignee: ASSIGNEE } },
+    // The wave blanket alone holds these back: the plan reused/re-established a live dispatch.
+    { label: "undispatched wave-2 gate (the #1019 live shape)", report: waveShut, action: "redispatched", task: { wave: 2, dispatch_id: null, assignee: null } },
+    { label: "dispatched wave-2 gate before earlier waves complete", report: waveShut, action: "reused", task: { wave: 2, ...dispatched } },
+    // The dispatch-provenance conjunct alone holds these back.
+    { label: "wave-eligible gate with no dispatch_id", report: waveOpen, action: "reused", task: { wave: 2, dispatch_id: null, assignee: ASSIGNEE } },
+    { label: "wave-eligible gate with no assignee", report: waveOpen, action: "reused", task: { wave: 2, dispatch_id: DISPATCH_ID, assignee: null } },
+    { label: "wave-eligible gate with blank dispatch provenance", report: waveOpen, action: "reused", task: { wave: 2, dispatch_id: "   ", assignee: ASSIGNEE } },
+    // The planResume action conjunct alone holds these back: receipt strings look complete and
+    // the wave blanket is open, but the plan deliberately left the outcome alone this run, so
+    // the recorded dispatch is NOT a currently verified live dispatch.
+    { label: "plan skipped the outcome", report: waveOpen, action: "skipped", task: { wave: 2, ...dispatched } },
+    { label: "plan requires a decision", report: waveOpen, action: "decision_required", task: { wave: 2, ...dispatched } },
+    { label: "outcome absent from the plan entirely", report: waveOpen, action: undefined, task: { wave: 2, ...dispatched } },
   ];
   try {
     for (const scenario of inertCases) {
       // orcaBin points at an absent binary: an inert gate must never reach it, so a broken
       // filter would surface as an INTEGRATION_CAPABILITY_GAP blocking entry, not [].
       const blocking = advanceIntegrationTasks({
-        receipt: receiptFor(scenario.task),
+        receipt: receiptFor({ outcome_id: OUTCOME_ID, kind: "integration_gate", orca_task_id: TASK_ID, ...scenario.task }),
         opts,
         orcaBin: path.join(os.tmpdir(), "relay-orca-h1-absent-orca-bin"),
-        report,
+        report: scenario.report,
+        actions: scenario.action === undefined ? [] : [{ outcome_id: OUTCOME_ID, action: scenario.action }],
       });
       assert.deepEqual(blocking, [], scenario.label);
     }
@@ -387,7 +470,7 @@ test("#1019 H1 resume leaves a materialized, undispatched or wave-ineligible int
   }
 });
 
-test("#1019 H1 resume advances a dispatched, wave-eligible integration gate", () => {
+test("#1019 H1/R3 resume advances a dispatched, wave-eligible integration gate the plan reused", () => {
   const fake = installFakeOrcaIntegrationLifecycle(initialState({
     gates: [{ id: "g1", task_id: TASK_ID, question: canonicalIntegrationQuestion(PROGRAM_ID, OUTCOME_ID, programSegment), options: ["passed", "failed"], status: "pending" }],
   }));
@@ -403,8 +486,11 @@ test("#1019 H1 resume advances a dispatched, wave-eligible integration gate", ()
       opts: { coordinatorHandle: COORDINATOR, integrationLockRoot: lockRoot, integrationReportPath: () => report.reportPath },
       orcaBin: fake.orcaPath,
       report: { outcomes: [{ outcome_id: OUTCOME_ID, wave: 1, state: "pending" }] },
+      actions: [{ outcome_id: OUTCOME_ID, action: "reused" }],
     });
-    // Wave-1 eligible + dispatched → the gate resolves and the operator is asked for worker_done.
+    // Wave-1 eligible + `reused` + dispatched → the gate resolves and the operator is asked for
+    // worker_done. This is the positive control for the inert matrix above: without it, those
+    // assertions could pass for the wrong reason (a lifecycle that never runs at all).
     assert.equal(blocking.length, 1);
     assert.equal(blocking[0].reason_code, "INTEGRATION_WORKER_DONE_REQUIRED");
     assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-resolve").length, 1);
@@ -416,30 +502,77 @@ test("#1019 H1 resume advances a dispatched, wave-eligible integration gate", ()
   }
 });
 
-test("#1019 M3 integration lifecycle lock reclaims a dead owner but never steals a live one", () => {
+function lockPathFor(lockRoot) {
+  return path.join(lockRoot, `${integrationLockName({ programId: PROGRAM_ID, outcomeId: OUTCOME_ID, taskId: TASK_ID })}.lock`);
+}
+
+function holdLock(lockRoot, ownerContent) {
+  const lockPath = lockPathFor(lockRoot);
+  fs.mkdirSync(lockPath, { recursive: true });
+  if (ownerContent !== null) fs.writeFileSync(path.join(lockPath, "owner"), ownerContent, "utf8");
+  return lockPath;
+}
+
+// A coordinator killed mid-critical-section leaves its lock directory behind. Its recorded
+// owner pid is provably gone (kill(pid,0) → ESRCH), so the next coordinator reclaims it
+// automatically — an abandoned lock must never require manual deletion to recover the program.
+test("#1019 M3/R3 a lock abandoned by a provably dead owner is reclaimed automatically", () => {
   const { execFileSync } = require("node:child_process");
   const lockRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-m3-lock-"));
   const lockArgs = { programId: PROGRAM_ID, outcomeId: OUTCOME_ID, taskId: TASK_ID, lockRoot };
-  const lockPath = path.join(lockRoot, `${integrationLockName(lockArgs)}.lock`);
-  // A guaranteed-dead PID: a child process that has already exited by the time execFileSync returns.
+  // A guaranteed-dead PID: a child process that has already been reaped by the time
+  // execFileSync returns, so kill(pid, 0) reports exactly ESRCH.
   const deadPid = Number(execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }));
+  const lockPath = holdLock(lockRoot, `${deadPid}\n`);
+  assert.ok(fs.existsSync(lockPath), "precondition: the abandoned lock exists");
   try {
-    // Dead owner: a crash left the lock dir + the PID of a process that no longer exists.
-    fs.mkdirSync(lockPath);
-    fs.writeFileSync(path.join(lockPath, "owner"), `${deadPid}\n`, "utf8");
-    const reclaimed = withIntegrationLifecycleLock({ ...lockArgs, timeoutMs: 300, pollMs: 5 }, () => "acquired");
+    let ran = false;
+    const reclaimed = withIntegrationLifecycleLock({ ...lockArgs, timeoutMs: 300, pollMs: 5 }, () => {
+      ran = true;
+      return "acquired";
+    });
+    assert.equal(ran, true, "the critical section must run after reclaiming a dead owner's lock");
     assert.equal(reclaimed, "acquired", "a dead owner's lock is reclaimed, not stranded");
     assert.equal(fs.existsSync(lockPath), false, "the reclaiming holder releases the lock when it finishes");
-
-    // Live owner: the current process holds the lock; a competing acquire must fail closed.
-    fs.mkdirSync(lockPath);
-    fs.writeFileSync(path.join(lockPath, "owner"), `${process.pid}\n`, "utf8");
-    assert.throws(
-      () => withIntegrationLifecycleLock({ ...lockArgs, timeoutMs: 60, pollMs: 5 }, () => "should-not-run"),
-      /integration lifecycle lock timed out/,
-    );
-    assert.equal(fs.existsSync(lockPath), true, "a live owner's lock is never stolen");
+    // The rename-then-remove reclaim leaves no staging residue behind.
+    assert.deepEqual(fs.readdirSync(lockRoot), [], "the reclaim leaves no rename staging residue");
   } finally {
     fs.rmSync(lockRoot, { recursive: true, force: true });
+  }
+});
+
+// The safety counterpart: a lock held by a LIVE owner is never stolen, and neither is one whose
+// ownership record is absent or malformed — that could belong to a live holder whose owner stamp
+// has not landed yet, and an old mtime is not evidence the owner is gone. All fail closed at the
+// bounded timeout with the lock left in place.
+test("#1019 M3/R3 live-owner and ambiguous-owner locks are never stolen", () => {
+  const lockArgs = { programId: PROGRAM_ID, outcomeId: OUTCOME_ID, taskId: TASK_ID };
+  const cases = [
+    { label: "live owner", owner: `${process.pid}\n` },
+    { label: "absent owner record", owner: null },
+    { label: "non-numeric owner", owner: "not-a-pid\n" },
+    { label: "trailing-garbage owner", owner: "123abc\n" },
+    { label: "zero owner", owner: "0\n" },
+    { label: "negative owner", owner: "-5\n" },
+  ];
+  for (const scenario of cases) {
+    const lockRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-lock-held-"));
+    const lockPath = holdLock(lockRoot, scenario.owner);
+    // An mtime far in the past: a lease-based reclaim would steal these; an ESRCH-only reclaim
+    // must not.
+    const stale = new Date(Date.now() - 3600_000);
+    fs.utimesSync(lockPath, stale, stale);
+    try {
+      let ran = false;
+      assert.throws(
+        () => withIntegrationLifecycleLock({ ...lockArgs, lockRoot, timeoutMs: 60, pollMs: 5 }, () => { ran = true; }),
+        /integration lifecycle lock timed out/,
+        scenario.label,
+      );
+      assert.equal(ran, false, `${scenario.label} must never enter the critical section`);
+      assert.ok(fs.existsSync(lockPath), `${scenario.label} must leave the held lock in place`);
+    } finally {
+      fs.rmSync(lockRoot, { recursive: true, force: true });
+    }
   }
 });

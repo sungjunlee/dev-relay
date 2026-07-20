@@ -43,7 +43,7 @@ const { dispatchTask, showDispatch, sendPrompt } = require("./lib/run-orca");
 const { provenanceMismatch } = require("./lib/run-orchestrator");
 const { buildOperatorPrompt } = require("./lib/operator-prompt");
 const { routeFor, defaultEvidenceFor } = require("./lib/task-kinds");
-const { planResume, earlierWavesComplete } = require("./lib/resume-plan");
+const { planResume, waveEligible } = require("./lib/resume-plan");
 const { orderReport } = require("./lib/resume-report");
 const { validateRelayRunMappings, applyRelayRunMappings } = require("./lib/resume-mapping");
 const {
@@ -484,24 +484,43 @@ function isNonEmptyStr(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
-// Advance ONLY a currently-dispatched, wave-eligible integration gate. A materialized but
-// undispatched integration_gate (null dispatch_id/assignee — the #1019 live shape, where the
-// integration gate is wave 2 and wave-1 resume has not reached it) stays INERT: advancing it
-// would hit INTEGRATION_DISPATCH_PROVENANCE_MISSING and flip an otherwise-idempotent wave-1
-// resume to ok:false. A gate whose earlier waves are not yet complete_with_evidence is never
-// advanced either — even if it was dispatched out of band — so its canonical gate can never be
-// resolved ahead of the program's wave order. planResume already skips these outcomes; this is
-// the matching guard on the coordinator-owned lifecycle advance.
-function integrationGateAdvanceable(task, report) {
-  const dispatched = isNonEmptyStr(task.dispatch_id) && isNonEmptyStr(task.assignee);
-  const waveEligible = task.wave === 1 || earlierWavesComplete(task, report);
-  return dispatched && waveEligible;
+// Actions that leave the outcome holding a CURRENTLY VERIFIED live dispatch: `reused` proved
+// task+dispatch+terminal are all live this run, and `redispatched` just re-established them
+// through the verified inject -> dispatch-show -> prompt path. Every other action (`skipped`,
+// `decision_required`) means planResume deliberately left the outcome alone. Receipt strings
+// alone are NOT proof — a stale receipt can carry a dispatch_id whose Orca dispatch is gone.
+const ADVANCEABLE_ACTIONS = new Set(["reused", "redispatched"]);
+
+// Advance ONLY an integration gate that is wave-eligible AND holds a verified live dispatch.
+// Eligibility is read straight off the plan `planResume` already computed, plus that same
+// module's shared `waveEligible` blanket — never a second policy that could drift from it.
+//
+// A materialized but undispatched integration_gate (null dispatch_id/assignee — the #1019 live
+// shape, where the integration gate is wave 2 and wave-1 resume has not reached it) stays
+// INERT: advancing it would hit INTEGRATION_DISPATCH_PROVENANCE_MISSING and flip an
+// otherwise-idempotent wave-1 resume to ok:false. A gate whose earlier waves are not yet
+// complete_with_evidence is never advanced either — even if it was dispatched out of band — so
+// its canonical gate can never be resolved ahead of the program's wave order. Both are left
+// COMPLETELY untouched: no lock, no Orca read, no lifecycle mutation. (#1019 R3)
+function integrationGateAdvanceable(task, report, actionByOutcome) {
+  return (
+    ADVANCEABLE_ACTIONS.has(actionByOutcome.get(task.outcome_id))
+    && waveEligible(task, report)
+    && isNonEmptyStr(task.dispatch_id)
+    && isNonEmptyStr(task.assignee)
+  );
 }
 
-function advanceIntegrationTasks({ receipt, opts, orcaBin, report }) {
+function integrationTasksToAdvance({ receipt, report, actions }) {
+  const actionByOutcome = new Map((actions || []).map((action) => [action.outcome_id, action.action]));
+  return receipt.tasks.filter((task) => (
+    task && task.kind === "integration_gate" && integrationGateAdvanceable(task, report, actionByOutcome)
+  ));
+}
+
+function advanceIntegrationTasks({ receipt, opts, orcaBin, report, actions }) {
   const blocking = [];
-  receipt.tasks
-    .filter((task) => task && task.kind === "integration_gate" && integrationGateAdvanceable(task, report))
+  integrationTasksToAdvance({ receipt, report, actions })
     .forEach((task) => {
     try {
       const result = advanceIntegrationGate({
@@ -622,7 +641,7 @@ function main() {
     const executed = executeActions({ receipt, actions: plan.actions, opts, orcaBin: resolveOrca(opts), persist });
     terminalsCreated = executed.reportTerminals;
     blockingReasons = executed.blocking;
-    blockingReasons = blockingReasons.concat(advanceIntegrationTasks({ receipt, opts, orcaBin: resolveOrca(opts), report }));
+    blockingReasons = blockingReasons.concat(advanceIntegrationTasks({ receipt, opts, orcaBin: resolveOrca(opts), report, actions: plan.actions }));
   }
 
   const body = buildReport({ opts, receiptPath, report, plan, terminalsCreated, blockingReasons, decisions: plan.decisions });
@@ -638,4 +657,4 @@ function main() {
 // without triggering a real resume run.
 if (require.main === module) main();
 
-module.exports = { syntheticTask, reportActions, integrationBlockingEntry, integrationGateAdvanceable, advanceIntegrationTasks };
+module.exports = { syntheticTask, reportActions, integrationBlockingEntry, integrationGateAdvanceable, integrationTasksToAdvance, advanceIntegrationTasks };
