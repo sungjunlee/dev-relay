@@ -261,6 +261,7 @@ module.exports = {
   planResume,
   planDecisions,
   classifyAction,
+  earlierWavesComplete,
   hasUnmappedRelayWork,
   relayClean,
   mappingLive,

@@ -114,9 +114,11 @@ function integrationGateBlock(lifecycle) {
   if (!lifecycle || !lifecycle.completion_command) {
     return base.concat("Wait for a fresh coordinator instruction containing the current dispatch provenance before sending worker_done.").join("\n");
   }
+  const provenance = lifecycle.evidence_provenance || {};
   return base.concat([
     `Write the live evidence JSON at this exact path: ${lifecycle.report_path}`,
-    "The JSON must contain passed:true and deterministic evidence text.",
+    "The JSON must contain passed:true, deterministic evidence text, and these exact provenance fields binding it to THIS dispatch (a reused or prior-run artifact is rejected):",
+    `  "runtime_id": ${JSON.stringify(provenance.runtime_id || null)}, "task_id": ${JSON.stringify(provenance.task_id || null)}, "dispatch_id": ${JSON.stringify(provenance.dispatch_id || null)}`,
     "After the coordinator resolves this exact gate to passed, copy-paste the following command exactly once from the current dispatched pane:",
     lifecycle.completion_command.copy_paste,
   ]).join("\n");

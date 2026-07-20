@@ -121,8 +121,11 @@ The lifecycle ordering is terminal and one-way:
 ```text
 verified dispatch
   -> canonical gate create/adopt
-  -> operator writes <outcome-id>.json with {"passed":true,"evidence":"..."}
+  -> operator writes <outcome-id>.json with {"passed":true,"evidence":"...",
+       "runtime_id":"<live>","task_id":"<this task>","dispatch_id":"<this dispatch>"}
   -> fresh runtime/coordinator/task/dispatch/assignee/report revalidation
+       (the report's runtime_id/task_id/dispatch_id MUST match the live dispatch;
+        a reused or prior-run artifact fails closed and never resolves the gate)
   -> coordinator resolves that physical gate to passed
   -> fresh completion instruction
   -> operator sends explicit worker_done exactly once

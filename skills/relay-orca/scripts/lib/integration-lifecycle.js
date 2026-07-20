@@ -189,6 +189,11 @@ function withBoundedLock(ctx, callback) {
   try {
     return ctx.withLock(lockName(ctx), callback);
   } catch (error) {
+    // A fail-closed decision from inside the locked section already carries its own specific
+    // reason code (e.g. gate/provenance/report codes); surfacing it verbatim is what makes the
+    // reason-code contract diagnosable. Only a genuine lock-acquisition failure — a non-lifecycle
+    // error from ctx.withLock itself — is mapped to INTEGRATION_LOCK_UNAVAILABLE.
+    if (error instanceof IntegrationLifecycleError) throw error;
     fail("INTEGRATION_LOCK_UNAVAILABLE", `integration lifecycle lock cannot be acquired: ${error.message}`);
   }
 }
@@ -243,7 +248,7 @@ function ensureCanonicalGate(ctx) {
   return withBoundedLock(ctx, () => ensureCanonicalGateUnlocked(ctx, identity));
 }
 
-function currentProvenance(ctx, { requireActive = false } = {}) {
+function currentProvenance(ctx) {
   const statusPayload = runJson(ctx, ["status", "--json"], "orca status");
   const currentRuntime = runtimeId(statusPayload);
   if (!nonEmpty(currentRuntime)) fail("INTEGRATION_RUNTIME_PROVENANCE_MISSING", "live Orca runtime id is unavailable; coordinator mutation is unsafe");
@@ -277,7 +282,43 @@ function currentProvenance(ctx, { requireActive = false } = {}) {
   return { runtimeId: currentRuntime, coordinator: verifiedCoordinator, task, tasks, dispatch };
 }
 
-function readReport(ctx) {
+function reportField(value, keys) {
+  for (const key of keys) {
+    if (value && Object.prototype.hasOwnProperty.call(value, key)) return value[key];
+  }
+  return undefined;
+}
+
+// Bind the evidence artifact to the live dispatch provenance. The deterministic
+// <outcome-id>.json path alone is NOT proof of freshness: a reused evidence directory or a
+// prior-run artifact for the same outcome would otherwise authorize gate-resolve on a new
+// canonical gate. The artifact must therefore carry the CURRENT runtime/task/dispatch identity
+// (already re-verified live by currentProvenance); a missing id fails closed as
+// INTEGRATION_REPORT_PROVENANCE_MISSING and a mismatched id as
+// INTEGRATION_REPORT_PROVENANCE_MISMATCH, so stale evidence can never resolve a gate. Crash
+// recovery for the SAME dispatch still passes because the ids are re-emitted unchanged.
+function bindReportProvenance(ctx, provenance, value) {
+  const expected = {
+    runtime_id: (provenance && provenance.runtimeId) || ctx.runtimeId || null,
+    task_id: ctx.taskId,
+    dispatch_id: ctx.dispatchId,
+  };
+  const recorded = {
+    runtime_id: reportField(value, ["runtime_id", "runtimeId"]),
+    task_id: reportField(value, ["task_id", "taskId"]),
+    dispatch_id: reportField(value, ["dispatch_id", "dispatchId"]),
+  };
+  for (const field of ["runtime_id", "task_id", "dispatch_id"]) {
+    if (!nonEmpty(recorded[field])) {
+      fail("INTEGRATION_REPORT_PROVENANCE_MISSING", `integration report ${ctx.reportPath} is missing ${field}; deterministic evidence must be bound to the live runtime/task/dispatch`);
+    }
+    if (!nonEmpty(expected[field]) || recorded[field] !== expected[field]) {
+      fail("INTEGRATION_REPORT_PROVENANCE_MISMATCH", `integration report ${field} ${recorded[field]} does not match the live dispatch provenance ${expected[field] || "missing"}; refusing to authorize gate-resolve on stale evidence`);
+    }
+  }
+}
+
+function readReport(ctx, provenance) {
   if (!ctx || !nonEmpty(ctx.reportPath)) fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "deterministic integration report path is required");
   if (typeof ctx.readReport !== "function") fail("INTEGRATION_REPORT_PROVENANCE_MISSING", "deterministic integration report reader is unavailable");
   const source = ctx.readReport(ctx.reportPath);
@@ -286,6 +327,7 @@ function readReport(ctx) {
   if (!value || value.passed !== true || !nonEmpty(value.evidence)) {
     fail("INTEGRATION_REPORT_INVALID", `integration report ${ctx.reportPath} must contain passed:true and deterministic evidence text`);
   }
+  bindReportProvenance(ctx, provenance, value);
   return { present: true, passed: true, evidence: value.evidence };
 }
 
@@ -336,6 +378,14 @@ function prepareIntegrationGate(ctx) {
       question: identityFor(ctx).question,
       report_path: ctx.reportPath,
       completion_command: completionCommand(ctx),
+      // The exact identity the deterministic evidence artifact must carry so a later advance
+      // can bind it to THIS dispatch (#1019 H2). Surfaced here so the operator prompt can quote
+      // the required values; without them the artifact fails closed instead of resolving a gate.
+      evidence_provenance: {
+        runtime_id: provenance.runtimeId,
+        task_id: ctx.taskId,
+        dispatch_id: ctx.dispatchId,
+      },
     };
   });
 }
@@ -347,7 +397,7 @@ function prepareIntegrationGate(ctx) {
 // double-complete the task or create a duplicate gate.
 function reissueCompletionInstruction(ctx, gateRow) {
   sendCompletionInstruction(ctx);
-  const afterInstruction = currentProvenance(ctx, { requireActive: true });
+  const afterInstruction = currentProvenance(ctx);
   if (afterInstruction.task.status !== "completed") {
     return {
       ok: false,
@@ -364,7 +414,7 @@ function reissueCompletionInstruction(ctx, gateRow) {
 function advanceIntegrationGate(ctx) {
   return withBoundedLock(ctx, () => {
     const provenance = currentProvenance(ctx);
-    const report = readReport(ctx);
+    const report = readReport(ctx, provenance);
     const identity = identityFor(ctx);
     const first = inspectCanonicalGates(listGates(ctx), identity);
     if (!first.ok) fail(first.reasonCode, first.message);

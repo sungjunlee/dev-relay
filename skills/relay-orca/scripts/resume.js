@@ -43,7 +43,7 @@ const { dispatchTask, showDispatch, sendPrompt } = require("./lib/run-orca");
 const { provenanceMismatch } = require("./lib/run-orchestrator");
 const { buildOperatorPrompt } = require("./lib/operator-prompt");
 const { routeFor, defaultEvidenceFor } = require("./lib/task-kinds");
-const { planResume } = require("./lib/resume-plan");
+const { planResume, earlierWavesComplete } = require("./lib/resume-plan");
 const { orderReport } = require("./lib/resume-report");
 const { validateRelayRunMappings, applyRelayRunMappings } = require("./lib/resume-mapping");
 const {
@@ -480,9 +480,29 @@ function executeActions({ receipt, actions, opts, orcaBin, persist }) {
   return { reportTerminals: ctx.reportTerminals, blocking: ctx.blocking };
 }
 
-function advanceIntegrationTasks({ receipt, opts, orcaBin, persist }) {
+function isNonEmptyStr(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+// Advance ONLY a currently-dispatched, wave-eligible integration gate. A materialized but
+// undispatched integration_gate (null dispatch_id/assignee — the #1019 live shape, where the
+// integration gate is wave 2 and wave-1 resume has not reached it) stays INERT: advancing it
+// would hit INTEGRATION_DISPATCH_PROVENANCE_MISSING and flip an otherwise-idempotent wave-1
+// resume to ok:false. A gate whose earlier waves are not yet complete_with_evidence is never
+// advanced either — even if it was dispatched out of band — so its canonical gate can never be
+// resolved ahead of the program's wave order. planResume already skips these outcomes; this is
+// the matching guard on the coordinator-owned lifecycle advance.
+function integrationGateAdvanceable(task, report) {
+  const dispatched = isNonEmptyStr(task.dispatch_id) && isNonEmptyStr(task.assignee);
+  const waveEligible = task.wave === 1 || earlierWavesComplete(task, report);
+  return dispatched && waveEligible;
+}
+
+function advanceIntegrationTasks({ receipt, opts, orcaBin, report }) {
   const blocking = [];
-  receipt.tasks.filter((task) => task && task.kind === "integration_gate").forEach((task) => {
+  receipt.tasks
+    .filter((task) => task && task.kind === "integration_gate" && integrationGateAdvanceable(task, report))
+    .forEach((task) => {
     try {
       const result = advanceIntegrationGate({
         run: runOrcaMutating,
@@ -602,7 +622,7 @@ function main() {
     const executed = executeActions({ receipt, actions: plan.actions, opts, orcaBin: resolveOrca(opts), persist });
     terminalsCreated = executed.reportTerminals;
     blockingReasons = executed.blocking;
-    blockingReasons = blockingReasons.concat(advanceIntegrationTasks({ receipt, opts, orcaBin: resolveOrca(opts), persist }));
+    blockingReasons = blockingReasons.concat(advanceIntegrationTasks({ receipt, opts, orcaBin: resolveOrca(opts), report }));
   }
 
   const body = buildReport({ opts, receiptPath, report, plan, terminalsCreated, blockingReasons, decisions: plan.decisions });
@@ -618,4 +638,4 @@ function main() {
 // without triggering a real resume run.
 if (require.main === module) main();
 
-module.exports = { syntheticTask, reportActions, integrationBlockingEntry };
+module.exports = { syntheticTask, reportActions, integrationBlockingEntry, integrationGateAdvanceable, advanceIntegrationTasks };

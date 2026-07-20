@@ -16,10 +16,11 @@ const {
   advanceIntegrationGate,
   IntegrationLifecycleError,
 } = require(path.join(SCRIPTS, "lib", "integration-lifecycle.js"));
-const { programSegment, withIntegrationLifecycleLock, readIntegrationEvidenceFile } = require(path.join(SCRIPTS, "receipt-io.js"));
+const { programSegment, withIntegrationLifecycleLock, readIntegrationEvidenceFile, integrationLockName } = require(path.join(SCRIPTS, "receipt-io.js"));
 const { deriveStatusReport } = require(path.join(SCRIPTS, "lib", "status-derive.js"));
 const { buildFinalSummary } = require(path.join(SCRIPTS, "lib", "final-summary.js"));
-const { installFakeOrcaIntegrationLifecycle } = require(path.join(__dirname, "..", "fixtures", "fake-orca-integration-lifecycle.js"));
+const { advanceIntegrationTasks } = require(path.join(SCRIPTS, "resume.js"));
+const { installFakeOrcaIntegrationLifecycle, DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca-integration-lifecycle.js"));
 
 const PROGRAM_ID = "repilot-941-20260715";
 const OUTCOME_ID = "integration-check";
@@ -28,10 +29,20 @@ const DISPATCH_ID = "dispatch_integration_1019";
 const ASSIGNEE = "term-integration-fresh";
 const COORDINATOR = "coord-current";
 
-function reportFile(passed = true) {
+// Evidence artifacts are provenance-bound (#1019 H2): the deterministic path alone is not
+// proof of freshness, so the artifact must carry the live runtime/task/dispatch identity.
+// `provenance` overrides let a test forge a stale/incomplete artifact.
+function reportFile(passed = true, provenance = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-integration-report-"));
   const reportPath = path.join(dir, "integration.json");
-  fs.writeFileSync(reportPath, JSON.stringify({ passed, evidence: passed ? "integration fixture passed" : "integration fixture failed" }) + "\n", "utf8");
+  const body = {
+    passed,
+    evidence: passed ? "integration fixture passed" : "integration fixture failed",
+    runtime_id: "runtime_id" in provenance ? provenance.runtime_id : DEFAULT_RUNTIME_ID,
+    task_id: "task_id" in provenance ? provenance.task_id : TASK_ID,
+    dispatch_id: "dispatch_id" in provenance ? provenance.dispatch_id : DISPATCH_ID,
+  };
+  fs.writeFileSync(reportPath, JSON.stringify(body) + "\n", "utf8");
   return { dir, reportPath };
 }
 
@@ -157,14 +168,14 @@ test("#1019 create response loss is recovered by re-list/adopt without a second 
 test("#1019 duplicate or noncanonical gates fail closed before further mutation", () => {
   const question = canonicalIntegrationQuestion(PROGRAM_ID, OUTCOME_ID, programSegment);
   const cases = [
-    { label: "duplicate", gates: [
+    { label: "duplicate", reasonCode: "INTEGRATION_GATE_DUPLICATE", gates: [
       { id: "g1", task_id: TASK_ID, question, options: ["passed", "failed"], status: "pending" },
       { id: "g2", task_id: TASK_ID, question, options: ["passed", "failed"], status: "pending" },
     ] },
-    { label: "wrong question", gates: [
+    { label: "wrong question", reasonCode: "INTEGRATION_GATE_NONCANONICAL", gates: [
       { id: "g1", task_id: TASK_ID, question: "stale question", options: ["passed", "failed"], status: "pending" },
     ] },
-    { label: "conflicting result", gates: [
+    { label: "conflicting result", reasonCode: "INTEGRATION_GATE_CONFLICT", gates: [
       { id: "g1", task_id: TASK_ID, question, options: ["passed", "failed"], status: "resolved", resolution: "failed" },
     ] },
   ];
@@ -173,7 +184,8 @@ test("#1019 duplicate or noncanonical gates fail closed before further mutation"
     const report = reportFile();
     try {
       assert.throws(() => prepareIntegrationGate(context(fake, report.reportPath)), (error) => {
-        assert.ok(error instanceof IntegrationLifecycleError);
+        assert.ok(error instanceof IntegrationLifecycleError, scenario.label);
+        assert.equal(error.reasonCode, scenario.reasonCode, scenario.label);
         return true;
       }, scenario.label);
       const mutations = fake.readLog().filter((argv) => ["gate-create", "gate-resolve", "send"].includes(argv[1]));
@@ -188,15 +200,20 @@ test("#1019 duplicate or noncanonical gates fail closed before further mutation"
 
 test("#1019 stale coordinator, dispatch, assignee, and report provenance fail closed", () => {
   const cases = [
-    { label: "coordinator", state: initialState({ coordinator: "coord-stale" }) },
-    { label: "dispatch", state: initialState({ dispatch: { [TASK_ID]: { dispatch_id: "dispatch-other", assignee: ASSIGNEE } } }) },
-    { label: "assignee", state: initialState({ dispatch: { [TASK_ID]: { dispatch_id: DISPATCH_ID, assignee: "term-other" } } }) },
+    { label: "coordinator", reasonCode: "INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH", state: initialState({ coordinator: "coord-stale" }) },
+    { label: "dispatch", reasonCode: "INTEGRATION_DISPATCH_PROVENANCE_MISMATCH", state: initialState({ dispatch: { [TASK_ID]: { dispatch_id: "dispatch-other", assignee: ASSIGNEE } } }) },
+    // A stale --from is rejected at the dispatch-show CLI boundary, surfacing as a capability gap.
+    { label: "assignee", reasonCode: "INTEGRATION_CAPABILITY_GAP", state: initialState({ dispatch: { [TASK_ID]: { dispatch_id: DISPATCH_ID, assignee: "term-other" } } }) },
   ];
   for (const scenario of cases) {
     const fake = installFakeOrcaIntegrationLifecycle(scenario.state);
     const report = reportFile();
     try {
-      assert.throws(() => advanceIntegrationGate(context(fake, report.reportPath)), /provenance|coordinator|dispatch|assignee/i, scenario.label);
+      assert.throws(() => advanceIntegrationGate(context(fake, report.reportPath)), (error) => {
+        assert.ok(error instanceof IntegrationLifecycleError, scenario.label);
+        assert.equal(error.reasonCode, scenario.reasonCode, scenario.label);
+        return true;
+      }, scenario.label);
       const mutations = fake.readLog().filter((argv) => ["gate-create", "gate-resolve", "send"].includes(argv[1]));
       assert.deepEqual(mutations, [], `${scenario.label} must have zero lifecycle mutation`);
       assert.equal(fake.readPoison(), null);
@@ -209,7 +226,11 @@ test("#1019 stale coordinator, dispatch, assignee, and report provenance fail cl
   const report = reportFile();
   fs.writeFileSync(report.reportPath, "not-json\n", "utf8");
   try {
-    assert.throws(() => advanceIntegrationGate(context(fake, report.reportPath)), /report|evidence/i);
+    assert.throws(() => advanceIntegrationGate(context(fake, report.reportPath)), (error) => {
+      assert.ok(error instanceof IntegrationLifecycleError);
+      assert.equal(error.reasonCode, "INTEGRATION_REPORT_INVALID");
+      return true;
+    });
     assert.deepEqual(fake.readLog().filter((argv) => ["gate-create", "gate-resolve", "send"].includes(argv[1])), []);
   } finally {
     fake.cleanup();
@@ -280,5 +301,145 @@ test("#1019 final summary vetoes active integration task and generic resolved ga
     assert.ok(generic.report.diagnostics.some((diagnostic) => diagnostic.code === "INTEGRATION_GATE_CONFLICT"));
   } finally {
     generic.fake.cleanup();
+  }
+});
+
+test("#1019 H2 evidence not bound to the live runtime/task/dispatch fails closed before gate-resolve", () => {
+  const question = canonicalIntegrationQuestion(PROGRAM_ID, OUTCOME_ID, programSegment);
+  const staleCases = [
+    { label: "prior-run runtime", provenance: { runtime_id: "runtime-prior-run" }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISMATCH" },
+    { label: "prior-run task", provenance: { task_id: "task-prior-run" }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISMATCH" },
+    { label: "reused-dir dispatch", provenance: { dispatch_id: "dispatch-prior-run" }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISMATCH" },
+    { label: "missing dispatch id", provenance: { dispatch_id: undefined }, reasonCode: "INTEGRATION_REPORT_PROVENANCE_MISSING" },
+  ];
+  for (const scenario of staleCases) {
+    // A canonical gate already exists pending; only fresh, provenance-bound evidence may resolve it.
+    const fake = installFakeOrcaIntegrationLifecycle(initialState({
+      gates: [{ id: "g1", task_id: TASK_ID, question, options: ["passed", "failed"], status: "pending" }],
+    }));
+    const report = reportFile(true, scenario.provenance);
+    try {
+      assert.throws(() => advanceIntegrationGate(context(fake, report.reportPath)), (error) => {
+        assert.ok(error instanceof IntegrationLifecycleError, scenario.label);
+        assert.equal(error.reasonCode, scenario.reasonCode, scenario.label);
+        return true;
+      }, scenario.label);
+      // Stale evidence must NEVER authorize a gate-create, gate-resolve, or worker_done.
+      assert.deepEqual(fake.readLog().filter((argv) => ["gate-create", "gate-resolve", "send"].includes(argv[1])), [], scenario.label);
+      assert.equal(fake.readPoison(), null);
+    } finally {
+      fake.cleanup();
+      fs.rmSync(report.dir, { recursive: true, force: true });
+    }
+  }
+  // The SAME dispatch's fresh, provenance-bound evidence still resolves the gate (crash recovery preserved).
+  const fresh = installFakeOrcaIntegrationLifecycle(initialState({
+    gates: [{ id: "g1", task_id: TASK_ID, question, options: ["passed", "failed"], status: "pending" }],
+  }));
+  const freshReport = reportFile();
+  try {
+    const advanced = advanceIntegrationGate(context(fresh, freshReport.reportPath));
+    assert.equal(advanced.ok, false);
+    assert.equal(advanced.reason_code, "INTEGRATION_WORKER_DONE_REQUIRED");
+    assert.equal(fresh.readLog().filter((argv) => argv[1] === "gate-resolve").length, 1);
+    assert.equal(fresh.readPoison(), null);
+  } finally {
+    fresh.cleanup();
+    fs.rmSync(freshReport.dir, { recursive: true, force: true });
+  }
+});
+
+test("#1019 H1 resume leaves a materialized, undispatched or wave-ineligible integration gate inert", () => {
+  const receiptFor = (integrationTask) => ({
+    program_id: PROGRAM_ID,
+    runtime_id: DEFAULT_RUNTIME_ID,
+    tasks: [
+      { outcome_id: "impl", kind: "implementation", wave: 1, orca_task_id: "orca-impl", dispatch_id: "d-impl", assignee: "term-impl" },
+      integrationTask,
+    ],
+  });
+  // Wave 1 has not completed_with_evidence, so the wave-2 integration gate is not yet eligible.
+  const report = { outcomes: [{ outcome_id: "impl", wave: 1, state: "reused" }, { outcome_id: OUTCOME_ID, wave: 2, state: "pending" }] };
+  const lockRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-h1-lock-"));
+  const opts = {
+    coordinatorHandle: COORDINATOR,
+    integrationLockRoot: lockRoot,
+    integrationReportPath: () => path.join(os.tmpdir(), "relay-orca-h1-nonexistent-report.json"),
+  };
+  const inertCases = [
+    { label: "undispatched wave-2 gate (the #1019 live shape)", task: { outcome_id: OUTCOME_ID, kind: "integration_gate", wave: 2, orca_task_id: TASK_ID, dispatch_id: null, assignee: null } },
+    { label: "dispatched wave-2 gate before earlier waves complete", task: { outcome_id: OUTCOME_ID, kind: "integration_gate", wave: 2, orca_task_id: TASK_ID, dispatch_id: DISPATCH_ID, assignee: ASSIGNEE } },
+  ];
+  try {
+    for (const scenario of inertCases) {
+      // orcaBin points at an absent binary: an inert gate must never reach it, so a broken
+      // filter would surface as an INTEGRATION_CAPABILITY_GAP blocking entry, not [].
+      const blocking = advanceIntegrationTasks({
+        receipt: receiptFor(scenario.task),
+        opts,
+        orcaBin: path.join(os.tmpdir(), "relay-orca-h1-absent-orca-bin"),
+        report,
+      });
+      assert.deepEqual(blocking, [], scenario.label);
+    }
+  } finally {
+    fs.rmSync(lockRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1019 H1 resume advances a dispatched, wave-eligible integration gate", () => {
+  const fake = installFakeOrcaIntegrationLifecycle(initialState({
+    gates: [{ id: "g1", task_id: TASK_ID, question: canonicalIntegrationQuestion(PROGRAM_ID, OUTCOME_ID, programSegment), options: ["passed", "failed"], status: "pending" }],
+  }));
+  const report = reportFile();
+  const lockRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-h1-pos-lock-"));
+  try {
+    const blocking = advanceIntegrationTasks({
+      receipt: {
+        program_id: PROGRAM_ID,
+        runtime_id: DEFAULT_RUNTIME_ID,
+        tasks: [{ outcome_id: OUTCOME_ID, kind: "integration_gate", wave: 1, orca_task_id: TASK_ID, dispatch_id: DISPATCH_ID, assignee: ASSIGNEE }],
+      },
+      opts: { coordinatorHandle: COORDINATOR, integrationLockRoot: lockRoot, integrationReportPath: () => report.reportPath },
+      orcaBin: fake.orcaPath,
+      report: { outcomes: [{ outcome_id: OUTCOME_ID, wave: 1, state: "pending" }] },
+    });
+    // Wave-1 eligible + dispatched → the gate resolves and the operator is asked for worker_done.
+    assert.equal(blocking.length, 1);
+    assert.equal(blocking[0].reason_code, "INTEGRATION_WORKER_DONE_REQUIRED");
+    assert.equal(fake.readLog().filter((argv) => argv[1] === "gate-resolve").length, 1);
+    assert.equal(fake.readPoison(), null);
+  } finally {
+    fake.cleanup();
+    fs.rmSync(report.dir, { recursive: true, force: true });
+    fs.rmSync(lockRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1019 M3 integration lifecycle lock reclaims a dead owner but never steals a live one", () => {
+  const { execFileSync } = require("node:child_process");
+  const lockRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-m3-lock-"));
+  const lockArgs = { programId: PROGRAM_ID, outcomeId: OUTCOME_ID, taskId: TASK_ID, lockRoot };
+  const lockPath = path.join(lockRoot, `${integrationLockName(lockArgs)}.lock`);
+  // A guaranteed-dead PID: a child process that has already exited by the time execFileSync returns.
+  const deadPid = Number(execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }));
+  try {
+    // Dead owner: a crash left the lock dir + the PID of a process that no longer exists.
+    fs.mkdirSync(lockPath);
+    fs.writeFileSync(path.join(lockPath, "owner"), `${deadPid}\n`, "utf8");
+    const reclaimed = withIntegrationLifecycleLock({ ...lockArgs, timeoutMs: 300, pollMs: 5 }, () => "acquired");
+    assert.equal(reclaimed, "acquired", "a dead owner's lock is reclaimed, not stranded");
+    assert.equal(fs.existsSync(lockPath), false, "the reclaiming holder releases the lock when it finishes");
+
+    // Live owner: the current process holds the lock; a competing acquire must fail closed.
+    fs.mkdirSync(lockPath);
+    fs.writeFileSync(path.join(lockPath, "owner"), `${process.pid}\n`, "utf8");
+    assert.throws(
+      () => withIntegrationLifecycleLock({ ...lockArgs, timeoutMs: 60, pollMs: 5 }, () => "should-not-run"),
+      /integration lifecycle lock timed out/,
+    );
+    assert.equal(fs.existsSync(lockPath), true, "a live owner's lock is never stolen");
+  } finally {
+    fs.rmSync(lockRoot, { recursive: true, force: true });
   }
 });

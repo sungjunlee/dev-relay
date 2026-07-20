@@ -182,20 +182,76 @@ function integrationSleep(ms) {
   Atomics.wait(shared, 0, 0, ms);
 }
 
-function withIntegrationLifecycleLock({ programId, outcomeId, taskId, lockRoot }, callback) {
+function readIntegrationLockOwnerPid(lockPath) {
+  try {
+    const raw = fs.readFileSync(path.join(lockPath, "owner"), "utf8").trim();
+    const pid = Number.parseInt(raw, 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+// `process.kill(pid, 0)` performs the OS liveness check without delivering a signal:
+// ESRCH means the owner is gone, EPERM means it exists under another user (still alive).
+// Anything ambiguous is treated as alive so a live holder is never stolen (fail closed).
+function integrationLockOwnerAlive(pid) {
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error && error.code === "ESRCH" ? false : true;
+  }
+}
+
+// A lock directory is reclaimable ONLY when its owner is provably gone. A readable owner PID
+// that no longer maps to a live process (a crashed/killed coordinator) is stale. An unreadable
+// owner — the narrow window where a crash struck between mkdir and the owner write, or a torn
+// write — falls back to a bounded mtime lease so the directory can never strand the lifecycle
+// forever, while a lock younger than the lease is left alone (a live holder mid-acquisition).
+function integrationLockIsStale(lockPath, timeoutMs) {
+  const pid = readIntegrationLockOwnerPid(lockPath);
+  if (pid !== null) return !integrationLockOwnerAlive(pid);
+  try {
+    return Date.now() - fs.statSync(lockPath).mtimeMs > timeoutMs;
+  } catch {
+    return false;
+  }
+}
+
+function reclaimStaleIntegrationLock(lockPath, timeoutMs) {
+  if (!integrationLockIsStale(lockPath, timeoutMs)) return false;
+  try {
+    fs.rmSync(lockPath, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function withIntegrationLifecycleLock({ programId, outcomeId, taskId, lockRoot, timeoutMs, pollMs }, callback) {
   const root = path.resolve(lockRoot || path.join(os.tmpdir(), "relay-orca-integration-locks"));
   const lockPath = path.join(root, `${integrationLockName({ programId, outcomeId, taskId })}.lock`);
+  const timeout = Number.isInteger(timeoutMs) && timeoutMs >= 0 ? timeoutMs : INTEGRATION_LOCK_TIMEOUT_MS;
+  const poll = Number.isInteger(pollMs) && pollMs > 0 ? pollMs : INTEGRATION_LOCK_POLL_MS;
   const started = Date.now();
   let acquired = false;
   fs.mkdirSync(root, { recursive: true });
-  while (!acquired && Date.now() - started <= INTEGRATION_LOCK_TIMEOUT_MS) {
+  while (!acquired) {
     try {
       fs.mkdirSync(lockPath);
       fs.writeFileSync(path.join(lockPath, "owner"), `${process.pid}\n`, "utf8");
       acquired = true;
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
-      integrationSleep(INTEGRATION_LOCK_POLL_MS);
+      // A crash/kill between mkdirSync and the finally rmSync would otherwise strand this
+      // directory forever, failing every later run/resume closed with no reset-free recovery.
+      // Reclaim it iff its owner is provably gone, then retry immediately; a live owner keeps
+      // the lock and we fall through to the bounded poll/timeout.
+      if (reclaimStaleIntegrationLock(lockPath, timeout)) continue;
+      if (Date.now() - started > timeout) break;
+      integrationSleep(poll);
     }
   }
   if (!acquired) throw new Error(`integration lifecycle lock timed out for ${programId}/${outcomeId}`);
@@ -275,6 +331,7 @@ module.exports = {
   receiptPathFor,
   writeReceiptAtomic,
   readReceiptFile,
+  integrationLockName,
   withIntegrationLifecycleLock,
   readIntegrationEvidenceFile,
   receiptExists,
