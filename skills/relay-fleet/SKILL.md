@@ -44,8 +44,11 @@ Use a JSON file containing a non-empty `leaves[]` array. Each leaf must include:
 - `prompt_file`: prepared dispatch prompt
 - `rubric_file`: prepared relay-plan rubric
 - `done_criteria_file`: frozen Done Criteria snapshot
+- `ownership`: validated `{ "sprint", "track", "component" }` copied from the dev-backlog sprint-state JSON that supplied the batch
 
 relay-fleet only fans out already-decomposed leaf contracts; it never splits a raw or ambiguous request itself — route that intake through `relay-ready` first and pass its leaf output here.
+
+All leaves must carry the same normalized owner. Missing, malformed, contradictory, or mixed-track ownership is rejected before a fleet manifest or child dispatch exists: one fleet is one track.
 
 Optional per-leaf fields are passed through to `dispatch.js`: `request_id`, `leaf_id`, `executor`, `model`, `model_hints`, `sandbox`, `network_access`, `timeout`, `reasoning`, `copy`, `test_command`, and `register`. An optional `depends_on` array of `leaf_ref` strings records ordering intent: a reference to another leaf in the *same* leaves file fails closed at load time (dispatch that leaf in an earlier wave and drop the reference here); a reference to a `leaf_ref` outside this file is accepted silently and assumed already satisfied.
 If a leaf's executor route is denied or its model is unresolved, pause that leaf and use `relay-config` to register the route or set the default before resuming the fleet.
@@ -90,8 +93,9 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 
 ## Behavior
 
-- The default command invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per undispatched leaf and always passes `--fleet-id`.
+- The default command invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per undispatched leaf and always passes `--fleet-id` plus the typed `--ownership-json` owner.
 - Existing fleet manifests are continued idempotently. With the same `--leaves-file`, already-dispatched children are not re-dispatched; with no `--leaves-file`, persisted fleet leaves are reused when dispatch recovery needs them.
+- Re-runs fail closed if a child manifest owner differs from its persisted leaf; relay-fleet never rewrites `manifest.ownership`.
 - The drive invokes `skills/relay-review/scripts/review-runner.js` for children in `internal_review_pending` or `review_pending`, publishes `publish_pending` children, and redispatches `changes_requested` children until each reaches `ready_to_merge` or `escalated`.
 - The drive then invokes the serial merge queue, which calls `skills/relay-merge/scripts/finalize-run.js` for one `ready_to_merge` child at a time. When a child merge fails, it marks that child `merge_blocked` and continues with the next ready child.
 - The fleet moves to `closed` only when every child is terminal: `merged`, `closed`, or `escalated`. Escalated children close the fleet with a nonzero exit and operator-attention summary; `merge_blocked` keeps the fleet open in `merging`.

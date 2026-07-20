@@ -1,0 +1,121 @@
+"use strict";
+
+const OWNERSHIP_FIELDS = Object.freeze(["sprint", "track", "component"]);
+const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+class OwnershipValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "OwnershipValidationError";
+  }
+}
+
+function requireOwnershipString(value, field, label) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new OwnershipValidationError(`${label}.${field} must be a non-empty string`);
+  }
+  const normalized = value.trim();
+  if (/[\0\r\n]/.test(normalized)) {
+    throw new OwnershipValidationError(`${label}.${field} must be a single-line string without NUL`);
+  }
+  return normalized;
+}
+
+function normalizeSprintPath(value, label) {
+  let sprint = requireOwnershipString(value, "sprint", label).replace(/\\/g, "/");
+  while (sprint.startsWith("./")) sprint = sprint.slice(2);
+
+  if (sprint.split("/").some((segment) => segment === "." || segment === "..")) {
+    throw new OwnershipValidationError(`${label}.sprint must not contain dot path segments`);
+  }
+
+  const anchored = `/${sprint}`;
+  const marker = "/backlog/sprints/";
+  const markerIndex = anchored.lastIndexOf(marker);
+  const relative = markerIndex === -1 ? null : anchored.slice(markerIndex + marker.length);
+  if (
+    !relative
+    || relative.includes("/")
+    || !relative.endsWith(".md")
+    || relative === ".md"
+    || !SLUG_PATTERN.test(relative.slice(0, -3))
+  ) {
+    throw new OwnershipValidationError(
+      `${label}.sprint must identify one markdown file under backlog/sprints/`
+    );
+  }
+  return sprint;
+}
+
+function normalizeSlug(value, field, label) {
+  const slug = requireOwnershipString(value, field, label);
+  if (!SLUG_PATTERN.test(slug)) {
+    throw new OwnershipValidationError(
+      `${label}.${field} must be a lowercase kebab-case slug, got ${JSON.stringify(slug)}`
+    );
+  }
+  return slug;
+}
+
+function normalizeOwnership(raw, { label = "ownership" } = {}) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new OwnershipValidationError(
+      `${label} must be an object with sprint, track, and component`
+    );
+  }
+
+  const unexpected = Object.keys(raw).filter((key) => !OWNERSHIP_FIELDS.includes(key));
+  if (unexpected.length > 0) {
+    throw new OwnershipValidationError(
+      `${label} may only contain ${OWNERSHIP_FIELDS.join(", ")}; unexpected: ${unexpected.join(", ")}`
+    );
+  }
+
+  return Object.freeze({
+    sprint: normalizeSprintPath(raw.sprint, label),
+    track: normalizeSlug(raw.track, "track", label),
+    component: normalizeSlug(raw.component, "component", label),
+  });
+}
+
+function parseOwnershipJson(raw, { label = "--ownership-json", required = false } = {}) {
+  if (raw === undefined || raw === null) {
+    if (required) {
+      throw new OwnershipValidationError(
+        `${label} is required and must contain sprint, track, and component`
+      );
+    }
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(String(raw));
+  } catch (error) {
+    throw new OwnershipValidationError(`${label} must be valid JSON: ${error.message}`);
+  }
+  return normalizeOwnership(parsed, { label });
+}
+
+function ownershipsEqual(left, right) {
+  if (!left || !right) return left === right;
+  return OWNERSHIP_FIELDS.every((field) => left[field] === right[field]);
+}
+
+function formatOwnership(owner) {
+  if (!owner) return "missing";
+  return JSON.stringify({
+    sprint: owner.sprint,
+    track: owner.track,
+    component: owner.component,
+  });
+}
+
+module.exports = {
+  OWNERSHIP_FIELDS,
+  OwnershipValidationError,
+  formatOwnership,
+  normalizeOwnership,
+  ownershipsEqual,
+  parseOwnershipJson,
+};

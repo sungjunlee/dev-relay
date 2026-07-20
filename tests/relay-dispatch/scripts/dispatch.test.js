@@ -5312,6 +5312,11 @@ fs.unlinkSync = function unlinkSync(targetPath) {
     "-b", "issue-918",
     "--prompt", "verify ordered cleanup",
     "--fleet-id", "issue-918-cleanup",
+    "--ownership-json", JSON.stringify({
+      sprint: "backlog/sprints/2026-07-relay-fleet.md",
+      track: "2026-07-relay-fleet",
+      component: "relay-fleet",
+    }),
     "--json",
   ])], { cwd: repoRoot, encoding: "utf-8", env });
 
@@ -8602,4 +8607,68 @@ test("resolveReasoningEffort override returns directly and silences unparseable 
   }
 
   assert.equal(writes.join(""), "");
+});
+
+test("dispatch persists typed fleet ownership and rejects resume-time drift", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "relay-fleet",
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-957-ownership",
+    "--prompt", "persist fleet ownership",
+    "--fleet-id", "fleet-957-ownership",
+    "--ownership-json", JSON.stringify(ownership),
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+  assert.deepEqual(first.ownership, ownership);
+
+  const record = readManifest(first.manifestPath);
+  assert.deepEqual(record.data.ownership, ownership);
+  const changesRequested = updateManifestState(
+    record.data,
+    STATES.CHANGES_REQUESTED,
+    "ownership_resume_test"
+  );
+  writeManifest(first.manifestPath, changesRequested, record.body);
+
+  const drifted = { ...ownership, component: "other-component" };
+  const rejected = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--manifest", first.manifestPath,
+    "--ownership-json", JSON.stringify(drifted),
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /cannot change immutable manifest\.ownership/);
+  assert.deepEqual(readManifest(first.manifestPath).data.ownership, ownership);
+  assert.equal(fs.existsSync(path.join(first.worktree, "resume.txt")), false);
+});
+
+test("dispatch requires valid ownership before fleet manifest or lock side effects", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-957-owner-required",
+    "--prompt", "reject missing owner",
+    "--fleet-id", "fleet-957-owner-required",
+    "--dry-run",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--ownership-json is required/);
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
 });

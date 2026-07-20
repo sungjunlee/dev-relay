@@ -15,6 +15,7 @@ const {
   normalizeReviewAssurance,
   reviewRoundLimitForAssurance,
 } = require("./review-assurance");
+const { normalizeOwnership } = require("../ownership");
 
 const RELAY_VERSION = 2;
 const NOTES_TEMPLATE = "# Notes\n\n## Context\n\n## Review History\n";
@@ -377,6 +378,7 @@ function createManifestSkeleton({
   doneCriteriaSource = null,
   modelHints = undefined,
   fleetId = undefined,
+  ownership = undefined,
 }) {
   const { STATES } = require("./lifecycle");
   const { createCleanupSkeleton } = require("./cleanup");
@@ -457,6 +459,10 @@ function createManifestSkeleton({
 
   if (fleetId !== undefined) {
     manifest.fleet_id = fleetId ? requireValidFleetId(fleetId) : null;
+  }
+
+  if (ownership !== undefined) {
+    manifest.ownership = normalizeOwnership(ownership, { label: "manifest.ownership" });
   }
 
   return manifest;

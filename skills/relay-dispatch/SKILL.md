@@ -58,7 +58,7 @@ Essential flags:
 - `--prompt, -p` or `--prompt-file` supplies the executor prompt.
 - `--rubric-file` is required for new dispatches from relay-plan and carries either structured evaluation channels or a readable legacy rubric.
 - `--executor, -e`, `--model, -m`, and `--model-hints` select harness/model routes subject to policy.
-- `--review-assurance compact | standard | hardened`, `--request-id`, `--leaf-id`, and `--done-criteria-file` persist review and readiness anchors.
+- `--review-assurance compact | standard | hardened`, `--request-id`, `--leaf-id`, and `--done-criteria-file` persist review and readiness anchors. Fleet dispatch also requires typed `--ownership-json` with `sprint`, `track`, and `component`; it is immutable on resume.
 - `--detach` starts a detached dispatch supervisor, prints a receipt, and returns before executor completion.
 - `--dry-run` validates without executing; `--json` returns structured output for orchestration.
 

@@ -6,6 +6,11 @@ const os = require("os");
 const path = require("path");
 
 const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
+const TEST_OWNERSHIP = Object.freeze({
+  sprint: "backlog/sprints/2026-07-relay-fleet.md",
+  track: "2026-07-relay-fleet",
+  component: "relay-fleet",
+});
 
 const {
   getFleetIssueLockPath,
@@ -343,6 +348,7 @@ test("dispatch --fleet-id writes the child back-pointer and releases the issue l
     "--executor", "codex",
     "--rubric-file", rubricPath,
     "--fleet-id", "fleet-dispatch",
+    "--ownership-json", JSON.stringify(TEST_OWNERSHIP),
     "--timeout", "5",
     "--json",
   ], {
@@ -358,6 +364,7 @@ test("dispatch --fleet-id writes the child back-pointer and releases the issue l
   const payload = JSON.parse(result.stdout);
   const manifest = readManifest(payload.manifestPath).data;
   assert.equal(manifest.fleet_id, "fleet-dispatch");
+  assert.deepEqual(manifest.ownership, TEST_OWNERSHIP);
   assert.equal(payload.fleetId, "fleet-dispatch");
   assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 477)), false);
 });
@@ -382,6 +389,7 @@ test("dispatch --fleet-id refuses an active same-issue fleet lock before executo
       "--executor", "codex",
       "--rubric-file", rubricPath,
       "--fleet-id", "fleet-blocked",
+      "--ownership-json", JSON.stringify(TEST_OWNERSHIP),
       "--timeout", "5",
       "--json",
     ], {

@@ -3,10 +3,17 @@
 ## Source of truth
 
 The dev-backlog sprint-state JSON is the source of truth for sprint wave intake.
-Use `next_batch`, not sprint markdown parsing, as the machine-readable batch:
+Use one selector-resolved sprint-state payload, not sprint markdown parsing, as
+the machine-readable owner and batch:
 
 ```json
 {
+  "schema_version": 2,
+  "active_sprint": {
+    "path": "backlog/sprints/2026-07-relay-fleet.md",
+    "track": "2026-07-relay-fleet",
+    "frontmatter": { "component": "relay-fleet" }
+  },
   "next_batch": {
     "heading": "### Batch 2 - Relay fleet docs",
     "items": []
@@ -27,10 +34,12 @@ in `next_batch.items` as concurrently dispatchable under that guarantee."
 
 ## Mapping
 
-Create one relay-fleet leaves file from one `next_batch` object. Include only
-items whose `state` is `todo` and whose `run_id`, `branch`, and `pr` are all
-`null`. Any non-null trace pointer means the sprint item is already in flight
-and MUST be excluded from the new fleet.
+Create one relay-fleet leaves file from one sprint-state payload's `next_batch`
+object. Include only items whose `state` is `todo` and whose `run_id`, `branch`,
+and `pr` are all `null`. Any non-null trace pointer means the sprint item is
+already in flight and MUST be excluded from the new fleet. Copy the same
+normalized `active_sprint` owner to every included leaf; never combine items
+from selector calls that resolved different owners.
 
 | Sprint-state field | Relay-fleet output | Rule |
 | --- | --- | --- |
@@ -44,6 +53,9 @@ and MUST be excluded from the new fleet.
 | `items[].branch` | exclusion trace | If non-null, exclude the item; an existing branch already owns it. Do not reuse it for a new leaf. |
 | `items[].pr` | exclusion trace | If non-null, exclude the item; an existing PR already owns it. |
 | `items[].unmoored` | operator warning | A `todo` item should normally be `false`; if it appears on an excluded or inconsistent row, resolve sprint bookkeeping before fan-out. |
+| `active_sprint.path` | `leaves[].ownership.sprint` | Copy the JSON path. It must identify one file under `backlog/sprints/`; relay-fleet validates syntax but does not parse that markdown. |
+| `active_sprint.track` | `leaves[].ownership.track` | Copy the canonical track. If an older schema-v2 producer omits it, use `active_sprint.frontmatter.track`, then the `.md` path basename, matching the #955 resolver normalization. |
+| `active_sprint.frontmatter.component` | `leaves[].ownership.component` | Require exactly one lowercase kebab-case component; missing or multiple components stop planning. |
 | relay-ready artifact, when present | `leaves[].request_id`, `leaves[].leaf_id` | Optional lineage fields. Include them only when relay-ready persisted a request/leaf handoff for this item; sprint-state does not invent them. |
 | relay-plan artifacts | `leaves[].prompt_file`, `leaves[].rubric_file`, `leaves[].done_criteria_file` | Required per leaf. These are authored before fan-out; see the planning boundary below. |
 
@@ -58,7 +70,12 @@ Example shape after filtering and planning:
       "branch": "issue-847-sprint-to-leaves-recipe",
       "prompt_file": "/tmp/relay/847/prompt.md",
       "rubric_file": "/tmp/relay/847/rubric.yaml",
-      "done_criteria_file": "/tmp/relay/847/done-criteria.md"
+      "done_criteria_file": "/tmp/relay/847/done-criteria.md",
+      "ownership": {
+        "sprint": "backlog/sprints/2026-07-relay-fleet.md",
+        "track": "2026-07-relay-fleet",
+        "component": "relay-fleet"
+      }
     }
   ]
 }
@@ -81,10 +98,13 @@ not perform planning.
 
 ## Wave and write rules
 
-Run one fleet per sprint batch. A `next_batch` is one parallel-safe wave, so the
-new leaves file SHOULD NOT prefill same-wave `depends_on` entries. If an item
-depends on another sprint item, dev-backlog's batch contract requires that
-dependent work to appear in a later batch.
+Run one fleet per sprint batch and per owning track. relay-fleet compares the
+full normalized owner on every leaf and rejects missing, contradictory, or
+mixed-track input before it creates a fleet manifest or invokes dispatch. A
+`next_batch` is one parallel-safe wave, so the new leaves file SHOULD NOT
+prefill same-wave `depends_on` entries. If an item depends on another sprint
+item, dev-backlog's batch contract requires that dependent work to appear in a
+later batch.
 
 Start the next batch's fleet only after the previous fleet's children are merged
 and the corresponding sprint Plan items are marked `[x]`. Batch order is

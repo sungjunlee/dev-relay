@@ -184,6 +184,11 @@ test("dispatch unknown route preset fails before creating run side effects inclu
     "-p", "unknown preset route plan",
     "--rubric-file", rubricFile,
     "--fleet-id", "issue-123",
+    "--ownership-json", JSON.stringify({
+      sprint: "backlog/sprints/2026-07-relay-fleet.md",
+      track: "2026-07-relay-fleet",
+      component: "relay-fleet",
+    }),
     "--route-preset", "missing",
     "--json",
   ], {

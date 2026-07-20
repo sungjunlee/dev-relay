@@ -199,8 +199,11 @@ closes the fleet once every child is `merged`, `closed`, or `escalated`.
 
 1. Markdown manifest vs real index → no index, iterate `children[]`.
 2. Merge queue batching → N/A, no batching (bisect cut).
-3. Fleet ↔ dev-backlog sprint files → one fleet per sprint batch is the natural
-   mapping; wire opportunistically.
+3. Fleet ↔ dev-backlog sprint files → enforced one fleet per owning track.
+   Planning copies `{sprint, track, component}` from the same dev-backlog
+   sprint-state JSON payload that supplies `next_batch`; fleet admission rejects
+   missing, contradictory, or mixed-track owners before manifest creation or
+   child dispatch.
 4. Stalled-child detection without a daemon → resume re-scans children via
    `fleet_id` back-pointer + `children[]` cross-check. No daemon.
 5. Phase 1 size → 2 sub-PRs (see build sequence).
