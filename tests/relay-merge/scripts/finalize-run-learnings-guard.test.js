@@ -541,7 +541,7 @@ test("finalize-run learning push recovers from a just-merged remote advance race
     commits: [{ oid: headSha, committedDate: DEFAULT_COMMIT_DATE }],
   });
 
-  // On the first learning push (HEAD:refs/heads/main), advance the bare remote
+  // On the first learning push (<commit>:refs/heads/main), advance the bare remote
   // with an empty commit so the push is rejected non-fast-forward, then retry.
   const gitWrapper = path.join(repoRoot, "fake-git-race.js");
   const marker = path.join(repoRoot, "race-fired");
@@ -570,7 +570,7 @@ function must(result, operation) {
   }
   return result.stdout.trim();
 }
-const isLearningPush = args.includes("push") && args.some((a) => String(a).startsWith("HEAD:refs/heads/main"));
+const isLearningPush = args.includes("push") && args.some((a) => String(a).endsWith(":refs/heads/main"));
 if (isLearningPush && !fs.existsSync(marker)) {
   fs.writeFileSync(marker, "1");
   const tree = must(gitBare(["rev-parse", "main^{tree}"]), "rev-parse tree");
@@ -620,6 +620,28 @@ process.exit(result.status == null ? 1 : result.status);
     { encoding: "utf-8", stdio: "pipe" }
   );
   assert.match(remoteCapabilities, new RegExp(`run #${runId}`));
+});
+
+test("durable learning push preserves relative remote URL resolution", () => {
+  const { repoRoot, runId } = setupRepoOnUnexpectedBranch();
+  execFileSync("git", ["remote", "set-url", "origin", "origin.git"], {
+    cwd: repoRoot,
+    stdio: "pipe",
+  });
+  const result = directLearning(repoRoot, { runId });
+  assert.equal(result.status, "appended");
+  assert.equal(result.durability.status, "pushed");
+  assert.equal(result.canonicalUntouched, true);
+});
+
+test("durable idempotent rerun reports already_present from the dry-run gate", () => {
+  const { repoRoot, runId } = setupRepoOnUnexpectedBranch();
+  const first = directLearning(repoRoot, { runId });
+  assert.equal(first.durability.status, "pushed");
+  const second = directLearning(repoRoot, { runId });
+  assert.equal(second.status, "skipped");
+  assert.equal(second.reason, "idempotent_match");
+  assert.equal(second.durability.status, "already_present");
 });
 
 function delegatedGit(fail) {

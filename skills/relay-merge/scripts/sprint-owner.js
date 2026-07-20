@@ -66,8 +66,8 @@ function isValidCapabilityName(name) {
 }
 
 function parseFrontmatter(content) {
-  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return null;
   const normalized = content.replace(/^\uFEFF/, "");
+  if (!normalized.startsWith("---\n") && !normalized.startsWith("---\r\n")) return null;
   const end = normalized.search(/\n---\r?\n/);
   if (end === -1) return null;
   return normalized.slice(normalized.indexOf("\n") + 1, end);
@@ -494,6 +494,8 @@ function resolveFromSprintFile(sprintPath, {
     return buildFailure("sprint_frontmatter_missing", { sprintPath: resolvedPath });
   }
   const components = parseComponents(readFrontmatterField(fm, "component"));
+  const declaredTrack = readFrontmatterField(fm, "track");
+  const canonicalTrack = declaredTrack || trackSlug;
   if (components.length === 0) {
     return buildFailure("component_empty", {
       sprintPath: resolvedPath,
@@ -514,16 +516,21 @@ function resolveFromSprintFile(sprintPath, {
       component: components[0],
     });
   }
-  if (expectedTrack && expectedTrack !== trackSlug && expectedTrack !== components[0]) {
+  if (
+    expectedTrack
+    && expectedTrack !== canonicalTrack
+    && expectedTrack !== trackSlug
+    && expectedTrack !== components[0]
+  ) {
     return buildFailure("contradictory_owner", {
-      detail: `sprint path track '${trackSlug}' contradicts track '${expectedTrack}'`,
+      detail: `sprint track '${canonicalTrack}' (path slug '${trackSlug}') contradicts track '${expectedTrack}'`,
       sprintPath: resolvedPath,
       track: expectedTrack,
     });
   }
   return buildOwner({
     sprintPath: resolvedPath,
-    track: trackSlug,
+    track: canonicalTrack,
     component: components[0],
     source,
   });
@@ -598,6 +605,14 @@ function resolveSprintOwner({
   homedir = os.homedir,
 } = {}) {
   if (!repo) return buildFailure("repo_missing");
+  for (const [field, value] of [["sprint", sprint], ["track", track], ["component", component]]) {
+    if (typeof value === "string" && !value.trim()) {
+      return buildFailure("owner_selector_empty", {
+        detail: `${field} selector must not be empty`,
+        field,
+      });
+    }
+  }
 
   const fsDeps = { readFile, existsSync, readdir, realpathSync };
   const backlogDir = path.join(repo, "backlog");

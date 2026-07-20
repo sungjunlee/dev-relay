@@ -57,6 +57,14 @@ describe("parseIssueComponent", () => {
   });
 });
 
+describe("parseFrontmatter", () => {
+  it("accepts a UTF-8 BOM before the opening delimiter", () => {
+    const fm = require("../../../skills/relay-merge/scripts/sprint-owner.js")
+      .parseFrontmatter("\uFEFF---\nstatus: active\ncomponent: auth\n---\n");
+    assert.match(fm, /status: active/);
+  });
+});
+
 describe("readManifestOwnership", () => {
   it("reads the fleet ownership seam", () => {
     assert.deepEqual(
@@ -287,6 +295,41 @@ describe("resolveSprintOwner", () => {
       assert.equal(result.component, "auth");
       assert.equal(result.source, OWNER_SOURCES.EXPLICIT_SPRINT);
       assert.equal(result.sprintPath, sprint);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a canonical frontmatter track for explicit sprint ownership", () => {
+    const repo = makeRepo();
+    try {
+      const sprint = writeSprint(repo, "file-slug", { component: "auth" });
+      fs.writeFileSync(sprint, `---
+status: active
+track: canonical-track
+component: "auth"
+---
+`, "utf-8");
+      const result = resolveSprintOwner({
+        repo,
+        owner: { sprint, track: "canonical-track", component: "auth", source: OWNER_SOURCES.FLEET },
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.track, "canonical-track");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects empty library ownership selectors instead of falling back", () => {
+    const repo = makeRepo();
+    try {
+      writeSprint(repo, "only", { component: "auth" });
+      for (const input of [{ sprint: "" }, { track: " " }, { component: "" }]) {
+        const result = resolveSprintOwner({ repo, ...input });
+        assert.equal(result.ok, false);
+        assert.equal(result.reason, "owner_selector_empty");
+      }
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

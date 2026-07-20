@@ -1082,6 +1082,13 @@ function appendDurableLearnings({
       dryRun: true,
       ...ownerHandles,
     });
+    if (dryRunResult.status === LEARNING_STATUS.SKIPPED && dryRunResult.reason === "idempotent_match") {
+      return {
+        ...withDurableOwnerPaths(dryRunResult, durable),
+        durability: { status: "already_present", baseBranch, remoteName },
+        canonicalUntouched: true,
+      };
+    }
     if (dryRunResult.status !== LEARNING_STATUS.APPENDED) {
       return {
         ...withDurableOwnerPaths(dryRunResult, durable),
@@ -1161,7 +1168,10 @@ function appendDurableLearnings({
       try {
         // Git's rejection text is localized. Pin the command locale so the
         // deliberately narrow NFF classifier below receives stable signals.
-        execGitFn(worktreePath, ["push", remoteName, `HEAD:refs/heads/${baseBranch}`], {
+        // Push from the canonical repository so relative remote URLs retain
+        // their configured resolution base. The detached worktree commit is
+        // available through the shared object database.
+        execGitFn(repoPath, ["push", remoteName, `${commitSha}:refs/heads/${baseBranch}`], {
           env: { ...process.env, LC_ALL: "C", LANG: "C" },
         });
         if (recoveryPatch) {

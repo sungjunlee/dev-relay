@@ -118,6 +118,13 @@ describe("parseArgs", () => {
     assert.equal(parsed.pr, "42");
   });
 
+  it("rejects empty ownership selectors in equals form", () => {
+    for (const flag of ["--sprint=", "--track=", "--component=", "--track=   "]) {
+      const parsed = parseArgs(["--repo=/x", "--run-id=r1", "--pr=42", flag]);
+      assert.match(parsed.error, /Empty value/);
+    }
+  });
+
   it("errors on unknown argument", () => {
     assert.match(parseArgs(["--repo", "/x", "--run-id", "r", "--pr", "1", "--bogus"]).error, /Unknown argument/);
   });

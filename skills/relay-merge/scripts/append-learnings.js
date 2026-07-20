@@ -120,6 +120,11 @@ function parseArgs(args) {
     if (!options.repo)  return { ...options, error: `Missing --repo. ${usage()}` };
     if (!options.runId) return { ...options, error: `Missing --run-id. ${usage()}` };
     if (!options.pr)    return { ...options, error: `Missing --pr. ${usage()}` };
+    for (const [flag, key] of [["--sprint", "sprint"], ["--track", "track"], ["--component", "component"]]) {
+      if (typeof options[key] === "string" && !options[key].trim()) {
+        return { ...options, error: `Empty value for ${flag}. ${usage()}` };
+      }
+    }
     if (options.track && options.component) {
       return {
         ...options,
