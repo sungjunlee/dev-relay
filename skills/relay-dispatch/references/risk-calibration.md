@@ -9,6 +9,7 @@ Each run is reported with:
 - `task_class`: `code`, `design`, `documentation`, `operations_security`, or `data_change`
 - `behavior_path`: `lightweight` for compact assurance and `full` for standard or hardened assurance
 - `assurance_tier`: compact, standard, or hardened
+- `comparison_eligibility`: report-only inclusion or exclusion derived from the persisted assurance floor
 - Outcome quality: contract status plus observed user/domain surface status
 - Verification status, reported separately; routine Verification success is not rubric value
 - Harness friction: stalls, recovery actions, and explicit manual interventions
@@ -19,7 +20,9 @@ No-rubric runs are first-class samples. Coverage reports their count and does no
 
 ## Task-class decisions
 
-Promotion evidence is evaluated within each task class, never from one global pass rate. A class needs at least three observed runs in each path before ordinary quality or friction trends can produce a promotion candidate.
+Promotion evidence is evaluated within each task class, never from one global pass rate. A run is comparable only when its task-derived `minimum_review_assurance` is `compact`. A low-risk run explicitly strengthened to standard or hardened remains a valid full-path control. Medium-, high-, and unknown-risk full runs remain visible but are excluded from compact decisions.
+
+Each path reports `observed_sample_size` for all runs, `sample_size` for the comparable cohort, and `excluded_sample_size` for the difference. A class needs at least three comparable runs in each path before ordinary quality or friction trends can produce a promotion candidate.
 
 The conservative decisions are:
 
@@ -29,6 +32,8 @@ The conservative decisions are:
 - `rollback_lightweight`: any lightweight safety boundary violation. This immediate rollback does not wait for a trend.
 
 A candidate is an operator decision artifact. The report does not auto-promote a route, weaken a gate, publish, or merge.
+
+Safety violations from excluded medium/high/unknown full runs remain operational evidence but cannot change the compact decision. Compact-eligible full controls retain the existing conservative safety behavior.
 
 ## Safety evidence
 

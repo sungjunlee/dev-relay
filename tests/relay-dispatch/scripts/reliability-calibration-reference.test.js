@@ -28,6 +28,9 @@ test("calibration reference defines class-local promotion and evidence boundarie
   }
   assert.match(reference, /Verification.*not.*rubric value/is);
   assert.match(reference, /three.*each path/is);
+  assert.match(reference, /minimum_review_assurance.*compact/is);
+  assert.match(reference, /medium.*high.*unknown.*excluded/is);
+  assert.match(reference, /observed_sample_size.*excluded_sample_size/is);
   assert.match(reference, /safety boundary violation.*immediate rollback/is);
   assert.match(reference, /unique material defects.*friction/is);
   assert.match(reference, /does not.*auto.*promot/is);

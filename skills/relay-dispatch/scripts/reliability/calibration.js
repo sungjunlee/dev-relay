@@ -82,6 +82,15 @@ function frictionFor(events) {
   };
 }
 
+function comparisonEligibility(profile) {
+  const floor = normalizedText(profile.minimum_review_assurance);
+  if (floor === "compact") return "included";
+  if (floor === "standard" || floor === "hardened") {
+    return "excluded_non_compact_floor";
+  }
+  return "excluded_unknown_floor";
+}
+
 function runRecord(manifest, events, verdictsByRun) {
   const data = manifest?.data || manifest || {};
   const runId = data.run_id;
@@ -112,6 +121,7 @@ function runRecord(manifest, events, verdictsByRun) {
     task_class: taskClassFor(profile),
     behavior_path: behaviorPath,
     assurance_tier: assurance,
+    comparison_eligibility: comparisonEligibility(profile),
     rubric_mode: factors.earned > 0 ? "earned" : "none",
     outcome_quality: {
       contract: latest.contract_status || "not_observed",
@@ -138,10 +148,12 @@ function runRecord(manifest, events, verdictsByRun) {
   };
 }
 
-function summarizePath(entries) {
+function summarizePath(entries, observedSampleSize = entries.length) {
   const records = entries.map((entry) => entry.record);
   return {
     sample_size: records.length,
+    observed_sample_size: observedSampleSize,
+    excluded_sample_size: observedSampleSize - records.length,
     outcome_quality_pass_rate: ratio(
       records.filter((record) => record.outcome_quality.pass).length,
       records.length
@@ -183,15 +195,28 @@ function uniqueMechanismDefects(entry) {
     + entry.adversarialUniqueDefects;
 }
 
-function promotionDecision(full, lightweight, fullEntries, minimumSampleSize) {
+function promotionDecision(
+  full,
+  lightweight,
+  fullEntries,
+  minimumSampleSize,
+  lightweightSafetyViolations
+) {
   if (
-    lightweight.safety_boundary_violations > 0
+    lightweightSafetyViolations > 0
     || full.safety_boundary_violations > 0
   ) {
     return { status: "rollback_lightweight", reasons: ["safety_boundary_violation"] };
   }
-  if (full.sample_size < minimumSampleSize || lightweight.sample_size < minimumSampleSize) {
-    return { status: "continue_calibration", reasons: ["insufficient_path_samples"] };
+  const insufficientReasons = [];
+  if (full.sample_size < minimumSampleSize) {
+    insufficientReasons.push("insufficient_comparable_full_samples");
+  }
+  if (lightweight.sample_size < minimumSampleSize) {
+    insufficientReasons.push("insufficient_comparable_lightweight_samples");
+  }
+  if (insufficientReasons.length > 0) {
+    return { status: "continue_calibration", reasons: insufficientReasons };
   }
   if (lightweight.outcome_quality_pass_rate < full.outcome_quality_pass_rate) {
     return { status: "retain_full", reasons: ["lightweight_outcome_trend_is_lower"] };
@@ -222,16 +247,30 @@ function buildCalibrationReport({
   const promotionDecisions = {};
   for (const taskClass of TASK_CLASSES) {
     const classEntries = entries.filter((entry) => entry.record.task_class === taskClass);
-    const fullEntries = classEntries.filter((entry) => entry.record.behavior_path === "full");
-    const lightEntries = classEntries.filter((entry) => entry.record.behavior_path === "lightweight");
-    const full = summarizePath(fullEntries);
-    const lightweight = summarizePath(lightEntries);
+    const observedFullEntries = classEntries.filter(
+      (entry) => entry.record.behavior_path === "full"
+    );
+    const observedLightEntries = classEntries.filter(
+      (entry) => entry.record.behavior_path === "lightweight"
+    );
+    const fullEntries = observedFullEntries.filter(
+      (entry) => entry.record.comparison_eligibility === "included"
+    );
+    const lightEntries = observedLightEntries.filter(
+      (entry) => entry.record.comparison_eligibility === "included"
+    );
+    const full = summarizePath(fullEntries, observedFullEntries.length);
+    const lightweight = summarizePath(lightEntries, observedLightEntries.length);
     byTaskClass[taskClass] = { paths: { full, lightweight } };
     promotionDecisions[taskClass] = promotionDecision(
       full,
       lightweight,
       fullEntries,
-      minimumSampleSize
+      minimumSampleSize,
+      observedLightEntries.reduce(
+        (sum, entry) => sum + entry.record.safety_boundary_violations.length,
+        0
+      )
     );
   }
   const coverageCounts = Object.fromEntries(TASK_CLASSES.map((taskClass) => [
