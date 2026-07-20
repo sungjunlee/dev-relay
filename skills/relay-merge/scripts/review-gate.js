@@ -248,6 +248,7 @@ function findExpectedGatingAdvisoryLanes(manifestData) {
     lane?.gating === true
       ? [{
           lane_index: index + 1,
+          profile: typeof lane.profile === "string" ? lane.profile.trim() : "",
           reviewer: typeof lane.reviewer === "string" ? lane.reviewer.trim() : "",
         }]
       : []
@@ -434,6 +435,14 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
         pr: prNumber,
         readyToMerge: false,
         reason: `Latest advisory event for ${eventLabel} does not bind an advisory profile.`,
+      };
+    }
+    if (expectedLane && (!expectedLane.profile || event.profile !== expectedLane.profile)) {
+      return {
+        status: "invalid_hardened_advisory",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: `Latest advisory event for required gating lane ${eventLabel} binds profile '${event.profile}' instead of configured profile '${expectedLane.profile || "missing"}'.`,
       };
     }
     try {
