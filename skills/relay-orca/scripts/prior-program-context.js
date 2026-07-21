@@ -14,12 +14,15 @@ const { programSegment } = require("./lib/program-segment");
 // authority for any exemption, but its live residue is still a valid blocking state:
 // the loader keeps the (ok:false) proof so the admission filter skips ownership and
 // classifies the unproven completed/foreign rows through EXISTING_ORCHESTRATION_STATE
-// (exit 34) with post-filter counts (DC #5). Only loader failures and identity/runtime
-// contradictions (cross-program/cross-runtime/duplicate/malformed/stale/unevaluable)
-// fall through to a thrown PriorProgramContextError → AMBIGUOUS_GLOBAL_STATE (exit 35).
-// The gate-lifecycle subset must be COMPLETE — a missing canonical gate is as much a
-// known blocking residue as a pending or failed one, so PROOF_GATE_MISSING belongs here
-// alongside PROOF_GATE_PENDING/FAILED, never on the exit-35 path.
+// (exit 34) with post-filter counts (DC #5). The proof is retained as exit-34 residue
+// ONLY when EVERY failure reason code is a known blocking code — the whole failure set,
+// not just the primary `proof.reasonCode`. Loader failures, identity/runtime
+// contradictions (cross-program/cross-runtime/duplicate/malformed/stale/unevaluable), and
+// ANY mixed-failure proof carrying at least one such unclassifiable co-failure alongside a
+// blocking one fall through to a thrown PriorProgramContextError → AMBIGUOUS_GLOBAL_STATE
+// (exit 35): ambiguity dominates. The gate-lifecycle subset must be COMPLETE — a missing
+// canonical gate is as much a known blocking residue as a pending or failed one, so
+// PROOF_GATE_MISSING belongs here alongside PROOF_GATE_PENDING/FAILED, never on the exit-35 path.
 const BLOCKING_PROOF_CODES = new Set([
   "PROOF_TASK_ACTIVE",
   "PROOF_TASK_FAILED",
@@ -143,7 +146,7 @@ function contextLocator(value, contextPath) {
   return { schema: 1, repoRoot, repoSlug, programPath, receiptPath, durablePath, genericPath };
 }
 
-function loadOne(locatorInput, contextPath, targetRepo, snapshot) {
+function loadOne(locatorInput, contextPath, targetRepo, snapshot, launchedProgramId) {
   const locator = contextLocator(locatorInput, contextPath);
   const contextRepo = resolveRepoContext({ repoRootOverride: locator.repoRoot });
   if (contextRepo.root !== targetRepo.root || contextRepo.slug !== targetRepo.slug || (locator.repoSlug !== null && locator.repoSlug !== contextRepo.slug)) {
@@ -153,6 +156,15 @@ function loadOne(locatorInput, contextPath, targetRepo, snapshot) {
   const program = programValue && programValue.program && object(programValue.program) ? programValue.program : programValue;
   if (!object(program) || typeof program.id !== "string" || program.id.trim() === "") {
     throw new PriorProgramContextError("accepted program id is missing");
+  }
+  // A prior-program context is a record of a DIFFERENT, already-closed program that this run
+  // must treat as historical residue. A context whose accepted program id equals the program
+  // being launched is self-referential — it would vouch for the very program it launches — so
+  // fail closed BEFORE reading its receipt/evidence (→ AMBIGUOUS_GLOBAL_STATE, exit 35). The
+  // guard is scoped to `run`: only a launching program supplies `launchedProgramId`; the
+  // standalone probe (no launched program) passes none and skips it.
+  if (typeof launchedProgramId === "string" && launchedProgramId.trim() !== "" && program.id === launchedProgramId) {
+    throw new PriorProgramContextError(`prior-program context ${program.id} is self-referential to the launching program`);
   }
   const receipt = readJson(locator.receiptPath, "canonical receipt");
   const receiptError = validateReceipt(receipt);
@@ -172,13 +184,27 @@ function loadOne(locatorInput, contextPath, targetRepo, snapshot) {
     orcaSnapshot: snapshot,
     programSegment,
   });
-  if (proof.ok !== true && !BLOCKING_PROOF_CODES.has(proof.reasonCode)) {
-    throw new PriorProgramContextError(`prior-program proof ${program.id} failed with ${proof.reasonCode || "PROOF_MALFORMED_INPUT"}`);
+  if (proof.ok !== true) {
+    // Ambiguity dominates a mixed-failure proof. A recomputed failing proof is retained as
+    // exit-34 classifiable blocking residue ONLY when EVERY failure reason code is a KNOWN
+    // blocking lifecycle code — not just the primary `proof.reasonCode`. Checking only the
+    // primary would let a blocking code that happens to sort first mask an unclassifiable
+    // co-failure (identity/runtime/malformed/stale/unevaluable/missing/duplicate). A single
+    // such co-failure makes the WHOLE context unclassifiable, so it falls through to a thrown
+    // PriorProgramContextError → AMBIGUOUS_GLOBAL_STATE (exit 35), never silently reported as
+    // classifiable blocking through exit 34.
+    const codes = proof.final_summary && Array.isArray(proof.final_summary.blocking_reasons) && proof.final_summary.blocking_reasons.length > 0
+      ? proof.final_summary.blocking_reasons.map((entry) => (entry ? entry.reason_code : undefined))
+      : [proof.reasonCode];
+    if (!codes.every((code) => BLOCKING_PROOF_CODES.has(code))) {
+      const ambiguous = codes.find((code) => !BLOCKING_PROOF_CODES.has(code));
+      throw new PriorProgramContextError(`prior-program proof ${program.id} failed with ${ambiguous || proof.reasonCode || "PROOF_MALFORMED_INPUT"}`);
+    }
   }
   return { contextPath, program, receipt, proof };
 }
 
-function loadPriorProgramContexts({ inputs, repoRoot, snapshot }) {
+function loadPriorProgramContexts({ inputs, repoRoot, snapshot, launchedProgramId }) {
   const rawInputs = Array.isArray(inputs) ? inputs.slice() : [];
   if (rawInputs.length === 0) return [];
   const targetRepo = resolveRepoContext({ repoRootOverride: repoRoot });
@@ -188,7 +214,7 @@ function loadPriorProgramContexts({ inputs, repoRoot, snapshot }) {
   });
   const unique = new Set(paths);
   if (unique.size !== paths.length) throw new PriorProgramContextError("prior-program context is duplicated");
-  const contexts = paths.map((contextPath) => loadOne(readJson(contextPath, "prior-program context"), contextPath, targetRepo, snapshot));
+  const contexts = paths.map((contextPath) => loadOne(readJson(contextPath, "prior-program context"), contextPath, targetRepo, snapshot, launchedProgramId));
   contexts.sort((left, right) => left.program.id.localeCompare(right.program.id) || left.contextPath.localeCompare(right.contextPath));
   return contexts;
 }

@@ -893,6 +893,69 @@ test("#1021 a verified completed task whose live canonical gate is MISSING class
   }
 });
 
+test("#1021 R3 finding 1: a mixed-failure proof (blocking + unclassifiable co-failure) is ambiguous → exit 35, never kept as exit-34 residue", () => {
+  // The retained runtime lost BOTH the mapped task and its canonical gate: Leaf 1 recomputes
+  // a proof whose failures MIX a known blocking residue (PROOF_GATE_MISSING) with an
+  // unclassifiable co-failure (PROOF_TASK_MISSING). Ambiguity must dominate — the whole
+  // context is unclassifiable — so admission throws AMBIGUOUS_GLOBAL_STATE (exit 35) with the
+  // counts nulled, NEVER retaining it as exit-34 classifiable blocking on the strength of the
+  // primary reason code (PROOF_GATE_MISSING) alone. Every explicit input stays byte-identical.
+  const history = historicalContextFixture({ programId: "prior-program-mixed-failure" });
+  const before = snapshotDir(history.root);
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    taskList: { id: "x", ok: true, result: { tasks: [], count: 0 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [], count: 0 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  try {
+    const { result, error } = runProbeWithPriorContext(history.contextPath, fake);
+    assert.equal(error && error.reasonCode, "AMBIGUOUS_GLOBAL_STATE");
+    assert.equal(error.exitCode, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    assert.equal(result.admitted, false);
+    // The exit-35 path nulls the post-filter counts (it never reports classifiable blocking counts).
+    assert.deepEqual(result.existing_state, { tasks: null, gates: null });
+    // Zero mutation + byte-identity of every explicit input on the ambiguous failure path.
+    assertReadOnlyLog(fake.readLog());
+    assertNoPoison(fake);
+    assert.deepEqual(snapshotDir(history.root), before, "the ambiguous failure path must not mutate any input file");
+  } finally {
+    fake.restore();
+    fs.rmSync(history.root, { recursive: true, force: true });
+  }
+});
+
+test("#1021 R3 finding 1 boundary: an all-blocking multi-failure proof is STILL retained as exit-34 classifiable residue", () => {
+  // Two blocking residues co-occur — the mapped task is active (PROOF_TASK_ACTIVE) AND its
+  // canonical gate has vanished (PROOF_GATE_MISSING). EVERY failure code is a known blocking
+  // lifecycle code, so the fix must NOT over-throw: the context stays classifiable and
+  // admission reports it through exit 34 (EXISTING_ORCHESTRATION_STATE) with post-filter
+  // counts, not the ambiguous exit-35 path.
+  const history = historicalContextFixture({ programId: "prior-program-all-blocking" });
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    taskList: {
+      id: "x",
+      ok: true,
+      result: { tasks: [{ ...history.task, status: "dispatched" }], count: 1 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+    gateList: { id: "x", ok: true, result: { gates: [], count: 0 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  try {
+    const { result, error } = runProbeWithPriorContext(history.contextPath, fake);
+    assert.equal(error && error.reasonCode, "EXISTING_ORCHESTRATION_STATE");
+    assert.equal(error.exitCode, REASONS.EXISTING_ORCHESTRATION_STATE);
+    assert.equal(result.admitted, false);
+    assert.match(error.message, /active_tasks=1/);
+    assert.deepEqual(result.existing_state, { tasks: 1, gates: 0 });
+    assertReadOnlyLog(fake.readLog());
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+    fs.rmSync(history.root, { recursive: true, force: true });
+  }
+});
+
 test("#1021 AC8: task-delete and foreign adoption (adopt) are poisoned on the read-only admission fixture", () => {
   const fake = installFakeOrca({ poisonMutations: true });
   try {

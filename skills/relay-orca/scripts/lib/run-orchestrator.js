@@ -43,13 +43,16 @@ function procDetail(proc, note) {
 // D3 admission gate: every mutation is preceded by capability admission from the
 // FROZEN #942 probe (imported, never modified). Any probe rejection or
 // admitted:false fails closed as ADMISSION_REJECTED, before any task/terminal.
-function admit(report, options) {
+function admit(report, options, launchedProgramId) {
   const result = emptyResult(false);
   try {
     probe({
       orcaBin: options.orcaBin,
       priorProgramContexts: options.priorProgramContexts,
       repoRoot: options.repoRoot,
+      // The launched program's own id: admission rejects a prior-program context that is
+      // self-referential to it (a context cannot vouch for the program it launches).
+      launchedProgramId,
       _result: result,
     });
   } catch (error) {
@@ -326,7 +329,7 @@ function orchestrate(rawProgram, options = {}) {
   const program = unwrapProgram(rawProgram);
   const report = initReport(plan);
   try {
-    const orcaBin = admit(report, options);
+    const orcaBin = admit(report, options, program.id);
     requireIntegrationCoordinator(program, options);
     // D3.1: reject a zero-handle run AFTER admission (probe result) and BEFORE any
     // materialization mutation, so no task-create/dispatch/terminal-create ever runs.

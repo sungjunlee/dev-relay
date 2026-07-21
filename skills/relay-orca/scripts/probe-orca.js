@@ -842,6 +842,10 @@ function probe(options = {}) {
       const contexts = loadPriorProgramContexts({
         inputs: priorProgramContexts,
         repoRoot: options.repoRoot,
+        // Only a launching `run` supplies launchedProgramId; loadOne fails closed on a
+        // prior-program context that is self-referential to it. The standalone probe passes
+        // none, so its historical-admission behavior is unchanged.
+        launchedProgramId: options.launchedProgramId,
         snapshot: {
           status: statusShape.payload,
           task_list: taskListShape.payload,

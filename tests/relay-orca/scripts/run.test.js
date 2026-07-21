@@ -499,6 +499,60 @@ test("#1021 D7: probe admits a retained closed-program runtime, then the next ru
   }
 });
 
+test("#1021 R3 finding 2: a prior-program context whose accepted program id equals the launching program is self-referential → rejected, zero receipt overwrite", () => {
+  const world = makeReceiptWorld();
+  // The prior-program context claims the SAME accepted program id as the program being
+  // launched ("epic-run-two"). A context is a record of a DIFFERENT closed program; one that
+  // vouches for the very program it launches is self-referential and must fail closed at
+  // admission (AMBIGUOUS_GLOBAL_STATE → ADMISSION_REJECTED) BEFORE any materialization.
+  const history = priorProgramRunContext(world, { programId: "epic-run-two" });
+  // Pre-seed a sentinel receipt at the launched program's canonical path. A rejected run must
+  // leave it byte-identical — zero overwrite, zero mutation.
+  const receiptPath = receiptPathForWorld(world, "epic-run-two");
+  fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+  const sentinel = `${JSON.stringify({ schema: 1, sentinel: "unchanged" })}\n`;
+  fs.writeFileSync(receiptPath, sentinel, "utf8");
+  const fake = installFakeOrcaRun({
+    taskList: { id: "x", ok: true, result: { tasks: [history.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [history.gate], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  try {
+    const r = runRun(
+      [
+        "--json",
+        "--orca-bin",
+        fake.orcaPath,
+        "--repo-root",
+        world.repoRoot,
+        "--program-file",
+        fixture("run-two-wave1.json"),
+        "--operator-handle",
+        "h1",
+        "--operator-handle",
+        "h2",
+        "--prior-program-context",
+        history.contextPath,
+      ],
+      { RELAY_ORCA_PROGRAMS_ROOT: world.programsRoot },
+    );
+    assert.equal(r.status, REASONS.ADMISSION_REJECTED);
+    const body = JSON.parse(r.stdout);
+    assert.equal(body.ok, false);
+    assert.equal(body.admission.admitted, false);
+    assert.match(body.blocking_reasons[0].message, /self-referential/);
+    // Zero receipt overwrite: the pre-existing receipt is byte-identical after the rejected run.
+    assert.equal(fs.readFileSync(receiptPath, "utf8"), sentinel, "a rejected self-referential run must not overwrite the receipt");
+    // Zero mutation: no task-create/dispatch/terminal/task-update, no reset/worktree poison marker.
+    assertNoMutations(fake);
+    assertNoPoison(fake);
+    assert.equal(fake.readLog().join(" ").includes("reset"), false, "a rejected self-referential run must not reset the runtime");
+  } finally {
+    fake.cleanup();
+    history.cleanup();
+    fs.rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // D11.3 Undelivered injection — exit 42, escalated, no further dispatch
 // ---------------------------------------------------------------------------
