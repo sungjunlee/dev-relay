@@ -111,6 +111,10 @@ function defaultScenario(overrides = {}) {
         },
     taskUpdateExit: overrides.taskUpdateExit !== undefined ? overrides.taskUpdateExit : 0,
     taskUpdateStderr: overrides.taskUpdateStderr || "",
+    // Admission tests can turn every mutation into a poison pill.  The normal
+    // smoke fixture keeps its historical behavior; this opt-in guard makes
+    // reset-free admission tests prove the complete read-only surface.
+    poisonMutations: overrides.poisonMutations === true,
   };
 }
 
@@ -154,6 +158,24 @@ function argValue(flag) {
   return args[idx + 1];
 }
 
+const scenario = loadScenario();
+
+if (scenario.poisonMutations && (
+  args.includes("reset") ||
+  args.includes("task-create") ||
+  args.includes("task-update") ||
+  args.includes("gate-create") ||
+  args.includes("gate-resolve") ||
+  args.includes("gate-delete") ||
+  args.includes("dispatch") ||
+  args.includes("worktree") ||
+  args.includes("terminal")
+)) {
+  if (poisonPath) fs.writeFileSync(poisonPath, "MUTATION_INVOKED:" + args.join(" "), "utf-8");
+  process.stderr.write("POISON: mutation must never be invoked by read-only admission\\n");
+  process.exit(98);
+}
+
 // D2 poison: any reset invocation hard-fails the fixture (and thus the test).
 if (args.includes("reset")) {
   if (poisonPath) fs.writeFileSync(poisonPath, "RESET_INVOKED:" + args.join(" "), "utf-8");
@@ -169,8 +191,6 @@ const stallCmd = process.env.RELAY_FAKE_ORCA_STALL_CMD || "status";
 if (Number.isInteger(stallMs) && stallMs > 0 && args[0] === stallCmd) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stallMs);
 }
-
-const scenario = loadScenario();
 
 if (args[0] === "status") {
   emit(scenario.status, scenario.statusExit, scenario.statusStdout, scenario.statusStderr);

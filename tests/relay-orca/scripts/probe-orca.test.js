@@ -13,6 +13,7 @@ const {
   resolveOrcaBin,
   isRunnableFile,
   runMain,
+  emptyResult,
   MACOS_BUNDLE_FALLBACK,
   JSON_KEYS,
   SMOKE_TITLE_MARKER,
@@ -27,6 +28,9 @@ const {
   DEFAULT_LIVE_AGENT_HANDLE,
   VALID_TASK_STATUSES,
 } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
+const { probe } = require(PROBE_JS);
+const { programSegment, resolveRepoContext } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "receipt-io.js"));
+const { RECEIPT_NOTE } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "lib", "receipt.js"));
 
 const READ_ONLY_SUBCOMMANDS = new Set(["status", "task-list", "gate-list"]);
 const FORBIDDEN_DEFAULT = ["task-create", "task-update", "dispatch", "run", "reset"];
@@ -76,6 +80,92 @@ function assertReadOnlyLog(logLines) {
     if (parts[0] === "orchestration" && READ_ONLY_SUBCOMMANDS.has(parts[1])) continue;
     assert.fail(`unexpected default-mode invocation: ${line}`);
   }
+}
+
+function historicalContextFixture({ programId = "prior-program-1", taskId = "prior-task-1" } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-prior-context-"));
+  const repo = resolveRepoContext({ repoRootOverride: REPO_ROOT });
+  const outcomeId = "integration";
+  const marker = `relay-orca: ${programSegment(programId)}/${outcomeId}`;
+  const program = {
+    id: programId,
+    runtime_id: DEFAULT_RUNTIME_ID,
+    exit_gates: ["budget:tasks_created <= 5"],
+    outcomes: [{ id: outcomeId, task_kind: "integration_gate", accepted_outcomes: ["passed"] }],
+  };
+  const task = {
+    outcome_id: outcomeId,
+    task_id: `plan-${outcomeId}`,
+    kind: "integration_gate",
+    wave: 1,
+    orca_task_id: taskId,
+    dispatch_id: `dispatch-${taskId}`,
+    assignee: DEFAULT_LIVE_AGENT_HANDLE,
+    relay_ids: { request: null, run: null, fleet: null },
+  };
+  const receipt = {
+    schema: 1,
+    program_id: programId,
+    source: path.join(root, "accepted-program.json"),
+    repo: { slug: repo.slug, root: repo.root },
+    runtime_id: DEFAULT_RUNTIME_ID,
+    tasks: [task],
+    terminals_created: [],
+    created_at: "2026-07-21T00:00:00.000Z",
+    updated_at: "2026-07-21T00:00:00.000Z",
+    note: RECEIPT_NOTE,
+  };
+  const durable = {
+    [outcomeId]: {
+      outcome_id: outcomeId,
+      runtime_id: DEFAULT_RUNTIME_ID,
+      integration: { passed: true },
+    },
+  };
+  const context = {
+    schema: 1,
+    repo_root: REPO_ROOT,
+    accepted_program: { path: path.join(root, "accepted-program.json") },
+    canonical_receipt: { path: path.join(root, "receipt.json") },
+    trusted_evidence: { durable_outcomes: { path: path.join(root, "durable.json") } },
+  };
+  fs.writeFileSync(path.join(root, "accepted-program.json"), JSON.stringify(program), "utf8");
+  fs.writeFileSync(path.join(root, "receipt.json"), JSON.stringify(receipt), "utf8");
+  fs.writeFileSync(path.join(root, "durable.json"), JSON.stringify(durable), "utf8");
+  fs.writeFileSync(path.join(root, "context.json"), JSON.stringify(context), "utf8");
+  return {
+    root,
+    contextPath: path.join(root, "context.json"),
+    program,
+    receipt,
+    task: { id: taskId, task_title: marker, display_name: marker, status: "completed" },
+    gate: {
+      id: `gate-${taskId}`,
+      task_id: taskId,
+      question: `Integration evidence for ${marker} passed?`,
+      options: ["passed", "failed"],
+      status: "passed",
+      resolution: "passed",
+    },
+  };
+}
+
+function runProbeWithPriorContext(contextPath, fake, overrides = {}) {
+  const result = emptyResult(false);
+  let error = null;
+  try {
+    probe({
+      orcaBin: fake.orcaPath,
+      isRunnableFile: () => true,
+      priorProgramContexts: [contextPath],
+      repoRoot: REPO_ROOT,
+      ...overrides,
+      _result: result,
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  return { result, error };
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +607,70 @@ test("D6: gates count > 0 → EXISTING_ORCHESTRATION_STATE exit 34", () => {
     assertNoPoison(fake);
   } finally {
     fake.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #1021 reset-free historical admission (red before the admission filter)
+// ---------------------------------------------------------------------------
+
+test("#1021 verified prior-program context admits its completed task and passed gate", () => {
+  const history = historicalContextFixture();
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    taskList: {
+      id: "x",
+      ok: true,
+      result: { tasks: [history.task], count: 1 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+    gateList: {
+      id: "x",
+      ok: true,
+      result: { gates: [history.gate], count: 1 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const { result, error } = runProbeWithPriorContext(history.contextPath, fake);
+    assert.equal(error, null, "a valid locator must be recomputed and admitted");
+    assert.equal(result.admitted, true);
+    assert.deepEqual(result.existing_state, { tasks: 0, gates: 0 });
+    assertReadOnlyLog(fake.readLog());
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+    fs.rmSync(history.root, { recursive: true, force: true });
+  }
+});
+
+test("#1021 prior-program contexts never let a foreign terminal row hide behind a verified proof", () => {
+  const history = historicalContextFixture({ programId: "prior-program-foreign" });
+  const foreign = { id: "foreign-terminal", task_title: "foreign", display_name: "foreign", status: "completed" };
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    taskList: {
+      id: "x",
+      ok: true,
+      result: { tasks: [history.task, foreign], count: 2 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+    gateList: {
+      id: "x",
+      ok: true,
+      result: { gates: [history.gate], count: 1 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const { result, error } = runProbeWithPriorContext(history.contextPath, fake);
+    assert.equal(error && error.reasonCode, "EXISTING_ORCHESTRATION_STATE");
+    assert.equal(result.admitted, false);
+    assert.match(error.message, /active_tasks=1/);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+    fs.rmSync(history.root, { recursive: true, force: true });
   }
 });
 
