@@ -88,11 +88,13 @@ All four task mirrors were set to `Done` with every acceptance criterion checked
 and all sprint Plan items were checked before running the normal dev-backlog
 close path. The source-checkout close command was run first with `--dry-run` and
 then without it, using `--track 2026-07-multi-track-sprint-interop` and without
-`--close-milestone`.
+`--close-milestone`. In the reproducible commands below, `DEV_BACKLOG_ROOT`
+names a dev-backlog source checkout or installation that contains
+`skills/dev-backlog/scripts/`.
 
 ```text
-bash /Users/sjlee/.codex/worktrees/2d02/dev-backlog/skills/dev-backlog/scripts/sprint-close.sh backlog --track 2026-07-multi-track-sprint-interop --dry-run
-bash /Users/sjlee/.codex/worktrees/2d02/dev-backlog/skills/dev-backlog/scripts/sprint-close.sh backlog --track 2026-07-multi-track-sprint-interop
+bash "$DEV_BACKLOG_ROOT/skills/dev-backlog/scripts/sprint-close.sh" backlog --track 2026-07-multi-track-sprint-interop --dry-run
+bash "$DEV_BACKLOG_ROOT/skills/dev-backlog/scripts/sprint-close.sh" backlog --track 2026-07-multi-track-sprint-interop
 ```
 
 The real close set the sprint to `completed` and moved `RELAY-954`, `RELAY-955`,
@@ -104,7 +106,7 @@ The real close set the sprint to `completed` and moved `RELAY-954`, `RELAY-955`,
 The required post-close command was:
 
 ```text
-node /Users/sjlee/.codex/worktrees/2d02/dev-backlog/skills/dev-backlog/scripts/backlog-doctor.js --json backlog
+node "$DEV_BACKLOG_ROOT/skills/dev-backlog/scripts/backlog-doctor.js" --json backlog
 ```
 
 The command exited `0` and returned `schema_version: 1` with
