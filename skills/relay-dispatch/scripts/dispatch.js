@@ -133,7 +133,7 @@ const {
   normalizeOwnership,
   ownershipsEqual,
   parseOwnershipJson,
-  validateOwnershipSprintFile,
+  validateOwnershipAgainstSprintState,
 } = require("./ownership");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const {
@@ -2119,9 +2119,10 @@ async function main() {
     branch = manifest.git?.working_branch || branch;
     runId = manifest.run_id || runId;
     wtPath = validatedPaths.worktree;
+    runtime = resolveDispatchRuntime(repoRoot);
     if (manifest.ownership || OWNERSHIP) {
       try {
-        validateOwnershipSprintFile(repoRoot, manifest.ownership || OWNERSHIP, {
+        validateOwnershipAgainstSprintState(repoRoot, manifest.ownership || OWNERSHIP, {
           label: `leaf '${manifest.source?.leaf_id || LEAF_ID || branch}' ownership`,
         });
       } catch (error) {
@@ -2221,8 +2222,6 @@ async function main() {
       process.exit(1);
     }
 
-    runtime = resolveDispatchRuntime(repoRoot);
-
     // --- Environment drift check ---
     const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
     const needsDraftEnvironmentBackfill = manifest.state === STATES.DRAFT
@@ -2252,9 +2251,10 @@ async function main() {
       });
     }
   } else {
+    runtime = resolveDispatchRuntime(repoRoot);
     if (OWNERSHIP) {
       try {
-        validateOwnershipSprintFile(repoRoot, OWNERSHIP, {
+        validateOwnershipAgainstSprintState(repoRoot, OWNERSHIP, {
           label: `leaf '${LEAF_ID || branch}' ownership`,
         });
       } catch (error) {
@@ -2271,7 +2271,6 @@ async function main() {
       console.error("Error: " + formatInflightCollisionError(inflightRuns, { issueNumber: issueForCollisionCheck }));
       process.exit(1);
     }
-    runtime = resolveDispatchRuntime(repoRoot);
     runId = runId || createRunId({ issueNumber, branch });
     if (FLEET_ID && issueForCollisionCheck && !DRY_RUN) {
       try {

@@ -24,6 +24,44 @@ function createGrandfatheredRubricAnchor(overrides = {}) {
   };
 }
 
+function writeFakeSprintStateBinary(directory, {
+  sprint = "backlog/sprints/2026-07-relay-fleet.md",
+  track = "2026-07-relay-fleet",
+  component = "relay-fleet",
+  invocationLog = null,
+} = {}) {
+  fs.mkdirSync(directory, { recursive: true });
+  const scriptPath = path.join(
+    directory,
+    `fake-sprint-state-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.js`
+  );
+  fs.writeFileSync(scriptPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args.includes("--help")) {
+  process.stdout.write("Usage: sprint-state.js --track <slug> --component <name> --json <backlog>\\n");
+  process.exit(0);
+}
+${invocationLog ? `fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify(args) + "\\n", "utf-8");` : ""}
+const backlogDir = args[args.length - 1];
+const repoRoot = path.dirname(backlogDir);
+process.stdout.write(JSON.stringify({
+  schema_version: 2,
+  active_sprint: {
+    path: path.join(repoRoot, ${JSON.stringify(sprint)}),
+    track: ${JSON.stringify(track)},
+    frontmatter: {
+      track: ${JSON.stringify(track)},
+      component: ${JSON.stringify(component)},
+    },
+  },
+}) + "\\n");
+`, "utf-8");
+  fs.chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
 function createEnforcementFixture({
   repoRoot,
   runId,
@@ -110,4 +148,5 @@ module.exports = {
   DEFAULT_ENFORCEMENT_RUBRIC,
   createGrandfatheredRubricAnchor,
   createEnforcementFixture,
+  writeFakeSprintStateBinary,
 };

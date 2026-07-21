@@ -44,6 +44,7 @@ const {
   validateTransition,
   writeFleetManifest,
 } = require("../../../skills/relay-dispatch/scripts/manifest/fleet");
+const { writeFakeSprintStateBinary } = require("../../relay-dispatch/scripts/test-support");
 
 function initGitRepo(repoRoot) {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -62,7 +63,10 @@ function setupRepo(prefix = "relay-fleet-") {
   process.env.RELAY_HOME = relayHome;
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   initGitRepo(repoRoot);
-  return { relayHome, repoRoot };
+  const sprintStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-fleet-sprint-state-"));
+  const sprintStateBin = writeFakeSprintStateBinary(sprintStateDir);
+  process.env.RELAY_SPRINT_STATE_BIN = sprintStateBin;
+  return { relayHome, repoRoot, sprintStateBin };
 }
 
 function writeNoOpCodex(binDir) {

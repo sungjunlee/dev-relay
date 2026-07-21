@@ -32,7 +32,7 @@ const {
   formatOwnership,
   normalizeOwnership,
   ownershipsEqual,
-  validateOwnershipSprintFile,
+  validateOwnershipAgainstSprintState,
 } = require("../../relay-dispatch/scripts/ownership");
 const {
   DISPATCH_STATUS,
@@ -314,17 +314,19 @@ function validateFleetOwnership(leaves) {
   return first.ownership;
 }
 
-function validateFleetOwnershipSprintFiles(repoRoot, leaves) {
-  for (const leaf of leaves) {
-    if (!leaf.ownership) continue;
-    try {
-      leaf.ownership = validateOwnershipSprintFile(repoRoot, leaf.ownership, {
-        label: `leaf '${leaf.leaf_ref}' ownership`,
-      });
-    } catch (error) {
-      throw new FleetInputError(error.message);
-    }
+function validateFleetOwnershipSprintState(repoRoot, leaves) {
+  const owner = validateFleetOwnership(leaves);
+  if (!owner) return;
+  const firstLeaf = leaves.find((leaf) => leaf.ownership);
+  let trustedOwner;
+  try {
+    trustedOwner = validateOwnershipAgainstSprintState(repoRoot, owner, {
+      label: `leaf '${firstLeaf.leaf_ref}' ownership`,
+    });
+  } catch (error) {
+    throw new FleetInputError(error.message);
   }
+  for (const leaf of leaves) leaf.ownership = trustedOwner;
 }
 
 function validateLeafFiles(leaves) {
@@ -2856,7 +2858,7 @@ function fleetHasReviewWork(summary) {
 function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
   const manifestExists = fs.existsSync(manifestPath);
   const explicitLeaves = options.leavesFile ? loadLeavesFile(options.leavesFile) : null;
-  if (explicitLeaves) validateFleetOwnershipSprintFiles(repoRoot, explicitLeaves);
+  if (explicitLeaves) validateFleetOwnershipSprintState(repoRoot, explicitLeaves);
 
   if (options.dryRun) {
     if (!explicitLeaves) {
@@ -2884,7 +2886,7 @@ function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
     candidateLeaves,
     { allowLegacyBackfill: Boolean(explicitLeaves) }
   );
-  if (!explicitLeaves) validateFleetOwnershipSprintFiles(repoRoot, candidateLeaves);
+  if (!explicitLeaves) validateFleetOwnershipSprintState(repoRoot, candidateLeaves);
 
   const recoveredReplacements = recoverAcceptedLeafReplacement(repoRoot, fleetId);
 
@@ -3080,7 +3082,7 @@ async function runFleet(options) {
     }
     const leaves = readPersistedLeaves(repoRoot, fleetId);
     validateFleetRunOwnership(repoRoot, fleetId, leaves);
-    validateFleetOwnershipSprintFiles(repoRoot, leaves);
+    validateFleetOwnershipSprintState(repoRoot, leaves);
     let interrupted = false;
     const activeChildren = new Map();
     const interrupt = () => {

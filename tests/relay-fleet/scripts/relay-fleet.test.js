@@ -55,6 +55,7 @@ const {
   persistRequestContract,
 } = require("../../../skills/relay-ready/scripts/relay-request");
 const { readManifestOwnership } = require("../../../skills/relay-merge/scripts/sprint-owner");
+const { writeFakeSprintStateBinary } = require("../../relay-dispatch/scripts/test-support");
 
 function initGitRepo(repoRoot) {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -73,7 +74,13 @@ function setupRepo(prefix = "relay-fleet-skill-") {
   process.env.RELAY_HOME = relayHome;
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   initGitRepo(repoRoot);
-  return { relayHome, repoRoot };
+  const sprintStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-fleet-sprint-state-"));
+  const sprintStateLog = path.join(sprintStateDir, "invocations.jsonl");
+  const sprintStateBin = writeFakeSprintStateBinary(sprintStateDir, {
+    invocationLog: sprintStateLog,
+  });
+  process.env.RELAY_SPRINT_STATE_BIN = sprintStateBin;
+  return { relayHome, repoRoot, sprintStateBin, sprintStateLog };
 }
 
 function addBareOrigin(repoRoot) {
@@ -853,7 +860,7 @@ process.stdout.write(JSON.stringify({ ok: true, runId, state: args.includes("--d
 }
 
 test("relay-fleet default invocation drives two leaves through review, serial merge, and closes the fleet", () => {
-  const { relayHome, repoRoot } = setupRepo("relay-fleet-drive-green-");
+  const { relayHome, repoRoot, sprintStateLog } = setupRepo("relay-fleet-drive-green-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-drive-green-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
   const reviewScript = writeFakeReviewScript(tmpDir);
@@ -907,6 +914,13 @@ test("relay-fleet default invocation drives two leaves through review, serial me
       source: "fleet",
     });
   }
+  const sprintStateInvocations = readJsonLines(sprintStateLog);
+  assert.equal(sprintStateInvocations.length, 1);
+  assert.deepEqual(sprintStateInvocations[0].slice(0, 3), ["--json", "--track", TEST_OWNERSHIP.track]);
+  assert.equal(
+    fs.realpathSync(sprintStateInvocations[0][3]),
+    fs.realpathSync(path.join(repoRoot, "backlog"))
+  );
 });
 
 test("relay-fleet rejects missing and mixed ownership before manifest or dispatch side effects", () => {
@@ -1017,6 +1031,46 @@ test("relay-fleet rejects a canonical missing sprint before fleet or dispatch si
     result.stderr,
     /leaf 'leaf-missing-sprint' ownership\.sprint.*2026-07-relay-fleet.*existing regular file.*backlog\/sprints/i
   );
+  assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, fleetId)), false);
+  assert.equal(fs.existsSync(getFleetLeavesStorePath(repoRoot, fleetId)), false);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, leaf.issue_number)), false);
+  assert.equal(fs.existsSync(dispatchLog), false);
+});
+
+test("relay-fleet rejects stale sprint-state component ownership before fleet or dispatch side effects", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-stale-component-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-owner-stale-component-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const dispatchLog = path.join(tmpDir, "dispatch.log");
+  const sprintStateLog = path.join(tmpDir, "sprint-state-invocations.jsonl");
+  const sprintStateBin = writeFakeSprintStateBinary(tmpDir, {
+    component: "merge-finalize",
+    invocationLog: sprintStateLog,
+  });
+  const leaf = makeLeaf(repoRoot, 1, {
+    leaf_ref: "leaf-stale-component",
+    issue_number: 957,
+  });
+  const leavesFile = writeLeavesFile(repoRoot, [leaf]);
+  const fleetId = "fleet-owner-stale-component";
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--json",
+  ], {
+    relayHome,
+    env: { RELAY_SPRINT_STATE_BIN: sprintStateBin, FAKE_DISPATCH_LOG: dispatchLog },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /leaf 'leaf-stale-component' ownership.*relay-fleet.*does not match trusted dev-backlog sprint-state owner.*merge-finalize/i
+  );
+  assert.equal(readJsonLines(sprintStateLog).length, 1);
   assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, fleetId)), false);
   assert.equal(fs.existsSync(getFleetLeavesStorePath(repoRoot, fleetId)), false);
   assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, leaf.issue_number)), false);

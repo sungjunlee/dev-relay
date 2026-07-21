@@ -2,6 +2,10 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  discoverSprintStateBin,
+  invokeSprintState,
+} = require("./sprint-state");
 
 const OWNERSHIP_FIELDS = Object.freeze(["sprint", "track", "component"]);
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -125,6 +129,75 @@ function validateOwnershipSprintFile(repoRoot, raw, { label = "ownership" } = {}
   return owner;
 }
 
+function validateOwnershipAgainstSprintState(repoRoot, raw, {
+  label = "ownership",
+  env = process.env,
+  homedir,
+  existsSync = fs.existsSync,
+  realpathSync = fs.realpathSync,
+  execFileSyncFn,
+  nodeBin,
+} = {}) {
+  const owner = validateOwnershipSprintFile(repoRoot, raw, { label });
+  const discoveryOptions = { env, existsSync };
+  if (homedir) discoveryOptions.homedir = homedir;
+  if (execFileSyncFn) discoveryOptions.execFileSyncFn = execFileSyncFn;
+  if (nodeBin) discoveryOptions.nodeBin = nodeBin;
+  const discovered = discoverSprintStateBin(discoveryOptions);
+  if (!discovered.ok) {
+    throw new OwnershipValidationError(
+      `${label} ${formatOwnership(owner)} could not be verified against trusted dev-backlog ` +
+      `sprint-state schema-v2 output (${discovered.reason}): ${discovered.detail || "selector unavailable"}`
+    );
+  }
+
+  const invocationOptions = {
+    binPath: discovered.path,
+    backlogDir: path.join(repoRoot, "backlog"),
+    repo: repoRoot,
+    track: owner.track,
+    existsSync,
+    realpathSync,
+  };
+  if (execFileSyncFn) invocationOptions.execFileSyncFn = execFileSyncFn;
+  if (nodeBin) invocationOptions.nodeBin = nodeBin;
+  const selected = invokeSprintState(invocationOptions);
+  if (!selected.ok) {
+    throw new OwnershipValidationError(
+      `${label} ${formatOwnership(owner)} could not be verified against trusted dev-backlog ` +
+      `sprint-state schema-v2 output for track ${JSON.stringify(owner.track)} ` +
+      `(${selected.reason}): ${selected.detail || "selector did not resolve one owner"}`
+    );
+  }
+
+  const selectedRaw = {
+    sprint: path.relative(repoRoot, selected.sprintPath).split(path.sep).join("/"),
+    track: selected.track,
+    component: selected.component,
+  };
+  let selectedOwner;
+  try {
+    selectedOwner = normalizeOwnership(selectedRaw, {
+      label: "trusted sprint-state owner",
+    });
+  } catch (error) {
+    throw new OwnershipValidationError(
+      `${label} ${formatOwnership(owner)} does not match a canonical trusted dev-backlog ` +
+      `sprint-state owner returned for track ${JSON.stringify(owner.track)}: ` +
+      `${JSON.stringify(selectedRaw)} (${error.message})`
+    );
+  }
+
+  if (!ownershipsEqual(owner, selectedOwner)) {
+    throw new OwnershipValidationError(
+      `${label} ${formatOwnership(owner)} does not match trusted dev-backlog sprint-state owner ` +
+      `${formatOwnership(selectedOwner)} selected for track ${JSON.stringify(owner.track)}`
+    );
+  }
+
+  return owner;
+}
+
 function parseOwnershipJson(raw, { label = "--ownership-json", required = false } = {}) {
   if (raw === undefined || raw === null) {
     if (required) {
@@ -165,5 +238,6 @@ module.exports = {
   normalizeOwnership,
   ownershipsEqual,
   parseOwnershipJson,
+  validateOwnershipAgainstSprintState,
   validateOwnershipSprintFile,
 };
