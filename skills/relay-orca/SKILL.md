@@ -116,11 +116,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
   --program-id epic-941 --final-summary --program-file /tmp/accepted-program.json --json
 ```
 
-Exit gates come ONLY from the program's `exit_gates`; generic `integration:<check>` evidence is accepted only
-through the version-1 accepted-program identity/freshness contract (exact program/runtime/raw-ref plus immutable
-verification binding); a failing integration gate is never masked by task completion. Follow-up proposals are
-advisory (accepted by the operator as a new later wave). Gate kinds, ordering/masking, follow-up lifecycle,
-decision/budget/authorization records, the completion rule, stop conditions, and fail-closed codes 70–72: [references/gates-and-completion.md](references/gates-and-completion.md).
+Exit gates come ONLY from the program's `exit_gates`; generic `integration:<check>` evidence is accepted only through the version-1 accepted-program identity/freshness contract (exact program/runtime/raw-ref plus immutable verification binding); a failing integration gate is never masked by task completion. Follow-up proposals are advisory (accepted by the operator as a new later wave). Gate kinds, ordering/masking, follow-up lifecycle, decision/budget/authorization records, the completion rule, stop conditions, and fail-closed codes 70–72: [references/gates-and-completion.md](references/gates-and-completion.md).
 
 Crash-safe resume (reconcile first, then reuse/re-dispatch only what is safe; fail closed on ambiguity):
 
