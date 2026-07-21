@@ -841,9 +841,16 @@ test("#1021 missing, duplicate, and malformed contexts fail closed before any mu
   const malformedPath = path.join(history.root, "malformed.json");
   const crossRepoPath = path.join(history.root, "cross-repo.json");
   fs.writeFileSync(malformedPath, JSON.stringify({ schema: 1 }), "utf8");
+  // Portable cross-repo fixture: a per-test temporary git repo whose canonical slug/root differ
+  // from the target repository on ANY host — never a host-specific absolute path. The context
+  // points a valid, loadable locator at this unrelated checkout, so admission fails closed on the
+  // repo-identity mismatch (→ AMBIGUOUS_GLOBAL_STATE) rather than depending on a path only present
+  // on one developer's machine.
+  const crossRepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-cross-repo-"));
+  execFileSync("git", ["-C", crossRepoRoot, "init", "-q"], { stdio: "ignore" });
   fs.writeFileSync(crossRepoPath, JSON.stringify({
     ...JSON.parse(fs.readFileSync(history.contextPath, "utf8")),
-    repo_root: "/Users/sjlee/gstack",
+    repo_root: crossRepoRoot,
   }), "utf8");
   try {
     for (const inputs of [
@@ -862,6 +869,110 @@ test("#1021 missing, duplicate, and malformed contexts fail closed before any mu
   } finally {
     fake.restore();
     fs.rmSync(history.root, { recursive: true, force: true });
+    fs.rmSync(crossRepoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1021 R5 finding 1: a FAILED prior context that claims the SAME physical task as a PASSING one is AMBIGUOUS (exit 35), never masked", () => {
+  // Program A's proof passes and would exempt the live `shared-task` row. Program B's proof FAILS
+  // (its marker/canonical gate do not match the shared live rows) yet its recomputed proof still
+  // CLAIMS the same physical `shared-task`. A passing proof must never mask a live row an unproven
+  // program also claims (DC #6), so admission fails closed AMBIGUOUS_GLOBAL_STATE with zero
+  // mutation — it must NOT silently admit by letting A's exemption cover B's unproven claim.
+  const passing = historicalContextFixture({ programId: "prior-program-a-overlap", taskId: "shared-task" });
+  const failing = historicalContextFixture({ programId: "prior-program-b-overlap", taskId: "shared-task" });
+  const beforePassing = snapshotDir(passing.root);
+  const beforeFailing = snapshotDir(failing.root);
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    // The live snapshot carries A's completed task + passed gate; B is recomputed against the SAME
+    // rows, so B fails marker/canonical checks while still resolving the shared physical task.
+    taskList: { id: "x", ok: true, result: { tasks: [passing.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [passing.gate], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  try {
+    const { result, error } = runProbeWithPriorContext(passing.contextPath, fake, {
+      priorProgramContexts: [passing.contextPath, failing.contextPath],
+    });
+    assert.equal(error && error.reasonCode, "AMBIGUOUS_GLOBAL_STATE");
+    assert.equal(error.exitCode, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    assert.equal(result.admitted, false);
+    // The exit-35 path nulls the post-filter counts (no classifiable blocking counts are reported).
+    assert.deepEqual(result.existing_state, { tasks: null, gates: null });
+    assertReadOnlyLog(fake.readLog());
+    assertNoPoison(fake);
+    assert.deepEqual(snapshotDir(passing.root), beforePassing, "the ambiguous overlap path must not mutate any input file");
+    assert.deepEqual(snapshotDir(failing.root), beforeFailing, "the ambiguous overlap path must not mutate any input file");
+  } finally {
+    fake.restore();
+    fs.rmSync(passing.root, { recursive: true, force: true });
+    fs.rmSync(failing.root, { recursive: true, force: true });
+  }
+});
+
+test("#1021 R5 finding 1: two FAILED prior contexts that claim the SAME physical task are AMBIGUOUS (exit 35), zero mutation", () => {
+  // Neither proof passes (both lost their canonical gate), so neither grants an exemption — but
+  // both recomputed proofs still CLAIM the same physical `shared-task-2` row. Two unproven programs
+  // contending for one live row is unclassifiable, so admission fails closed AMBIGUOUS_GLOBAL_STATE
+  // (exit 35) with zero mutation, never silently reported as exit-34 residue.
+  const first = historicalContextFixture({ programId: "prior-program-c-overlap", taskId: "shared-task-2" });
+  const second = historicalContextFixture({ programId: "prior-program-d-overlap", taskId: "shared-task-2" });
+  const beforeFirst = snapshotDir(first.root);
+  const beforeSecond = snapshotDir(second.root);
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    // The live task is present (so both proofs resolve and CLAIM the shared physical row) but the
+    // gate is gone, so BOTH proofs fail PROOF_GATE_MISSING — neither can grant an exemption.
+    taskList: { id: "x", ok: true, result: { tasks: [first.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [], count: 0 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  try {
+    const { result, error } = runProbeWithPriorContext(first.contextPath, fake, {
+      priorProgramContexts: [first.contextPath, second.contextPath],
+    });
+    assert.equal(error && error.reasonCode, "AMBIGUOUS_GLOBAL_STATE");
+    assert.equal(error.exitCode, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    assert.equal(result.admitted, false);
+    assert.deepEqual(result.existing_state, { tasks: null, gates: null });
+    assertReadOnlyLog(fake.readLog());
+    assertNoPoison(fake);
+    assert.deepEqual(snapshotDir(first.root), beforeFirst, "the ambiguous overlap path must not mutate any input file");
+    assert.deepEqual(snapshotDir(second.root), beforeSecond, "the ambiguous overlap path must not mutate any input file");
+  } finally {
+    fake.restore();
+    fs.rmSync(first.root, { recursive: true, force: true });
+    fs.rmSync(second.root, { recursive: true, force: true });
+  }
+});
+
+test("#1021 R5 finding 2: the historical reject message is bounded before it is surfaced", () => {
+  // The AMBIGUOUS overlap message embeds a subprocess-derived physical id. An adversarial or wedged
+  // CLI could inflate that id without bound; admission must render `history.message` through
+  // boundedExcerpt like every other reject call site, so a blocking message can never be inflated
+  // or line-injected past the D8 bound (EXCERPT_LIMIT = 256).
+  const longTaskId = "s".repeat(400);
+  const passing = historicalContextFixture({ programId: "prior-program-a-bounded", taskId: longTaskId });
+  const failing = historicalContextFixture({ programId: "prior-program-b-bounded", taskId: longTaskId });
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    taskList: { id: "x", ok: true, result: { tasks: [passing.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [passing.gate], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  try {
+    const { result, error } = runProbeWithPriorContext(passing.contextPath, fake, {
+      priorProgramContexts: [passing.contextPath, failing.contextPath],
+    });
+    assert.equal(error && error.reasonCode, "AMBIGUOUS_GLOBAL_STATE");
+    assert.equal(result.admitted, false);
+    // The raw id is >256 chars; the surfaced message must be truncated to the bounded excerpt and
+    // must never carry the full unbounded id.
+    assert.ok(error.message.length <= 256, `reject message must be bounded, got length ${error.message.length}`);
+    assert.ok(!error.message.includes(longTaskId), "the full unbounded id must not appear in the surfaced message");
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+    fs.rmSync(passing.root, { recursive: true, force: true });
+    fs.rmSync(failing.root, { recursive: true, force: true });
   }
 });
 

@@ -872,7 +872,7 @@ function probe(options = {}) {
         tasks: history.activeTasks ?? null,
         gates: history.blockingGates ?? null,
       };
-      reject(history.reasonCode, history.message);
+      reject(history.reasonCode, boundedExcerpt(history.message));
     }
     result.existing_state = { tasks: history.activeTasks, gates: history.blockingGates };
   } else if (activeTaskInfo.count > 0 || gateCountInfo.count > 0) {

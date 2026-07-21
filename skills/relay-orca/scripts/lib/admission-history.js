@@ -97,9 +97,34 @@ function exactOutcome(program, outcomeId) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+// Reserve every physical task/gate row a prior-program proof — passing OR failing — claims in
+// a registry shared across all contexts. Exemption authority stays limited to passing proofs
+// (proof.ok === true) alone; this registry only detects CROSS-CONTEXT overlap. If two contexts
+// claim the same physical id, one proof would necessarily mask a live row another program also
+// claims, so the whole snapshot is unclassifiable (AMBIGUOUS_GLOBAL_STATE, DC #6). A failing or
+// absent proof registers its claims too — otherwise a later passing proof could silently exempt
+// (mask) a row a failed, unproven program already claimed. Physical ids come from the proof's
+// own recomputed `orca_task_ids`/`integration_gate_ids`: a failed proof only ever lists the live
+// rows it actually resolved, so a claim always corresponds to a real row that could be masked.
+function registerProofClaims({ proof, programId, claimedTasks, claimedGates }) {
+  const taskIds = proof && Array.isArray(proof.orca_task_ids) ? proof.orca_task_ids : [];
+  for (const taskId of taskIds) {
+    if (claimedTasks.has(taskId)) return failure("AMBIGUOUS_GLOBAL_STATE", `task ${taskId} is claimed by multiple prior-program contexts`);
+    claimedTasks.set(taskId, programId);
+  }
+  const physicalGateIds = proof && Array.isArray(proof.integration_gate_ids) ? proof.integration_gate_ids : [];
+  for (const physicalGateId of physicalGateIds) {
+    if (claimedGates.has(physicalGateId)) return failure("AMBIGUOUS_GLOBAL_STATE", `gate ${physicalGateId} is claimed by multiple prior-program contexts`);
+    claimedGates.set(physicalGateId, programId);
+  }
+  return null;
+}
+
 function proofIndexes(contexts, gates, segment) {
   const taskOwners = new Map();
   const gateOwners = new Map();
+  const claimedTasks = new Map();
+  const claimedGates = new Map();
   const seenPrograms = new Set();
   const ordered = contexts.slice().sort((left, right) => {
     const program = String(left.program.id).localeCompare(String(right.program.id));
@@ -111,10 +136,15 @@ function proofIndexes(contexts, gates, segment) {
     if (seenPrograms.has(programId)) return failure("AMBIGUOUS_GLOBAL_STATE", `prior-program context ${programId} is duplicated or contradictory`);
     seenPrograms.add(programId);
     const proof = context.proof;
-    // A recomputed proof that describes a known failed/pending lifecycle is not
-    // authority for any exemption, but its live residue is still a valid blocking
-    // state and must be reported through exit 34. Loader failures and identity
-    // contradictions never reach this branch; they fail closed as exit 35.
+    // Reserve this context's claimed physical rows FIRST — before granting any exemption below —
+    // so a passing proof can never mask a row a failing/earlier program also claimed (DC #6).
+    // Cross-context overlap on any physical id fails closed as AMBIGUOUS_GLOBAL_STATE (exit 35).
+    const claimed = registerProofClaims({ proof, programId, claimedTasks, claimedGates });
+    if (claimed) return claimed;
+    // A recomputed proof that describes a known failed/pending lifecycle is not authority for any
+    // exemption (that stays limited to proof.ok === true), but its live residue is still a valid
+    // blocking state reported through exit 34, and its claims are already registered above. Loader
+    // failures and identity contradictions never reach this branch; they fail closed as exit 35.
     if (!proof || proof.ok !== true) continue;
     const receiptTasks = Array.isArray(context.receipt.tasks) ? context.receipt.tasks : [];
     const proofTasks = new Set(proof.orca_task_ids || []);
@@ -125,7 +155,8 @@ function proofIndexes(contexts, gates, segment) {
       if (!exactOutcome(context.program, entry.outcome_id)) {
         return failure("AMBIGUOUS_GLOBAL_STATE", `prior-program proof ${programId} maps an unaccepted outcome`);
       }
-      if (taskOwners.has(taskId)) return failure("AMBIGUOUS_GLOBAL_STATE", `task ${taskId} is covered by multiple prior-program proofs`);
+      // Cross-context task overlap is already caught by registerProofClaims; a single proof's
+      // orca_task_ids is a deduped set, so no within-context duplicate can reach here.
       taskOwners.set(taskId, { context, taskId, outcomeId: entry.outcome_id });
     }
 
@@ -146,7 +177,9 @@ function proofIndexes(contexts, gates, segment) {
       if (!inspected.ok || inspected.state === "missing" || !inspected.gate) continue;
       const physicalId = gateId(inspected.gate);
       if (!physicalId || !proofGates.has(physicalId)) continue;
-      if (gateOwners.has(physicalId)) return failure("AMBIGUOUS_GLOBAL_STATE", `gate ${physicalId} is covered by multiple prior-program proofs`);
+      // Cross-context gate overlap is already caught by registerProofClaims; a passing proof's
+      // integration_gate_ids is a deduped set with a program-specific canonical identity, so no
+      // within-context (or cross-program) duplicate physical gate can reach here.
       gateOwners.set(physicalId, { context, taskId: entry.orca_task_id });
     }
   }
