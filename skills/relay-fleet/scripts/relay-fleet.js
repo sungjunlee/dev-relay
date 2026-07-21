@@ -2892,11 +2892,13 @@ function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
     return { leaves: persisted.leaves, explicitLeaves, manifestExists, replacedChildren: recoveredReplacements };
   }
 
-  if (ownershipValidation.hydratedLeaves.length > 0) {
-    persistFleetLeaves(repoRoot, fleetId, candidateLeaves, { durable: true });
+  const persistedLeaves = readPersistedLeaves(repoRoot, fleetId);
+  const recoveredOwnershipValidation = validateFleetRunOwnership(repoRoot, fleetId, persistedLeaves);
+  if (recoveredOwnershipValidation.hydratedLeaves.length > 0) {
+    persistFleetLeaves(repoRoot, fleetId, persistedLeaves, { durable: true });
   }
   return {
-    leaves: candidateLeaves,
+    leaves: persistedLeaves,
     explicitLeaves: null,
     manifestExists,
     replacedChildren: recoveredReplacements,

@@ -2110,7 +2110,7 @@ fs.renameSync = function renameSyncWithLeavesStoreFailure(sourcePath, destPath) 
   assert.equal(fs.readFileSync(leavesStorePath, "utf-8"), storeBefore);
 });
 
-test("relay-fleet recovers a replacement interrupted after the manifest rename", () => {
+test("relay-fleet persisted-only resume dispatches the replacement after an interrupted manifest rename", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-crash-recovery-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-replace-crash-recovery-hook-"));
   const preloadPath = path.join(tmpDir, "kill-before-leaves-rename.js");
@@ -2184,7 +2184,6 @@ fs.renameSync = function killBeforeLeavesRename(sourcePath, destPath) {
   const recovered = runFleet([
     "--repo", repoRoot,
     "--fleet-id", fleetId,
-    "--leaves-file", leavesFile,
     "--dispatch-script", dispatchScript,
     "--review-script", reviewScript,
     "--finalize-script", finalizeScript,
