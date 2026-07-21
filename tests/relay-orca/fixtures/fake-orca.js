@@ -160,19 +160,26 @@ function argValue(flag) {
 
 const scenario = loadScenario();
 
+// AC8 read-only surface: the historical-admission path may ONLY read status/task-list/
+// gate-list. Every mutation, foreign adoption, and worktree/terminal touch is poisoned so
+// a read-only admission test hard-fails the moment relay-orca reaches for one. The list
+// mirrors DC #8: reset, task-create/update/delete, gate create/resolve/delete, dispatch,
+// worktree, terminal, and foreign adoption (adopt).
 if (scenario.poisonMutations && (
   args.includes("reset") ||
   args.includes("task-create") ||
   args.includes("task-update") ||
+  args.includes("task-delete") ||
   args.includes("gate-create") ||
   args.includes("gate-resolve") ||
   args.includes("gate-delete") ||
   args.includes("dispatch") ||
   args.includes("worktree") ||
-  args.includes("terminal")
+  args.includes("terminal") ||
+  args.includes("adopt")
 )) {
   if (poisonPath) fs.writeFileSync(poisonPath, "MUTATION_INVOKED:" + args.join(" "), "utf-8");
-  process.stderr.write("POISON: mutation must never be invoked by read-only admission\\n");
+  process.stderr.write("POISON: mutation/adoption must never be invoked by read-only admission\\n");
   process.exit(98);
 }
 

@@ -194,6 +194,57 @@ function runProbeWithPriorContext(contextPath, fake, overrides = {}) {
   return { result, error };
 }
 
+// AC8 (DC #8): mutation / foreign-adoption / worktree / terminal tokens the strictly
+// read-only historical-admission path must NEVER emit. Kept in lock-step with the fixture's
+// poisonMutations surface so a test proves the whole matrix, not a subset.
+const FORBIDDEN_ADMISSION_TOKENS = [
+  "reset",
+  "task-create",
+  "task-update",
+  "task-delete",
+  "gate-create",
+  "gate-resolve",
+  "gate-delete",
+  "dispatch",
+  "worktree",
+  "terminal",
+  "adopt",
+];
+
+// Content-hash every file in a directory so a before/after comparison proves the read-only
+// admission path made ZERO filesystem writes (input byte identity, DC #8).
+function snapshotDir(dir) {
+  const map = {};
+  for (const name of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, name);
+    if (fs.statSync(full).isFile()) map[name] = sha256(fs.readFileSync(full, "utf8"));
+  }
+  return map;
+}
+
+// Tripwire `gh` and `orca` on PATH: admission is given the fake via --orca-bin and never
+// shells out to GitHub, so IF it ever fell through to a real binary the marker file proves
+// it. Neither marker may exist after a read-only admission (DC #8: never invoke real orca/gh).
+function installRealBinaryPoison() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-real-bin-poison-"));
+  for (const name of ["gh", "orca"]) {
+    const marker = path.join(dir, `${name}.invoked`);
+    fs.writeFileSync(
+      path.join(dir, name),
+      `#!/bin/sh\necho REAL_${name}_INVOKED > ${JSON.stringify(marker)}\nexit 97\n`,
+      "utf8",
+    );
+    fs.chmodSync(path.join(dir, name), 0o755);
+  }
+  return {
+    dir,
+    ghInvoked: () => fs.existsSync(path.join(dir, "gh.invoked")),
+    orcaInvoked: () => fs.existsSync(path.join(dir, "orca.invoked")),
+    pathWith: () => `${dir}${path.delimiter}${process.env.PATH || ""}`,
+    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // D3 binary resolution
 // ---------------------------------------------------------------------------
@@ -810,6 +861,140 @@ test("#1021 missing, duplicate, and malformed contexts fail closed before any mu
     }
   } finally {
     fake.restore();
+    fs.rmSync(history.root, { recursive: true, force: true });
+  }
+});
+
+test("#1021 a verified completed task whose live canonical gate is MISSING classifies as EXISTING_ORCHESTRATION_STATE (34), not AMBIGUOUS (35)", () => {
+  // The mapped completed task is still present, but its canonical gate has vanished from the
+  // live gate-list. Leaf 1 recomputes PROOF_GATE_MISSING — a KNOWN blocking lifecycle residue
+  // (a missing gate is no less blocking than a pending/failed one). Admission must therefore
+  // classify the now-unproven completed row through exit 34 with post-filter counts, never
+  // throw PriorProgramContextError → AMBIGUOUS_GLOBAL_STATE (35) with existing_state {null,null}.
+  const history = historicalContextFixture({ programId: "prior-program-gate-missing" });
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    taskList: { id: "x", ok: true, result: { tasks: [history.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [], count: 0 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  try {
+    const { result, error } = runProbeWithPriorContext(history.contextPath, fake);
+    assert.equal(error && error.reasonCode, "EXISTING_ORCHESTRATION_STATE");
+    assert.equal(error.exitCode, REASONS.EXISTING_ORCHESTRATION_STATE);
+    assert.equal(result.admitted, false);
+    assert.match(error.message, /active_tasks=1/);
+    // Post-filter counts are reported, NOT nulled out as they are on the exit-35 path.
+    assert.deepEqual(result.existing_state, { tasks: 1, gates: 0 });
+    assertReadOnlyLog(fake.readLog());
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+    fs.rmSync(history.root, { recursive: true, force: true });
+  }
+});
+
+test("#1021 AC8: task-delete and foreign adoption (adopt) are poisoned on the read-only admission fixture", () => {
+  const fake = installFakeOrca({ poisonMutations: true });
+  try {
+    for (const argv of [
+      ["orchestration", "task-delete", "--id", "t1", "--json"],
+      ["orchestration", "adopt", "--run", "r1", "--json"],
+    ]) {
+      fs.rmSync(fake.poisonPath, { force: true });
+      let status = 0;
+      try {
+        execFileSync(fake.orcaPath, argv, { stdio: "pipe" });
+      } catch (error) {
+        status = error.status;
+      }
+      assert.equal(status, 98, `${argv.join(" ")} must hard-fail the read-only fixture`);
+      assert.match(fake.readPoison(), /MUTATION_INVOKED/);
+    }
+  } finally {
+    fake.restore();
+  }
+});
+
+test("#1021 AC8: read-only admission touches no mutating/adoption subcommand, no real gh/orca, and writes nothing", () => {
+  const realPoison = installRealBinaryPoison();
+  const history = historicalContextFixture({ programId: "prior-program-ac8-readonly" });
+  const fake = installFakeOrca(
+    {
+      poisonMutations: true,
+      taskList: { id: "x", ok: true, result: { tasks: [history.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+      gateList: { id: "x", ok: true, result: { gates: [history.gate], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    },
+    { prependPath: false },
+  );
+  const before = snapshotDir(history.root);
+  try {
+    const result = runProbe(
+      ["--json", "--orca-bin", fake.orcaPath, "--repo-root", REPO_ROOT, "--prior-program-context", history.contextPath],
+      { PATH: realPoison.pathWith() },
+    );
+    assert.equal(result.status, 0);
+    const body = parseJson(result.stdout);
+    assert.equal(body.admitted, true);
+    assert.deepEqual(body.existing_state, { tasks: 0, gates: 0 });
+    // Neither the real `gh` nor a PATH `orca` was shelled out (only the injected fake ran).
+    assert.equal(realPoison.ghInvoked(), false, "real gh must never be invoked by admission");
+    assert.equal(realPoison.orcaInvoked(), false, "real/PATH orca must never be invoked when --orca-bin is injected");
+    // Only read-only subcommands ran; no mutation/adoption/worktree/terminal token appears.
+    assertReadOnlyLog(fake.readLog());
+    const tokens = fake.readLog().join(" ");
+    FORBIDDEN_ADMISSION_TOKENS.forEach((forbidden) =>
+      assert.equal(tokens.includes(forbidden), false, `read-only admission emitted ${forbidden}`),
+    );
+    assertNoPoison(fake);
+    // Zero filesystem writes: every explicit input file is byte-identical and none were added.
+    assert.deepEqual(snapshotDir(history.root), before, "read-only admission must not mutate its input files");
+  } finally {
+    fake.restore();
+    realPoison.cleanup();
+    fs.rmSync(history.root, { recursive: true, force: true });
+  }
+});
+
+test("#1021 AC8: a rejected admission leaves every explicit context input byte-identical (zero mutation)", () => {
+  const realPoison = installRealBinaryPoison();
+  const history = historicalContextFixture({ programId: "prior-program-ac8-identity" });
+  // A foreign completed terminal row cannot hide behind the verified proof, so admission
+  // rejects with EXISTING_ORCHESTRATION_STATE. Even on this failure path every read input
+  // stays byte-identical — the admission surface never writes.
+  const foreign = { id: "foreign-terminal", task_title: "foreign", display_name: "foreign", status: "completed" };
+  const fake = installFakeOrca(
+    {
+      poisonMutations: true,
+      taskList: { id: "x", ok: true, result: { tasks: [history.task, foreign], count: 2 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+      gateList: { id: "x", ok: true, result: { gates: [history.gate], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    },
+    { prependPath: false },
+  );
+  const before = snapshotDir(history.root);
+  try {
+    const result = runProbe(
+      ["--json", "--orca-bin", fake.orcaPath, "--repo-root", REPO_ROOT, "--prior-program-context", history.contextPath],
+      { PATH: realPoison.pathWith() },
+    );
+    assert.equal(result.status, REASONS.EXISTING_ORCHESTRATION_STATE);
+    const body = parseJson(result.stdout);
+    assert.equal(body.admitted, false);
+    assert.equal(body.blocking_reasons[0].reason_code, "EXISTING_ORCHESTRATION_STATE");
+    assert.match(body.blocking_reasons[0].message, /active_tasks=1/);
+    // Input byte identity: every explicit context/receipt/evidence file is unchanged.
+    assert.deepEqual(snapshotDir(history.root), before, "failed admission must not mutate any input file");
+    // No mutation/adoption, no real gh/orca, no poison marker even on the reject path.
+    assertReadOnlyLog(fake.readLog());
+    const tokens = fake.readLog().join(" ");
+    FORBIDDEN_ADMISSION_TOKENS.forEach((forbidden) =>
+      assert.equal(tokens.includes(forbidden), false, `rejected admission emitted ${forbidden}`),
+    );
+    assert.equal(realPoison.ghInvoked(), false);
+    assert.equal(realPoison.orcaInvoked(), false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+    realPoison.cleanup();
     fs.rmSync(history.root, { recursive: true, force: true });
   }
 });

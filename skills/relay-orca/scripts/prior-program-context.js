@@ -10,10 +10,21 @@ const { validateReceipt } = require("./lib/receipt");
 const { resolveRepoContext } = require("./receipt-io");
 const { programSegment } = require("./lib/program-segment");
 
+// A recomputed Leaf-1 proof that fails on a KNOWN lifecycle-residue code is not
+// authority for any exemption, but its live residue is still a valid blocking state:
+// the loader keeps the (ok:false) proof so the admission filter skips ownership and
+// classifies the unproven completed/foreign rows through EXISTING_ORCHESTRATION_STATE
+// (exit 34) with post-filter counts (DC #5). Only loader failures and identity/runtime
+// contradictions (cross-program/cross-runtime/duplicate/malformed/stale/unevaluable)
+// fall through to a thrown PriorProgramContextError → AMBIGUOUS_GLOBAL_STATE (exit 35).
+// The gate-lifecycle subset must be COMPLETE — a missing canonical gate is as much a
+// known blocking residue as a pending or failed one, so PROOF_GATE_MISSING belongs here
+// alongside PROOF_GATE_PENDING/FAILED, never on the exit-35 path.
 const BLOCKING_PROOF_CODES = new Set([
   "PROOF_TASK_ACTIVE",
   "PROOF_TASK_FAILED",
   "PROOF_TASK_MARKER_MISMATCH",
+  "PROOF_GATE_MISSING",
   "PROOF_GATE_PENDING",
   "PROOF_GATE_FAILED",
   "PROOF_GATE_DUPLICATE",
