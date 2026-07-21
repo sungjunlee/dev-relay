@@ -21,6 +21,20 @@ at operator dispatch time — not part of this schema (D11).
     "tracker": "github",                  // tracker identity
     "concurrency": 2,                     // optional; default 2, hard maximum 4
     "exit_gates": ["...", "..."],         // REQUIRED — >= 1 non-empty program exit gate
+    "integration_evidence_version": 1,    // REQUIRED when exit_gates contains integration:<check>
+    "integration_evidence": [             // REQUIRED, exactly one declaration per raw check ref
+      {
+        "program_id": "epic-941",         // exact accepted program id
+        "runtime_id": "runtime-...",      // non-empty, must match the receipt runtime_id
+        "check_ref": "full-suite",        // exact unsanitized text after integration:
+        "verification": {
+          "input_sha256": "sha256:...",   // immutable verification input binding
+          "result_sha256": "sha256:...",  // immutable verification result binding
+          "passed": true,                 // bound by binding_sha256; not free-standing authority
+          "binding_sha256": "sha256:..."  // SHA-256 of the three fields above
+        }
+      }
+    ],
     "decision_gates": [                    // optional program-level gates / auth boundaries
       { "id": "signoff", "description": "operator approves completion", "authorization": "operator" }
     ],
@@ -50,6 +64,21 @@ The root may be the program object directly or wrapped under a `program` key.
   `orca-task-<slugified-id>`; duplicate outcome ids (or ids that collide after slugging)
   are rejected.
 - `exit_gates` — required, at least one non-empty string. Missing → rejection (D7b).
+- Generic `integration:<check>` exit gates require `integration_evidence_version: 1` and
+  `integration_evidence[]`. There must be exactly one declaration for each exact raw check ref
+  (the substring after the first `integration:`); a declaration carries the accepted
+  `program_id`, a non-empty receipt-matching `runtime_id`, that exact `check_ref`, and the
+  immutable verification binding shown above. Identity-less or versionless evidence is never
+  completion evidence.
+- `integration_evidence[].verification` is content-based, not time-based. `input_sha256` and
+  `result_sha256` are producer-defined content addresses; `binding_sha256` is SHA-256 over the
+  canonical JSON object `{ input_sha256, result_sha256, passed }` with lexicographically sorted
+  object keys. Status recomputes and compares this binding and the full declaration exactly.
+- Evidence artifacts use the same identity and verification fields plus `schema: 1` and optional
+  human-readable `evidence`. They are stored as
+  `<sanitized-readable-prefix>-<sha256(raw-check-ref)>.json`; the readable prefix is never
+  authority. Raw refs are checked before path lookup, allow `a/b`, and reject absolute paths,
+  traversal segments, backslashes, controls, empty segments, and duplicate/conflicting artifacts.
 - `concurrency` — integer in `[1, 4]`; default `2`. Above `4` → rejection (D7g). `--concurrency`
   overrides the program value.
 - `outcomes[].accepted_outcomes` — required, at least one non-empty string. Empty/absent means

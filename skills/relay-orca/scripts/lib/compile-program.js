@@ -3,6 +3,8 @@
 const { reject } = require("./reasons");
 const { assertSupportedKind, assertPreparedFleet, routeFor, defaultEvidenceFor } = require("./task-kinds");
 const { normalizeDependsOn, edgesFor, assertAcyclic, computeLevels, declaredLevels, groupIntoWaves } = require("./waves");
+const { indexDeclarations } = require("./integration-evidence");
+const { parseGate } = require("./gate-kinds");
 
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONCURRENCY = 4;
@@ -47,6 +49,25 @@ function assertExitGates(program) {
   const gates = program.exit_gates;
   if (!Array.isArray(gates) || gates.filter((gate) => typeof gate === "string" && gate.trim()).length === 0) {
     reject("MISSING_EXIT_GATES", "program.exit_gates must list at least one non-empty exit gate");
+  }
+}
+
+function assertIntegrationEvidence(program) {
+  const refs = program.exit_gates
+    .filter((gate) => typeof gate === "string" && parseGate(gate).kind === "integration")
+    .map((gate) => parseGate(gate).ref);
+  if (refs.length === 0) return;
+  const contract = indexDeclarations({
+    programId: program.id,
+    runtimeId: null,
+    requireRuntime: false,
+    refs,
+    version: program.integration_evidence_version,
+    declarations: program.integration_evidence,
+  });
+  const firstError = [...contract.errors.entries()][0];
+  if (firstError) {
+    reject("INVALID_INPUT", `integration evidence declaration for raw check ref "${firstError[0]}" is invalid: ${firstError[1]}`);
   }
 }
 
@@ -131,6 +152,7 @@ function compileProgram(input, options = {}) {
   const program = unwrapProgram(input);
   const concurrency = resolveConcurrency(program, options.concurrency);
   assertExitGates(program);
+  assertIntegrationEvidence(program);
   assertOutcomes(program);
 
   const seenIds = new Set();

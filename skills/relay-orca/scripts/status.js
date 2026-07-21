@@ -34,6 +34,7 @@ const { orderGatesReport, orderFinalSummary } = require("./lib/gate-report");
 const { deriveProposals, mergeFollowUps, upsertRecordedFollowUps } = require("./lib/follow-ups");
 const { buildFinalSummary } = require("./lib/final-summary");
 const { REASONS: GATE_REASONS } = require("./lib/gate-reasons");
+const { artifactFileName, rawRefError } = require("./lib/integration-evidence");
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -308,30 +309,63 @@ function readProgramExitGates(programFile, receiptProgramId) {
   if (!Array.isArray(program.exit_gates) || program.exit_gates.length === 0) {
     usageError(`program file ${programFile} has no exit_gates array`);
   }
-  return { exitGates: program.exit_gates, decisionGates: Array.isArray(program.decision_gates) ? program.decision_gates : [] };
-}
-
-function sanitizeArtifactName(ref) {
-  return String(ref == null ? "" : ref).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "gate";
+  return {
+    exitGates: program.exit_gates,
+    decisionGates: Array.isArray(program.decision_gates) ? program.decision_gates : [],
+    integrationEvidenceVersion: program.integration_evidence_version,
+    integrationEvidence: program.integration_evidence,
+  };
 }
 
 // Build the injected integration-evidence reader (#947 D1/D2). An `integration:` gate's
-// live evidence is an artifact FILE under the gate-evidence directory; the gate result
-// derives from that artifact, NEVER from Orca task/worker status. A missing dir/file →
-// { present: false } so the gate fails closed (never passed). This is the ONLY new
-// filesystem read the gate modes perform, and it is strictly read-only.
+// live evidence is an identity-bound artifact FILE under the gate-evidence directory; the
+// gate result derives from that artifact, NEVER from Orca task/worker status. A missing
+// dir/file returns { present: false }; malformed, aliased, or duplicate artifacts return a
+// validation failure so the gate fails closed. This is the ONLY new filesystem read the
+// gate modes perform, and it is strictly read-only.
 function makeIntegrationEvidenceReader(dir) {
   const root = dir || (process.env.RELAY_ORCA_GATE_EVIDENCE_ROOT || "").trim() || null;
   return (ref) => {
     if (!root) return { present: false };
-    const artifact = path.join(root, `${sanitizeArtifactName(ref)}.json`);
-    if (!fs.existsSync(artifact)) return { present: false };
+    const unsafe = rawRefError(ref);
+    if (unsafe) return { present: true, valid: false, reason: unsafe };
+    const expectedName = artifactFileName(ref);
+    const expectedPath = path.join(root, expectedName);
+    if (!fs.existsSync(root)) return { present: false };
     try {
-      const json = JSON.parse(fs.readFileSync(artifact, "utf-8"));
-      return { present: true, passed: json.passed === true, evidence: typeof json.evidence === "string" ? json.evidence : `check ${ref}` };
+      const names = fs.readdirSync(root).filter((name) => name.endsWith(".json")).sort();
+      const candidates = [];
+      let expectedParseError = null;
+      for (const name of names) {
+        const file = path.join(root, name);
+        if (name !== expectedName) {
+          let parsed;
+          try {
+            parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
+          } catch {
+            continue;
+          }
+          if (!parsed || typeof parsed !== "object" || parsed.check_ref !== ref) continue;
+          candidates.push({ file, artifact: parsed });
+          continue;
+        }
+        try {
+          candidates.push({ file, artifact: JSON.parse(fs.readFileSync(file, "utf-8")) });
+        } catch {
+          expectedParseError = "expected integration evidence artifact is not valid JSON";
+        }
+      }
+      if (expectedParseError) return { present: true, valid: false, reason: expectedParseError };
+      if (candidates.length === 0) return { present: false };
+      if (candidates.length > 1) {
+        return { present: true, valid: false, reason: "duplicate/conflicting integration evidence artifacts address the same raw check ref" };
+      }
+      if (candidates[0].file !== expectedPath) {
+        return { present: true, valid: false, reason: `integration evidence artifact is stored under the wrong raw-ref path; expected ${expectedName}` };
+      }
+      return { present: true, valid: true, artifact: candidates[0].artifact };
     } catch (error) {
-      // A corrupt artifact is unusable live evidence → not present → fail closed.
-      return { present: false };
+      return { present: true, valid: false, reason: `cannot inspect integration evidence directory: ${error.message}` };
     }
   };
 }
@@ -360,8 +394,15 @@ function strictExitCode(opts, gateEval, programComplete) {
 }
 
 function runGatesMode(opts, { report, receipt, receiptPath }) {
-  const { exitGates } = readProgramExitGates(opts.programFile, opts.programId);
-  const gateEval = evaluateGates({ report, receipt, exitGates, readIntegrationEvidence: makeIntegrationEvidenceReader(opts.gateEvidenceDir) });
+  const program = readProgramExitGates(opts.programFile, opts.programId);
+  const gateEval = evaluateGates({
+    report,
+    receipt,
+    exitGates: program.exitGates,
+    integrationEvidenceVersion: program.integrationEvidenceVersion,
+    integrationEvidence: program.integrationEvidence,
+    readIntegrationEvidence: makeIntegrationEvidenceReader(opts.gateEvidenceDir),
+  });
   const proposals = deriveProposals({ report, gates: gateEval.gates, receipt });
   if (opts.recordProposals && proposals.length > 0) recordProposals(receipt, receiptPath, proposals);
   const body = orderGatesReport({
@@ -378,8 +419,15 @@ function runGatesMode(opts, { report, receipt, receiptPath }) {
 }
 
 function runFinalSummaryMode(opts, { report, receipt, receiptPath }) {
-  const { exitGates } = readProgramExitGates(opts.programFile, opts.programId);
-  const gateEval = evaluateGates({ report, receipt, exitGates, readIntegrationEvidence: makeIntegrationEvidenceReader(opts.gateEvidenceDir) });
+  const program = readProgramExitGates(opts.programFile, opts.programId);
+  const gateEval = evaluateGates({
+    report,
+    receipt,
+    exitGates: program.exitGates,
+    integrationEvidenceVersion: program.integrationEvidenceVersion,
+    integrationEvidence: program.integrationEvidence,
+    readIntegrationEvidence: makeIntegrationEvidenceReader(opts.gateEvidenceDir),
+  });
   const derived = deriveProposals({ report, gates: gateEval.gates, receipt });
   const followUps = mergeFollowUps({ derived, recorded: receipt.follow_ups });
   const summary = buildFinalSummary({

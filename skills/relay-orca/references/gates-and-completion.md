@@ -23,7 +23,7 @@ Each gate is keyed by a pinned, verbatim prefix on the gate string:
 
 | Prefix | Meaning | Evidence source |
 | --- | --- | --- |
-| `integration:<check>` | a named check / evidence artifact must pass **live** | a live evidence artifact under `--gate-evidence-dir` (`<check>.json` → `{ "passed": true/false }`); never task/worker status |
+| `integration:<check>` | a named check / evidence artifact must pass **live** | a version-1 identity-bound artifact under `--gate-evidence-dir`; never task/worker status |
 | `advisory:<ref>` | advisory evidence posted + blocking findings triaged (reuses the #945 advisory contract) | the reconciled `advisory_review` outcomes |
 | `tracker:<ref>` | tracker reconciliation clean for the program's issues | no reopened issue / duplicate-or-lost mapping / unreconciled back-pointer in the reconciliation |
 | `decision:<id>` | an explicit, resolved user decision record exists | the receipt's `decisions[]` (six provenance keys) |
@@ -33,6 +33,31 @@ Each gate is keyed by a pinned, verbatim prefix on the gate string:
 A gate string **without a recognized prefix evaluates as `unevaluable`** — NEVER as passed
 (fail closed) — with a diagnostic naming it. A `budget:` ref that does not parse, or names
 an unknown counter, is likewise `unevaluable`.
+
+### Generic integration evidence trust contract (#1046)
+
+`integration:<check>` is a generic named exit check. It is not an implicit
+`integration_gate` outcome and does not inherit that outcome's `task_id`, `dispatch_id`, or
+`assignee` contract. A newly accepted program that declares an integration gate must set
+`integration_evidence_version: 1` and declare exactly one entry in
+`integration_evidence[]` for the exact raw `<check>` ref. The declaration must contain the
+accepted `program_id`, a non-empty `runtime_id` equal to the receipt runtime, the exact raw
+`check_ref`, and the verification binding. The artifact repeats those fields and is accepted
+only when all identity fields and the full verification binding match the declaration.
+
+The binding contains `input_sha256`, `result_sha256`, and `passed`; `binding_sha256` is the
+SHA-256 of their canonical, lexicographically keyed JSON object. A timestamp, mtime,
+`passed:true` by itself, free-form `evidence`, sanitized basename, or lifecycle outcome name
+is never authority. The artifact filename includes the full SHA-256 of the raw ref, so `a/b`
+and `a-b` cannot share storage. Unsafe refs, duplicate declarations, duplicate artifacts,
+malformed identities, and path aliases fail closed through the existing gate state/message
+fields.
+
+The real closure topology remains explicit: `integration:full-suite` binds the generic check
+artifact while the separate `integration-main-suite` outcome retains its own lifecycle
+provenance. Status does not infer one identity from the other. Older identity-less programs
+and artifacts are read only as fail-closed legacy input; they cannot yield
+`program_complete:true`.
 
 Gate states (verbatim enum): `passed`, `failed`, `not_yet_evaluable`, `awaiting_decision`,
 `unevaluable`.
