@@ -119,11 +119,7 @@ function isRedispatchCandidate(task, diags, outcome, liveAbsent, report) {
     !isNonEmpty(task.dispatch_id) &&
     isNonEmpty(task.orca_task_id) &&
     !hasDiag(diags, "MISSING_TASK") &&
-    (task.wave === 1 ||
-      (task.wave > 1 &&
-        (report.outcomes || [])
-          .filter((reportOutcome) => reportOutcome.wave < task.wave)
-          .every((reportOutcome) => reportOutcome.state === "complete_with_evidence"))) &&
+    waveEligible(task, report) &&
     relayClean(task, outcome)
   );
 }
@@ -135,6 +131,14 @@ function earlierWavesComplete(task, report) {
       .filter((outcome) => outcome.wave < task.wave)
       .every((outcome) => outcome.state === "complete_with_evidence")
   );
+}
+
+// THE wave blanket. Wave 1 is always eligible; a later wave only once every earlier-wave
+// outcome is durably `complete_with_evidence`. Re-dispatch, the `skipped` classification, and
+// the #1019 integration-gate advancement all consume this SINGLE predicate so the eligibility
+// policies cannot drift apart. (#1019 R3)
+function waveEligible(task, report) {
+  return task.wave === 1 || earlierWavesComplete(task, report);
 }
 
 // Program-level fail-closed decisions (D2). Deduped by reason_code and ordered by exit
@@ -214,7 +218,7 @@ function classifyAction(task, report, unmappedRelayWork, liveDispatch) {
     if (unmappedRelayWork) return makeAction(task, "skipped", `outcome ${task.outcome_id} is absent, but unmapped relay work references this program; not re-dispatched to avoid duplicating it`);
     return makeAction(task, "redispatched", `outcome ${task.outcome_id} Orca dispatch verifiably absent and relay side clean; re-dispatching through the verified path`, execPlan(task, "redispatch"));
   }
-  if (task.wave > 1 && !earlierWavesComplete(task, report)) {
+  if (!waveEligible(task, report)) {
     return makeAction(task, "skipped", `outcome ${task.outcome_id} is in wave ${task.wave}; earlier waves are not yet complete_with_evidence; left untouched`);
   }
   return makeAction(task, "skipped", `outcome ${task.outcome_id} has in-flight/durable relay work; left untouched`);
@@ -261,6 +265,9 @@ module.exports = {
   planResume,
   planDecisions,
   classifyAction,
+  // Only the blanket is exported. `earlierWavesComplete` stays module-private so no caller can
+  // re-fork wave eligibility as a second, drifting policy. (#1019 R3)
+  waveEligible,
   hasUnmappedRelayWork,
   relayClean,
   mappingLive,

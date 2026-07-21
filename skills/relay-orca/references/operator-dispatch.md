@@ -12,6 +12,8 @@ the ownership boundary. It is the reviewer's anchor for the `run` operator surfa
   implementation worktrees and durable run manifests** — `run` never invokes any
   `orca worktree` subcommand.
 - `orca orchestration reset` is never invoked on any path.
+- For `integration_gate`, only the coordinator creates/adopts/resolves the canonical gate;
+  the operator writes deterministic evidence and never mutates a gate or task.
 - Orca `worker_done` and task status are **lifecycle signals, never completion authority**. A
   program outcome is complete only when live relay manifests, PRs/issues, and program exit gates
   confirm it. `run` always reports `reconciliation_required: true`; live reconciliation is #945.
@@ -26,7 +28,7 @@ appears in a prompt — engine selection is `relay-config`, resolved at relay di
 | --- | --- | --- |
 | `relay_run` | `relay` | Drive the normal relay path: readiness → plan → dispatch → review → merge. Coordinator/terminals never edit code directly. |
 | `relay_fleet` | `relay-fleet` | Same relay path, plus the **already-prepared** leaf artifacts (prompt/rubric/done-criteria paths from the program contract). A fleet outcome lacking prepared leaves never reaches prompt building (the plan rejects `UNPREPARED_FLEET_LEAF`). |
-| `integration_gate` | `relay-review` | **read-only** integration-gate evidence; findings become tracker follow-ups. Review completion does not authorize coordinator file edits or silent fixes. |
+| `integration_gate` | `relay-review` | **read-only** integration-gate evidence; findings become tracker follow-ups. Review completion does not authorize coordinator file edits or silent fixes. The prompt includes the deterministic report path and, after gate resolution, one explicit worker_done command. |
 | `advisory_review` | `relay-review` | **read-only** advisory evidence; blocking findings triaged into tracker follow-ups. No file edits or fixes. |
 | `tracker_reconciliation` | `dev-backlog` | Reconcile tracker/issue state against live relay manifests. |
 
@@ -66,6 +68,45 @@ An unverified task is never reported `dispatched`. A step 1–2 failure records 
 `escalated`, dispatches no further pending task, and leaves already-verified running operators
 untouched (stop semantics are #946).
 
+## Integration-gate completion contract (#1019)
+
+An integration operator must write the live report at the exact path supplied in the prompt,
+using deterministic JSON that is bound to THIS dispatch — it MUST carry `passed`, `evidence`,
+and the exact `runtime_id`/`task_id`/`dispatch_id`/`assignee` of the live dispatch (the same
+required fields as the [gates-and-completion.md](gates-and-completion.md#integration-gate-lifecycle-1019)
+bound shape), e.g.:
+
+```json
+{"passed":true,"evidence":"suite green","runtime_id":"<live>","task_id":"<this task>","dispatch_id":"<this dispatch>","assignee":"<this pane>"}
+```
+
+An artifact omitting any provenance field, or carrying a reused/prior-run value, fails closed
+(`INTEGRATION_REPORT_PROVENANCE_MISSING` / `INTEGRATION_REPORT_PROVENANCE_MISMATCH`) and never
+resolves the gate. The operator does not create or resolve the gate. The coordinator uses the shared #1016 marker to derive
+the exact question and the exact options `["passed","failed"]`; it lists, creates/adopts,
+and re-lists under a bounded lock. Lost create responses are recovered by re-list/adopt, while
+duplicates, noncanonical gates, missing physical ids, and conflicting results stop the flow.
+
+After fresh runtime, coordinator, task, dispatch, assignee, and report validation, the
+coordinator resolves the adopted physical gate to the canonical `passed` resolution and sends
+a fresh instruction. That instruction includes one copy-paste command in the real CLI shape:
+
+```bash
+orca orchestration send \
+  --from <fresh-assignee> --to <current-coordinator> \
+  --subject '<marker>' --body '<completion text>' \
+  --type worker_done --task-id <task-id> --dispatch-id <dispatch-id> \
+  --report-path <deterministic-report> --phase integration_gate --json
+```
+
+The operator runs it exactly once from the current dispatched pane. The coordinator then
+re-reads `task-list` and accepts completion only when that task is `completed`. The command
+never uses raw `--payload` JSON. A stale runtime/coordinator/task/dispatch/assignee/report,
+unavailable gate identity, completion-delivery gap, or missing terminal transition fails closed
+with the exact capability gap. No `task-update`, reset, receipt edit, or manual dispatch replay
+is a repair path. Redispatch and restart regenerate every provenance field and the completion
+command from fresh reads.
+
 ## Terminal acquisition — explicit handles only
 
 `run` dispatches ONLY to operator terminals passed via a repeatable `--operator-handle`. It
@@ -87,5 +128,6 @@ remaining tasks stay `pending` (partial wave dispatch).
 | `INJECTION_UNDELIVERED` | 42 | A `dispatch --inject` step failed (or the post-verification prompt hand-off failed). |
 | `PROVENANCE_MISMATCH` | 43 | `dispatch-show` returned null/empty/mismatched provenance. |
 | `OPERATOR_DISPATCH_FAILED` | 44 | `run` was invoked with zero `--operator-handle` (it never self-creates a terminal). Rejected upfront, before any mutation. |
+| `INTEGRATION_LIFECYCLE_FAILED` | 45 | The coordinator-owned integration boundary cannot verify the current canonical gate/provenance/terminal transition safely. |
 
 Plan-library rejections (`2`–`21`) re-raise verbatim; usage errors exit `64`.

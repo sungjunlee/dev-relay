@@ -166,6 +166,124 @@ function readReceiptFile(finalPath) {
   return fs.readFileSync(finalPath, "utf-8");
 }
 
+// #1019 integration lifecycle I/O stays at the top-level script boundary. The pure
+// lifecycle state machine receives these adapters so plan.js's lib source-scan remains
+// intact while run/resume still get a bounded per-program/outcome lock and deterministic
+// evidence reads.
+const INTEGRATION_LOCK_TIMEOUT_MS = 5000;
+const INTEGRATION_LOCK_POLL_MS = 10;
+
+function integrationLockName({ programId, outcomeId, taskId }) {
+  return crypto.createHash("sha256").update(`${programId}\0${outcomeId}\0${taskId}`).digest("hex");
+}
+
+function integrationSleep(ms) {
+  const shared = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(shared, 0, 0, ms);
+}
+
+// Read the recorded owner pid of a held lock. Returns null for EVERY ambiguous shape — an
+// absent owner file (the crash window between `mkdirSync` publishing the lock and the owner
+// write landing), an unreadable file, or a non-numeric/out-of-range/trailing-garbage value.
+// A null owner is NEVER reclaimed: an ambiguous lock is left to time out fail-closed rather
+// than stolen from a possibly-live holder. There is deliberately no mtime lease fallback —
+// an old mtime is not evidence that the owner is gone. (#1019 R3)
+function readIntegrationLockOwnerPid(lockPath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(lockPath, "owner"), "utf8");
+  } catch {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!/^[1-9][0-9]*$/.test(trimmed)) return null;
+  const pid = Number(trimmed);
+  return Number.isSafeInteger(pid) ? pid : null;
+}
+
+// A process is "provably gone" ONLY when `process.kill(pid, 0)` — the OS liveness check that
+// delivers no signal — reports exactly ESRCH. EPERM means the pid is live under another user,
+// and any other error is ambiguous; both are treated as alive so contention still fails closed.
+// Our own pid is never considered gone.
+function integrationLockOwnerIsGone(pid) {
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return Boolean(error) && error.code === "ESRCH";
+  }
+}
+
+// Reclaim a lock whose recorded owner is provably dead. The rename-then-remove makes the
+// reclaim atomic: among racing reclaimers exactly one rename succeeds, and every loser sees
+// ENOENT and simply keeps polling (it can then contend for the lock normally). Renaming
+// rather than removing in place also means a lock freshly acquired by a competitor can never
+// be deleted out from under it by a half-completed reclaim.
+function reclaimAbandonedIntegrationLock(root, lockPath) {
+  const pid = readIntegrationLockOwnerPid(lockPath);
+  if (pid === null || !integrationLockOwnerIsGone(pid)) return false;
+  const grave = path.join(root, `.reclaimed-${process.pid}-${crypto.randomBytes(6).toString("hex")}`);
+  try {
+    fs.renameSync(lockPath, grave);
+  } catch {
+    return false;
+  }
+  fs.rmSync(grave, { recursive: true, force: true });
+  return true;
+}
+
+function withIntegrationLifecycleLock({ programId, outcomeId, taskId, lockRoot, timeoutMs, pollMs }, callback) {
+  const root = path.resolve(lockRoot || path.join(os.tmpdir(), "relay-orca-integration-locks"));
+  const lockPath = path.join(root, `${integrationLockName({ programId, outcomeId, taskId })}.lock`);
+  const timeout = Number.isInteger(timeoutMs) && timeoutMs >= 0 ? timeoutMs : INTEGRATION_LOCK_TIMEOUT_MS;
+  const poll = Number.isInteger(pollMs) && pollMs > 0 ? pollMs : INTEGRATION_LOCK_POLL_MS;
+  const started = Date.now();
+  let acquired = false;
+  let lastOwner = null;
+  fs.mkdirSync(root, { recursive: true });
+  while (!acquired) {
+    try {
+      // `mkdirSync` is the atomic publish; the owner stamp follows immediately so an
+      // abandoned lock is reclaimable without manual deletion.
+      fs.mkdirSync(lockPath);
+      fs.writeFileSync(path.join(lockPath, "owner"), `${process.pid}\n`, "utf8");
+      acquired = true;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      lastOwner = readIntegrationLockOwnerPid(lockPath);
+      // A crash/kill between mkdirSync and the finally rmSync would otherwise strand this
+      // directory forever, failing every later run/resume closed with no reset-free recovery.
+      // Reclaim it iff its owner is provably gone; a live or ambiguous owner keeps the lock.
+      const reclaimed = reclaimAbandonedIntegrationLock(root, lockPath);
+      // The timeout bounds EVERY path, reclaim included, so a pathological stream of
+      // dead-owner locks can never spin here forever.
+      if (Date.now() - started > timeout) break;
+      // Retry immediately after a successful reclaim; otherwise back off and let the live (or
+      // ambiguous) owner finish, which fails closed at the timeout.
+      if (!reclaimed) integrationSleep(poll);
+    }
+  }
+  if (!acquired) {
+    const held = lastOwner === null ? "an unidentifiable owner" : `owner pid ${lastOwner}`;
+    throw new Error(`integration lifecycle lock timed out for ${programId}/${outcomeId} (held by ${held})`);
+  }
+  try {
+    return callback();
+  } finally {
+    fs.rmSync(lockPath, { recursive: true, force: true });
+  }
+}
+
+function readIntegrationEvidenceFile(filePath) {
+  if (!fs.existsSync(filePath)) return { present: false };
+  try {
+    return { present: true, value: JSON.parse(fs.readFileSync(filePath, "utf8")) };
+  } catch (error) {
+    return { present: true, invalid: true, error: error.message };
+  }
+}
+
 function receiptExists(finalPath) {
   return fs.existsSync(finalPath);
 }
@@ -226,6 +344,9 @@ module.exports = {
   receiptPathFor,
   writeReceiptAtomic,
   readReceiptFile,
+  integrationLockName,
+  withIntegrationLifecycleLock,
+  readIntegrationEvidenceFile,
   receiptExists,
   listManifestFiles,
   listFleetManifestFiles,

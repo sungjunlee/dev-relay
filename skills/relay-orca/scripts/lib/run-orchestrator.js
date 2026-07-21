@@ -20,6 +20,7 @@ const {
 } = require("./run-orca");
 const { buildOperatorPrompt } = require("./operator-prompt");
 const { coordinationMarkerFor } = require("./coordination-marker");
+const { IntegrationLifecycleError, prepareIntegrationGate } = require("./integration-lifecycle");
 
 // The CLI-invocation boundary is injected by run.js (the Node subprocess module
 // may not live under scripts/lib/ — plan.js's frozen D6 source scan forbids it).
@@ -155,6 +156,34 @@ function requireOperatorHandles(options) {
   }
 }
 
+function integrationTasks(program) {
+  return (Array.isArray(program.outcomes) ? program.outcomes : []).filter((outcome) => outcome && outcome.task_kind === "integration_gate");
+}
+
+function requireIntegrationCoordinator(program, options) {
+  if (integrationTasks(program).length > 0 && !isNonEmptyString(options.coordinatorHandle)) {
+    reject(
+      "INTEGRATION_LIFECYCLE_FAILED",
+      "integration_gate requires an explicit --coordinator-handle; the coordinator is never inferred from a receipt, history, or stale dispatch",
+      "Re-run with the verified current coordinator handle and a deterministic --gate-evidence-dir; do not use task-update, reset, receipt edits, or manual dispatch replay.",
+    );
+  }
+  if (integrationTasks(program).length > 0 && typeof options.integrationReportPath !== "function") {
+    reject(
+      "INTEGRATION_LIFECYCLE_FAILED",
+      "integration_gate requires a deterministic integration report path before dispatch",
+      "Provide --gate-evidence-dir or RELAY_ORCA_GATE_EVIDENCE_ROOT so the operator can write the live report at a deterministic path.",
+    );
+  }
+  if (integrationTasks(program).length > 0 && typeof options.withIntegrationLifecycleLock !== "function") {
+    reject(
+      "INTEGRATION_LIFECYCLE_FAILED",
+      "integration_gate requires the bounded lifecycle lock adapter; no mutation was attempted",
+      "Use the shipped run/resume entry point so the coordinator lifecycle lock is installed; do not bypass it with a manual bridge.",
+    );
+  }
+}
+
 // D6.2 provenance trio verification. Returns a bounded description of the first
 // null/empty/mismatched value, or null when the task/dispatch/assignee trio is
 // fully verified.
@@ -211,7 +240,41 @@ function dispatchOne(ctx) {
   // is durable coordination metadata, independent of whether the operator prompt lands),
   // so a later reconcile can recover the dispatch instead of re-materializing it.
   persistReceipt(report, options);
-  const prompt = buildOperatorPrompt(task, program, outcome, options.programSegment);
+  let integrationGate = null;
+  if (task.kind === "integration_gate") {
+    try {
+      integrationGate = prepareIntegrationGate({
+        run: options.runOrca,
+        orcaBin,
+        programId: program.id,
+        outcomeId: task.outcome_id,
+        taskId: orcaTaskId,
+        dispatchId: show.dispatchId,
+        assignee: show.assignee,
+        coordinatorHandle: options.coordinatorHandle,
+        runtimeId: report.admission.runtime_id,
+        reportPath: options.integrationReportPath(task.outcome_id),
+        programSegment: options.programSegment,
+        withLock: (lockKey, callback) => options.withIntegrationLifecycleLock({
+          programId: program.id,
+          outcomeId: task.outcome_id,
+          taskId: orcaTaskId,
+          lockRoot: options.integrationLockRoot,
+          lockKey,
+        }, callback),
+        readReport: () => ({ present: false }),
+      });
+    } catch (error) {
+      if (!(error instanceof IntegrationLifecycleError)) throw error;
+      entry.status = STATUS.ESCALATED;
+      reject(
+        "INTEGRATION_LIFECYCLE_FAILED",
+        `integration lifecycle failed before operator prompt for outcome ${task.outcome_id}: ${error.reasonCode}: ${error.message}`,
+        "Re-read the current runtime/coordinator/task/dispatch/assignee and canonical gate; do not use task-update, reset, receipt edits, or manual dispatch replay.",
+      );
+    }
+  }
+  const prompt = buildOperatorPrompt(task, program, outcome, options.programSegment, { integrationGate });
   const sent = sendPrompt(options.runOrca, orcaBin, { orcaTaskId, handle, prompt });
   if (!sent.ok) {
     entry.status = STATUS.ESCALATED;
@@ -259,6 +322,7 @@ function orchestrate(rawProgram, options = {}) {
   const report = initReport(plan);
   try {
     const orcaBin = admit(report, options);
+    requireIntegrationCoordinator(program, options);
     // D3.1: reject a zero-handle run AFTER admission (probe result) and BEFORE any
     // materialization mutation, so no task-create/dispatch/terminal-create ever runs.
     requireOperatorHandles(options);

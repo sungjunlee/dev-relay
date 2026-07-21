@@ -11,6 +11,7 @@ const REASONS = {
   INJECTION_UNDELIVERED: 42, // D6 dispatch --inject step failed / prompt hand-off failed
   PROVENANCE_MISMATCH: 43, // D6 dispatch-show null/empty/mismatched provenance
   OPERATOR_DISPATCH_FAILED: 44, // D7 no valid operator target for an eligible task
+  INTEGRATION_LIFECYCLE_FAILED: 45, // #1019 coordinator-owned gate/terminal boundary failed closed
 };
 
 const REMEDIATION = {
@@ -24,6 +25,8 @@ const REMEDIATION = {
     "Reconcile the dispatch-show provenance (task id, dispatch id, assignee); never advance a program on unverified provenance.",
   OPERATOR_DISPATCH_FAILED:
     "Provide an --operator-handle or ensure orca terminal create yields a usable handle for the eligible task.",
+  INTEGRATION_LIFECYCLE_FAILED:
+    "Re-read the current runtime, coordinator, task, dispatch, assignee, canonical gate, and deterministic report; never use task-update, reset, receipt edits, or manual replay to repair the lifecycle.",
 };
 
 class RunError extends Error {

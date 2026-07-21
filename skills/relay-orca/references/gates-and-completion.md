@@ -93,6 +93,82 @@ PROPOSED follow-up: `{ "id", "source_gate" | "source_outcome", "description",
 - A PROPOSED follow-up that targets accepted scope blocks completion; a follow-up recorded
   with `"status": "deferred"` is listed separately (a `deferred` section) and does not block.
 
+## Integration-gate lifecycle (#1019)
+
+`integration_gate` is a coordinator-owned terminal boundary. The read-only integration
+operator writes deterministic live evidence; it never creates or resolves an Orca gate.
+The coordinator must supply an explicit current `--coordinator-handle` and revalidate it
+from live runtime/dispatch reads on every run, resume, redispatch, and restart. A receipt,
+history entry, prior completion message, or stale assignee is never a source for coordinator
+identity.
+
+The physical gate id is not caller-selectable in the installed Orca CLI, so the stable
+logical identity is exactly:
+
+```text
+verified task id + "Integration evidence for relay-orca: <program-segment>/<outcome-id> passed?" + ["passed","failed"]
+```
+
+The coordinator holds a bounded per-program/outcome lock, performs `gate-list` first, and
+creates only when zero exact canonical gates exist. It always re-lists after `gate-create`,
+including a non-zero or lost response, then adopts exactly one physical id. One exact gate is
+adopted. Multiple exact gates, any other gate on the dedicated task, a missing physical id,
+or conflicting/noncanonical results fail closed with no further mutation. A generic
+`status=resolved` is not a passed integration result without the canonical resolution.
+
+The lifecycle ordering is terminal and one-way:
+
+```text
+verified dispatch
+  -> canonical gate create/adopt
+  -> operator writes <outcome-id>.json with {"passed":true,"evidence":"...",
+       "runtime_id":"<live>","task_id":"<this task>","dispatch_id":"<this dispatch>",
+       "assignee":"<this pane>"}
+  -> fresh runtime/coordinator/task/dispatch/assignee/report revalidation
+       (the report's runtime_id/task_id/dispatch_id/assignee MUST match the live dispatch;
+        a reused or prior-run artifact fails closed and never resolves the gate)
+  -> coordinator resolves that physical gate to passed
+  -> fresh completion instruction
+  -> operator sends explicit worker_done exactly once
+  -> coordinator re-reads task-list and requires status=completed
+```
+
+The evidence path is deterministic, so the same path is reused across runtimes, dispatches,
+and restarts. Each artifact is therefore **bound to the lifecycle that produced it**: it must
+carry `runtime_id`, `task_id`, `dispatch_id`, and `assignee` matching the freshly verified
+live provenance. A missing or contradicting field fails closed
+(`INTEGRATION_REPORT_PROVENANCE_MISSING` / `INTEGRATION_REPORT_PROVENANCE_MISMATCH`) **before**
+gate inspection or resolution, with zero lifecycle mutation. A restart of the SAME dispatch
+re-reads its own artifact and still matches, so crash recovery is unaffected.
+
+`resume` advances an integration gate only for outcomes that are wave-eligible under the same
+wave blanket `planResume` applies AND whose planned action is `reused` or `redispatched` —
+the two actions that leave a currently verified live dispatch behind. Receipt `dispatch_id` /
+`assignee` strings alone are not proof of a live dispatch. A pending later-wave, an
+undispatched, or a `skipped`/`decision_required` integration task is left untouched — no lock,
+no Orca read, no mutation.
+
+The bounded lifecycle lock records its owner pid. A lock whose owner is **provably gone**
+(signal 0 reports exactly `ESRCH`) is reclaimed automatically by rename-then-remove, so an
+abandoned lock never needs manual deletion and racing reclaimers cannot delete a newly
+acquired lock. A live owner, a foreign-user owner (`EPERM`), and any malformed, unreadable, or
+absent owner record are never stolen — that contention still times out fail-closed. There is
+no mtime-lease fallback: an old mtime is not evidence that the owner is gone.
+
+The completion instruction contains a concrete command in the authoritative shape, with
+`--from <fresh-assignee>`, `--to <current-coordinator>`, `--type worker_done`, `--task-id`,
+`--dispatch-id`, `--report-path`, `--phase integration_gate`, and `--json`. It does not use
+raw `--payload` JSON. If gate identity, coordinator/dispatch/report provenance, completion
+delivery, or the terminal transition cannot be expressed by the installed contract, the
+coordinator reports the exact missing capability and stops. There is no `task-update`, reset,
+receipt-edit, or manual-dispatch-replay fallback.
+
+`status --final-summary` treats an active integration task, missing/pending/failed canonical
+gate, duplicate/noncanonical gate, generic resolved result, and conflicting result as
+`orca_lifecycle_failure`, even when durable evidence and exit-gate artifacts are green.
+Durable evidence remains completion authority; Orca task state and `worker_done` only prove
+that the lifecycle handoff reached its required terminal state.
+
 ### The `--record-proposals` boundary
 
 Proposals are written to the receipt (under `follow_ups`) ONLY by

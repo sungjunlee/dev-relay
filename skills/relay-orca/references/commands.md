@@ -104,7 +104,8 @@ shortens the budget for tests.
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
   --program-file <accepted-program.json> [--json] [--concurrency N] \
-  [--operator-handle <handle> ...] [--orca-bin <path>]
+  [--operator-handle <handle> ...] [--coordinator-handle <handle>] \
+  [--gate-evidence-dir <dir>] [--orca-bin <path>]
 ```
 
 | Flag | Meaning |
@@ -113,6 +114,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
 | `--json` | Emit the machine-readable run report as JSON on stdout. |
 | `--concurrency N` | Override the concurrency ceiling. Default 2, hard maximum 4 (rejected via the plan library). |
 | `--operator-handle <handle>` | Repeatable. An explicit operator terminal handle to dispatch to — REQUIRED. `run` dispatches ONLY to handles provided here and never creates its own terminal (a self-created terminal has no recognized agent and cannot accept `--inject`). With zero handles, `run` fails closed with `OPERATOR_DISPATCH_FAILED` (44) before any mutation. Each handle must be a terminal already running an agent CLI (`orca terminal create --command "<agent-cli>" --json`). |
+| `--coordinator-handle <handle>` | Required for `integration_gate`. Must be the live/current coordinator handle verified by fresh Orca reads; it is never inferred from receipt/history. |
+| `--gate-evidence-dir <dir>` | Deterministic root for integration evidence. The operator writes `<outcome-id>.json` there; `RELAY_ORCA_GATE_EVIDENCE_ROOT` is an equivalent environment override. |
 | `--orca-bin <path>` | Explicit Orca CLI override — passed to the capability probe and used for all orchestration calls. |
 | `--resolve-decision <id>` | (#947) Write a resolved `decision:` record for `<id>` into the receipt's `decisions[]`. Requires `--resolution` and `--resolver`; provenance (question/options/downstream_wave) is sourced from the program's declared `decision_gates[<id>]`. Never automatic. |
 | `--resolution <text>` | The decision resolution (with `--resolve-decision`). |
@@ -165,6 +168,7 @@ remaining eligible tasks `pending` for a follow-up `resume`.
 | `INJECTION_UNDELIVERED` | 42 | An `orca orchestration dispatch --inject` failed (or the post-verification prompt hand-off failed). |
 | `PROVENANCE_MISMATCH` | 43 | `dispatch-show` returned a null/empty/mismatched task id, dispatch id, or assignee. |
 | `OPERATOR_DISPATCH_FAILED` | 44 | No operator terminal was provided: `run` was invoked with zero `--operator-handle` (it never self-creates a terminal). Rejected upfront, before any mutation. |
+| `INTEGRATION_LIFECYCLE_FAILED` | 45 | The explicit coordinator, deterministic report, canonical gate, or fresh dispatch provenance cannot be verified safely; no fallback mutation is attempted. |
 
 A `42`/`43` failure records the failing task `escalated`, dispatches no further pending task,
 and does not touch already-verified running operators (stop semantics are #946). Plan-library
@@ -282,6 +286,7 @@ the completion rule, and the stop-condition table: [gates-and-completion.md](gat
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
   --program-id <program-id> [--json] [--operator-handle <handle> ...] \
+  [--coordinator-handle <handle>] [--gate-evidence-dir <dir>] \
   [--orca-bin <path>] [--gh-bin <path>] [--repo-root <path>]
 ```
 
@@ -290,6 +295,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
 | `--program-id`, `-p` | The accepted program's stable id (required). Resolves the receipt under the programs root. |
 | `--json` | Emit the machine-readable resume report as JSON on stdout. |
 | `--operator-handle <handle>` | Repeatable. An explicit operator terminal to re-dispatch/reacquire to. `resume` never creates its own terminal and never adopts one it did not receive here: if an outcome needs (re)dispatch and no handle is provided, `resume` fails closed with a `decision_required` report (`RESUME_NO_OPERATOR_HANDLE`, exit 66) and performs zero mutation. Each handle must already run an agent CLI. |
+| `--coordinator-handle <handle>` | Required when the receipt contains an `integration_gate`. Fresh `status`, `dispatch-show --preamble`, task-list, and dispatch reads must confirm this handle before any gate mutation. |
+| `--gate-evidence-dir <dir>` | Deterministic root for `<outcome-id>.json` live integration evidence; defaults to the receipt's `integration-gates` directory, with `RELAY_ORCA_GATE_EVIDENCE_ROOT` as an override. |
 | `--orca-bin <path>` | Explicit Orca CLI override for the reconciliation reads and the restoration mutations. |
 | `--gh-bin <path>` | Explicit `gh` CLI override (or env `RELAY_ORCA_GH_BIN`). |
 | `--repo-root <path>` | Explicit repo root for slug derivation (defaults to the git repo of the cwd). |
@@ -304,9 +311,18 @@ It then reuses valid live mappings, reacquires a lost operator terminal, and re-
 outcome **only** when ALL of: its Orca dispatch is verifiably absent, its relay side shows no
 in-flight/durable work, and the wave rules allow it — through the SAME verified path as `run`
 (inject → dispatch-show → prompt), persisting the receipt at the same A-series write points.
-Running it twice is **idempotent**: no duplicate Orca tasks, dispatches, relay runs, fleets,
-branches, or PRs can result. It **never** invokes `orca orchestration reset`, any `orca
-worktree` subcommand, task deletion, or relay force-close, and it never creates Orca worktrees.
+For an `integration_gate`, resume reconstructs coordinator, runtime, task, dispatch, assignee,
+and report provenance from fresh reads. It uses one bounded lock and one canonical logical key
+(verified task id + exact #1016 marker question + `["passed","failed"]` options), lists before
+creating, re-lists after create even when the response is lost, and refuses duplicate,
+noncanonical, pending, failed, or conflicting gates. Only the coordinator creates/resolves the
+gate. After canonical `passed`, it sends the current operator a copy-paste
+`orca orchestration send ... --type worker_done --task-id ... --dispatch-id ... --report-path ...
+--phase integration_gate --json` command and requires a fresh task-list `status=completed` read.
+It never uses raw `--payload` JSON or `task-update`. Running it twice is **idempotent**: no
+duplicate Orca tasks, gates, dispatches, relay runs, fleets, branches, or PRs can result. It
+**never** invokes `orca orchestration reset`, any `orca worktree` subcommand, task deletion, or
+relay force-close, and it never creates Orca worktrees.
 
 ### Resume report (`--json`)
 

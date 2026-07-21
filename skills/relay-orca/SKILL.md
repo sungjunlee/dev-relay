@@ -90,10 +90,12 @@ Dispatch provenance-injected operators for an accepted program (admission-gated;
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
   --program-file /tmp/accepted-program.json \
   --operator-handle term-a --operator-handle term-b \
+  --coordinator-handle coord-current \
+  --gate-evidence-dir /tmp/relay-orca-integration-gates \
   --json
 ```
 
-`run` compiles through the frozen plan library, requires probe admission before any mutation, materializes wave-1 tasks, and dispatches with fail-closed provenance verification. `run` also persists a minimal, versioned, atomically-written **receipt** (identity/mapping only) under `~/.relay/programs/<repo-slug>/<program-id>/`. Flags, run report shape, partial-wave semantics, and reason codes 40–44: [references/commands.md](references/commands.md) and [references/operator-dispatch.md](references/operator-dispatch.md).
+`run` compiles through the frozen plan library, requires probe admission before any mutation, materializes wave-1 tasks, and dispatches with fail-closed provenance verification. An `integration_gate` additionally requires the explicit current `--coordinator-handle` and prepares its coordinator-owned canonical gate before the read-only operator prompt. `--gate-evidence-dir` gives the operator a deterministic evidence path. `run` also persists a minimal, versioned, atomically-written **receipt** (identity/mapping only) under `~/.relay/programs/<repo-slug>/<program-id>/`. Flags, run report shape, partial-wave semantics, and reason codes 40–45: [references/commands.md](references/commands.md) and [references/operator-dispatch.md](references/operator-dispatch.md).
 
 Derive a read-only live program view from the receipt + relay manifests + GitHub + Orca (no mutation of any kind):
 
@@ -121,10 +123,12 @@ Crash-safe resume (reconcile first, then reuse/re-dispatch only what is safe; fa
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
   --program-id epic-941 \
+  --coordinator-handle coord-current \
+  --gate-evidence-dir /tmp/relay-orca-integration-gates \
   --json
 ```
 
-`resume` loads the receipt, runs the SAME reconciliation as `status` **before any mutation**, reuses valid mappings, reacquires lost operator terminals, and re-dispatches ONLY outcomes whose Orca dispatch is verifiably absent AND whose relay side is clean — through the verified path. It never resets Orca, deletes a task/worktree/branch/PR, or force-closes a relay run. Running it twice is idempotent. Fail-closed decision codes 60–63 and recovery steps: [references/commands.md](references/commands.md) and [references/recovery.md](references/recovery.md).
+`resume` loads the receipt, runs the SAME reconciliation as `status` **before any mutation**, reuses valid mappings, reacquires lost operator terminals, and re-dispatches ONLY outcomes whose Orca dispatch is verifiably absent AND whose relay side is clean — through the verified path. For integration tasks it re-generates all coordinator/dispatch/assignee/report provenance from fresh reads, adopts or resolves only the canonical gate, sends a fresh explicit `worker_done` instruction after resolution, and requires a task-list re-read of `completed`; it never retries or falls back to `task-update`. It never resets Orca, deletes a task/worktree/branch/PR, or force-closes a relay run. Running it twice is idempotent. Fail-closed decision codes 60–63 and recovery steps: [references/commands.md](references/commands.md) and [references/recovery.md](references/recovery.md).
 
 Coordinator-only stop (records a bounded stop record; never cancels outcomes):
 

@@ -49,6 +49,12 @@ function defaultResumeScenario(overrides = {}) {
     terminalCreateOkFalse: overrides.terminalCreateOkFalse || false,
     terminalCreateEmptyHandle: overrides.terminalCreateEmptyHandle || false,
     terminalSendOkFalse: overrides.terminalSendOkFalse || false,
+    // #1019: the live coordinator handle. UNDEFINED by default, which keeps `status` and
+    // `dispatch-show` byte-identical for every pre-#1019 scenario (the integration lifecycle
+    // then fails closed on missing coordinator provenance, as it should). Setting it opts a
+    // scenario into a runtime that can actually complete the integration-gate lifecycle, so
+    // an over-broad advancement filter really does create/resolve gates and get caught.
+    coordinator: overrides.coordinator,
   };
 }
 
@@ -66,10 +72,13 @@ const stateDir = ${JSON.stringify(stateDir)};
 function appendLog(line) { if (logPath) fs.appendFileSync(logPath, line + "\\n", "utf-8"); }
 appendLog(args.join(" "));
 // The real dispatch-show payload nests provenance under result.dispatch (D4.3/D5.2).
-function nestDispatch(flat) {
+function nestDispatch(flat, coordinator) {
   const dispatch = { id: flat.dispatch_id, task_id: flat.task_id, assignee_handle: flat.assignee, status: flat.status || "dispatched" };
   const result = { dispatch: dispatch };
   if (flat.terminal_present !== undefined) result.terminal_present = flat.terminal_present;
+  // #1019: the real --preamble read carries the live coordinator handle. Emitted only when
+  // the scenario defines one, so pre-#1019 scenarios keep their exact previous payload.
+  if (coordinator !== undefined) result.preamble = { coordinator_handle: coordinator };
   return result;
 }
 function loadScenario() { return JSON.parse(fs.readFileSync(scenarioPath, "utf-8")); }
@@ -79,18 +88,28 @@ function stateFile(taskId) { return path.join(stateDir, "disp-" + String(taskId)
 function poison(marker, code) { if (poisonPath) fs.writeFileSync(poisonPath, marker + ":" + args.join(" "), "utf-8"); process.stderr.write("POISON: " + marker + "\\n"); process.exit(code); }
 
 // D7 poison: reset + worktree only (resume MAY dispatch/terminal). Active on every path.
+// #1019 adds task-update: the integration lifecycle must reach completion through the
+// operator's explicit worker_done, never a coordinator-side task status write.
 if (args.includes("reset")) poison("RESET_INVOKED", 99);
 if (args.includes("worktree")) poison("WORKTREE_INVOKED", 98);
+if (args.includes("task-update")) poison("TASK_UPDATE_INVOKED", 97);
 
 const scenario = loadScenario();
 const meta = { runtimeId: scenario.runtimeId };
+const gatesFile = path.join(stateDir, "gates.json");
+function loadGates() {
+  try { return JSON.parse(fs.readFileSync(gatesFile, "utf-8")); } catch (e) { return Array.isArray(scenario.gates) ? scenario.gates : []; }
+}
+function saveGates(gates) { try { fs.writeFileSync(gatesFile, JSON.stringify(gates), "utf-8"); } catch (e) { /* ignore */ } }
 
 if (args[0] === "status") {
   if (!scenario.statusOk) { process.stderr.write("orca status unreachable\\n"); process.exit(1); }
   const runtime = { state: "ready", reachable: true };
   if (!scenario.omitRuntimeId) runtime.runtimeId = scenario.runtimeId;
   const statusMeta = scenario.omitRuntimeId ? {} : meta;
-  emit({ id: "status-1", ok: true, result: { app: { running: true, pid: 1 }, runtime, graph: { state: "ready" } }, _meta: statusMeta }, 0);
+  const statusResult = { app: { running: true, pid: 1 }, runtime, graph: { state: "ready" } };
+  if (scenario.coordinator !== undefined) statusResult.coordinator = { handle: scenario.coordinator };
+  emit({ id: "status-1", ok: true, result: statusResult, _meta: statusMeta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "task-list") {
   if (scenario.taskListOk === false) { process.stderr.write("orca task-list unreachable\\n"); process.exit(1); }
@@ -100,9 +119,52 @@ if (args[0] === "orchestration" && args[1] === "task-list") {
 }
 if (args[0] === "orchestration" && args[1] === "gate-list") {
   if (scenario.gateListOk === false) { process.stderr.write("orca gate-list unreachable\\n"); process.exit(1); }
-  const gates = Array.isArray(scenario.gates) ? scenario.gates : [];
+  const all = loadGates();
+  // The real CLI scopes to --task when given; unscoped reconciliation reads see every gate.
+  const task = argValue("--task");
+  const gates = task === undefined ? all : all.filter((g) => (g.task_id || g.task) === task);
   const gateMeta = scenario.gateListRuntimeId !== undefined ? { runtimeId: scenario.gateListRuntimeId } : meta;
   emit({ id: "gate-list-1", ok: true, result: { gates, count: gates.length }, _meta: gateMeta }, 0);
+}
+if (args[0] === "orchestration" && args[1] === "gate-create") {
+  if (!args.includes("--task") || !args.includes("--question") || !args.includes("--options") || !args.includes("--json")) {
+    emit({ ok: false, error: "gate-create shape rejected" }, 2);
+  }
+  const gates = loadGates();
+  const gate = { id: "physical-gate-" + (gates.length + 1), task_id: argValue("--task"), question: argValue("--question"), options: JSON.parse(argValue("--options")), status: "pending" };
+  gates.push(gate);
+  saveGates(gates);
+  emit({ id: "gc-1", ok: true, result: { gate }, _meta: meta }, 0);
+}
+if (args[0] === "orchestration" && args[1] === "gate-resolve") {
+  if (!args.includes("--id") || !args.includes("--resolution") || !args.includes("--json")) {
+    emit({ ok: false, error: "gate-resolve shape rejected" }, 2);
+  }
+  const gates = loadGates();
+  const gate = gates.find((g) => g.id === argValue("--id"));
+  if (!gate) emit({ ok: false, error: "gate not found" }, 1);
+  gate.status = "resolved";
+  gate.resolution = argValue("--resolution");
+  saveGates(gates);
+  emit({ id: "gr-1", ok: true, result: { gate }, _meta: meta }, 0);
+}
+// #1019 orchestration send: validated against the authoritative explicit-flag shape. Raw
+// --payload and any unknown flag are rejected exactly as the real CLI would.
+if (args[0] === "orchestration" && args[1] === "send") {
+  const VALUE_FLAGS = ["--to", "--subject", "--from", "--body", "--type", "--task-id", "--dispatch-id", "--report-path", "--phase"];
+  const BOOL_FLAGS = ["--json"];
+  const sendArgs = args.slice(2);
+  for (let i = 0; i < sendArgs.length; i++) {
+    const flag = sendArgs[i];
+    if (VALUE_FLAGS.indexOf(flag) >= 0) {
+      if (i + 1 >= sendArgs.length) emit({ ok: false, error: "orchestration send: flag " + flag + " requires a value" }, 2);
+      i++;
+    } else if (BOOL_FLAGS.indexOf(flag) < 0) {
+      process.stderr.write("orchestration send: unrecognized flag " + flag + "\\n");
+      emit({ ok: false, error: "orchestration send does not accept " + flag }, 2);
+    }
+  }
+  emit({ id: "send-1", ok: true, result: { delivered: true, type: argValue("--type") }, _meta: meta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "dispatch-show") {
   const task = argValue("--task");
@@ -114,7 +176,7 @@ if (args[0] === "orchestration" && args[1] === "dispatch-show") {
   Object.keys(seed).forEach((k) => { if (k === "runtimeId") seedRuntime = seed[k]; else result[k] = seed[k]; });
   try { Object.assign(result, JSON.parse(fs.readFileSync(stateFile(task), "utf-8"))); } catch (e) { /* no real dispatch yet */ }
   const dispatchMeta = seedRuntime !== undefined ? { runtimeId: seedRuntime } : meta;
-  emit({ id: "ds-" + task, ok: true, result: nestDispatch(result), _meta: dispatchMeta }, 0);
+  emit({ id: "ds-" + task, ok: true, result: nestDispatch(result, scenario.coordinator), _meta: dispatchMeta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "dispatch") {
   const task = argValue("--task");

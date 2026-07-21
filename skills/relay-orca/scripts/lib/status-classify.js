@@ -71,9 +71,25 @@ function gatePasses(gate) {
 // receipt-and-status.md). When Orca is untrusted the checks degrade to null.
 function integrationGateEvidence(facts, orcaTrusted) {
   if (!orcaTrusted) return { gate_report_present: null, gate_check_passes: null };
+  if (facts.strictIntegration) {
+    const audit = facts.integrationAudit;
+    return {
+      gate_report_present: Boolean(audit && audit.state !== "missing"),
+      gate_check_passes: Boolean(audit && audit.ok === true && audit.state === "passed"),
+    };
+  }
   const gates = Array.isArray(facts.outcomeGates) ? facts.outcomeGates : [];
   const gate = gates.find((candidate) => !candidate.kind || candidate.kind === "integration") || null;
-  return { gate_report_present: Boolean(gate), gate_check_passes: gate ? gatePasses(gate) : false };
+  return { gate_report_present: Boolean(gate), gate_check_passes: gate ? integrationGatePasses(gate) : false };
+}
+
+// Integration gates have the exact ["passed","failed"] resolution contract. A generic
+// status=resolved is deliberately insufficient; only the canonical resolution (or the
+// explicit legacy-compatible status=passed shape) can classify this outcome as passed.
+function integrationGatePasses(gate) {
+  if (!gate || typeof gate !== "object") return false;
+  const explicit = [gate.resolution, gate.result, gate.outcome].find((value) => typeof value === "string" && value.trim() !== "");
+  return explicit === "passed" || gate.status === "passed";
 }
 
 // advisory_review (read-only): advisory evidence posted AND every blocking finding
@@ -176,6 +192,17 @@ function detectOutcome(facts, evidence, orcaTrusted, complete) {
   }
   if (mappedRunMissing) {
     diagnostics.push(diag("MISSING_RELAY_RUN", outcomeId, `mapped relay run ${mappedRunId} has no manifest`, { run: mappedRunId }));
+  }
+
+  if (facts.strictIntegration) {
+    if (!orcaTrusted && receiptTask.kind === "integration_gate") {
+      diagnostics.push(diag("INTEGRATION_GATE_UNVERIFIED", outcomeId, "canonical integration gate cannot be verified because the live Orca runtime is not attributable", { orca_task_id: orcaTaskId }));
+    } else if (facts.integrationAudit && !facts.integrationAudit.ok) {
+      diagnostics.push(diag(facts.integrationAudit.reasonCode, outcomeId, facts.integrationAudit.message, { orca_task_id: orcaTaskId }));
+    }
+    if (receiptTask.kind === "integration_gate" && orcaTask && orcaTask.status !== "completed") {
+      diagnostics.push(diag("INTEGRATION_TASK_ACTIVE", outcomeId, `integration task ${orcaTaskId} is still ${orcaTask.status || "active"}; completed task-list status is required after worker_done`, { orca_task_id: orcaTaskId, status: orcaTask.status || null }));
+    }
   }
 
   const taskCompleted = Boolean(orcaTask && (orcaTask.status === "completed" || orcaTask.worker_done === true));
