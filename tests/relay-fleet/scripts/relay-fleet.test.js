@@ -7,6 +7,7 @@ const path = require("node:path");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RELAY_FLEET_SCRIPT = path.join(REPO_ROOT, "skills", "relay-fleet", "scripts", "relay-fleet.js");
+const REAL_DISPATCH_SCRIPT = path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "dispatch.js");
 const TEST_OWNERSHIP = Object.freeze({
   sprint: "backlog/sprints/2026-07-relay-fleet.md",
   track: "2026-07-relay-fleet",
@@ -70,6 +71,53 @@ function setupRepo(prefix = "relay-fleet-skill-") {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   initGitRepo(repoRoot);
   return { relayHome, repoRoot };
+}
+
+function addBareOrigin(repoRoot) {
+  const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-fleet-origin-"));
+  execFileSync("git", ["init", "--bare", remoteRoot], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", remoteRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  return remoteRoot;
+}
+
+function writeRealDispatchTestBins(binDir) {
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation\\n");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const fileName = fs.existsSync(path.join(cwd, "first.txt")) ? "resume.txt" : "first.txt";
+fs.writeFileSync(path.join(cwd, fileName), fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+fs.writeFileSync(output, "ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "list") process.exit(0);
+if (args[0] === "pr" && args[1] === "create") {
+  process.stdout.write("https://example.test/acme/dev-relay/pull/957\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected fake gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
 }
 
 function writeJson(filePath, data) {
@@ -141,10 +189,26 @@ function flagValue(args, flag) {
   return index === -1 ? undefined : args[index + 1];
 }
 
+test("buildRedispatchArgs pairs immutable fleet ID with typed ownership", () => {
+  const { repoRoot } = setupRepo("relay-fleet-redispatch-owner-args-");
+  const fleetId = "fleet-957-redispatch-owner";
+  const args = buildRedispatchArgs({
+    repoRoot,
+    fleetId,
+    runId: "issue-957-20260721010101000-a1b2c3d4",
+    leaf: { leaf_ref: "leaf-a", ownership: TEST_OWNERSHIP },
+    options: { dispatchScript: "/dispatch.js" },
+  });
+
+  assert.equal(flagValue(args, "--fleet-id"), fleetId);
+  assert.deepEqual(JSON.parse(flagValue(args, "--ownership-json")), TEST_OWNERSHIP);
+});
+
 test("buildRedispatchArgs forwards leaf timeout, executor, and sandbox overrides", () => {
   const { repoRoot } = setupRepo("relay-fleet-redispatch-leaf-args-");
   const args = buildRedispatchArgs({
     repoRoot,
+    fleetId: "fleet-redispatch-leaf-args",
     runId: "issue-908-20260713010101000-a1b2c3d4",
     leaf: { leaf_ref: "leaf-a", ownership: TEST_OWNERSHIP, timeout: "5400", executor: "codex", sandbox: "workspace-write" },
     options: {
@@ -163,6 +227,7 @@ test("buildRedispatchArgs prefers a leaf timeout over the fleet timeout", () => 
   const { repoRoot } = setupRepo("relay-fleet-redispatch-timeout-precedence-");
   const args = buildRedispatchArgs({
     repoRoot,
+    fleetId: "fleet-redispatch-timeout-precedence",
     runId: "issue-908-20260713010101000-a1b2c3d4",
     leaf: { leaf_ref: "leaf-a", ownership: TEST_OWNERSHIP, timeout: "5400" },
     options: { dispatchScript: "/dispatch.js", timeout: "1800" },
@@ -175,6 +240,7 @@ test("buildRedispatchArgs omits timeout when neither leaf nor fleet defines it",
   const { repoRoot } = setupRepo("relay-fleet-redispatch-timeout-omitted-");
   const args = buildRedispatchArgs({
     repoRoot,
+    fleetId: "fleet-redispatch-timeout-omitted",
     runId: "issue-908-20260713010101000-a1b2c3d4",
     leaf: { leaf_ref: "leaf-a", ownership: TEST_OWNERSHIP },
     options: { dispatchScript: "/dispatch.js" },
@@ -187,6 +253,7 @@ test("buildRedispatchArgs mirrors leaf register on redispatch", () => {
   const { repoRoot } = setupRepo("relay-fleet-redispatch-register-");
   const args = buildRedispatchArgs({
     repoRoot,
+    fleetId: "fleet-redispatch-register",
     runId: "issue-908-20260713010101000-a1b2c3d4",
     leaf: { leaf_ref: "leaf-a", ownership: TEST_OWNERSHIP, register: true },
     options: { dispatchScript: "/dispatch.js", register: false },
@@ -3742,6 +3809,107 @@ test("relay-fleet --resume re-enters the review loop for changes_requested child
   assert.equal(readJsonLines(reviewLog).length, 1);
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.MERGED);
   assert.equal(payload.summary.fleet_state, FLEET_STATES.CLOSED);
+});
+
+test("relay-fleet redispatch pairs immutable ownership with fleet ID for real dispatch", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-real-redispatch-owner-");
+  addBareOrigin(repoRoot);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-real-redispatch-owner-"));
+  const binDir = path.join(tmpDir, "bin");
+  fs.mkdirSync(binDir);
+  writeRealDispatchTestBins(binDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const reviewConfigPath = path.join(tmpDir, "review-config.json");
+  const fleetId = "fleet-957-real-redispatch-owner";
+  const leaf = makeLeaf(repoRoot, 1, {
+    issue_number: 957,
+    leaf_ref: "leaf-owner",
+    leaf_id: "leaf-owner",
+    branch: "issue-957-real-redispatch-owner",
+  });
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const initial = spawnSync(process.execPath, [
+    REAL_DISPATCH_SCRIPT,
+    repoRoot,
+    "--branch", leaf.branch,
+    "--prompt-file", leaf.prompt_file,
+    "--rubric-file", leaf.rubric_file,
+    "--leaf-id", leaf.leaf_id,
+    "--fleet-id", fleetId,
+    "--ownership-json", JSON.stringify(leaf.ownership),
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+  assert.equal(initial.status, 0, `${initial.stderr}\n${initial.stdout}`);
+  const initialPayload = JSON.parse(initial.stdout);
+  const manifestPath = initialPayload.manifestPath;
+  const runId = initialPayload.runId;
+  const initialRecord = readManifest(manifestPath);
+  assert.equal(initialRecord.data.state, RUN_STATES.REVIEW_PENDING);
+  writeManifest(
+    manifestPath,
+    updateManifestState(initialRecord.data, RUN_STATES.CHANGES_REQUESTED, "ownership_redispatch_test"),
+    initialRecord.body
+  );
+  fs.writeFileSync(
+    path.join(getRunDir(repoRoot, runId), "review-round-1-redispatch.md"),
+    "Apply the requested ownership-safe correction.\n",
+    "utf-8"
+  );
+
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
+  });
+  writePersistedFleetLeaves(repoRoot, fleetId, [leaf]);
+  advanceFleetManifestState(repoRoot, fleetId, FLEET_STATES.DISPATCHED);
+
+  const driftedOwnership = { ...leaf.ownership, component: "other-component" };
+  const rejectedArgs = buildRedispatchArgs({
+    repoRoot,
+    fleetId,
+    runId,
+    leaf: { ...leaf, ownership: driftedOwnership },
+    options: { dispatchScript: REAL_DISPATCH_SCRIPT },
+  });
+  const rejected = spawnSync(process.execPath, rejectedArgs, {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /cannot change immutable manifest\.ownership/);
+  assert.deepEqual(readManifest(manifestPath).data.ownership, leaf.ownership);
+  assert.equal(fs.existsSync(path.join(initialPayload.worktree, "resume.txt")), false);
+
+  writeJson(reviewConfigPath, { [runId]: { to_state: "ready_to_merge", verdict: "lgtm" } });
+  const resumed = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--review",
+    "--dispatch-script", REAL_DISPATCH_SCRIPT,
+    "--review-script", reviewScript,
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_REVIEW_CONFIG: reviewConfigPath,
+    },
+  });
+
+  assert.equal(resumed.status, 0, `${resumed.stderr}\n${resumed.stdout}`);
+  const resumedPayload = JSON.parse(resumed.stdout);
+  assert.deepEqual(resumedPayload.reviewed_children[0].steps.map((step) => step.phase), ["redispatch", "review"]);
+  const resumedManifest = readManifest(manifestPath).data;
+  assert.equal(resumedManifest.state, RUN_STATES.READY_TO_MERGE);
+  assert.equal(resumedManifest.fleet_id, fleetId);
+  assert.deepEqual(resumedManifest.ownership, leaf.ownership);
+  assert.equal(fs.existsSync(path.join(initialPayload.worktree, "resume.txt")), true);
 });
 
 test("relay-fleet --resume keeps pre-manifest dispatch failures visible during review resume", () => {

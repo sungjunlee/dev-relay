@@ -1751,7 +1751,7 @@ function buildPublishArgs({ repoRoot, runId, options }) {
   ];
 }
 
-function buildRedispatchArgs({ repoRoot, runId, leaf, options }) {
+function buildRedispatchArgs({ repoRoot, fleetId, runId, leaf, options }) {
   const ownership = normalizeOwnership(leaf.ownership, {
     label: `leaf '${leaf.leaf_ref}'.ownership`,
   });
@@ -1759,6 +1759,7 @@ function buildRedispatchArgs({ repoRoot, runId, leaf, options }) {
     options.dispatchScript,
     repoRoot,
     "--manifest", getManifestPath(repoRoot, runId),
+    "--fleet-id", fleetId,
     "--ownership-json", JSON.stringify(ownership),
     "--json",
   ];
@@ -2033,7 +2034,7 @@ function spawnRedispatchForChild({ repoRoot, fleetId, leaf, child, options, acti
     }
 
     const before = childReviewSnapshot(repoRoot, child.run_id);
-    const args = buildRedispatchArgs({ repoRoot, runId: child.run_id, leaf, options });
+    const args = buildRedispatchArgs({ repoRoot, fleetId, runId: child.run_id, leaf, options });
     const dispatch = spawn(process.execPath, args, {
       cwd: repoRoot,
       env: process.env,
