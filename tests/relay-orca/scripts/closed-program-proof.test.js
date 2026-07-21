@@ -134,6 +134,59 @@ function verify(overrides = {}) {
   return PROOF.verifyClosedProgram(fixture(overrides));
 }
 
+const FLEET_OUTCOME_ID = "fleet-leaf";
+const FLEET_ID = "fleet-xyz";
+const TRACKER_OUTCOME_ID = "tracker-recon";
+const TRACKER_RUN_ID = "run-tracker";
+
+function liveRow(outcomeId, orcaTaskId) {
+  return { id: orcaTaskId, task_title: `relay-orca: ${programSegment(PROGRAM_ID)}/${outcomeId}`, status: "completed", worker_done: true };
+}
+
+// A relay_fleet outcome added alongside the base relay_run + integration_gate outcomes so
+// the shared exit-gate/generic-evidence machinery stays satisfied while checkFleet runs.
+function fleetFixture() {
+  const inputs = fixture();
+  inputs.acceptedProgram.outcomes.push({ id: FLEET_OUTCOME_ID, task_kind: "relay_fleet", accepted_outcomes: ["closed"] });
+  inputs.receipt.tasks.push({
+    ...receiptTask(FLEET_OUTCOME_ID, "relay_fleet", "orca-fleet"),
+    relay_ids: { request: null, run: null, fleet: FLEET_ID },
+  });
+  inputs.orcaSnapshot.task_list.tasks.push(liveRow(FLEET_OUTCOME_ID, "orca-fleet"));
+  inputs.durableOutcomeEvidence[FLEET_OUTCOME_ID] = {
+    fleet_manifest: {
+      fleet_state: "closed",
+      fleet_id: FLEET_ID,
+      children: [
+        { run_id: "child-run-1", leaf_ref: "leaf-1" },
+        { run_id: "child-run-2", leaf_ref: "leaf-2" },
+      ],
+    },
+    fleet_children: [
+      { run_id: "child-run-1", leaf_ref: "leaf-1", state: "merged" },
+      { run_id: "child-run-2", leaf_ref: "leaf-2", state: "merged" },
+    ],
+  };
+  return inputs;
+}
+
+// A tracker_reconciliation outcome added the same way so checkDurableOutcome's tracker
+// branch runs against a fully consistent program.
+function trackerFixture() {
+  const inputs = fixture();
+  inputs.acceptedProgram.outcomes.push({ id: TRACKER_OUTCOME_ID, task_kind: "tracker_reconciliation", accepted_outcomes: ["closed"] });
+  inputs.receipt.tasks.push({
+    ...receiptTask(TRACKER_OUTCOME_ID, "tracker_reconciliation", "orca-tracker"),
+    relay_ids: { request: null, run: TRACKER_RUN_ID, fleet: null },
+  });
+  inputs.orcaSnapshot.task_list.tasks.push(liveRow(TRACKER_OUTCOME_ID, "orca-tracker"));
+  inputs.durableOutcomeEvidence[TRACKER_OUTCOME_ID] = {
+    manifest: { state: "closed", run_id: TRACKER_RUN_ID, issue_number: 303 },
+    issue: { state: "CLOSED", number: 303 },
+  };
+  return inputs;
+}
+
 test("closed-program proof recomputes the exact identity and keeps generic/lifecycle names distinct", () => {
   const result = verify();
   assert.equal(result.ok, true);
@@ -325,4 +378,116 @@ test("the verifier does not change the frozen receipt or report shapes", () => {
   assert.equal(result.ok, true);
   assert.equal(JSON.stringify(inputs.receipt), receiptBefore);
   assert.deepEqual(Object.keys(result.final_summary).sort(), ["blocking_reasons", "lifecycle_diagnostics", "program_complete", "stopped_on"].sort());
+});
+
+// #1021 class closure: whenever a receipt maps a run id, the manifest MUST carry the same
+// run id — an absent manifest run id is a fail-closed mismatch, never a skip.
+test("relay run identity: mapped run id requires a matching manifest run id; absent or mismatched manifest run id fails closed", () => {
+  const cases = [
+    // mapping present, manifest run id ABSENT (the R4 class-closure case) → fail closed.
+    { mutate: (inputs) => { delete inputs.durableOutcomeEvidence["relay-build"].manifest.run_id; }, ok: false, match: /omits the run id/ },
+    // mapping present, manifest run id MISMATCH → fail closed.
+    { mutate: (inputs) => { inputs.durableOutcomeEvidence["relay-build"].manifest.run_id = "run-foreign"; }, ok: false, match: /does not match/ },
+    // mapping present, manifest run id MATCH → accepted.
+    { mutate: () => {}, ok: true },
+    // mapping ABSENT (receipt declares no run id) → comparison skipped, existing behavior.
+    {
+      mutate: (inputs) => {
+        inputs.receipt.tasks.find((task) => task.outcome_id === "relay-build").relay_ids.run = null;
+        delete inputs.durableOutcomeEvidence["relay-build"].manifest.run_id;
+      },
+      ok: true,
+    },
+  ];
+  for (const { mutate, ok, match } of cases) {
+    const inputs = fixture();
+    mutate(inputs);
+    const result = PROOF.verifyClosedProgram(inputs);
+    assert.equal(result.ok, ok);
+    if (!ok) {
+      assert.equal(result.reasonCode, "PROOF_STALE_EVIDENCE");
+      assert.match(result.message, match);
+      assert.equal(result.final_summary.program_complete, false);
+      assert.notEqual(result.final_summary.stopped_on, null);
+    }
+  }
+});
+
+test("fleet identity: mapped fleet id requires a matching manifest fleet id; absent or mismatched manifest fleet id fails closed", () => {
+  assert.equal(PROOF.verifyClosedProgram(fleetFixture()).ok, true); // mapping present + match → accepted
+  for (const { mutate, match } of [
+    { mutate: (inputs) => { delete inputs.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_manifest.fleet_id; }, match: /omits the fleet id/ },
+    { mutate: (inputs) => { inputs.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_manifest.fleet_id = "fleet-foreign"; }, match: /does not match/ },
+  ]) {
+    const inputs = fleetFixture();
+    mutate(inputs);
+    const result = PROOF.verifyClosedProgram(inputs);
+    assert.equal(result.ok, false);
+    assert.equal(result.reasonCode, "PROOF_STALE_EVIDENCE");
+    assert.match(result.message, match);
+  }
+  // mapping ABSENT (receipt declares no fleet id) → comparison skipped even when manifest id absent.
+  const skip = fleetFixture();
+  skip.receipt.tasks.find((task) => task.outcome_id === FLEET_OUTCOME_ID).relay_ids.fleet = null;
+  delete skip.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_manifest.fleet_id;
+  assert.equal(PROOF.verifyClosedProgram(skip).ok, true);
+});
+
+test("fleet children must equal the manifest's declared roster exactly before any child state is trusted", () => {
+  for (const mutate of [
+    // subset: supplied drops a declared child.
+    (inputs) => { inputs.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_children = [{ run_id: "child-run-1", leaf_ref: "leaf-1", state: "merged" }]; },
+    // superset: supplied adds a child the manifest never declared.
+    (inputs) => { inputs.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_children.push({ run_id: "child-run-3", leaf_ref: "leaf-3", state: "merged" }); },
+    // renamed: supplied forges one declared child's run id.
+    (inputs) => { inputs.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_children[1].run_id = "child-run-forged"; },
+    // identity-less: a supplied child omits both ids the manifest declares.
+    (inputs) => { inputs.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_children[1] = { state: "merged" }; },
+    // duplicated: supplied repeats one child so it no longer matches the declared roster.
+    (inputs) => { inputs.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_children[1] = { run_id: "child-run-1", leaf_ref: "leaf-1", state: "merged" }; },
+  ]) {
+    const inputs = fleetFixture();
+    mutate(inputs);
+    const result = PROOF.verifyClosedProgram(inputs);
+    assert.equal(result.ok, false);
+    assert.equal(result.reasonCode, "PROOF_STALE_EVIDENCE");
+    assert.match(result.message, /does not match the fleet manifest's declared children/);
+  }
+  // Identity is checked BEFORE child state: an exactly-matching roster with a failed child
+  // still surfaces the child-state stop, proving the identity gate did not mask it.
+  const failedChild = fleetFixture();
+  failedChild.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_children[1].state = "failed";
+  assert.equal(PROOF.verifyClosedProgram(failedChild).reasonCode, "PROOF_STOPPED");
+  // Binding is OMITTED when the manifest declares no child identities (authoritative-has-no-id).
+  const noDeclaredIds = fleetFixture();
+  noDeclaredIds.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_manifest.children = [{ state: "merged" }, { state: "merged" }];
+  assert.equal(PROOF.verifyClosedProgram(noDeclaredIds).ok, true);
+});
+
+test("tracker reconciliation binds the receipt-mapped run and the declared issue number", () => {
+  assert.equal(PROOF.verifyClosedProgram(trackerFixture()).ok, true); // both mappings present + match → accepted
+  for (const { mutate, match } of [
+    // receipt-mapped run present, manifest run id ABSENT → fail closed.
+    { mutate: (inputs) => { delete inputs.durableOutcomeEvidence[TRACKER_OUTCOME_ID].manifest.run_id; }, match: /omits the run id/ },
+    // receipt-mapped run present, manifest run id MISMATCH → fail closed.
+    { mutate: (inputs) => { inputs.durableOutcomeEvidence[TRACKER_OUTCOME_ID].manifest.run_id = "run-foreign"; }, match: /does not match/ },
+    // declared issue number present, injected issue number ABSENT → fail closed.
+    { mutate: (inputs) => { delete inputs.durableOutcomeEvidence[TRACKER_OUTCOME_ID].issue.number; }, match: /does not match/ },
+    // declared issue number present, injected issue number MISMATCH → fail closed.
+    { mutate: (inputs) => { inputs.durableOutcomeEvidence[TRACKER_OUTCOME_ID].issue.number = 999; }, match: /does not match/ },
+  ]) {
+    const inputs = trackerFixture();
+    mutate(inputs);
+    const result = PROOF.verifyClosedProgram(inputs);
+    assert.equal(result.ok, false);
+    assert.equal(result.reasonCode, "PROOF_STALE_EVIDENCE");
+    assert.match(result.message, match);
+  }
+  // Both mappings ABSENT → comparisons skipped (existing behavior preserved).
+  const skip = trackerFixture();
+  skip.receipt.tasks.find((task) => task.outcome_id === TRACKER_OUTCOME_ID).relay_ids.run = null;
+  delete skip.durableOutcomeEvidence[TRACKER_OUTCOME_ID].manifest.run_id;
+  skip.durableOutcomeEvidence[TRACKER_OUTCOME_ID].manifest.issue_number = null;
+  skip.durableOutcomeEvidence[TRACKER_OUTCOME_ID].issue.number = 999;
+  assert.equal(PROOF.verifyClosedProgram(skip).ok, true);
 });

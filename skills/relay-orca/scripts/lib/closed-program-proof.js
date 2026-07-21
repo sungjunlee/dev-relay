@@ -359,8 +359,9 @@ function checkIdentity(record, programId, runtimeId) {
   return null;
 }
 
-// Pull the receipt-mapped relay/fleet id for this outcome. Null when the receipt task
-// or its relay_ids are absent so the binding stays optional ("when present").
+// Pull the receipt-mapped relay/fleet id for this outcome. Null ONLY when the receipt
+// (the authoritative mapping) declares no such id — in that case the comparison is
+// omitted. A non-null return is REQUIRED on the evidence side (see bindMappedId).
 function receiptRelayId(receiptTask, field) {
   const ids = isObject(receiptTask) && isObject(receiptTask.relay_ids) ? receiptTask.relay_ids : null;
   return ids && nonEmpty(ids[field]) ? ids[field] : null;
@@ -370,17 +371,65 @@ function numberLabel(value) {
   return typeof value === "number" ? `#${value}` : "with no number";
 }
 
+// #1021 uniform identity-binding rule (class closure). Whenever an authoritative mapping
+// declares an id, the durable evidence MUST carry the same id, non-empty and equal. An
+// evidence side that omits a declared id fails CLOSED — it is never skipped. The
+// comparison is omitted ONLY when the authoritative side itself declares no such id.
+//
+// bindMappedId binds a receipt-mapped relay/fleet id (authoritative) to a manifest id.
+function bindMappedId(mapped, actual, label, noun) {
+  if (!nonEmpty(mapped)) return null;
+  if (!nonEmpty(actual)) return reason("PROOF_STALE_EVIDENCE", `${label} manifest omits the ${noun} id required by the receipt-mapped ${noun} ${mapped}`);
+  if (actual !== mapped) return reason("PROOF_STALE_EVIDENCE", `${label} manifest ${noun} ${actual} does not match the receipt-mapped ${noun} ${mapped}`);
+  return null;
+}
+
+// bindDeclaredNumber binds a manifest-declared PR/issue number (authoritative) to an
+// injected GitHub record number. An absent record number fails closed (undefined never
+// equals a declared number).
+function bindDeclaredNumber(declared, actual, label, noun) {
+  if (declared == null) return null;
+  if (actual !== declared) return reason("PROOF_STALE_EVIDENCE", `${label} ${noun} ${numberLabel(actual)} does not match its declared manifest ${noun} #${declared}`);
+  return null;
+}
+
+// A fleet child's durable identity is its { run_id, leaf_ref } pair (#945 D4). Null when
+// the child declares neither id, so a manifest whose children carry no identities cannot
+// bind (the authoritative-has-no-id branch of the uniform rule).
+function fleetChildKey(child) {
+  if (!isObject(child)) return null;
+  const runId = [child.run_id, child.runId].find(nonEmpty) || "";
+  const leafRef = [child.leaf_ref, child.leafRef].find(nonEmpty) || "";
+  if (runId === "" && leafRef === "") return null;
+  return `${runId} ${leafRef}`;
+}
+
+// Sorted multiset of child identity keys (duplicates preserved so counts must match), or
+// null when any child in the set declares no identity.
+function fleetChildIdentities(children) {
+  const keys = [];
+  for (const child of children) {
+    const key = fleetChildKey(child);
+    if (key === null) return null;
+    keys.push(key);
+  }
+  return keys.sort((left, right) => left.localeCompare(right));
+}
+
+function childIdentitiesEqual(declared, supplied) {
+  return supplied !== null && declared.length === supplied.length && declared.every((key, index) => key === supplied[index]);
+}
+
 function checkRelayRun(record, receiptTask) {
   const manifest = record.manifest || record.relay_manifest;
   if (!isObject(manifest)) return reason("PROOF_OUTCOME_INCOMPLETE", `relay outcome ${record.outcome_id} has no durable relay manifest`);
   if (manifest.state === "closed" || manifest.state === "escalated" || manifest.state === "failed") return reason("PROOF_STOPPED", `relay outcome ${record.outcome_id} is ${manifest.state}`);
   if (manifest.state !== "merged") return reason("PROOF_OUTCOME_INCOMPLETE", `relay outcome ${record.outcome_id} is not durably merged`);
-  // Bind durable evidence to the receipt mapping identity: a merged/closed shape alone is
-  // not authority. When the manifest carries a run id it must equal the receipt-mapped run.
-  const mappedRun = receiptRelayId(receiptTask, "run");
-  if (mappedRun && nonEmpty(manifest.run_id) && manifest.run_id !== mappedRun) {
-    return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} manifest run ${manifest.run_id} does not match the receipt-mapped run ${mappedRun}`);
-  }
+  // Bind durable evidence to the receipt mapping identity: a merged shape alone is not
+  // authority. When the receipt maps a run id, the manifest MUST carry the same run id —
+  // an omitted manifest run id fails closed, never skips (see bindMappedId).
+  const runFailure = bindMappedId(receiptRelayId(receiptTask, "run"), manifest.run_id, `relay outcome ${record.outcome_id}`, "run");
+  if (runFailure) return runFailure;
   const pr = record.pr || (isObject(record.github) && record.github.pr);
   const issue = record.issue || (isObject(record.github) && record.github.issue);
   if (!isObject(pr) || !isObject(issue)) return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} is missing GitHub evidence`);
@@ -391,9 +440,11 @@ function checkRelayRun(record, receiptTask) {
   if (nonEmpty(manifest.head_sha) && nonEmpty(pr.headRefOid) && manifest.head_sha !== pr.headRefOid) return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} PR head differs from its merged manifest`);
   // The manifest's declared PR/issue numbers must match the injected GitHub records before
   // the outcome counts as complete_with_evidence — else foreign merged/closed records pass.
-  if (manifest.pr_number != null && pr.number !== manifest.pr_number) return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} PR ${numberLabel(pr.number)} does not match its merged manifest PR #${manifest.pr_number}`);
+  const prNumberFailure = bindDeclaredNumber(manifest.pr_number, pr.number, `relay outcome ${record.outcome_id}`, "PR");
+  if (prNumberFailure) return prNumberFailure;
   if (issue.state !== "CLOSED") return reason("PROOF_OUTCOME_FAILED", `relay outcome ${record.outcome_id} issue is not closed`);
-  if (manifest.issue_number != null && issue.number !== manifest.issue_number) return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} issue ${numberLabel(issue.number)} does not match its merged manifest issue #${manifest.issue_number}`);
+  const issueNumberFailure = bindDeclaredNumber(manifest.issue_number, issue.number, `relay outcome ${record.outcome_id}`, "issue");
+  if (issueNumberFailure) return issueNumberFailure;
   return null;
 }
 
@@ -402,13 +453,25 @@ function checkFleet(record, receiptTask) {
   if (!isObject(manifest)) return reason("PROOF_OUTCOME_INCOMPLETE", `fleet outcome ${record.outcome_id} has no durable fleet manifest`);
   if (manifest.fleet_state === "escalated" || manifest.state === "escalated") return reason("PROOF_STOPPED", `fleet outcome ${record.outcome_id} is escalated`);
   if (!(isTerminalManifestState(manifest.fleet_state) || isTerminalManifestState(manifest.state))) return reason("PROOF_OUTCOME_INCOMPLETE", `fleet outcome ${record.outcome_id} is not terminal`);
-  // Same receipt-mapping identity binding as relay runs: when the fleet manifest carries a
-  // fleet id it must equal the receipt-mapped fleet id.
-  const mappedFleet = receiptRelayId(receiptTask, "fleet");
-  if (mappedFleet && nonEmpty(manifest.fleet_id) && manifest.fleet_id !== mappedFleet) {
-    return reason("PROOF_STALE_EVIDENCE", `fleet outcome ${record.outcome_id} manifest fleet ${manifest.fleet_id} does not match the receipt-mapped fleet ${mappedFleet}`);
+  // Same uniform binding as relay runs: when the receipt maps a fleet id, the manifest MUST
+  // carry the same fleet id — an omitted manifest fleet id fails closed, never skips.
+  const fleetFailure = bindMappedId(receiptRelayId(receiptTask, "fleet"), manifest.fleet_id, `fleet outcome ${record.outcome_id}`, "fleet");
+  if (fleetFailure) return fleetFailure;
+  // The fleet manifest's declared children (#945 D4 `children:` frontmatter → { leaf_ref,
+  // run_id }) are the AUTHORITATIVE roster. When the record supplies its own child
+  // evidence, its child identities must equal the declared roster exactly — same
+  // { run_id, leaf_ref } set and same count — before any child state is trusted. A subset,
+  // superset, renamed, or identity-less child fails closed rather than passing on a forged
+  // roster. The binding is omitted only when the manifest declares no child identities.
+  const declaredChildren = Array.isArray(manifest.children) ? manifest.children : Array.isArray(manifest.fleet_children) ? manifest.fleet_children : null;
+  const suppliedChildren = Array.isArray(record.fleet_children) ? record.fleet_children : Array.isArray(record.fleetChildren) ? record.fleetChildren : null;
+  if (suppliedChildren && declaredChildren) {
+    const declaredKeys = fleetChildIdentities(declaredChildren);
+    if (declaredKeys && !childIdentitiesEqual(declaredKeys, fleetChildIdentities(suppliedChildren))) {
+      return reason("PROOF_STALE_EVIDENCE", `fleet outcome ${record.outcome_id} child evidence does not match the fleet manifest's declared children`);
+    }
   }
-  const children = Array.isArray(record.fleet_children) ? record.fleet_children : Array.isArray(record.fleetChildren) ? record.fleetChildren : Array.isArray(manifest.children) ? manifest.children : null;
+  const children = suppliedChildren || declaredChildren;
   if (!children || children.length === 0) return reason("PROOF_OUTCOME_INCOMPLETE", `fleet outcome ${record.outcome_id} has no child evidence`);
   for (const child of children) {
     const state = child && (child.state || (isObject(child.manifest) && child.manifest.state));
@@ -433,6 +496,13 @@ function checkDurableOutcome(record, kind, programId, runtimeId, receiptTask) {
     const manifest = record.manifest || record.relay_manifest;
     const issue = record.issue || (isObject(record.github) && record.github.issue);
     if (!manifest || !isTerminalManifestState(manifest.state) || !issue || issue.state !== "CLOSED") return reason("PROOF_OUTCOME_INCOMPLETE", `tracker outcome ${record.outcome_id} is not durably reconciled`);
+    // Uniform identity binding on the reconciled evidence: the receipt-mapped run and the
+    // manifest's declared issue number, when present, must equal the injected records so a
+    // foreign closed issue or manifest cannot satisfy the tracker outcome.
+    const runFailure = bindMappedId(receiptRelayId(receiptTask, "run"), manifest.run_id, `tracker outcome ${record.outcome_id}`, "run");
+    if (runFailure) return runFailure;
+    const issueFailure = bindDeclaredNumber(manifest.issue_number, issue.number, `tracker outcome ${record.outcome_id}`, "issue");
+    if (issueFailure) return issueFailure;
     return null;
   }
   if (kind === "integration_gate") {
