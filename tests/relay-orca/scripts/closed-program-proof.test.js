@@ -292,6 +292,31 @@ test("the compact injected snapshot shape used by the admission boundary is supp
   assert.equal(PROOF.verifyClosedProgram(inputs).ok, true);
 });
 
+// DC #1: the three Orca reads must supply INDEPENDENT, agreeing runtime ids. A compact snapshot
+// shares one object, so its task/gate runtime ids must be explicit — never invented from the
+// shared status object (which would make all three trivially agree).
+test("a compact snapshot must supply explicit, agreeing task/gate runtime ids or fail closed", () => {
+  const base = fixture().orcaSnapshot;
+  const tasks = base.task_list.tasks;
+  const gates = base.gate_list.gates;
+  for (const compact of [
+    { runtimeId: RUNTIME_ID, tasks, gates }, // no task/gate runtime override at all
+    { runtimeId: RUNTIME_ID, taskRuntimeId: RUNTIME_ID, tasks, gates }, // gate override still missing
+    { runtimeId: RUNTIME_ID, gateRuntimeId: RUNTIME_ID, tasks, gates }, // task override still missing
+    { runtimeId: RUNTIME_ID, taskRuntimeId: "other-runtime", gateRuntimeId: RUNTIME_ID, tasks, gates }, // present but different
+  ]) {
+    const inputs = fixture();
+    inputs.orcaSnapshot = compact;
+    const result = PROOF.verifyClosedProgram(inputs);
+    assert.equal(result.ok, false);
+    assert.equal(result.reasonCode, "PROOF_CROSS_RUNTIME");
+  }
+  // All three explicit runtime ids present and equal → the compact shape passes.
+  const ok = fixture();
+  ok.orcaSnapshot = { runtimeId: RUNTIME_ID, taskRuntimeId: RUNTIME_ID, gateRuntimeId: RUNTIME_ID, tasks, gates };
+  assert.equal(PROOF.verifyClosedProgram(ok).ok, true);
+});
+
 test("a false-complete durable summary cannot mask an incomplete manifest", () => {
   const inputs = fixture();
   inputs.durableOutcomeEvidence["relay-build"].manifest.state = "review_pending";
@@ -462,6 +487,43 @@ test("fleet children must equal the manifest's declared roster exactly before an
   const noDeclaredIds = fleetFixture();
   noDeclaredIds.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_manifest.children = [{ state: "merged" }, { state: "merged" }];
   assert.equal(PROOF.verifyClosedProgram(noDeclaredIds).ok, true);
+});
+
+// DC #1: `fleet_state` is the ONLY fleet closed authority; a live/derived `manifest.state` is
+// never sufficient and must not substitute for it.
+test("fleet_state is the only closed authority — a terminal manifest.state cannot substitute", () => {
+  for (const mutate of [
+    // fleet_state non-terminal while a derived state claims closed.
+    (m) => { m.fleet_state = "review_pending"; m.state = "closed"; },
+    // fleet_state absent entirely while a derived state claims merged.
+    (m) => { delete m.fleet_state; m.state = "merged"; },
+  ]) {
+    const inputs = fleetFixture();
+    mutate(inputs.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_manifest);
+    const result = PROOF.verifyClosedProgram(inputs);
+    assert.equal(result.ok, false);
+    assert.equal(result.reasonCode, "PROOF_OUTCOME_INCOMPLETE");
+    assert.match(result.message, /is not terminal/);
+  }
+});
+
+// DC #3: once ANY declared child carries identity, EVERY declared child must — a partially
+// identified roster is malformed authority and fails closed, while a fully identity-less roster
+// keeps the existing authoritative-has-no-id skip.
+test("a partially identified declared fleet roster fails closed; a fully identity-less roster keeps existing behavior", () => {
+  const mixed = fleetFixture();
+  mixed.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_manifest.children = [
+    { run_id: "child-run-1", leaf_ref: "leaf-1" },
+    { state: "merged" },
+  ];
+  const mixedResult = PROOF.verifyClosedProgram(mixed);
+  assert.equal(mixedResult.ok, false);
+  assert.equal(mixedResult.reasonCode, "PROOF_STALE_EVIDENCE");
+  assert.match(mixedResult.message, /only partially identified/);
+  // Fully identity-less declared roster: binding omitted, existing behavior preserved.
+  const none = fleetFixture();
+  none.durableOutcomeEvidence[FLEET_OUTCOME_ID].fleet_manifest.children = [{ state: "merged" }, { state: "merged" }];
+  assert.equal(PROOF.verifyClosedProgram(none).ok, true);
 });
 
 test("tracker reconciliation binds the receipt-mapped run and the declared issue number", () => {

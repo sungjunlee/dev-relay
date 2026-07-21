@@ -180,8 +180,13 @@ function unwrapProgram(input) {
 function normalizeSnapshot(input) {
   if (!isObject(input)) return { failure: reason("PROOF_CROSS_RUNTIME", "injected Orca snapshot is missing") };
   const status = isObject(input.status) ? input.status : input;
-  const taskList = isObject(input.task_list) ? input.task_list : isObject(input.taskList) ? input.taskList : input;
-  const gateList = isObject(input.gate_list) ? input.gate_list : isObject(input.gateList) ? input.gateList : input;
+  // A distinct task-list/gate-list object vs a compact snapshot that shares the top-level
+  // object. taskList/gateList still fall back to `input` for the tasks/gates rows below, but
+  // the shared object is NEVER used as a runtime-id source — see the compact rule below.
+  const taskListObj = isObject(input.task_list) ? input.task_list : isObject(input.taskList) ? input.taskList : null;
+  const gateListObj = isObject(input.gate_list) ? input.gate_list : isObject(input.gateList) ? input.gateList : null;
+  const taskList = taskListObj || input;
+  const gateList = gateListObj || input;
   const runtimeFrom = (value) => {
     if (!isObject(value)) return null;
     const resultValue = isObject(value.result) ? value.result : {};
@@ -190,10 +195,20 @@ function normalizeSnapshot(input) {
     return [value.runtime_id, value.runtimeId, resultValue.runtime_id, resultValue.runtimeId, runtime.runtime_id, runtime.runtimeId, meta.runtime_id, meta.runtimeId]
       .find(nonEmpty) || null;
   };
-  const runtimeId = runtimeFrom(status);
-  const taskRuntimeId = [input.taskRuntimeId, input.task_runtime_id, runtimeFrom(taskList)].find(nonEmpty) || null;
-  const gateRuntimeId = [input.gateRuntimeId, input.gate_runtime_id, runtimeFrom(gateList)].find(nonEmpty) || null;
-  if (!runtimeId || !taskRuntimeId || !gateRuntimeId || runtimeId !== taskRuntimeId || runtimeId !== gateRuntimeId) {
+  // DC #1: the status, task-list, and gate-list runtime ids are three INDEPENDENT reads that
+  // must each be present and agree. Collect every present runtime id from each read's own
+  // sources — for the task/gate reads that means the top-level explicit override plus, only
+  // when a distinct task_list/gate_list object exists, that object's own runtime id. A compact
+  // snapshot has no distinct object, so its task/gate ids MUST come from the explicit override
+  // and are never invented from the shared status object (which would make all three trivially
+  // agree). Every collected id must be non-empty and equal, and each read must supply at least
+  // one — so a disagreeing override or a missing read fails PROOF_CROSS_RUNTIME.
+  const statusIds = [runtimeFrom(status)].filter(nonEmpty);
+  const taskIds = [input.taskRuntimeId, input.task_runtime_id, taskListObj ? runtimeFrom(taskListObj) : null].filter(nonEmpty);
+  const gateIds = [input.gateRuntimeId, input.gate_runtime_id, gateListObj ? runtimeFrom(gateListObj) : null].filter(nonEmpty);
+  const runtimeId = statusIds[0] || null;
+  const allIds = [...statusIds, ...taskIds, ...gateIds];
+  if (statusIds.length === 0 || taskIds.length === 0 || gateIds.length === 0 || allIds.some((id) => id !== runtimeId)) {
     return { failure: reason("PROOF_CROSS_RUNTIME", "status, task-list, and gate-list runtime ids must be present, non-empty, and identical") };
   }
   const taskResult = isObject(taskList.result) ? taskList.result : {};
@@ -420,6 +435,19 @@ function childIdentitiesEqual(declared, supplied) {
   return supplied !== null && declared.length === supplied.length && declared.every((key, index) => key === supplied[index]);
 }
 
+// Classify how completely a declared child roster carries identity: "none" (no child declares
+// a { run_id, leaf_ref } — the authoritative-has-no-id branch, binding omitted as before),
+// "all" (every child declares identity — bind exact multiset equality), or "mixed" (some
+// declare identity and some do not — a partially unidentified roster that fails closed as
+// stale/malformed rather than being silently trusted). Per DC #3, once ANY declared child
+// carries identity, EVERY declared child must.
+function rosterIdentityCoverage(children) {
+  const identified = children.filter((child) => fleetChildKey(child) !== null).length;
+  if (identified === 0) return "none";
+  if (identified === children.length) return "all";
+  return "mixed";
+}
+
 function checkRelayRun(record, receiptTask) {
   const manifest = record.manifest || record.relay_manifest;
   if (!isObject(manifest)) return reason("PROOF_OUTCOME_INCOMPLETE", `relay outcome ${record.outcome_id} has no durable relay manifest`);
@@ -452,7 +480,10 @@ function checkFleet(record, receiptTask) {
   const manifest = record.fleet_manifest || record.fleetManifest;
   if (!isObject(manifest)) return reason("PROOF_OUTCOME_INCOMPLETE", `fleet outcome ${record.outcome_id} has no durable fleet manifest`);
   if (manifest.fleet_state === "escalated" || manifest.state === "escalated") return reason("PROOF_STOPPED", `fleet outcome ${record.outcome_id} is escalated`);
-  if (!(isTerminalManifestState(manifest.fleet_state) || isTerminalManifestState(manifest.state))) return reason("PROOF_OUTCOME_INCOMPLETE", `fleet outcome ${record.outcome_id} is not terminal`);
+  // DC #1: `fleet_state` is the ONLY fleet closed authority. A live/derived `manifest.state`
+  // is never sufficient authority for terminality, so it must NOT substitute for `fleet_state`
+  // here (the escalated stop above still honors either field, which only ever fails closed).
+  if (!isTerminalManifestState(manifest.fleet_state)) return reason("PROOF_OUTCOME_INCOMPLETE", `fleet outcome ${record.outcome_id} is not terminal`);
   // Same uniform binding as relay runs: when the receipt maps a fleet id, the manifest MUST
   // carry the same fleet id — an omitted manifest fleet id fails closed, never skips.
   const fleetFailure = bindMappedId(receiptRelayId(receiptTask, "fleet"), manifest.fleet_id, `fleet outcome ${record.outcome_id}`, "fleet");
@@ -466,8 +497,16 @@ function checkFleet(record, receiptTask) {
   const declaredChildren = Array.isArray(manifest.children) ? manifest.children : Array.isArray(manifest.fleet_children) ? manifest.fleet_children : null;
   const suppliedChildren = Array.isArray(record.fleet_children) ? record.fleet_children : Array.isArray(record.fleetChildren) ? record.fleetChildren : null;
   if (suppliedChildren && declaredChildren) {
-    const declaredKeys = fleetChildIdentities(declaredChildren);
-    if (declaredKeys && !childIdentitiesEqual(declaredKeys, fleetChildIdentities(suppliedChildren))) {
+    const coverage = rosterIdentityCoverage(declaredChildren);
+    // A partially identified declared roster is malformed authority — it fails closed rather
+    // than skipping the binding, so a forged child cannot hide behind an identity-less sibling.
+    if (coverage === "mixed") {
+      return reason("PROOF_STALE_EVIDENCE", `fleet outcome ${record.outcome_id} declared children are only partially identified`);
+    }
+    // "all" → every declared child carries identity, so require exact multiset equality with the
+    // supplied roster before any child state is trusted. "none" → authoritative-has-no-id branch,
+    // binding omitted (existing behavior for a fully identity-less roster).
+    if (coverage === "all" && !childIdentitiesEqual(fleetChildIdentities(declaredChildren), fleetChildIdentities(suppliedChildren))) {
       return reason("PROOF_STALE_EVIDENCE", `fleet outcome ${record.outcome_id} child evidence does not match the fleet manifest's declared children`);
     }
   }
