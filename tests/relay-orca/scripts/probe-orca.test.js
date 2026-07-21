@@ -31,6 +31,8 @@ const {
 const { probe } = require(PROBE_JS);
 const { programSegment, resolveRepoContext } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "receipt-io.js"));
 const { RECEIPT_NOTE } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "lib", "receipt.js"));
+const { canonicalIntegrationQuestion } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "lib", "integration-lifecycle.js"));
+const { verificationBinding, sha256 } = require(path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "lib", "integration-evidence.js"));
 
 const READ_ONLY_SUBCOMMANDS = new Set(["status", "task-list", "gate-list"]);
 const FORBIDDEN_DEFAULT = ["task-create", "task-update", "dispatch", "run", "reset"];
@@ -87,10 +89,18 @@ function historicalContextFixture({ programId = "prior-program-1", taskId = "pri
   const repo = resolveRepoContext({ repoRootOverride: REPO_ROOT });
   const outcomeId = "integration";
   const marker = `relay-orca: ${programSegment(programId)}/${outcomeId}`;
+  const checkRef = "full-suite";
+  const verification = verificationBinding({
+    input_sha256: sha256("prior-input"),
+    result_sha256: sha256("prior-result"),
+    passed: true,
+  });
   const program = {
     id: programId,
     runtime_id: DEFAULT_RUNTIME_ID,
-    exit_gates: ["budget:tasks_created <= 5"],
+    exit_gates: [`integration:${checkRef}`],
+    integration_evidence_version: 1,
+    integration_evidence: [{ check_ref: checkRef, program_id: programId, runtime_id: DEFAULT_RUNTIME_ID, verification }],
     outcomes: [{ id: outcomeId, task_kind: "integration_gate", accepted_outcomes: ["passed"] }],
   };
   const task = {
@@ -122,16 +132,32 @@ function historicalContextFixture({ programId = "prior-program-1", taskId = "pri
       integration: { passed: true },
     },
   };
+  const generic = {
+    [checkRef]: {
+      schema: 1,
+      program_id: programId,
+      runtime_id: DEFAULT_RUNTIME_ID,
+      check_ref: checkRef,
+      verification,
+      evidence: "prior integration evidence",
+    },
+  };
   const context = {
     schema: 1,
+    // Deliberately false: the probe must ignore this claim and recompute Leaf 1.
+    success: false,
     repo_root: REPO_ROOT,
     accepted_program: { path: path.join(root, "accepted-program.json") },
     canonical_receipt: { path: path.join(root, "receipt.json") },
-    trusted_evidence: { durable_outcomes: { path: path.join(root, "durable.json") } },
+    trusted_evidence: {
+      durable_outcomes: { path: path.join(root, "durable.json") },
+      generic_integration: { path: path.join(root, "generic.json") },
+    },
   };
   fs.writeFileSync(path.join(root, "accepted-program.json"), JSON.stringify(program), "utf8");
   fs.writeFileSync(path.join(root, "receipt.json"), JSON.stringify(receipt), "utf8");
   fs.writeFileSync(path.join(root, "durable.json"), JSON.stringify(durable), "utf8");
+  fs.writeFileSync(path.join(root, "generic.json"), JSON.stringify(generic), "utf8");
   fs.writeFileSync(path.join(root, "context.json"), JSON.stringify(context), "utf8");
   return {
     root,
@@ -142,7 +168,7 @@ function historicalContextFixture({ programId = "prior-program-1", taskId = "pri
     gate: {
       id: `gate-${taskId}`,
       task_id: taskId,
-      question: `Integration evidence for ${marker} passed?`,
+      question: canonicalIntegrationQuestion(programId, outcomeId, programSegment),
       options: ["passed", "failed"],
       status: "passed",
       resolution: "passed",
@@ -644,6 +670,37 @@ test("#1021 verified prior-program context admits its completed task and passed 
   }
 });
 
+test("#1021 probe CLI accepts repeatable context paths and recomputes proof", () => {
+  const history = historicalContextFixture({ programId: "prior-program-cli" });
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    taskList: { id: "x", ok: true, result: { tasks: [history.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [history.gate], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  try {
+    const result = runProbe([
+      "--json",
+      "--orca-bin",
+      fake.orcaPath,
+      "--repo-root",
+      REPO_ROOT,
+      "--prior-program-context",
+      history.contextPath,
+      "--prior-program-context",
+      history.contextPath,
+    ]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.match(body.blocking_reasons[0].message, /duplicated/);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+    fs.rmSync(history.root, { recursive: true, force: true });
+  }
+});
+
 test("#1021 prior-program contexts never let a foreign terminal row hide behind a verified proof", () => {
   const history = historicalContextFixture({ programId: "prior-program-foreign" });
   const foreign = { id: "foreign-terminal", task_title: "foreign", display_name: "foreign", status: "completed" };
@@ -668,6 +725,89 @@ test("#1021 prior-program contexts never let a foreign terminal row hide behind 
     assert.equal(result.admitted, false);
     assert.match(error.message, /active_tasks=1/);
     assertNoPoison(fake);
+  } finally {
+    fake.restore();
+    fs.rmSync(history.root, { recursive: true, force: true });
+  }
+});
+
+test("#1021 failed, missing-id, and duplicate rows are never historical exemptions", () => {
+  const scenarios = [
+    {
+      label: "failed",
+      task: (history) => ({ ...history.task, status: "failed" }),
+      expected: "EXISTING_ORCHESTRATION_STATE",
+    },
+    {
+      label: "missing id",
+      task: (history) => ({ ...history.task, id: "" }),
+      expected: "AMBIGUOUS_GLOBAL_STATE",
+    },
+    {
+      label: "duplicate",
+      task: (history) => [history.task, { ...history.task }],
+      expected: "AMBIGUOUS_GLOBAL_STATE",
+    },
+  ];
+  for (const scenario of scenarios) {
+    const history = historicalContextFixture({ programId: `prior-program-${scenario.label.replace(/ /g, "-")}` });
+    const tasks = scenario.task(history);
+    const rows = Array.isArray(tasks) ? tasks : [tasks];
+    const fake = installFakeOrca({
+      poisonMutations: true,
+      taskList: {
+        id: "x",
+        ok: true,
+        result: { tasks: rows, count: rows.length },
+        _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+      },
+      gateList: {
+        id: "x",
+        ok: true,
+        result: { gates: [history.gate], count: 1 },
+        _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+      },
+    });
+    try {
+      const { result, error } = runProbeWithPriorContext(history.contextPath, fake);
+      assert.equal(error && error.reasonCode, scenario.expected, scenario.label);
+      assert.equal(result.admitted, false, scenario.label);
+      assertNoPoison(fake);
+    } finally {
+      fake.restore();
+      fs.rmSync(history.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("#1021 missing, duplicate, and malformed contexts fail closed before any mutation", () => {
+  const history = historicalContextFixture({ programId: "prior-program-context-errors" });
+  const fake = installFakeOrca({
+    poisonMutations: true,
+    taskList: { id: "x", ok: true, result: { tasks: [history.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [history.gate], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  const malformedPath = path.join(history.root, "malformed.json");
+  const crossRepoPath = path.join(history.root, "cross-repo.json");
+  fs.writeFileSync(malformedPath, JSON.stringify({ schema: 1 }), "utf8");
+  fs.writeFileSync(crossRepoPath, JSON.stringify({
+    ...JSON.parse(fs.readFileSync(history.contextPath, "utf8")),
+    repo_root: "/Users/sjlee/gstack",
+  }), "utf8");
+  try {
+    for (const inputs of [
+      [path.join(history.root, "missing.json")],
+      [history.contextPath, history.contextPath],
+      [malformedPath],
+      [crossRepoPath],
+    ]) {
+      const { result, error } = runProbeWithPriorContext(inputs[0], fake, {
+        priorProgramContexts: inputs,
+      });
+      assert.equal(error && error.reasonCode, "AMBIGUOUS_GLOBAL_STATE");
+      assert.equal(result.admitted, false);
+      assertNoPoison(fake);
+    }
   } finally {
     fake.restore();
     fs.rmSync(history.root, { recursive: true, force: true });

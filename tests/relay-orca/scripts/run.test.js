@@ -305,6 +305,33 @@ test("D11.2: probe rejects admission → ADMISSION_REJECTED exit 40, zero mutati
   }
 });
 
+test("#1021 run forwards every explicit prior-program context to admission", () => {
+  const contextRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-context-"));
+  const contextPath = path.join(contextRoot, "context.json");
+  fs.writeFileSync(contextPath, JSON.stringify({}), "utf8");
+  const r = runProgram(
+    "run-two-wave1.json",
+    ["--operator-handle", "h1", "--prior-program-context", contextPath],
+    {
+      gateList: {
+        id: "x",
+        ok: true,
+        result: { gates: [{ id: "g1", task_id: "foreign-task" }], count: 1 },
+        _meta: { runtimeId: "00000000-0000-4000-8000-000000000001" },
+      },
+    },
+  );
+  try {
+    assert.equal(r.status, REASONS.ADMISSION_REJECTED);
+    assert.match(r.body.blocking_reasons[0].message, /prior-program context/);
+    assertNoMutations(r.fake);
+    assertNoPoison(r.fake);
+  } finally {
+    r.fake.cleanup();
+    fs.rmSync(contextRoot, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // D11.3 Undelivered injection — exit 42, escalated, no further dispatch
 // ---------------------------------------------------------------------------

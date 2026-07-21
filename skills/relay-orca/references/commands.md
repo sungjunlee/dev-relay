@@ -58,7 +58,8 @@ unknown flags exit `64` (usage).
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" \
-  [--json] [--smoke --smoke-to <handle>] [--orca-bin <path>]
+  [--json] [--smoke --smoke-to <handle>] [--orca-bin <path>] \
+  [--repo-root <path>] [--prior-program-context <context.json> ...]
 ```
 
 | Flag | Meaning |
@@ -67,14 +68,17 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" \
 | `--smoke` | After default checks pass, run a self-cleaning synthetic injection smoke. Requires `--smoke-to`. |
 | `--smoke-to <handle>` | Live Orca terminal handle already running a recognized agent CLI. Required with `--smoke`; the smoke path dispatches `--inject` to this handle and verifies assignee provenance against it. Bare `--smoke` fails fast (exit 64) before creating smoke task state. |
 | `--orca-bin <path>` | Explicit Orca CLI override (wins over PATH and the macOS bundle fallback). |
+| `--repo-root <path>` | Target git checkout used to validate each context's repository identity. |
+| `--prior-program-context <context.json>` | Repeatable read-only locator for an accepted program, canonical receipt, and trusted evidence. The probe recomputes Leaf 1's proof every attempt; it never trusts a context success bit. |
 | `--help`, `-h` | Print usage. |
 
 Default mode is **READ-ONLY**: it spawns only `orca status --json`,
-`orca orchestration task-list --json`, and `orca orchestration gate-list --json`. It never
-invokes `orca orchestration reset`. Admission ignores historical `completed`/`failed` tasks
-and blocks only active task states (`pending`/`ready`/`dispatched`/`blocked`) plus any live
-gates. Smoke cleanup uses `--status failed` (a real CLI terminal status). Full rationale,
-check order, smoke semantics, terminal-task filtering, and the reason-code table:
+`orca orchestration task-list --json`, and `orca orchestration gate-list --json`; explicit
+contexts add only durable file reads. It never invokes `orca orchestration reset`. Without
+contexts, admission ignores historical `completed`/`failed` tasks and blocks active tasks
+plus gates exactly as #942 did. With contexts, only rows covered by a recomputed closed-
+program proof are filtered. Smoke cleanup uses `--status failed` (a real CLI terminal
+status). Full rationale, check order, smoke semantics, context schema, and the reason-code table:
 [capability-probe.md](capability-probe.md).
 
 ### Probe rejection matrix
@@ -85,8 +89,8 @@ check order, smoke semantics, terminal-task filtering, and the reason-code table
 | `RUNTIME_NOT_READY` | 31 | Well-formed `status` fails a readiness conjunct |
 | `ORCHESTRATION_UNAVAILABLE` | 32 | Orchestration absent, disabled, or `ok:false` |
 | `MALFORMED_OUTPUT` | 33 | Unparseable or shape-invalid JSON |
-| `EXISTING_ORCHESTRATION_STATE` | 34 | Active task count or gate count `> 0` (never adopted) |
-| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer count, a count that disagrees with its own array length, unknown/missing task status, or `_meta.runtimeId` mismatch |
+| `EXISTING_ORCHESTRATION_STATE` | 34 | Active/unverified post-filter task or gate residue |
+| `AMBIGUOUS_GLOBAL_STATE` | 35 | Contradictory counts, malformed/duplicate/foreign attribution, context/proof/runtime mismatch, or missing identity |
 | `SMOKE_FAILED` | 36 | Smoke provenance (task/dispatch/assignee vs `--smoke-to`) failed |
 | `SMOKE_CLEANUP_FAILED` | 37 | Smoke cleanup of self-created state failed |
 
@@ -105,7 +109,7 @@ shortens the budget for tests.
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
   --program-file <accepted-program.json> [--json] [--concurrency N] \
   [--operator-handle <handle> ...] [--coordinator-handle <handle>] \
-  [--gate-evidence-dir <dir>] [--orca-bin <path>]
+  [--gate-evidence-dir <dir>] [--prior-program-context <context.json> ...] [--orca-bin <path>]
 ```
 
 | Flag | Meaning |
@@ -116,6 +120,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
 | `--operator-handle <handle>` | Repeatable. An explicit operator terminal handle to dispatch to — REQUIRED. `run` dispatches ONLY to handles provided here and never creates its own terminal (a self-created terminal has no recognized agent and cannot accept `--inject`). With zero handles, `run` fails closed with `OPERATOR_DISPATCH_FAILED` (44) before any mutation. Each handle must be a terminal already running an agent CLI (`orca terminal create --command "<agent-cli>" --json`). |
 | `--coordinator-handle <handle>` | Required for `integration_gate`. Must be the live/current coordinator handle verified by fresh Orca reads; it is never inferred from receipt/history. |
 | `--gate-evidence-dir <dir>` | Deterministic root for integration evidence. The operator writes `<outcome-id>.json` there; `RELAY_ORCA_GATE_EVIDENCE_ROOT` is an equivalent environment override. |
+| `--prior-program-context <context.json>` | Repeatable. Forward the exact read-only prior-program locators to admission; no implicit receipt/history discovery occurs. |
 | `--orca-bin <path>` | Explicit Orca CLI override — passed to the capability probe and used for all orchestration calls. |
 | `--resolve-decision <id>` | (#947) Write a resolved `decision:` record for `<id>` into the receipt's `decisions[]`. Requires `--resolution` and `--resolver`; provenance (question/options/downstream_wave) is sourced from the program's declared `decision_gates[<id>]`. Never automatic. |
 | `--resolution <text>` | The decision resolution (with `--resolve-decision`). |

@@ -75,7 +75,8 @@ function usageError(message) {
   process.stderr.write(`relay-orca run: ${message}\n`);
   process.stderr.write(
     "usage: run.js --program-file <accepted-program.json> [--json] [--concurrency N] " +
-      "[--operator-handle <handle> ...] [--coordinator-handle <handle>] [--gate-evidence-dir <dir>] [--orca-bin <path>]\n",
+      "[--operator-handle <handle> ...] [--coordinator-handle <handle>] [--gate-evidence-dir <dir>] " +
+      "[--prior-program-context <context.json> ...] [--orca-bin <path>]\n",
   );
   process.exit(USAGE_EXIT);
 }
@@ -88,6 +89,7 @@ function parseArgs(argv) {
     operatorHandles: [],
     coordinatorHandle: null,
     gateEvidenceDir: null,
+    priorProgramContexts: [],
     orcaBin: null,
     repoRoot: null,
     // #947 additive operator-record flags. A decision/authorization record is written
@@ -106,6 +108,7 @@ function parseArgs(argv) {
     else if (arg === "--operator-handle") opts.operatorHandles.push(requireValue(argv[(i += 1)], "--operator-handle"));
     else if (arg === "--coordinator-handle") opts.coordinatorHandle = requireValue(argv[(i += 1)], "--coordinator-handle");
     else if (arg === "--gate-evidence-dir") opts.gateEvidenceDir = requireValue(argv[(i += 1)], "--gate-evidence-dir");
+    else if (arg === "--prior-program-context") opts.priorProgramContexts.push(requireValue(argv[(i += 1)], "--prior-program-context"));
     else if (arg === "--resolve-decision") opts.resolveDecision = requireValue(argv[(i += 1)], "--resolve-decision");
     else if (arg === "--resolution") opts.resolution = requireValue(argv[(i += 1)], "--resolution");
     else if (arg === "--resolver") opts.resolver = requireValue(argv[(i += 1)], "--resolver");
@@ -273,6 +276,8 @@ function main() {
       concurrency: opts.concurrency,
       operatorHandles: opts.operatorHandles,
       orcaBin: opts.orcaBin,
+      priorProgramContexts: opts.priorProgramContexts,
+      repoRoot: opts.repoRoot,
       runOrca,
       persistReceipt,
       coordinatorHandle: opts.coordinatorHandle,

@@ -46,7 +46,12 @@ function procDetail(proc, note) {
 function admit(report, options) {
   const result = emptyResult(false);
   try {
-    probe({ orcaBin: options.orcaBin, _result: result });
+    probe({
+      orcaBin: options.orcaBin,
+      priorProgramContexts: options.priorProgramContexts,
+      repoRoot: options.repoRoot,
+      _result: result,
+    });
   } catch (error) {
     if (!(error instanceof ProbeError)) throw error;
     report.admission = { admitted: false, runtime_id: result.runtime_id };

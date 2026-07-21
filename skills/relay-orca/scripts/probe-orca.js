@@ -9,6 +9,9 @@
 const { execFileSync } = require("node:child_process");
 const { resolveOrcaBin, isRunnableFile, MACOS_BUNDLE_FALLBACK } = require("./lib/resolve-orca-bin");
 const { REASONS, USAGE_EXIT, ProbeError, reject } = require("./lib/probe-reasons");
+const { classifyHistoricalState } = require("./lib/admission-history");
+const { loadPriorProgramContexts, PriorProgramContextError } = require("./prior-program-context");
+const { programSegment } = require("./lib/program-segment");
 
 const SMOKE_TITLE_MARKER = "relay-orca-probe-smoke";
 const SMOKE_SPEC = "relay-orca capability probe synthetic smoke (self-cleaning)";
@@ -101,6 +104,8 @@ function parseArgs(argv) {
     smoke: false,
     smokeTo: null,
     orcaBin: null,
+    repoRoot: null,
+    priorProgramContexts: [],
     help: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -117,6 +122,14 @@ function parseArgs(argv) {
       const value = argv[(i += 1)];
       if (!value || value.startsWith("-")) usageError("--orca-bin requires a path");
       opts.orcaBin = value;
+    } else if (arg === "--repo-root") {
+      const value = argv[(i += 1)];
+      if (!value || value.startsWith("-")) usageError("--repo-root requires a path");
+      opts.repoRoot = value;
+    } else if (arg === "--prior-program-context") {
+      const value = argv[(i += 1)];
+      if (!value || value.startsWith("-")) usageError("--prior-program-context requires a path");
+      opts.priorProgramContexts.push(value);
     } else if (arg === "--help" || arg === "-h") opts.help = true;
     else usageError(`unrecognized argument: ${arg}`);
   }
@@ -137,7 +150,8 @@ function parseArgs(argv) {
 function usageError(message) {
   process.stderr.write(`relay-orca probe: ${message}\n`);
   process.stderr.write(
-    "usage: probe-orca.js [--json] [--smoke --smoke-to <handle>] [--orca-bin <path>]\n",
+    "usage: probe-orca.js [--json] [--smoke --smoke-to <handle>] [--orca-bin <path>] " +
+      "[--repo-root <path>] [--prior-program-context <context.json>] ...\n",
   );
   process.exit(USAGE_EXIT);
 }
@@ -807,8 +821,9 @@ function probe(options = {}) {
     );
   }
 
-  // Only non-terminal tasks block admission. Historical completed/failed tasks stay
-  // listed by the real CLI but must not brick later probes. Unknown status fails closed.
+  // Only non-terminal tasks block admission in the frozen no-context mode. Historical
+  // completed/failed tasks stay listed by the real CLI but must not brick later probes.
+  // Unknown status fails closed. Keep this path byte-identical for #942 callers.
   const activeTaskInfo = countActiveTasks(taskCountInfo.items || []);
   if (activeTaskInfo.ambiguous) {
     recordCheck(result.checks, "existing_state", "failed");
@@ -818,7 +833,45 @@ function probe(options = {}) {
   }
   result.existing_state = { tasks: activeTaskInfo.count, gates: gateCountInfo.count };
 
-  if (activeTaskInfo.count > 0 || gateCountInfo.count > 0) {
+  const priorProgramContexts = Array.isArray(options.priorProgramContexts)
+    ? options.priorProgramContexts
+    : [];
+  if (priorProgramContexts.length > 0) {
+    let history;
+    try {
+      const contexts = loadPriorProgramContexts({
+        inputs: priorProgramContexts,
+        repoRoot: options.repoRoot,
+        snapshot: {
+          status: statusShape.payload,
+          task_list: taskListShape.payload,
+          gate_list: gateListShape.payload,
+        },
+      });
+      history = classifyHistoricalState({
+        tasks: taskCountInfo.items || [],
+        gates: gateCountInfo.items || [],
+        contexts,
+        programSegment,
+      });
+    } catch (error) {
+      recordCheck(result.checks, "existing_state", "failed");
+      skipRemaining(result.checks, ["smoke"]);
+      result.existing_state = { tasks: null, gates: null };
+      const detail = error instanceof PriorProgramContextError ? error.message : "context could not be read";
+      reject("AMBIGUOUS_GLOBAL_STATE", `prior-program context is untrustworthy: ${boundedExcerpt(detail)}`);
+    }
+    if (!history.ok) {
+      recordCheck(result.checks, "existing_state", "failed");
+      skipRemaining(result.checks, ["smoke"]);
+      result.existing_state = {
+        tasks: history.activeTasks ?? null,
+        gates: history.blockingGates ?? null,
+      };
+      reject(history.reasonCode, history.message);
+    }
+    result.existing_state = { tasks: history.activeTasks, gates: history.blockingGates };
+  } else if (activeTaskInfo.count > 0 || gateCountInfo.count > 0) {
     recordCheck(result.checks, "existing_state", "failed");
     skipRemaining(result.checks, ["smoke"]);
     reject(
@@ -850,6 +903,8 @@ function runMain(argv = process.argv.slice(2), runtime = {}) {
       smoke: opts.smoke,
       smokeTo: opts.smokeTo,
       orcaBin: opts.orcaBin,
+      priorProgramContexts: opts.priorProgramContexts,
+      repoRoot: opts.repoRoot || runtime.repoRoot,
       pathEnv: runtime.pathEnv,
       isRunnableFile: runtime.isRunnableFile,
       pathDelimiter: runtime.pathDelimiter,

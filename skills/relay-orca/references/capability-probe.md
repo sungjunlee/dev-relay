@@ -14,7 +14,7 @@ on Orca upgrades**.
 | --- | --- |
 | Desktop app / runtime graph is ready | `orca status --json` readiness conjuncts |
 | Orchestration commands exist and are enabled | `orchestration task-list --json` |
-| Runtime-global state has no **active** program | task-list active (non-terminal) count `=== 0`, gate-list count `=== 0`, and each list `count` equals its own array length |
+| Runtime-global state has no **unverified** program residue | task-list active count is zero; with explicit prior-program contexts, only rows covered by recomputed closed-program proofs are filtered |
 | Injected dispatch returns provenance IDs | Explicit `--smoke --smoke-to <live-handle>` create + `dispatch --inject` to that handle |
 
 ## Targeted CLI surface (mid-2026)
@@ -49,7 +49,7 @@ Real CLI constraints the probe honors:
    is raised only when all three ordered branches miss.
 2. Runtime readiness (`status --json`)
 3. Orchestration availability (`task-list --json`)
-4. Existing global state (`task-list` + `gate-list` counts / runtimeId consistency)
+4. Existing global state (`task-list` + `gate-list` counts / runtimeId consistency), then optional explicit historical-proof filtering
 5. Optional smoke (only when `--smoke --smoke-to <handle>` and all prior checks passed)
 
 Checks after a failed check may be skipped and are recorded as `skipped` in `checks[]`.
@@ -65,8 +65,42 @@ Admission counts only **active** (non-terminal) task states as existing orchestr
 | `completed`, `failed` | Ignored (historical; do not brick later probes) |
 | missing / unknown / malformed | Fail-closed (`AMBIGUOUS_GLOBAL_STATE`) |
 
-Gate list ambiguity and any non-empty live gate count still fail closed. The
-`existing_state.tasks` field reports the **active** task count used for admission.
+Without a prior-program context, gate list ambiguity and any non-empty live gate count still
+fail closed. The `existing_state.tasks` field reports the **active** task count used for
+admission in that frozen path.
+
+### Explicit prior-program contexts
+
+`--prior-program-context <context.json>` is repeatable on both `probe-orca.js` and
+`run.js`. A context is a read-only locator, not a completion claim:
+
+```json
+{
+  "schema": 1,
+  "repo_root": "/absolute/path/to/repo",
+  "accepted_program": { "path": "/path/accepted-program.json" },
+  "canonical_receipt": { "path": "/path/receipt.json" },
+  "trusted_evidence": {
+    "durable_outcomes": { "path": "/path/durable-outcomes.json" },
+    "generic_integration": { "path": "/path/generic-integration.json" }
+  }
+}
+```
+
+Every attempt rereads these files and recomputes Leaf 1's `verifyClosedProgram` against
+the one live status/task-list/gate-list snapshot. Context success/proof bits are ignored.
+Missing, duplicate, malformed, unreadable, cross-repository, contradictory, or
+cross-runtime inputs fail closed with `AMBIGUOUS_GLOBAL_STATE` (35). No context keeps the
+original #942 policy byte-for-byte: terminal completed/failed tasks are ignored and any
+gate or active task blocks.
+
+With contexts, only a uniquely owned task whose proof mapping and exact
+`relay-orca: <program-segment>/<outcome>` marker agree and whose live state is exactly
+`completed` is exempt. A gate is exempt only when its unique physical id links to that
+exempt task and the recomputed proof includes it; all other terminal/foreign/orphaned or
+unresolved rows remain in the post-filter `existing_state.tasks` / `existing_state.gates`
+counts. Multiple contexts are sorted by program identity, and task/gate rows are sorted by
+physical id before classification.
 
 ### Remediation (no automatic reset)
 
@@ -87,8 +121,8 @@ When active tasks or gates block admission:
 | `RUNTIME_NOT_READY` | 31 | Well-formed status fails a readiness conjunct, or `status` exits non-zero with shape-valid stdout |
 | `ORCHESTRATION_UNAVAILABLE` | 32 | Orchestration absent/disabled/`ok:false` |
 | `MALFORMED_OUTPUT` | 33 | Unparseable or shape-invalid JSON |
-| `EXISTING_ORCHESTRATION_STATE` | 34 | Active task count or gate `count > 0` (never adopted) |
-| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer `count`, a `count` that disagrees with its own array length, unknown/missing task status, or a runtime id that is missing/empty on any probed response or disagrees across them — the status `runtime.runtimeId` and every `_meta.runtimeId` (status, task-list, gate-list) must all be present, non-empty, and identical |
+| `EXISTING_ORCHESTRATION_STATE` | 34 | Active task/gate residue, or validly classified rows not covered by a recomputed closed-program proof |
+| `AMBIGUOUS_GLOBAL_STATE` | 35 | Contradictory counts, unknown/missing identity or status, duplicate/malformed/foreign attribution, unreadable or cross-repository context, proof/runtime mismatch, or inconsistent runtime ids |
 | `SMOKE_FAILED` | 36 | Smoke provenance verification failed |
 | `SMOKE_CLEANUP_FAILED` | 37 | Smoke cleanup of self-created state failed |
 
@@ -128,9 +162,10 @@ exit codes are unaffected.
 ## Guarantees
 
 - **D1 read-only default** — without `--smoke`, the probe spawns only `status`,
-  `orchestration task-list`, and `orchestration gate-list`. It creates no Orca task,
-  terminal, worktree, relay request/run, PR, or tracker issue, and writes nothing to the
-  filesystem (stdout/stderr only).
+  `orchestration task-list`, and `orchestration gate-list`. With explicit contexts it also
+  rereads only the locator, accepted-program, canonical receipt, and trusted evidence files.
+  It creates no Orca task, terminal, worktree, relay request/run, PR, or tracker issue, and
+  writes nothing to the filesystem.
 - **D2 no-reset** — no code path invokes `orca orchestration reset`, including error and
   smoke-cleanup-failure paths. Scoped manual reset remains an operator remediation step only.
 - **D9 smoke** — runs only under `--smoke --smoke-to <live-handle>`, only after default
@@ -151,6 +186,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json \
   --smoke --smoke-to <live-agent-terminal-handle>
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json --orca-bin /path/to/orca
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json \
+  --orca-bin /path/to/orca --prior-program-context /path/prior-context.json
 ```
 
 `--smoke-to` must name a terminal already running a recognized agent CLI (e.g. claude,
