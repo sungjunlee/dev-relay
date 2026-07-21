@@ -1195,24 +1195,37 @@ function missingLegacyOwnershipError(record, leafRef, expected) {
   );
 }
 
+function assertManifestOwnershipBackfillCurrent(backfill, current) {
+  const actual = readRunRecordOwnership({
+    manifestPath: backfill.record.manifestPath,
+    data: current.data,
+  }, backfill.leafRef);
+  if (actual && !ownershipsEqual(actual, backfill.ownership)) {
+    throw new FleetInputError(
+      `ownership drift for leaf '${backfill.leafRef}' run '${runRecordLabel(backfill.record)}': ` +
+      `manifest=${formatOwnership(actual)} leaf=${formatOwnership(backfill.ownership)}; ` +
+      "refusing to rewrite the child owner"
+    );
+  }
+  return actual;
+}
+
 function applyManifestOwnershipBackfills(backfills) {
+  // Validate the complete cohort against fresh reads before the first write.
+  // The write loop repeats this check under its own transaction so a race
+  // after preflight still fails closed without losing concurrent transitions.
   for (const backfill of backfills) {
     withManifestTransaction(backfill.record.manifestPath, () => {
       const current = readManifest(backfill.record.manifestPath);
-      const actual = readRunRecordOwnership({
-        manifestPath: backfill.record.manifestPath,
-        data: current.data,
-      }, backfill.leafRef);
-      if (actual) {
-        if (!ownershipsEqual(actual, backfill.ownership)) {
-          throw new FleetInputError(
-            `ownership drift for leaf '${backfill.leafRef}' run '${runRecordLabel(backfill.record)}': ` +
-            `manifest=${formatOwnership(actual)} leaf=${formatOwnership(backfill.ownership)}; ` +
-            "refusing to rewrite the child owner"
-          );
-        }
-        return;
-      }
+      assertManifestOwnershipBackfillCurrent(backfill, current);
+    });
+  }
+
+  for (const backfill of backfills) {
+    withManifestTransaction(backfill.record.manifestPath, () => {
+      const current = readManifest(backfill.record.manifestPath);
+      const actual = assertManifestOwnershipBackfillCurrent(backfill, current);
+      if (actual) return;
       writeManifestUnlocked(backfill.record.manifestPath, {
         ...current.data,
         ownership: backfill.ownership,

@@ -1035,6 +1035,110 @@ test("relay-fleet requires explicit ownership to migrate an active legacy child,
   assert.deepEqual(persisted.leaves.map((entry) => entry.ownership), [TEST_OWNERSHIP]);
 });
 
+test("relay-fleet preflights every legacy ownership backfill before writing the first child", async () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-backfill-preflight-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-owner-backfill-preflight-hook-"));
+  const preloadPath = writeReadMarkerPreload(tmpDir);
+  const markerPath = path.join(tmpDir, "later-manifest-read.flag");
+  const fleetId = "fleet-owner-backfill-preflight";
+  const leaves = [
+    makeLeaf(repoRoot, 1, {
+      issue_number: 595,
+      leaf_ref: "leaf-first",
+      leaf_id: "leaf-first",
+    }),
+    makeLeaf(repoRoot, 2, {
+      issue_number: 594,
+      leaf_ref: "leaf-later",
+      leaf_id: "leaf-later",
+    }),
+  ];
+  const runIds = [
+    "issue-595-20260721010101000-a1b2c3d4",
+    "issue-594-20260721010101000-a1b2c3d4",
+  ];
+
+  for (let index = 0; index < leaves.length; index += 1) {
+    const leaf = leaves[index];
+    const runId = runIds[index];
+    writeChildRun(repoRoot, {
+      runId,
+      branch: leaf.branch,
+      issueNumber: leaf.issue_number,
+      leafId: leaf.leaf_id,
+      fleetId,
+    });
+    const manifestPath = getManifestPath(repoRoot, runId);
+    const record = readManifest(manifestPath);
+    const { ownership: _legacyOwnership, ...legacyManifest } = record.data;
+    writeManifest(manifestPath, {
+      ...legacyManifest,
+      timestamps: {
+        ...legacyManifest.timestamps,
+        created_at: "2026-07-21T01:01:01.000Z",
+      },
+    }, record.body);
+  }
+
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: leaves.map((leaf, index) => ({
+      leaf_ref: leaf.leaf_ref,
+      run_id: runIds[index],
+      dispatch_status: DISPATCH_STATUS.DISPATCHED,
+    })),
+  });
+  advanceFleetManifestState(repoRoot, fleetId, FLEET_STATES.DISPATCHED);
+  writePersistedFleetLeaves(repoRoot, fleetId, leaves.map((leaf) => {
+    const { ownership: _persistedOwnership, ...legacyLeaf } = leaf;
+    return legacyLeaf;
+  }));
+
+  const firstManifestPath = getManifestPath(repoRoot, runIds[0]);
+  const laterManifestPath = getManifestPath(repoRoot, runIds[1]);
+  const firstLock = acquireManifestLock(firstManifestPath);
+  const child = spawn(process.execPath, [
+    RELAY_FLEET_SCRIPT,
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", writeLeavesFile(repoRoot, leaves),
+    "--json",
+  ], {
+    env: {
+      ...process.env,
+      RELAY_HOME: relayHome,
+      RELAY_SOURCE_ROOT: REPO_ROOT,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preloadPath}`].filter(Boolean).join(" "),
+      RELAY_FLEET_MARK_READ_PATH: laterManifestPath,
+      RELAY_FLEET_READ_MARKER_PATH: markerPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const childResult = captureChildResult(child);
+  const driftedOwnership = {
+    sprint: "backlog/sprints/2026-07-other-track.md",
+    track: "2026-07-other-track",
+    component: "other-track",
+  };
+
+  try {
+    await waitFor(() => fs.existsSync(markerPath));
+    const laterRecord = readManifest(laterManifestPath);
+    writeManifest(laterManifestPath, {
+      ...laterRecord.data,
+      ownership: driftedOwnership,
+    }, laterRecord.body);
+  } finally {
+    releaseManifestLock(firstLock);
+  }
+
+  const result = await childResult;
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ownership drift.*leaf-later.*refusing to rewrite/i);
+  assert.equal(readManifest(firstManifestPath).data.ownership, undefined);
+  assert.deepEqual(readManifest(laterManifestPath).data.ownership, driftedOwnership);
+});
+
 test("relay-fleet legacy ownership backfill preserves a concurrent child manifest transition", async () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-backfill-race-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-owner-backfill-race-hook-"));
