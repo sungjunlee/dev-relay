@@ -1257,11 +1257,14 @@ function validateFleetRunOwnership(repoRoot, fleetId, leaves, { allowLegacyBackf
   const candidateKeys = new Set();
 
   function addCandidate(record, leafRef, leaf) {
-    // Terminal children cannot dispatch, review, or merge again, so legacy
-    // manifests must not be re-asserted on every fleet resume. Active children
-    // remain fail-closed and require a trusted leaf owner before backfill.
+    // Terminal children without ownership remain inspectable as legacy runs.
+    // Once a terminal child has an owner, keep validating its immutable value
+    // against the persisted leaf just like an active child.
     const candidateKey = `${record.manifestPath}\0${leafRef}`;
-    if (runRecordIsFleetTerminal(record) || candidateKeys.has(candidateKey)) return;
+    if (
+      (runRecordIsFleetTerminal(record) && record.data?.ownership === undefined)
+      || candidateKeys.has(candidateKey)
+    ) return;
     candidateKeys.add(candidateKey);
     candidates.push({ record, leafRef, leaf });
   }

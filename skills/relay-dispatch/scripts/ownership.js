@@ -101,17 +101,20 @@ function validateOwnershipSprintFile(repoRoot, raw, { label = "ownership" } = {}
   const owner = normalizeOwnership(raw, { label });
   const sprintsRoot = path.resolve(repoRoot, "backlog", "sprints");
   const sprintPath = path.resolve(repoRoot, owner.sprint);
-  const isDirectChild = path.dirname(sprintPath) === sprintsRoot;
+  let realSprintsRoot = null;
+  let realSprintPath = null;
   let isRegularFile = false;
 
-  if (isDirectChild) {
-    try {
-      isRegularFile = fs.statSync(sprintPath).isFile();
-    } catch (error) {
-      if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
-    }
+  try {
+    realSprintsRoot = fs.realpathSync(sprintsRoot);
+    realSprintPath = fs.realpathSync(sprintPath);
+    isRegularFile = fs.statSync(realSprintPath).isFile();
+  } catch (error) {
+    if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
   }
 
+  const isDirectChild = realSprintPath !== null
+    && path.dirname(realSprintPath) === realSprintsRoot;
   if (!isDirectChild || !isRegularFile) {
     throw new OwnershipValidationError(
       `${label}.sprint ${JSON.stringify(owner.sprint)} for track ${JSON.stringify(owner.track)} ` +

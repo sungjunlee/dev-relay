@@ -15,6 +15,7 @@ const {
 const {
   OWNER_SOURCES,
   readManifestOwnership,
+  resolveSprintOwner,
 } = require("../../../skills/relay-merge/scripts/sprint-owner");
 
 const OWNER = Object.freeze({
@@ -63,6 +64,35 @@ test("validateOwnershipSprintFile resolves canonical ownership against the curre
   }, { label: "leaf 'issue-957' ownership" });
 
   assert.deepEqual(owner, OWNER);
+});
+
+test("validated ownership remains consumable unchanged through the downstream #955 seam", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-owner-downstream-"));
+  const sprintPath = path.join(repoRoot, OWNER.sprint);
+  fs.mkdirSync(path.dirname(sprintPath), { recursive: true });
+  fs.writeFileSync(sprintPath, `---
+status: active
+track: ${OWNER.track}
+component: ${OWNER.component}
+---
+
+# Current checkout sprint
+`, "utf-8");
+
+  const owner = validateOwnershipSprintFile(repoRoot, OWNER);
+  const manifestOwner = readManifestOwnership({ ownership: owner });
+  const resolved = resolveSprintOwner({
+    repo: repoRoot,
+    owner: manifestOwner,
+    sprintState: () => assert.fail("concrete fleet ownership must not invoke sprint-state"),
+  });
+
+  assert.deepEqual(manifestOwner, { ...OWNER, source: OWNER_SOURCES.FLEET });
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.source, OWNER_SOURCES.FLEET);
+  assert.equal(resolved.sprintPath, sprintPath);
+  assert.equal(resolved.track, OWNER.track);
+  assert.equal(resolved.component, OWNER.component);
 });
 
 test("validateOwnershipSprintFile rejects missing and non-file canonical sprints", () => {

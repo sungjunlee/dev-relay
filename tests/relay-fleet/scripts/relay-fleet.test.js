@@ -1023,6 +1023,42 @@ test("relay-fleet rejects a canonical missing sprint before fleet or dispatch si
   assert.equal(fs.existsSync(dispatchLog), false);
 });
 
+test("relay-fleet rejects an outside-target sprint symlink before fleet or dispatch side effects", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-symlink-escape-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-owner-symlink-escape-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const dispatchLog = path.join(tmpDir, "dispatch.log");
+  const leaf = makeLeaf(repoRoot, 1, {
+    leaf_ref: "leaf-symlink-escape",
+    issue_number: 957,
+  });
+  const leavesFile = writeLeavesFile(repoRoot, [leaf]);
+  const fleetId = "fleet-owner-symlink-escape";
+  const sprintPath = path.join(repoRoot, TEST_OWNERSHIP.sprint);
+  const outsideTarget = path.join(tmpDir, "outside-sprint.md");
+  fs.writeFileSync(outsideTarget, "# Outside sprint target\n", "utf-8");
+  fs.unlinkSync(sprintPath);
+  fs.symlinkSync(outsideTarget, sprintPath);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--json",
+  ], { relayHome, env: { FAKE_DISPATCH_LOG: dispatchLog } });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /leaf 'leaf-symlink-escape' ownership\.sprint.*must resolve to an existing regular file within.*backlog\/sprints/i
+  );
+  assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, fleetId)), false);
+  assert.equal(fs.existsSync(getFleetLeavesStorePath(repoRoot, fleetId)), false);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, leaf.issue_number)), false);
+  assert.equal(fs.existsSync(dispatchLog), false);
+});
+
 test("relay-fleet rejects child manifest ownership drift without rewriting it", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-drift-");
   const fleetId = "fleet-owner-drift";
@@ -1060,7 +1096,7 @@ test("relay-fleet rejects child manifest ownership drift without rewriting it", 
   assert.deepEqual(readManifest(getManifestPath(repoRoot, runId)).data.ownership, driftedOwnership);
 });
 
-test("relay-fleet resumes a terminal pre-ownership fleet without re-asserting its legacy child", () => {
+test("relay-fleet keeps terminal missing-owner legacy inspection allowed without backfill", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-terminal-legacy-");
   const fleetId = "fleet-owner-terminal-legacy";
   const leaf = makeLeaf(repoRoot, 1, { issue_number: 591, leaf_ref: "leaf-legacy", leaf_id: "leaf-legacy" });
@@ -1095,6 +1131,44 @@ test("relay-fleet resumes a terminal pre-ownership fleet without re-asserting it
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   assert.equal(JSON.parse(result.stdout).summary.fleet_state, FLEET_STATES.CLOSED);
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.ownership, undefined);
+});
+
+test("relay-fleet rejects terminal existing-owner drift against the persisted leaf", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-terminal-drift-");
+  const fleetId = "fleet-owner-terminal-drift";
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 593, leaf_ref: "leaf-terminal-drift" });
+  const runId = "issue-593-20260721010101000-a1b2c3d4";
+  const driftedOwnership = { ...TEST_OWNERSHIP, component: "other-component" };
+  writeChildRun(repoRoot, {
+    runId,
+    branch: leaf.branch,
+    issueNumber: leaf.issue_number,
+    leafId: leaf.leaf_id,
+    fleetId,
+    ownership: driftedOwnership,
+    state: RUN_STATES.CLOSED,
+  });
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
+  });
+  advanceFleetManifestState(repoRoot, fleetId, FLEET_STATES.DISPATCHED);
+  writePersistedFleetLeaves(repoRoot, fleetId, [leaf]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--resume",
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ownership drift.*leaf-terminal-drift.*refusing to rewrite/i);
+  assert.deepEqual(readManifest(getManifestPath(repoRoot, runId)).data.ownership, driftedOwnership);
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(getFleetLeavesStorePath(repoRoot, fleetId), "utf-8")).leaves[0].ownership,
+    TEST_OWNERSHIP
+  );
 });
 
 test("relay-fleet requires explicit ownership to migrate an active legacy child, then backfills both stores", () => {
