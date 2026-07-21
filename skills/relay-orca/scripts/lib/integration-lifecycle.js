@@ -414,9 +414,32 @@ function reissueCompletionInstruction(ctx, gateRow) {
   return { ok: true, state: "completed", gate: gateRow, report_path: ctx.reportPath };
 }
 
+// The program-owned integration task may still advance toward `completed` ONLY from a live,
+// still-running status. This mirrors probe-orca's authoritative active-task set
+// (pending/ready/dispatched/blocked); `completed`/`failed` are the two terminal states, and only
+// `completed` is a legitimate integration success. Any status outside this set that is not
+// `completed` — a terminal `failed`, or any unrecognized/ambiguous status — fails closed rather
+// than being mutated toward completion. (#1019 R7)
+const ADVANCEABLE_TASK_STATUSES = Object.freeze(["pending", "ready", "dispatched", "blocked"]);
+
 function advanceIntegrationGate(ctx) {
   return withBoundedLock(ctx, () => {
     const provenance = currentProvenance(ctx);
+    // Refuse a task that can never legitimately complete BEFORE any gate materialization,
+    // gate-resolve, or completion send. `completed` is the ONE success terminal (the terminal
+    // paths below own it); every OTHER terminal or non-completable status — `failed`, or any
+    // status outside the still-advancing live set — is one-way. A still-verifying historical
+    // dispatch plus provenance-bound evidence must not flip the canonical gate to passed or
+    // re-issue worker_done against such a task: that strands a passed gate on a task that can
+    // never reach completion, a harder residue than failing closed. This fires here with zero
+    // further mutation. (#1019 R7)
+    const taskStatus = provenance.task && provenance.task.status;
+    if (taskStatus !== "completed" && !ADVANCEABLE_TASK_STATUSES.includes(taskStatus)) {
+      fail(
+        "INTEGRATION_TASK_NOT_COMPLETABLE",
+        `integration task ${ctx.taskId} is in terminal/non-completable status "${taskStatus}"; refusing to resolve the canonical gate passed or send worker_done against a task that cannot reach completion — resolve the task's failure at its source rather than forcing the integration gate`,
+      );
+    }
     // Evidence is validated and provenance-bound BEFORE any gate inspection or mutation,
     // so a stale artifact fails closed with zero lifecycle mutation.
     const report = readReport(ctx, provenance);

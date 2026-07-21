@@ -160,6 +160,57 @@ test("#1019 repeated resume on passed gate + active task re-issues the completio
   }
 });
 
+// #1019 R7: the live integration task is already terminal `failed` (or otherwise
+// non-completable), yet a historical dispatch still verifies and provenance-bound evidence
+// exists. Resolving the canonical gate passed and re-issuing worker_done would strand a passed
+// gate on a task that can never legitimately complete — a harder residue than failing closed. The
+// advance must refuse BEFORE any gate-create/resolve/send, with an actionable reason and zero mutation.
+test("#1019 R7 a terminal non-completable integration task fails closed before any gate mutation", () => {
+  const question = canonicalIntegrationQuestion(PROGRAM_ID, OUTCOME_ID, programSegment);
+  // A pending canonical gate already exists AND the operator's provenance-bound evidence landed;
+  // only the still-live task status stops the flow.
+  for (const status of ["failed", "cancelled"]) {
+    const fake = installFakeOrcaIntegrationLifecycle(initialState({
+      tasks: [{ id: TASK_ID, status, worker_done: false }],
+      gates: [{ id: "g1", task_id: TASK_ID, question, options: ["passed", "failed"], status: "pending" }],
+    }));
+    const report = reportFile();
+    try {
+      assert.throws(() => advanceIntegrationGate(context(fake, report.reportPath)), (error) => {
+        assert.ok(error instanceof IntegrationLifecycleError, status);
+        assert.equal(error.reasonCode, "INTEGRATION_TASK_NOT_COMPLETABLE", status);
+        return true;
+      }, status);
+      const mutations = fake.readLog().filter((argv) => ["gate-create", "gate-resolve", "send"].includes(argv[1]));
+      assert.deepEqual(mutations, [], `${status} must have zero lifecycle mutation`);
+      assert.equal(fake.readState().gates[0].status, "pending", `${status} must leave the canonical gate unresolved`);
+      assert.equal(fake.readPoison(), null);
+    } finally {
+      fake.cleanup();
+      fs.rmSync(report.dir, { recursive: true, force: true });
+    }
+  }
+
+  // The same guard holds when the canonical gate is still MISSING: a non-completable task must
+  // never even materialize a gate to write evidence against.
+  const fake = installFakeOrcaIntegrationLifecycle(initialState({
+    tasks: [{ id: TASK_ID, status: "failed", worker_done: false }],
+  }));
+  const report = reportFile();
+  try {
+    assert.throws(() => advanceIntegrationGate(context(fake, report.reportPath)), (error) => {
+      assert.equal(error.reasonCode, "INTEGRATION_TASK_NOT_COMPLETABLE");
+      return true;
+    });
+    assert.deepEqual(fake.readLog().filter((argv) => ["gate-create", "gate-resolve", "send"].includes(argv[1])), []);
+    assert.equal(fake.readState().gates.length, 0, "a failed task must not even create a gate");
+    assert.equal(fake.readPoison(), null);
+  } finally {
+    fake.cleanup();
+    fs.rmSync(report.dir, { recursive: true, force: true });
+  }
+});
+
 test("#1019 create response loss is recovered by re-list/adopt without a second create", () => {
   const fake = installFakeOrcaIntegrationLifecycle(initialState({ createResponseLoss: true }));
   try {

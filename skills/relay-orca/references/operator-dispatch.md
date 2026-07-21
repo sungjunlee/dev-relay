@@ -71,8 +71,18 @@ untouched (stop semantics are #946).
 ## Integration-gate completion contract (#1019)
 
 An integration operator must write the live report at the exact path supplied in the prompt,
-using deterministic JSON such as `{"passed":true,"evidence":"suite green"}`. The operator
-does not create or resolve the gate. The coordinator uses the shared #1016 marker to derive
+using deterministic JSON that is bound to THIS dispatch — it MUST carry `passed`, `evidence`,
+and the exact `runtime_id`/`task_id`/`dispatch_id`/`assignee` of the live dispatch (the same
+required fields as the [gates-and-completion.md](gates-and-completion.md#integration-gate-lifecycle-1019)
+bound shape), e.g.:
+
+```json
+{"passed":true,"evidence":"suite green","runtime_id":"<live>","task_id":"<this task>","dispatch_id":"<this dispatch>","assignee":"<this pane>"}
+```
+
+An artifact omitting any provenance field, or carrying a reused/prior-run value, fails closed
+(`INTEGRATION_REPORT_PROVENANCE_MISSING` / `INTEGRATION_REPORT_PROVENANCE_MISMATCH`) and never
+resolves the gate. The operator does not create or resolve the gate. The coordinator uses the shared #1016 marker to derive
 the exact question and the exact options `["passed","failed"]`; it lists, creates/adopts,
 and re-lists under a bounded lock. Lost create responses are recovered by re-list/adopt, while
 duplicates, noncanonical gates, missing physical ids, and conflicting results stop the flow.
