@@ -107,6 +107,7 @@ function discoverSprintStateBin({
 function normalizeRepoSprintPath(repo, sprintPath, {
   existsSync = fs.existsSync,
   realpathSync = fs.realpathSync,
+  statSync = fs.statSync,
 } = {}) {
   if (!repo) return buildFailure("repo_missing");
   if (typeof sprintPath !== "string" || !sprintPath.trim()) {
@@ -132,20 +133,48 @@ function normalizeRepoSprintPath(repo, sprintPath, {
     if (!existsSync(sprintsDir)) {
       return buildFailure("sprint_path_missing", { sprintPath: absPath, sprintsDir });
     }
-    if (!existsSync(absPath)) {
-      return buildFailure("sprint_path_missing", { sprintPath: absPath });
-    }
+    let realRepo;
     let realSprints;
-    let realFile;
     try {
+      realRepo = realpathSync(repo);
       realSprints = realpathSync(sprintsDir);
-      realFile = realpathSync(absPath);
     } catch (error) {
       return buildFailure("sprint_path_missing", {
         sprintPath: absPath,
         detail: error.message,
       });
     }
+
+    const rootRel = path.relative(realRepo, realSprints);
+    if (
+      !rootRel
+      || rootRel === ".."
+      || rootRel.startsWith(`..${path.sep}`)
+      || path.isAbsolute(rootRel)
+      || rootRel.split(path.sep).includes("..")
+    ) {
+      return buildFailure("sprint_path_escaped", {
+        detail: `sprints root must resolve within repository ${realRepo}`,
+        sprintPath: absPath,
+        sprintsDir,
+      });
+    }
+
+    if (!existsSync(absPath)) {
+      return buildFailure("sprint_path_missing", { sprintPath: absPath });
+    }
+    let realFile;
+    let isRegularFile;
+    try {
+      realFile = realpathSync(absPath);
+      isRegularFile = statSync(realFile).isFile();
+    } catch (error) {
+      return buildFailure("sprint_path_missing", {
+        sprintPath: absPath,
+        detail: error.message,
+      });
+    }
+
     const rel = path.relative(realSprints, realFile);
     if (
       !rel
@@ -156,6 +185,13 @@ function normalizeRepoSprintPath(repo, sprintPath, {
     ) {
       return buildFailure("sprint_path_escaped", {
         detail: `sprint path must resolve under ${sprintsDir}`,
+        sprintPath: absPath,
+        sprintsDir,
+      });
+    }
+    if (path.dirname(realFile) !== realSprints || !isRegularFile) {
+      return buildFailure("sprint_path_invalid", {
+        detail: `sprint path must resolve to a direct regular-file child of ${sprintsDir}`,
         sprintPath: absPath,
         sprintsDir,
       });

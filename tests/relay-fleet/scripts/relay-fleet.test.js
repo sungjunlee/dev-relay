@@ -1113,6 +1113,48 @@ test("relay-fleet rejects an outside-target sprint symlink before fleet or dispa
   assert.equal(fs.existsSync(dispatchLog), false);
 });
 
+test("relay-fleet rejects an external sprints-root symlink before fleet or dispatch side effects", () => {
+  const { relayHome, repoRoot, sprintStateLog } = setupRepo("relay-fleet-owner-root-symlink-escape-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-owner-root-symlink-escape-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const dispatchLog = path.join(tmpDir, "dispatch.log");
+  const leaf = makeLeaf(repoRoot, 1, {
+    leaf_ref: "leaf-root-symlink-escape",
+    issue_number: 957,
+  });
+  const leavesFile = writeLeavesFile(repoRoot, [leaf]);
+  const fleetId = "fleet-owner-root-symlink-escape";
+  const sprintsRoot = path.join(repoRoot, "backlog", "sprints");
+  const outsideSprintsRoot = path.join(tmpDir, "outside-sprints");
+  fs.mkdirSync(outsideSprintsRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(outsideSprintsRoot, path.basename(TEST_OWNERSHIP.sprint)),
+    "# Outside sprint root target\n",
+    "utf-8"
+  );
+  fs.rmSync(sprintsRoot, { recursive: true, force: true });
+  fs.symlinkSync(outsideSprintsRoot, sprintsRoot, "dir");
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--json",
+  ], { relayHome, env: { FAKE_DISPATCH_LOG: dispatchLog } });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /leaf 'leaf-root-symlink-escape' ownership\.sprint.*existing regular file within.*direct child.*sprints root must resolve within repository/i
+  );
+  assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, fleetId)), false);
+  assert.equal(fs.existsSync(getFleetLeavesStorePath(repoRoot, fleetId)), false);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, leaf.issue_number)), false);
+  assert.equal(fs.existsSync(dispatchLog), false);
+  assert.deepEqual(readJsonLines(sprintStateLog), []);
+});
+
 test("relay-fleet rejects child manifest ownership drift without rewriting it", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-drift-");
   const fleetId = "fleet-owner-drift";

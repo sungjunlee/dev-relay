@@ -5,6 +5,7 @@ const path = require("node:path");
 const {
   discoverSprintStateBin,
   invokeSprintState,
+  normalizeRepoSprintPath,
 } = require("./sprint-state");
 
 const OWNERSHIP_FIELDS = Object.freeze(["sprint", "track", "component"]);
@@ -105,24 +106,12 @@ function validateOwnershipSprintFile(repoRoot, raw, { label = "ownership" } = {}
   const owner = normalizeOwnership(raw, { label });
   const sprintsRoot = path.resolve(repoRoot, "backlog", "sprints");
   const sprintPath = path.resolve(repoRoot, owner.sprint);
-  let realSprintsRoot = null;
-  let realSprintPath = null;
-  let isRegularFile = false;
-
-  try {
-    realSprintsRoot = fs.realpathSync(sprintsRoot);
-    realSprintPath = fs.realpathSync(sprintPath);
-    isRegularFile = fs.statSync(realSprintPath).isFile();
-  } catch (error) {
-    if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
-  }
-
-  const isDirectChild = realSprintPath !== null
-    && path.dirname(realSprintPath) === realSprintsRoot;
-  if (!isDirectChild || !isRegularFile) {
+  const normalized = normalizeRepoSprintPath(repoRoot, owner.sprint);
+  if (!normalized.ok) {
     throw new OwnershipValidationError(
       `${label}.sprint ${JSON.stringify(owner.sprint)} for track ${JSON.stringify(owner.track)} ` +
-      `must resolve to an existing regular file within ${sprintsRoot}; checked ${sprintPath}`
+      `must resolve to an existing regular file within ${sprintsRoot} as a direct child; ` +
+      `checked ${sprintPath} (${normalized.reason}: ${normalized.detail || "path validation failed"})`
     );
   }
 
