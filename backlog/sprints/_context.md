@@ -26,6 +26,11 @@ Probe signals (test frameworks, type strictness, linters) are exposed as data, n
 ### No auto-mutation of shared files
 Sprint files and `_context.md` are human-curated. Relay reports candidates at sprint close; humans promote. Auto-append creates stale-review queues.
 
+### Owning sprint resolution is a shared schema-v2 contract
+Dev-backlog schema-v2 JSON is the source of truth for sprint ownership. Resolution precedence is an explicit or fleet owner, then the issue `component:`, then the exactly-one-active fallback. Relay consumes this through its shared sprint-state seam and must not add another track/component markdown parser.
+
+One fleet represents one validated track. Every leaf carries the same normalized owner through its child manifest and finalize path; missing, contradictory, ambiguous, or mixed ownership must fail before fleet manifest, issue lock, worktree, or dispatch side effects.
+
 ### Unified route configuration is the single source of truth
 `routes.json` drives dispatch and review routing. It maps into the existing policy-shaped object in memory; do not generate a derived `policy.json`, and keep `evaluateRelayRoute()` behavior stable. Legacy `policy.json` holders retain legacy precedence until explicitly migrated.
 
