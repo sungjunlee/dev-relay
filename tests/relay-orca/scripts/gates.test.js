@@ -6,6 +6,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -102,10 +103,25 @@ function sanitizeArtifact(ref) {
   return String(ref == null ? "" : ref).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "gate";
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+}
+
+function verificationBinding(passed = true) {
+  const binding = { input_sha256: `sha256:${"a".repeat(64)}`, result_sha256: `sha256:${"b".repeat(64)}`, passed };
+  return { ...binding, binding_sha256: `sha256:${crypto.createHash("sha256").update(canonicalJson(binding)).digest("hex")}` };
+}
+
+function boundArtifactName(ref) {
+  return `${sanitizeArtifact(ref)}-${crypto.createHash("sha256").update(ref).digest("hex")}.json`;
+}
+
 // Build a hermetic gate world: real tiny git repo, receipt at the collision-resistant
 // segment path, run/fleet manifests, fake read-only orca + gh, an accepted program file
 // carrying the exit_gates verbatim, and a gate-evidence directory of live artifacts.
-function buildGateWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghScenario = {}, exitGates = [], decisionGates = [], gateEvidence = {} }) {
+function buildGateWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghScenario = {}, exitGates = [], decisionGates = [], gateEvidence = {}, integrationEvidenceVersion, integrationEvidence = [] }) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-gates-"));
   const repoRoot = path.join(base, "repo");
   const programsRoot = path.join(base, "programs");
@@ -132,11 +148,10 @@ function buildGateWorld({ programId, receipt, manifests = [], orcaScenario = {},
 
   // The accepted program file — the ONLY source of exit_gates (input artifacts).
   const programFile = path.join(base, "accepted-program.json");
-  fs.writeFileSync(
-    programFile,
-    `${JSON.stringify({ program: { id: programId, exit_gates: exitGates, decision_gates: decisionGates, outcomes: receiptObject.tasks.map((task) => ({ id: task.outcome_id, task_kind: task.kind, accepted_outcomes: ["x"] })) } }, null, 2)}\n`,
-    "utf-8",
-  );
+  const acceptedProgram = { id: programId, exit_gates: exitGates, decision_gates: decisionGates, outcomes: receiptObject.tasks.map((task) => ({ id: task.outcome_id, task_kind: task.kind, accepted_outcomes: ["x"] })) };
+  if (integrationEvidenceVersion !== undefined) acceptedProgram.integration_evidence_version = integrationEvidenceVersion;
+  if (integrationEvidence.length > 0) acceptedProgram.integration_evidence = integrationEvidence;
+  fs.writeFileSync(programFile, `${JSON.stringify({ program: acceptedProgram }, null, 2)}\n`, "utf-8");
 
   Object.entries(gateEvidence).forEach(([name, value]) => {
     fs.writeFileSync(path.join(evidenceDir, `${sanitizeArtifact(name)}.json`), `${JSON.stringify(value, null, 2)}\n`, "utf-8");
@@ -224,6 +239,8 @@ function greenWorld(programId, opts = {}) {
     exitGates: opts.exitGates || [],
     decisionGates: opts.decisionGates || [],
     gateEvidence: opts.gateEvidence || {},
+    integrationEvidenceVersion: opts.integrationEvidenceVersion,
+    integrationEvidence: opts.integrationEvidence || [],
   });
 }
 
@@ -258,6 +275,38 @@ test("D9.1: passing integration gate after all outcomes complete → passed; rep
     assert.deepEqual(Object.keys(gate).sort(), [...GATE_ENTRY_KEYS].sort());
     assert.equal(world.orca.readPoison(), null);
     assert.equal(world.gh.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1046 red: a well-formed-looking cross-program identity artifact cannot pass a generic integration gate", () => {
+  const programId = "epic-1046-red";
+  const expected = { program_id: programId, runtime_id: DEFAULT_RUNTIME_ID, check_ref: "e2e", verification: verificationBinding(true) };
+  const artifact = {
+    schema: 1,
+    program_id: "different-program",
+    runtime_id: DEFAULT_RUNTIME_ID,
+    check_ref: "e2e",
+    verification: verificationBinding(true),
+    passed: true,
+    evidence: "suite green",
+  };
+  const world = greenWorld(programId, {
+    exitGates: ["integration:e2e"],
+    integrationEvidenceVersion: 1,
+    integrationEvidence: [expected],
+    gateEvidence: { e2e: artifact },
+  });
+  try {
+    // Keep the legacy sanitized copy that the current reader consumes, and add the
+    // collision-resistant location the new reader must inspect. Before the fix the
+    // current implementation trusts only passed:true and incorrectly reports passed.
+    fs.writeFileSync(path.join(world.evidenceDir, boundArtifactName("e2e")), `${JSON.stringify(artifact, null, 2)}\n`, "utf-8");
+    const result = world.run("--gates");
+    assert.equal(result.status, 0);
+    assert.equal(gateByString(result.body, "integration:e2e").state, "failed");
+    assert.match(gateByString(result.body, "integration:e2e").message, /identity|program/i);
   } finally {
     world.cleanup();
   }
