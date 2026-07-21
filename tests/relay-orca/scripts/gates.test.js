@@ -149,12 +149,37 @@ function buildGateWorld({ programId, receipt, manifests = [], orcaScenario = {},
   // The accepted program file — the ONLY source of exit_gates (input artifacts).
   const programFile = path.join(base, "accepted-program.json");
   const acceptedProgram = { id: programId, exit_gates: exitGates, decision_gates: decisionGates, outcomes: receiptObject.tasks.map((task) => ({ id: task.outcome_id, task_kind: task.kind, accepted_outcomes: ["x"] })) };
-  if (integrationEvidenceVersion !== undefined) acceptedProgram.integration_evidence_version = integrationEvidenceVersion;
-  if (integrationEvidence.length > 0) acceptedProgram.integration_evidence = integrationEvidence;
+  const integrationRefs = exitGates
+    .filter((gate) => typeof gate === "string" && gate.startsWith("integration:"))
+    .map((gate) => gate.slice("integration:".length));
+  const defaultIntegrationEvidence = integrationRefs.map((checkRef) => {
+    const supplied = gateEvidence[checkRef];
+    const passed = supplied && supplied.schema === 1
+      ? supplied.verification && supplied.verification.passed === true
+      : supplied && supplied.passed === true;
+    return {
+      program_id: programId,
+      runtime_id: receiptObject.runtime_id,
+      check_ref: checkRef,
+      verification: verificationBinding(passed),
+    };
+  });
+  if (integrationRefs.length > 0 || integrationEvidenceVersion !== undefined) acceptedProgram.integration_evidence_version = integrationEvidenceVersion === undefined ? 1 : integrationEvidenceVersion;
+  if (integrationEvidence.length > 0 || integrationRefs.length > 0) acceptedProgram.integration_evidence = integrationEvidence.length > 0 ? integrationEvidence : defaultIntegrationEvidence;
   fs.writeFileSync(programFile, `${JSON.stringify({ program: acceptedProgram }, null, 2)}\n`, "utf-8");
 
   Object.entries(gateEvidence).forEach(([name, value]) => {
-    fs.writeFileSync(path.join(evidenceDir, `${sanitizeArtifact(name)}.json`), `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+    const artifact = value && value.schema === 1
+      ? value
+      : {
+        schema: 1,
+        program_id: programId,
+        runtime_id: receiptObject.runtime_id,
+        check_ref: name,
+        verification: verificationBinding(value && value.passed === true),
+        ...(value && typeof value.evidence === "string" ? { evidence: value.evidence } : {}),
+      };
+    fs.writeFileSync(path.join(evidenceDir, boundArtifactName(name)), `${JSON.stringify(artifact, null, 2)}\n`, "utf-8");
   });
 
   const orca = installFakeOrcaStatus({ runtimeId: DEFAULT_RUNTIME_ID, ...orcaScenario });
@@ -172,7 +197,7 @@ function buildGateWorld({ programId, receipt, manifests = [], orcaScenario = {},
     receiptOnDisk() {
       return fs.readFileSync(receiptPath, "utf-8");
     },
-    run(mode, extraArgs = []) {
+    run(mode, extraArgs = [], options = {}) {
       const args = [
         STATUS_JS,
         "--program-id",
@@ -181,8 +206,6 @@ function buildGateWorld({ programId, receipt, manifests = [], orcaScenario = {},
         mode,
         "--program-file",
         programFile,
-        "--gate-evidence-dir",
-        evidenceDir,
         "--orca-bin",
         orca.orcaPath,
         "--gh-bin",
@@ -191,11 +214,21 @@ function buildGateWorld({ programId, receipt, manifests = [], orcaScenario = {},
         repoRoot,
         ...extraArgs,
       ];
+      if (!options.omitEvidenceDir) {
+        const evidenceFlagIndex = args.indexOf("--orca-bin");
+        args.splice(evidenceFlagIndex, 0, "--gate-evidence-dir", evidenceDir);
+      }
       const result = { status: 0, stdout: "", stderr: "" };
       try {
         result.stdout = execFileSync(process.execPath, args, {
           encoding: "utf-8",
-          env: { ...process.env, RELAY_ORCA_PROGRAMS_ROOT: programsRoot, RELAY_ORCA_RUNS_ROOT: runsRoot, RELAY_ORCA_FLEETS_ROOT: fleetsRoot },
+          env: {
+            ...process.env,
+            RELAY_ORCA_PROGRAMS_ROOT: programsRoot,
+            RELAY_ORCA_RUNS_ROOT: runsRoot,
+            RELAY_ORCA_FLEETS_ROOT: fleetsRoot,
+            RELAY_ORCA_GATE_EVIDENCE_ROOT: evidenceDir,
+          },
           stdio: "pipe",
         });
       } catch (error) {
@@ -299,14 +332,229 @@ test("#1046 red: a well-formed-looking cross-program identity artifact cannot pa
     gateEvidence: { e2e: artifact },
   });
   try {
-    // Keep the legacy sanitized copy that the current reader consumes, and add the
-    // collision-resistant location the new reader must inspect. Before the fix the
-    // current implementation trusts only passed:true and incorrectly reports passed.
+    // The artifact is in the collision-resistant location, but its explicit identity is
+    // for another program. The pre-fix reader ignored that identity and trusted passed:true.
     fs.writeFileSync(path.join(world.evidenceDir, boundArtifactName("e2e")), `${JSON.stringify(artifact, null, 2)}\n`, "utf-8");
     const result = world.run("--gates");
     assert.equal(result.status, 0);
     assert.equal(gateByString(result.body, "integration:e2e").state, "failed");
     assert.match(gateByString(result.body, "integration:e2e").message, /identity|program/i);
+  } finally {
+    world.cleanup();
+  }
+});
+
+function identityDeclaration(programId, checkRef, verification = verificationBinding(true), runtimeId = DEFAULT_RUNTIME_ID) {
+  return { program_id: programId, runtime_id: runtimeId, check_ref: checkRef, verification };
+}
+
+function identityArtifact(programId, checkRef, verification = verificationBinding(true), runtimeId = DEFAULT_RUNTIME_ID) {
+  return { schema: 1, program_id: programId, runtime_id: runtimeId, check_ref: checkRef, verification, evidence: "fixture verification" };
+}
+
+function assertReadOnly(world, result, expectedStatus = 0) {
+  assert.equal(result.status, expectedStatus);
+  assert.equal(world.receiptOnDisk(), world.receiptBefore, "identity failure must not rewrite the receipt");
+  assert.equal(world.orca.readPoison(), null, "identity failure must not mutate Orca");
+  assert.equal(world.gh.readPoison(), null, "identity failure must not mutate GitHub");
+}
+
+test("#1046: stale, cross-runtime, cross-check, and tampered-result artifacts fail closed with strict precedence", () => {
+  const cases = [
+    ["stale-program", identityArtifact("earlier-program", "e2e")],
+    ["cross-runtime", identityArtifact("epic-1046-matrix-cross-runtime", "e2e", verificationBinding(true), "runtime-other")],
+    ["cross-check", identityArtifact("epic-1046-matrix-cross-check", "other")],
+    ["tampered-result", identityArtifact("epic-1046-matrix-tampered-result", "e2e", verificationBinding(false))],
+  ];
+  cases.forEach(([name, artifact]) => {
+    const programId = artifact.program_id === "earlier-program" ? "epic-1046-matrix-stale" : artifact.program_id;
+    const expected = identityDeclaration(programId, "e2e", verificationBinding(true));
+    const world = greenWorld(programId, {
+      exitGates: ["integration:e2e"],
+      integrationEvidenceVersion: 1,
+      integrationEvidence: [expected],
+      gateEvidence: { e2e: artifact },
+    });
+    world.receiptBefore = world.receiptOnDisk();
+    try {
+      const loose = world.run("--gates");
+      assertReadOnly(world, loose, 0);
+      assert.equal(gateByString(loose.body, "integration:e2e").state, "failed", name);
+      assert.match(gateByString(loose.body, "integration:e2e").message, /identity contract/);
+      const strict = world.run("--gates", ["--strict"]);
+      assertReadOnly(world, strict, 71);
+      const final = world.run("--final-summary", ["--strict"]);
+      assertReadOnly(world, final, 71);
+      assert.equal(final.body.program_complete, false);
+    } finally {
+      world.cleanup();
+    }
+  });
+});
+
+test("#1046: missing identity and legacy identity-less evidence never pass a newly accepted program", () => {
+  const programId = "epic-1046-missing-identity";
+  const expected = identityDeclaration(programId, "e2e");
+  const missing = greenWorld(programId, {
+    exitGates: ["integration:e2e"],
+    integrationEvidenceVersion: 1,
+    integrationEvidence: [expected],
+    gateEvidence: { e2e: { schema: 1, passed: true } },
+  });
+  try {
+    missing.receiptBefore = missing.receiptOnDisk();
+    const result = missing.run("--gates");
+    assertReadOnly(missing, result);
+    assert.equal(gateByString(result.body, "integration:e2e").state, "failed");
+    assert.match(gateByString(result.body, "integration:e2e").message, /identity contract/);
+  } finally {
+    missing.cleanup();
+  }
+
+  const legacy = greenWorld("epic-1046-legacy", { exitGates: ["integration:e2e"], gateEvidence: { e2e: { passed: true } } });
+  try {
+    const program = JSON.parse(fs.readFileSync(legacy.programFile, "utf-8"));
+    delete program.program.integration_evidence_version;
+    delete program.program.integration_evidence;
+    fs.writeFileSync(legacy.programFile, `${JSON.stringify(program, null, 2)}\n`, "utf-8");
+    fs.writeFileSync(path.join(legacy.evidenceDir, boundArtifactName("e2e")), `${JSON.stringify({ passed: true }, null, 2)}\n`, "utf-8");
+    legacy.receiptBefore = legacy.receiptOnDisk();
+    const result = legacy.run("--final-summary");
+    assertReadOnly(legacy, result);
+    assert.equal(result.body.program_complete, false);
+    assert.equal(result.body.stopped_on, "integration_gate_failed");
+  } finally {
+    legacy.cleanup();
+  }
+});
+
+test("#1046: duplicate declarations and duplicate artifacts fail closed without adding report keys", () => {
+  const programId = "epic-1046-duplicates";
+  const declaration = identityDeclaration(programId, "e2e");
+  const world = greenWorld(programId, {
+    exitGates: ["integration:e2e"],
+    integrationEvidenceVersion: 1,
+    integrationEvidence: [declaration, { ...declaration, verification: verificationBinding(false) }],
+    gateEvidence: { e2e: identityArtifact(programId, "e2e") },
+  });
+  try {
+    world.receiptBefore = world.receiptOnDisk();
+    const declarationResult = world.run("--gates");
+    assertReadOnly(world, declarationResult);
+    assert.equal(gateByString(declarationResult.body, "integration:e2e").state, "failed");
+    assert.deepEqual(Object.keys(gateByString(declarationResult.body, "integration:e2e")).sort(), [...GATE_ENTRY_KEYS].sort());
+  } finally {
+    world.cleanup();
+  }
+
+  const artifacts = greenWorld("epic-1046-duplicate-artifacts", {
+    exitGates: ["integration:e2e"],
+    gateEvidence: { e2e: { passed: true } },
+  });
+  try {
+    fs.writeFileSync(path.join(artifacts.evidenceDir, "e2e-duplicate.json"), `${JSON.stringify(identityArtifact("epic-1046-duplicate-artifacts", "e2e"), null, 2)}\n`, "utf-8");
+    artifacts.receiptBefore = artifacts.receiptOnDisk();
+    const result = artifacts.run("--gates");
+    assertReadOnly(artifacts, result);
+    assert.equal(gateByString(result.body, "integration:e2e").state, "failed");
+    assert.match(gateByString(result.body, "integration:e2e").message, /duplicate/);
+  } finally {
+    artifacts.cleanup();
+  }
+});
+
+test("#1046: unsafe traversal refs are rejected before path lookup, and a/b is distinct from a-b", () => {
+  const unsafe = greenWorld("epic-1046-traversal", {
+    exitGates: ["integration:a/../secret"],
+    integrationEvidenceVersion: 1,
+    integrationEvidence: [identityDeclaration("epic-1046-traversal", "a/../secret")],
+    gateEvidence: {},
+  });
+  try {
+    unsafe.receiptBefore = unsafe.receiptOnDisk();
+    const result = unsafe.run("--gates");
+    assertReadOnly(unsafe, result);
+    assert.equal(gateByString(result.body, "integration:a/../secret").state, "failed");
+    assert.match(gateByString(result.body, "integration:a/../secret").message, /unsafe|identity contract/);
+  } finally {
+    unsafe.cleanup();
+  }
+
+  const programId = "epic-1046-collision";
+  const refs = ["a/b", "a-b"];
+  const collision = greenWorld(programId, {
+    exitGates: refs.map((ref) => `integration:${ref}`),
+    integrationEvidenceVersion: 1,
+    integrationEvidence: refs.map((ref) => identityDeclaration(programId, ref)),
+    gateEvidence: { "a/b": { passed: true }, "a-b": { passed: true } },
+  });
+  try {
+    const result = collision.run("--gates");
+    assert.equal(result.status, 0);
+    assert.equal(gateByString(result.body, "integration:a/b").state, "passed");
+    assert.equal(gateByString(result.body, "integration:a-b").state, "passed");
+    assert.notEqual(boundArtifactName("a/b"), boundArtifactName("a-b"));
+  } finally {
+    collision.cleanup();
+  }
+});
+
+test("#1046: generic full-suite evidence stays distinct from the integration-main-suite lifecycle outcome", () => {
+  const programId = "epic-1046-topology";
+  const world = greenWorld(programId, {
+    extraTasks: [{ outcome_id: "integration-main-suite", kind: "relay_run", run: "run-integration" }],
+    manifests: [{ run_id: "run-integration", state: "merged", pr_number: 11, issue_number: 101, head_sha: "def" }],
+    orcaTasks: [orcaTask(programId, "integration-main-suite", { status: "completed", worker_done: true })],
+    prs: { 11: { state: "MERGED", mergedAt: "2026-07-13T01:00:00Z", headRefOid: "def" } },
+    issues: { 101: { state: "CLOSED", stateReason: "COMPLETED" } },
+    exitGates: ["integration:full-suite"],
+    integrationEvidenceVersion: 1,
+    integrationEvidence: [identityDeclaration(programId, "full-suite")],
+    gateEvidence: { "full-suite": { passed: true } },
+  });
+  try {
+    const result = world.run("--final-summary");
+    assert.equal(result.status, 0);
+    assert.equal(result.body.program_complete, true);
+    assert.equal(gateByString(result.body, "integration:full-suite").state, "passed");
+    assert.equal(result.body.gates.some((gate) => gate.gate === "integration:integration-main-suite"), false);
+    assert.ok(result.body.outcomes.some((outcome) => outcome.outcome_id === "integration-main-suite"));
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1046: declaration input ordering does not change deterministic gate output", () => {
+  const programId = "epic-1046-ordering";
+  const refs = ["z-suite", "a-suite"];
+  const world = greenWorld(programId, {
+    exitGates: refs.map((ref) => `integration:${ref}`),
+    integrationEvidenceVersion: 1,
+    integrationEvidence: refs.slice().reverse().map((ref) => identityDeclaration(programId, ref)),
+    gateEvidence: { "z-suite": { passed: true }, "a-suite": { passed: true } },
+  });
+  try {
+    const first = world.run("--gates");
+    const second = world.run("--gates");
+    assert.deepEqual(first.body.gates, second.body.gates);
+    assert.deepEqual(first.body.blocking_reasons, second.body.blocking_reasons);
+    assert.deepEqual(first.body.gates.map((gate) => gate.gate), ["integration:z-suite", "integration:a-suite"]);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1046: RELAY_ORCA_GATE_EVIDENCE_ROOT remains the read-only evidence fallback", () => {
+  const world = greenWorld("epic-1046-evidence-fallback", {
+    exitGates: ["integration:e2e"],
+    gateEvidence: { e2e: { passed: true } },
+  });
+  try {
+    const result = world.run("--gates", [], { omitEvidenceDir: true });
+    assert.equal(result.status, 0);
+    assert.equal(gateByString(result.body, "integration:e2e").state, "passed");
+    assert.equal(world.orca.readPoison(), null);
+    assert.equal(world.gh.readPoison(), null);
   } finally {
     world.cleanup();
   }

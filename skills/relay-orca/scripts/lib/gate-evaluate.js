@@ -18,6 +18,7 @@ const { boundedExcerpt } = require("./bounded-excerpt");
 const { parseGate } = require("./gate-kinds");
 const { effectiveCounters, parseBudgetRef, COUNTER_NAMES } = require("./budget-counters");
 const { validateDecisionRecord, isResolved, findById } = require("./decision-records");
+const { indexDeclarations, validateArtifact } = require("./integration-evidence");
 
 function result(state, evidence, message) {
   return { state, evidence: boundedExcerpt(evidence), message: boundedExcerpt(message) };
@@ -26,15 +27,42 @@ function result(state, evidence, message) {
 // integration: a named live check / evidence artifact must PASS live. The artifact is read
 // through the injected reader (top-level fs), NEVER from task status. Absent artifact →
 // failed (no live pass evidence), never passed.
-function evalIntegration(ref, readIntegrationEvidence) {
+function evalIntegration(ref, readIntegrationEvidence, integrationContract, programId, runtimeId) {
+  const declarationError = integrationContract && integrationContract.errors
+    ? integrationContract.errors.get(ref)
+    : "accepted program has no integration identity contract";
+  if (declarationError) {
+    return result(
+      "failed",
+      `identity:${declarationError}`,
+      `integration check "${ref}" rejected: identity contract ${declarationError}`,
+    );
+  }
+  const declaration = integrationContract && integrationContract.byRef ? integrationContract.byRef.get(ref) : null;
   const evidence = typeof readIntegrationEvidence === "function" ? readIntegrationEvidence(ref) : null;
   if (!evidence || evidence.present !== true) {
     return result("failed", `no live evidence artifact for ${ref}`, `integration check "${ref}" has no live evidence artifact; gate cannot pass`);
   }
-  if (evidence.passed === true) {
-    return result("passed", evidence.evidence || `check ${ref} passed`, `integration check "${ref}" passed live`);
+  if (evidence.valid !== true) {
+    const reason = evidence.reason || "artifact identity or verification binding is invalid";
+    return result(
+      "failed",
+      `identity:${reason}`,
+      `integration check "${ref}" rejected: identity contract ${reason}`,
+    );
   }
-  return result("failed", evidence.evidence || `check ${ref} failed`, `integration check "${ref}" failed live`);
+  const checked = validateArtifact(evidence.artifact, { declaration, programId, runtimeId, checkRef: ref });
+  if (!checked.valid) {
+    return result(
+      "failed",
+      `identity:${checked.reason}`,
+      `integration check "${ref}" rejected: identity contract ${checked.reason}`,
+    );
+  }
+  if (checked.passed === true) {
+    return result("passed", checked.evidence, `integration check "${ref}" passed live`);
+  }
+  return result("failed", checked.evidence, `integration check "${ref}" failed live`);
 }
 
 // advisory: reuse the #945 advisory contract — advisory evidence posted AND every blocking
@@ -112,7 +140,7 @@ function evaluateOneGate(gateString, ctx) {
   let evaluated;
   switch (kind) {
     case "integration":
-      evaluated = evalIntegration(ref, ctx.readIntegrationEvidence);
+      evaluated = evalIntegration(ref, ctx.readIntegrationEvidence, ctx.integrationContract, ctx.programId, ctx.runtimeId);
       break;
     case "advisory":
       evaluated = evalAdvisory(ref, ctx.facts.advisory);
@@ -149,7 +177,7 @@ const BLOCKING_REASON_BY_STATE = Object.freeze({
 // after every accepted outcome reconciles complete_with_evidence; before that they are
 // `not_yet_evaluable` with the blocking outcomes listed. Returns { prerequisites_met,
 // gates, blocking_reasons, blocking_outcomes }.
-function evaluateGates({ report, receipt, exitGates, readIntegrationEvidence }) {
+function evaluateGates({ report, receipt, exitGates, readIntegrationEvidence, integrationEvidenceVersion, integrationEvidence }) {
   const gateStrings = Array.isArray(exitGates) ? exitGates : [];
   const outcomes = report.outcomes || [];
   const blockingOutcomes = outcomes.filter((outcome) => outcome.state !== "complete_with_evidence");
@@ -173,7 +201,25 @@ function evaluateGates({ report, receipt, exitGates, readIntegrationEvidence }) 
     return { prerequisites_met: false, gates, blocking_reasons: blocking, blocking_outcomes: blockingOutcomes.map((outcome) => outcome.outcome_id) };
   }
 
-  const ctx = { receipt, readIntegrationEvidence, facts: reconciliationFacts(report) };
+  const integrationRefs = gateStrings
+    .map((gateString) => parseGate(gateString))
+    .filter((parsed) => parsed.kind === "integration")
+    .map((parsed) => parsed.ref);
+  const integrationContract = indexDeclarations({
+    programId: report.program_id,
+    runtimeId: receipt && receipt.runtime_id,
+    refs: integrationRefs,
+    version: integrationEvidenceVersion,
+    declarations: integrationEvidence,
+  });
+  const ctx = {
+    receipt,
+    readIntegrationEvidence,
+    integrationContract,
+    programId: report.program_id,
+    runtimeId: receipt && receipt.runtime_id,
+    facts: reconciliationFacts(report),
+  };
   const gates = gateStrings.map((gateString) => evaluateOneGate(gateString, ctx));
   const blocking = gates
     .filter((gate) => gate.state !== "passed")

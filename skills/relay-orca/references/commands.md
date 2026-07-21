@@ -262,8 +262,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
 | --- | --- |
 | `--gates` | Evaluate the program's exit gates (read-only). Mutually exclusive with `--final-summary`. |
 | `--final-summary` | Declare evidence-backed program completion (read-only). |
-| `--program-file <path>` | The accepted program — the ONLY source of `exit_gates` (required by both modes; its `id` must match the receipt). |
-| `--gate-evidence-dir <dir>` | Directory of live `integration:` evidence artifacts (`<check>.json` → `{ "passed": bool }`); also env `RELAY_ORCA_GATE_EVIDENCE_ROOT`. |
+| `--program-file <path>` | The accepted program — the ONLY source of `exit_gates` and generic integration trust declarations (required by both modes; its `id` must match the receipt). |
+| `--gate-evidence-dir <dir>` | Directory of live identity-bound `integration:` artifacts (`<sanitized-ref>-<sha256(raw-ref)>.json`); also env `RELAY_ORCA_GATE_EVIDENCE_ROOT`. |
 | `--record-proposals` | (`--gates` only) Append discovered follow-up proposals to the receipt's `follow_ups`. WITHOUT it, both modes are strictly read-only. |
 | `--strict` | Turn the fail-closed conditions below into non-zero exits. Without it, both modes exit `0` with the truthful report. |
 
@@ -278,8 +278,9 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
 | `GATE_FAILED` | 71 | Any exit gate failed. |
 | `COMPLETION_BLOCKED` | 72 | `--final-summary` and `program_complete` is false. |
 
-Gate kinds, ordering/masking, follow-up lifecycle, decision/budget/authorization records,
-the completion rule, and the stop-condition table: [gates-and-completion.md](gates-and-completion.md).
+Gate kinds, generic integration identity/freshness validation, ordering/masking, follow-up
+lifecycle, decision/budget/authorization records, the completion rule, and the stop-condition
+table: [gates-and-completion.md](gates-and-completion.md).
 
 ## `resume` — crash-safe, reconcile-first, idempotent resumption
 
