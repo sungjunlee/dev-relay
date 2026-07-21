@@ -50,7 +50,10 @@ function setupRepo() {
   execFileSync("git", ["config", "user.name", "Relay Dispatch Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-dispatch@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
-  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const sprintPath = path.join(repoRoot, "backlog", "sprints", "2026-07-relay-fleet.md");
+  fs.mkdirSync(path.dirname(sprintPath), { recursive: true });
+  fs.writeFileSync(sprintPath, "# Relay fleet sprint fixture\n", "utf-8");
+  execFileSync("git", ["add", "README.md", "backlog/sprints/2026-07-relay-fleet.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["remote", "add", "origin", remoteRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -8622,7 +8625,7 @@ test("dispatch canonicalizes typed fleet ownership and rejects only real resume-
   };
   const absoluteOwnership = {
     ...ownership,
-    sprint: path.join(repoRoot, ownership.sprint),
+    sprint: path.join(os.tmpdir(), "retired-checkout", ownership.sprint),
   };
 
   const first = JSON.parse(runDispatch(repoRoot, [
@@ -8795,6 +8798,44 @@ test("dispatch preserves valid fleet behavior when fleet id and ownership are pa
   assert.equal(manifest.fleet_id, fleetId);
   assert.deepEqual(manifest.ownership, ownership);
   assert.equal(fs.existsSync(path.join(result.worktree, "first.txt")), true);
+});
+
+test("dispatch rejects a canonical missing sprint before manifest, lock, worktree, or executor side effects", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-missing-sprint-bin-"));
+  const executorMarker = path.join(binDir, "executor-invoked");
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/bin/sh\n: > ${JSON.stringify(executorMarker)}\nexit 99\n`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "relay-fleet",
+  };
+  fs.unlinkSync(path.join(repoRoot, ownership.sprint));
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-957-missing-sprint",
+    "--prompt", "reject missing sprint",
+    "--fleet-id", "fleet-957-missing-sprint",
+    "--leaf-id", "leaf-missing-sprint",
+    "--ownership-json", JSON.stringify(ownership),
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /leaf 'leaf-missing-sprint' ownership\.sprint.*2026-07-relay-fleet.*existing regular file.*backlog\/sprints/i
+  );
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
+  assert.equal(fs.existsSync(executorMarker), false);
 });
 
 test("dispatch rejects a contradictory sprint and track before fleet manifest or lock side effects", () => {

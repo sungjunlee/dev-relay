@@ -61,7 +61,10 @@ function initGitRepo(repoRoot) {
   execFileSync("git", ["config", "user.name", "Relay Fleet Skill Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-fleet-skill@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
-  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const sprintPath = path.join(repoRoot, TEST_OWNERSHIP.sprint);
+  fs.mkdirSync(path.dirname(sprintPath), { recursive: true });
+  fs.writeFileSync(sprintPath, "# Relay fleet sprint fixture\n", "utf-8");
+  execFileSync("git", ["add", "README.md", TEST_OWNERSHIP.sprint], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
 }
 
@@ -986,6 +989,38 @@ test("relay-fleet rejects missing and mixed ownership before manifest or dispatc
     assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, fleetId)), false, fixture.name);
     assert.equal(fs.existsSync(dispatchLog), false, fixture.name);
   }
+});
+
+test("relay-fleet rejects a canonical missing sprint before fleet or dispatch side effects", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-owner-missing-sprint-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-owner-missing-sprint-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const dispatchLog = path.join(tmpDir, "dispatch.log");
+  const leaf = makeLeaf(repoRoot, 1, {
+    leaf_ref: "leaf-missing-sprint",
+    issue_number: 957,
+  });
+  const leavesFile = writeLeavesFile(repoRoot, [leaf]);
+  const fleetId = "fleet-owner-missing-sprint";
+  fs.unlinkSync(path.join(repoRoot, TEST_OWNERSHIP.sprint));
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--json",
+  ], { relayHome, env: { FAKE_DISPATCH_LOG: dispatchLog } });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /leaf 'leaf-missing-sprint' ownership\.sprint.*2026-07-relay-fleet.*existing regular file.*backlog\/sprints/i
+  );
+  assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, fleetId)), false);
+  assert.equal(fs.existsSync(getFleetLeavesStorePath(repoRoot, fleetId)), false);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, leaf.issue_number)), false);
+  assert.equal(fs.existsSync(dispatchLog), false);
 });
 
 test("relay-fleet rejects child manifest ownership drift without rewriting it", () => {

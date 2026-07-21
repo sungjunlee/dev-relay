@@ -2,11 +2,15 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const {
   normalizeOwnership,
   ownershipsEqual,
   parseOwnershipJson,
+  validateOwnershipSprintFile,
 } = require("../../../skills/relay-dispatch/scripts/ownership");
 const {
   OWNER_SOURCES,
@@ -45,6 +49,37 @@ test("normalizeOwnership canonicalizes absolute and repo-relative sprint spellin
     ...OWNER,
     source: OWNER_SOURCES.FLEET,
   });
+});
+
+test("validateOwnershipSprintFile resolves canonical ownership against the current repo", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-owner-repo-"));
+  const sprintPath = path.join(repoRoot, OWNER.sprint);
+  fs.mkdirSync(path.dirname(sprintPath), { recursive: true });
+  fs.writeFileSync(sprintPath, "# Current checkout sprint\n", "utf-8");
+
+  const owner = validateOwnershipSprintFile(repoRoot, {
+    ...OWNER,
+    sprint: "/tmp/retired-checkout/backlog/sprints/2026-07-relay-fleet.md",
+  }, { label: "leaf 'issue-957' ownership" });
+
+  assert.deepEqual(owner, OWNER);
+});
+
+test("validateOwnershipSprintFile rejects missing and non-file canonical sprints", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-owner-repo-"));
+
+  assert.throws(
+    () => validateOwnershipSprintFile(repoRoot, OWNER, {
+      label: "leaf 'missing-sprint' ownership",
+    }),
+    /leaf 'missing-sprint' ownership\.sprint.*2026-07-relay-fleet.*existing regular file.*backlog\/sprints/
+  );
+
+  fs.mkdirSync(path.join(repoRoot, OWNER.sprint), { recursive: true });
+  assert.throws(
+    () => validateOwnershipSprintFile(repoRoot, OWNER),
+    /existing regular file/
+  );
 });
 
 test("normalizeOwnership requires track to match the sprint basename but keeps component independent", () => {

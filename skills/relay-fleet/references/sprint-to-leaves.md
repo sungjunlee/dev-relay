@@ -53,7 +53,7 @@ from selector calls that resolved different owners.
 | `items[].branch` | exclusion trace | If non-null, exclude the item; an existing branch already owns it. Do not reuse it for a new leaf. |
 | `items[].pr` | exclusion trace | If non-null, exclude the item; an existing PR already owns it. |
 | `items[].unmoored` | operator warning | A `todo` item should normally be `false`; if it appears on an excluded or inconsistent row, resolve sprint bookkeeping before fan-out. |
-| `active_sprint.path` | `leaves[].ownership.sprint` | Copy the JSON path. It must identify one file under `backlog/sprints/`; relay-fleet validates syntax but does not parse that markdown. |
+| `active_sprint.path` | `leaves[].ownership.sprint` | Copy the JSON path. After canonicalization, it must resolve to an existing regular file in the current repo's `backlog/sprints/`; relay-fleet does not parse that markdown. An absolute path from another checkout remains valid when its canonical repo-relative sprint exists in the current repo. |
 | `active_sprint.track` | `leaves[].ownership.track` | Copy the canonical track. It must equal the `active_sprint.path` filename basename without `.md`. If an older schema-v2 producer omits it, use `active_sprint.frontmatter.track`, then that basename, matching the #955 resolver normalization. |
 | `active_sprint.frontmatter.component` | `leaves[].ownership.component` | Require exactly one lowercase kebab-case component; missing or multiple components stop planning. |
 | relay-ready artifact, when present | `leaves[].request_id`, `leaves[].leaf_id` | Optional lineage fields. Include them only when relay-ready persisted a request/leaf handoff for this item; sprint-state does not invent them. |

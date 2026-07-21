@@ -50,7 +50,10 @@ function initGitRepo(repoRoot) {
   execFileSync("git", ["config", "user.name", "Relay Fleet Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-fleet@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
-  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const sprintPath = path.join(repoRoot, TEST_OWNERSHIP.sprint);
+  fs.mkdirSync(path.dirname(sprintPath), { recursive: true });
+  fs.writeFileSync(sprintPath, "# Relay fleet sprint fixture\n", "utf-8");
+  execFileSync("git", ["add", "README.md", TEST_OWNERSHIP.sprint], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
 }
 

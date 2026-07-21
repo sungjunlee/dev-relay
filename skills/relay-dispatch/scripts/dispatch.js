@@ -133,6 +133,7 @@ const {
   normalizeOwnership,
   ownershipsEqual,
   parseOwnershipJson,
+  validateOwnershipSprintFile,
 } = require("./ownership");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const {
@@ -2118,6 +2119,16 @@ async function main() {
     branch = manifest.git?.working_branch || branch;
     runId = manifest.run_id || runId;
     wtPath = validatedPaths.worktree;
+    if (manifest.ownership || OWNERSHIP) {
+      try {
+        validateOwnershipSprintFile(repoRoot, manifest.ownership || OWNERSHIP, {
+          label: `leaf '${manifest.source?.leaf_id || LEAF_ID || branch}' ownership`,
+        });
+      } catch (error) {
+        console.error(`Error: ${error.message}`);
+        process.exit(1);
+      }
+    }
     manifest = {
       ...manifest,
       paths: {
@@ -2241,6 +2252,16 @@ async function main() {
       });
     }
   } else {
+    if (OWNERSHIP) {
+      try {
+        validateOwnershipSprintFile(repoRoot, OWNERSHIP, {
+          label: `leaf '${LEAF_ID || branch}' ownership`,
+        });
+      } catch (error) {
+        console.error(`Error: ${error.message}`);
+        process.exit(1);
+      }
+    }
     const issueForCollisionCheck = issueNumber
       || inferIssueFromPromptOrBranch(branch, PROMPT);
     const inflightRuns = issueForCollisionCheck
