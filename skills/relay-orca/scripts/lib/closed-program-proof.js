@@ -178,7 +178,8 @@ function normalizeSnapshot(input) {
     if (!isObject(value)) return null;
     const resultValue = isObject(value.result) ? value.result : {};
     const meta = isObject(value._meta) ? value._meta : {};
-    return [value.runtime_id, value.runtimeId, resultValue.runtime_id, resultValue.runtimeId, meta.runtime_id, meta.runtimeId]
+    const runtime = isObject(resultValue.runtime) ? resultValue.runtime : {};
+    return [value.runtime_id, value.runtimeId, resultValue.runtime_id, resultValue.runtimeId, runtime.runtime_id, runtime.runtimeId, meta.runtime_id, meta.runtimeId]
       .find(nonEmpty) || null;
   };
   const runtimeId = runtimeFrom(status);
@@ -187,8 +188,10 @@ function normalizeSnapshot(input) {
   if (!runtimeId || !taskRuntimeId || !gateRuntimeId || runtimeId !== taskRuntimeId || runtimeId !== gateRuntimeId) {
     return { failure: reason("PROOF_CROSS_RUNTIME", "status, task-list, and gate-list runtime ids must be present, non-empty, and identical") };
   }
-  const tasks = Array.isArray(taskList.tasks) ? taskList.tasks : null;
-  const gates = Array.isArray(gateList.gates) ? gateList.gates : null;
+  const taskResult = isObject(taskList.result) ? taskList.result : {};
+  const gateResult = isObject(gateList.result) ? gateList.result : {};
+  const tasks = Array.isArray(taskList.tasks) ? taskList.tasks : Array.isArray(taskResult.tasks) ? taskResult.tasks : null;
+  const gates = Array.isArray(gateList.gates) ? gateList.gates : Array.isArray(gateResult.gates) ? gateResult.gates : null;
   if (!tasks || !gates) return { failure: reason("PROOF_MALFORMED_INPUT", "Orca task-list and gate-list rows are missing or malformed") };
   return { runtimeId, tasks: tasks.slice(), gates: gates.slice() };
 }
@@ -200,15 +203,17 @@ function normalizeReceipt(receipt, programId, runtimeId) {
   if (!nonEmpty(receipt.runtime_id) || receipt.runtime_id !== runtimeId) return { failure: reason("PROOF_CROSS_RUNTIME", "receipt runtime_id does not match the attributable Orca runtime") };
   const byOutcome = new Map();
   const byTask = new Map();
+  const byRelayTask = new Map();
   for (const entry of receipt.tasks) {
-    if (!isObject(entry) || !nonEmpty(entry.outcome_id) || !nonEmpty(entry.kind) || !nonEmpty(entry.orca_task_id)) {
+    if (!isObject(entry) || !nonEmpty(entry.outcome_id) || !nonEmpty(entry.kind) || !nonEmpty(entry.task_id) || !nonEmpty(entry.orca_task_id)) {
       return { failure: reason("PROOF_MALFORMED_INPUT", "receipt contains a malformed outcome/task mapping") };
     }
-    if (byOutcome.has(entry.outcome_id) || byTask.has(entry.orca_task_id)) {
+    if (byOutcome.has(entry.outcome_id) || byTask.has(entry.orca_task_id) || byRelayTask.has(entry.task_id)) {
       return { failure: reason("PROOF_DUPLICATE_CONFLICT", "receipt outcome and Orca task mappings must be unique") };
     }
     byOutcome.set(entry.outcome_id, entry);
     byTask.set(entry.orca_task_id, entry);
+    byRelayTask.set(entry.task_id, entry);
   }
   return { receipt, byOutcome, byTask };
 }
