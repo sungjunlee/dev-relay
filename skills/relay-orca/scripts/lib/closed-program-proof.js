@@ -24,6 +24,7 @@ const {
 const { isTerminalManifestState } = require("./manifest-parse");
 const { taskDisplayString } = require("./status-derive");
 const { programSegment: defaultProgramSegment } = require("./program-segment");
+const { pickStoppedOn } = require("./final-summary");
 
 const PROOF_REASON_CODES = Object.freeze([
   "PROOF_MALFORMED_INPUT",
@@ -110,9 +111,16 @@ function emptySummary(ok, failures) {
     code: failure.code,
     message: failure.message,
   }));
+  // `blocking_reasons` stays the deterministic sorted listing produced by result(); the
+  // single `stopped_on` token is the MOST SEVERE stop present, not the alphabetically-first
+  // failure. Map every failure code to its stop token and defer the severity ordering to
+  // lib/final-summary.js STOP_PRIORITY via pickStoppedOn (no forked severity policy). Every
+  // stoppedOn() token is a STOP_PRIORITY member, so a non-empty failure set always resolves.
+  const stopTokens = new Set(failures.map((failure) => stoppedOn(failure.code)));
+  if (stopTokens.size === 0) stopTokens.add(stoppedOn("PROOF_MALFORMED_INPUT"));
   return {
     program_complete: ok,
-    stopped_on: ok ? null : stoppedOn(failures[0] ? failures[0].code : "PROOF_MALFORMED_INPUT"),
+    stopped_on: ok ? null : pickStoppedOn(stopTokens),
     blocking_reasons: blocking,
     lifecycle_diagnostics: lifecycle,
   };
@@ -351,25 +359,55 @@ function checkIdentity(record, programId, runtimeId) {
   return null;
 }
 
-function checkRelayRun(record) {
+// Pull the receipt-mapped relay/fleet id for this outcome. Null when the receipt task
+// or its relay_ids are absent so the binding stays optional ("when present").
+function receiptRelayId(receiptTask, field) {
+  const ids = isObject(receiptTask) && isObject(receiptTask.relay_ids) ? receiptTask.relay_ids : null;
+  return ids && nonEmpty(ids[field]) ? ids[field] : null;
+}
+
+function numberLabel(value) {
+  return typeof value === "number" ? `#${value}` : "with no number";
+}
+
+function checkRelayRun(record, receiptTask) {
   const manifest = record.manifest || record.relay_manifest;
   if (!isObject(manifest)) return reason("PROOF_OUTCOME_INCOMPLETE", `relay outcome ${record.outcome_id} has no durable relay manifest`);
   if (manifest.state === "closed" || manifest.state === "escalated" || manifest.state === "failed") return reason("PROOF_STOPPED", `relay outcome ${record.outcome_id} is ${manifest.state}`);
   if (manifest.state !== "merged") return reason("PROOF_OUTCOME_INCOMPLETE", `relay outcome ${record.outcome_id} is not durably merged`);
+  // Bind durable evidence to the receipt mapping identity: a merged/closed shape alone is
+  // not authority. When the manifest carries a run id it must equal the receipt-mapped run.
+  const mappedRun = receiptRelayId(receiptTask, "run");
+  if (mappedRun && nonEmpty(manifest.run_id) && manifest.run_id !== mappedRun) {
+    return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} manifest run ${manifest.run_id} does not match the receipt-mapped run ${mappedRun}`);
+  }
   const pr = record.pr || (isObject(record.github) && record.github.pr);
   const issue = record.issue || (isObject(record.github) && record.github.issue);
   if (!isObject(pr) || !isObject(issue)) return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} is missing GitHub evidence`);
   if (!((pr.state === "MERGED") || nonEmpty(pr.mergedAt))) return reason("PROOF_OUTCOME_FAILED", `relay outcome ${record.outcome_id} does not have a merged PR`);
-  if (manifest.head_sha !== undefined && manifest.head_sha !== pr.headRefOid) return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} PR head differs from its merged manifest`);
+  // Absent manifest head_sha is optional, not stale (parseManifest nulls a missing
+  // git.head_sha). Flag stale only when BOTH SHAs are present non-empty strings and
+  // disagree — mirrors the status-classify PR_CHANGED head comparison.
+  if (nonEmpty(manifest.head_sha) && nonEmpty(pr.headRefOid) && manifest.head_sha !== pr.headRefOid) return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} PR head differs from its merged manifest`);
+  // The manifest's declared PR/issue numbers must match the injected GitHub records before
+  // the outcome counts as complete_with_evidence — else foreign merged/closed records pass.
+  if (manifest.pr_number != null && pr.number !== manifest.pr_number) return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} PR ${numberLabel(pr.number)} does not match its merged manifest PR #${manifest.pr_number}`);
   if (issue.state !== "CLOSED") return reason("PROOF_OUTCOME_FAILED", `relay outcome ${record.outcome_id} issue is not closed`);
+  if (manifest.issue_number != null && issue.number !== manifest.issue_number) return reason("PROOF_STALE_EVIDENCE", `relay outcome ${record.outcome_id} issue ${numberLabel(issue.number)} does not match its merged manifest issue #${manifest.issue_number}`);
   return null;
 }
 
-function checkFleet(record) {
+function checkFleet(record, receiptTask) {
   const manifest = record.fleet_manifest || record.fleetManifest;
   if (!isObject(manifest)) return reason("PROOF_OUTCOME_INCOMPLETE", `fleet outcome ${record.outcome_id} has no durable fleet manifest`);
   if (manifest.fleet_state === "escalated" || manifest.state === "escalated") return reason("PROOF_STOPPED", `fleet outcome ${record.outcome_id} is escalated`);
   if (!(isTerminalManifestState(manifest.fleet_state) || isTerminalManifestState(manifest.state))) return reason("PROOF_OUTCOME_INCOMPLETE", `fleet outcome ${record.outcome_id} is not terminal`);
+  // Same receipt-mapping identity binding as relay runs: when the fleet manifest carries a
+  // fleet id it must equal the receipt-mapped fleet id.
+  const mappedFleet = receiptRelayId(receiptTask, "fleet");
+  if (mappedFleet && nonEmpty(manifest.fleet_id) && manifest.fleet_id !== mappedFleet) {
+    return reason("PROOF_STALE_EVIDENCE", `fleet outcome ${record.outcome_id} manifest fleet ${manifest.fleet_id} does not match the receipt-mapped fleet ${mappedFleet}`);
+  }
   const children = Array.isArray(record.fleet_children) ? record.fleet_children : Array.isArray(record.fleetChildren) ? record.fleetChildren : Array.isArray(manifest.children) ? manifest.children : null;
   if (!children || children.length === 0) return reason("PROOF_OUTCOME_INCOMPLETE", `fleet outcome ${record.outcome_id} has no child evidence`);
   for (const child of children) {
@@ -380,11 +418,11 @@ function checkFleet(record) {
   return null;
 }
 
-function checkDurableOutcome(record, kind, programId, runtimeId) {
+function checkDurableOutcome(record, kind, programId, runtimeId, receiptTask) {
   const identityFailure = checkIdentity(record, programId, runtimeId);
   if (identityFailure) return identityFailure;
-  if (kind === "relay_run") return checkRelayRun(record);
-  if (kind === "relay_fleet") return checkFleet(record);
+  if (kind === "relay_run") return checkRelayRun(record, receiptTask);
+  if (kind === "relay_fleet") return checkFleet(record, receiptTask);
   if (kind === "advisory_review") {
     const advisory = record.advisory || record;
     return advisory.evidence_posted === true && advisory.blocking_findings_triaged === true
@@ -522,7 +560,7 @@ function verifyClosedProgram(input = {}) {
     const record = durable.byId.get(id);
     if (!record) durableFailures.push(reason("PROOF_OUTCOME_MISSING", `durable evidence for accepted outcome ${id} is missing`));
     else {
-      const failure = checkDurableOutcome(record, parsedProgram.byId.get(id).task_kind, parsedProgram.programId, parsedSnapshot.runtimeId);
+      const failure = checkDurableOutcome(record, parsedProgram.byId.get(id).task_kind, parsedProgram.programId, parsedSnapshot.runtimeId, parsedReceipt.byOutcome.get(id));
       if (failure) durableFailures.push(failure);
     }
   }

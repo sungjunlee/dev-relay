@@ -103,9 +103,9 @@ function fixture(overrides = {}) {
   const baseReceipt = receipt();
   const outcomeEvidence = {
     "relay-build": {
-      manifest: { state: "merged", pr_number: 101, issue_number: 202, head_sha: "abc" },
-      pr: { state: "MERGED", mergedAt: "2026-07-20T00:01:00.000Z", headRefOid: "abc" },
-      issue: { state: "CLOSED" },
+      manifest: { state: "merged", run_id: "run-relay-build", pr_number: 101, issue_number: 202, head_sha: "abc" },
+      pr: { state: "MERGED", mergedAt: "2026-07-20T00:01:00.000Z", headRefOid: "abc", number: 101 },
+      issue: { state: "CLOSED", number: 202 },
     },
     [OUTCOME_ID]: { integration: { report_present: true } },
   };
@@ -158,7 +158,7 @@ test("proof is byte-deterministic across accepted, receipt, live, and evidence o
   inputs.trustedGenericIntegrationEvidence = [{ ...genericArtifact() }];
   inputs.durableOutcomeEvidence = [
     { outcome_id: OUTCOME_ID, integration: { report_present: true } },
-    { outcome_id: "relay-build", manifest: { state: "merged", pr_number: 101, issue_number: 202, head_sha: "abc" }, pr: { state: "MERGED", mergedAt: "2026-07-20T00:01:00.000Z", headRefOid: "abc" }, issue: { state: "CLOSED" } },
+    { outcome_id: "relay-build", manifest: { state: "merged", run_id: "run-relay-build", pr_number: 101, issue_number: 202, head_sha: "abc" }, pr: { state: "MERGED", mergedAt: "2026-07-20T00:01:00.000Z", headRefOid: "abc", number: 101 }, issue: { state: "CLOSED", number: 202 } },
   ];
   const second = PROOF.verifyClosedProgram(inputs);
   assert.deepEqual(second, first);
@@ -248,6 +248,66 @@ test("a false-complete durable summary cannot mask an incomplete manifest", () =
   assert.equal(result.reasonCode, "PROOF_OUTCOME_INCOMPLETE");
   assert.equal(result.final_summary.program_complete, false);
   assert.notEqual(result.final_summary.stopped_on, null);
+});
+
+test("durable evidence must match the receipt-mapped run/PR/issue identity, not a generic merged shape", () => {
+  const cases = [
+    // Manifest run id disagrees with the receipt-mapped run-relay-build.
+    (evidence) => { evidence["relay-build"].manifest.run_id = "run-foreign"; },
+    // Injected PR record number disagrees with the merged manifest's declared PR number.
+    (evidence) => { evidence["relay-build"].pr.number = 999; },
+    // Injected PR record carries no number at all, so identity cannot be confirmed.
+    (evidence) => { delete evidence["relay-build"].pr.number; },
+    // Injected issue record number disagrees with the merged manifest's declared issue number.
+    (evidence) => { evidence["relay-build"].issue.number = 888; },
+  ];
+  for (const mutate of cases) {
+    const inputs = fixture();
+    mutate(inputs.durableOutcomeEvidence);
+    const result = PROOF.verifyClosedProgram(inputs);
+    assert.equal(result.ok, false);
+    assert.equal(result.reasonCode, "PROOF_STALE_EVIDENCE");
+    assert.match(result.message, /does not match/);
+    assert.equal(result.final_summary.program_complete, false);
+    assert.notEqual(result.final_summary.stopped_on, null);
+  }
+});
+
+test("absent manifest head_sha is optional, but two present disagreeing SHAs stay stale", () => {
+  // A valid merged manifest whose head_sha is null/absent (parseManifest nulls a missing
+  // git.head_sha) is accepted, and a present-but-absent live head is not treated as stale.
+  for (const mutate of [
+    (record) => { record.manifest.head_sha = null; },
+    (record) => { delete record.manifest.head_sha; },
+    (record) => { delete record.pr.headRefOid; },
+  ]) {
+    const inputs = fixture();
+    mutate(inputs.durableOutcomeEvidence["relay-build"]);
+    assert.equal(PROOF.verifyClosedProgram(inputs).ok, true);
+  }
+  // Both SHAs present and disagreeing is still stale evidence.
+  const stale = fixture();
+  stale.durableOutcomeEvidence["relay-build"].pr.headRefOid = "moved-after-merge";
+  const staleResult = PROOF.verifyClosedProgram(stale);
+  assert.equal(staleResult.ok, false);
+  assert.equal(staleResult.reasonCode, "PROOF_STALE_EVIDENCE");
+});
+
+test("stopped_on is the STOP_PRIORITY-most-severe token while blocking_reasons stay deterministically listed", () => {
+  const inputs = fixture();
+  // Two failures with distinct stop tokens: PROOF_STOPPED (relay_escalated, severe) and
+  // PROOF_OUTCOME_INCOMPLETE (outcomes_incomplete, least severe). Alphabetically
+  // PROOF_OUTCOME_INCOMPLETE sorts first, so a first-failure policy would pick the WEAK token.
+  inputs.durableOutcomeEvidence["relay-build"].manifest.state = "closed";
+  inputs.durableOutcomeEvidence[OUTCOME_ID] = {};
+  const result = PROOF.verifyClosedProgram(inputs);
+  assert.equal(result.ok, false);
+  const codes = result.final_summary.blocking_reasons.map((entry) => entry.reason_code);
+  assert.deepEqual(codes, ["PROOF_OUTCOME_INCOMPLETE", "PROOF_STOPPED"]);
+  assert.deepEqual(codes, [...codes].sort());
+  assert.equal(result.reasonCode, "PROOF_OUTCOME_INCOMPLETE");
+  assert.equal(result.final_summary.stopped_on, "relay_escalated");
+  assert.notEqual(result.final_summary.stopped_on, "outcomes_incomplete");
 });
 
 test("pure verifier has no filesystem, Orca, or GitHub mutation boundary", () => {
