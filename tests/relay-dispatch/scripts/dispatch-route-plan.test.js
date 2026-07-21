@@ -8,6 +8,7 @@ const path = require("path");
 const { readManifest, writeManifest } = require("../../../skills/relay-dispatch/scripts/manifest/store");
 const { getProjectPolicyPath, getProjectRoutesPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
+const { writeFakeSprintStateBinary } = require("./test-support");
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..");
 const SCRIPT = path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "dispatch.js");
@@ -168,7 +169,15 @@ test("dispatch dry-run expands route preset below explicit flags and records pre
 });
 
 test("dispatch unknown route preset fails before creating run side effects including fleet locks", () => {
-  const { repoRoot, relayHome, rubricFile } = setupRepo();
+  const { root, repoRoot, relayHome, rubricFile } = setupRepo();
+  const sprintPath = path.join(repoRoot, "backlog", "sprints", "2026-07-relay-fleet.md");
+  fs.mkdirSync(path.dirname(sprintPath), { recursive: true });
+  fs.writeFileSync(sprintPath, "# Sprint fixture\n", "utf-8");
+  const sprintStateLog = path.join(root, "sprint-state-invocations.jsonl");
+  const sprintStateBin = writeFakeSprintStateBinary(root, {
+    component: "merge-finalize",
+    invocationLog: sprintStateLog,
+  });
   writeJson(path.join(relayHome, "routes.json"), {
     version: 2,
     strict: false,
@@ -184,12 +193,21 @@ test("dispatch unknown route preset fails before creating run side effects inclu
     "-p", "unknown preset route plan",
     "--rubric-file", rubricFile,
     "--fleet-id", "issue-123",
+    "--ownership-json", JSON.stringify({
+      sprint: "backlog/sprints/2026-07-relay-fleet.md",
+      track: "2026-07-relay-fleet",
+      component: "relay-fleet",
+    }),
     "--route-preset", "missing",
     "--json",
   ], {
     cwd: repoRoot,
     encoding: "utf-8",
-    env: { ...process.env, RELAY_HOME: relayHome },
+    env: {
+      ...process.env,
+      RELAY_HOME: relayHome,
+      RELAY_SPRINT_STATE_BIN: sprintStateBin,
+    },
   });
 
   assert.notEqual(proc.status, 0);
@@ -199,6 +217,7 @@ test("dispatch unknown route preset fails before creating run side effects inclu
   assert.equal(fs.existsSync(path.join(relayHome, "runs")), false);
   assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
   assert.equal(fs.existsSync(path.join(relayHome, "fleets")), false);
+  assert.equal(fs.existsSync(sprintStateLog), false);
 });
 
 test("dispatch route preset review_assurance maps to existing review assurance path", () => {

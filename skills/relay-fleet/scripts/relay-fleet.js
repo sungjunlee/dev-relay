@@ -21,8 +21,19 @@ const {
   requireValidFleetId,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const { STATES: RUN_STATES } = require("../../relay-dispatch/scripts/manifest/lifecycle");
-const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
+const {
+  readManifest,
+  withManifestTransaction,
+  writeManifest,
+  writeManifestUnlocked,
+} = require("../../relay-dispatch/scripts/manifest/store");
 const { execGh } = require("../../relay-dispatch/scripts/exec");
+const {
+  formatOwnership,
+  normalizeOwnership,
+  ownershipsEqual,
+  validateOwnershipAgainstSprintState,
+} = require("../../relay-dispatch/scripts/ownership");
 const {
   DISPATCH_STATUS,
   FleetIssueLockError,
@@ -222,7 +233,18 @@ function normalizeDependsOn(rawValue, index) {
   });
 }
 
-function normalizeLeaf(rawLeaf, index, baseDir) {
+function normalizeLeafOwnership(rawValue, index, leafRef, { allowMissing = false } = {}) {
+  if (allowMissing && rawValue === undefined) return undefined;
+  try {
+    return normalizeOwnership(rawValue, {
+      label: `leaves[${index}].ownership (${leafRef})`,
+    });
+  } catch (error) {
+    throw new FleetInputError(error.message);
+  }
+}
+
+function normalizeLeaf(rawLeaf, index, baseDir, { allowMissingOwnership = false } = {}) {
   if (!rawLeaf || typeof rawLeaf !== "object" || Array.isArray(rawLeaf)) {
     throw new FleetInputError(`leaves[${index}] must be an object`);
   }
@@ -240,6 +262,9 @@ function normalizeLeaf(rawLeaf, index, baseDir) {
       baseDir,
       `leaves[${index}].done_criteria_file`
     ),
+    ownership: normalizeLeafOwnership(rawLeaf.ownership, index, leafRef, {
+      allowMissing: allowMissingOwnership,
+    }),
     request_id: optionalString(rawLeaf.request_id || rawLeaf.requestId),
     leaf_id: optionalString(rawLeaf.leaf_id || rawLeaf.leafId) || leafRef,
     depends_on: normalizeDependsOn(rawLeaf.depends_on ?? rawLeaf.dependsOn, index),
@@ -255,6 +280,53 @@ function normalizeLeaf(rawLeaf, index, baseDir) {
     publish_policy: optionalString(rawLeaf.publish_policy || rawLeaf.publishPolicy),
     register: rawLeaf.register === true,
   };
+}
+
+function validateFleetOwnership(leaves) {
+  if (leaves.length === 0) return null;
+  const missing = leaves.filter((leaf) => !leaf.ownership);
+  if (missing.length === leaves.length) return null;
+  if (missing.length > 0) {
+    throw new FleetInputError(
+      `incomplete legacy ownership migration; missing owner for: ${missing.map((leaf) => leaf.leaf_ref).join(", ")}`
+    );
+  }
+  const first = leaves[0];
+  const mixedTrack = leaves.filter((leaf) => leaf.ownership.track !== first.ownership.track);
+  if (mixedTrack.length > 0) {
+    const offenders = [first, ...mixedTrack]
+      .map((leaf) => `${leaf.leaf_ref}=${formatOwnership(leaf.ownership)}`)
+      .join("; ");
+    throw new FleetInputError(
+      `mixed-track fleet rejected before dispatch; one fleet may own exactly one track: ${offenders}`
+    );
+  }
+
+  const contradictory = leaves.filter((leaf) => !ownershipsEqual(leaf.ownership, first.ownership));
+  if (contradictory.length > 0) {
+    const offenders = [first, ...contradictory]
+      .map((leaf) => `${leaf.leaf_ref}=${formatOwnership(leaf.ownership)}`)
+      .join("; ");
+    throw new FleetInputError(
+      `contradictory ownership within track '${first.ownership.track}' rejected before dispatch: ${offenders}`
+    );
+  }
+  return first.ownership;
+}
+
+function validateFleetOwnershipSprintState(repoRoot, leaves) {
+  const owner = validateFleetOwnership(leaves);
+  if (!owner) return;
+  const firstLeaf = leaves.find((leaf) => leaf.ownership);
+  let trustedOwner;
+  try {
+    trustedOwner = validateOwnershipAgainstSprintState(repoRoot, owner, {
+      label: `leaf '${firstLeaf.leaf_ref}' ownership`,
+    });
+  } catch (error) {
+    throw new FleetInputError(error.message);
+  }
+  for (const leaf of leaves) leaf.ownership = trustedOwner;
 }
 
 function validateLeafFiles(leaves) {
@@ -370,6 +442,7 @@ function loadLeavesFile(leavesFile) {
   const leaves = rawLeaves.map((leaf, index) => normalizeLeaf(leaf, index, path.dirname(resolved)));
   validateUniqueIssues(leaves);
   validateLeafDependencies(leaves);
+  validateFleetOwnership(leaves);
   validateLeafFiles(leaves);
   return leaves;
 }
@@ -439,8 +512,15 @@ function readPersistedLeaves(repoRoot, fleetId) {
   if (!payload) return [];
   const rawLeaves = Array.isArray(payload) ? payload : payload.leaves;
   if (!Array.isArray(rawLeaves)) return [];
-  const leaves = rawLeaves.map((leaf, index) => normalizeLeaf(leaf, index, path.dirname(storePath)));
+  const leaves = rawLeaves.map((leaf, index) => normalizeLeaf(leaf, index, path.dirname(storePath), {
+    // Fleet stores written before ownership enforcement have no ownership
+    // field. New --leaves-file input remains strict; only this persisted legacy
+    // boundary may load an absent field so resume can migrate or skip terminal
+    // children safely.
+    allowMissingOwnership: true,
+  }));
   validateUniqueIssues(leaves);
+  validateFleetOwnership(leaves);
   return leaves;
 }
 
@@ -452,6 +532,7 @@ function comparableLeaf(leaf) {
     prompt_file: leaf.prompt_file,
     rubric_file: leaf.rubric_file,
     done_criteria_file: leaf.done_criteria_file,
+    ownership: leaf.ownership,
     request_id: leaf.request_id || null,
     leaf_id: leaf.leaf_id || leaf.leaf_ref,
     depends_on: Array.isArray(leaf.depends_on) ? leaf.depends_on.slice().sort() : [],
@@ -477,6 +558,25 @@ function comparableLeaves(leaves) {
 
 function leavesMatch(left, right) {
   return JSON.stringify(comparableLeaves(left)) === JSON.stringify(comparableLeaves(right));
+}
+
+function comparableLeafWithoutOwnership(leaf) {
+  const comparable = comparableLeaf(leaf);
+  delete comparable.ownership;
+  return comparable;
+}
+
+function legacyOwnershipMigrationMatches(persisted, incoming) {
+  if (!persisted.some((leaf) => !leaf.ownership)) return false;
+  if (persisted.length !== incoming.length || incoming.some((leaf) => !leaf.ownership)) return false;
+  const incomingByRef = new Map(incoming.map((leaf) => [leaf.leaf_ref, leaf]));
+  return persisted.every((legacyLeaf) => {
+    const nextLeaf = incomingByRef.get(legacyLeaf.leaf_ref);
+    if (!nextLeaf) return false;
+    if (legacyLeaf.ownership && !ownershipsEqual(legacyLeaf.ownership, nextLeaf.ownership)) return false;
+    return JSON.stringify(comparableLeafWithoutOwnership(legacyLeaf))
+      === JSON.stringify(comparableLeafWithoutOwnership(nextLeaf));
+  });
 }
 
 function sortedLeafRefs(items) {
@@ -895,6 +995,10 @@ function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
     );
   }
   if (!leavesMatch(persisted, leaves)) {
+    if (legacyOwnershipMigrationMatches(persisted, leaves)) {
+      assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves);
+      return { leaves, replacements: [], legacyOwnershipMigration: true };
+    }
     const { replacements } = assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves, { persistedLeaves: persisted });
     if (Array.isArray(replacements) && replacements.length > 0) {
       return { leaves, replacements };
@@ -904,7 +1008,7 @@ function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
     );
   }
   assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves);
-  return { leaves: persisted, replacements: [] };
+  return { leaves: persisted, replacements: [], legacyOwnershipMigration: false };
 }
 
 function processIsAlive(pid) {
@@ -1072,6 +1176,201 @@ function findRunRecordForLeaf(records, leaf) {
   }) || null;
 }
 
+function runRecordMatchesLeaf(record, leaf) {
+  return record.data?.source?.leaf_id === leaf.leaf_id
+    || record.data?.source?.leaf_id === leaf.leaf_ref
+    || record.data?.git?.working_branch === leaf.branch;
+}
+
+function runRecordIsFleetTerminal(record) {
+  return [RUN_STATES.MERGED, RUN_STATES.CLOSED, RUN_STATES.ESCALATED]
+    .includes(record.data?.state);
+}
+
+function runRecordLabel(record) {
+  return record.data?.run_id || path.basename(record.manifestPath);
+}
+
+function readRunRecordOwnership(record, leafRef) {
+  if (record.data?.ownership === undefined) return null;
+  try {
+    return normalizeOwnership(record.data.ownership, {
+      label: `child manifest '${runRecordLabel(record)}'.ownership`,
+    });
+  } catch (error) {
+    throw new FleetInputError(`ownership drift for leaf '${leafRef}': ${error.message}`);
+  }
+}
+
+function missingLegacyOwnershipError(record, leafRef, expected) {
+  const location = `child manifest '${runRecordLabel(record)}'.ownership`;
+  const expectedText = expected ? `; expected ${formatOwnership(expected)}` : "";
+  return new FleetInputError(
+    `legacy ownership is missing for leaf '${leafRef}' at ${location}${expectedText}; ` +
+    "rerun the default drive with --leaves-file containing the validated single-track ownership to backfill the legacy child"
+  );
+}
+
+function assertManifestOwnershipBackfillCurrent(backfill, current) {
+  const actual = readRunRecordOwnership({
+    manifestPath: backfill.record.manifestPath,
+    data: current.data,
+  }, backfill.leafRef);
+  if (actual && !ownershipsEqual(actual, backfill.ownership)) {
+    throw new FleetInputError(
+      `ownership drift for leaf '${backfill.leafRef}' run '${runRecordLabel(backfill.record)}': ` +
+      `manifest=${formatOwnership(actual)} leaf=${formatOwnership(backfill.ownership)}; ` +
+      "refusing to rewrite the child owner"
+    );
+  }
+  return actual;
+}
+
+function applyManifestOwnershipBackfills(backfills) {
+  // Validate the complete cohort against fresh reads before the first write.
+  // The write loop repeats this check under its own transaction so a race
+  // after preflight still fails closed without losing concurrent transitions.
+  for (const backfill of backfills) {
+    withManifestTransaction(backfill.record.manifestPath, () => {
+      const current = readManifest(backfill.record.manifestPath);
+      assertManifestOwnershipBackfillCurrent(backfill, current);
+    });
+  }
+
+  for (const backfill of backfills) {
+    withManifestTransaction(backfill.record.manifestPath, () => {
+      const current = readManifest(backfill.record.manifestPath);
+      const actual = assertManifestOwnershipBackfillCurrent(backfill, current);
+      if (actual) return;
+      writeManifestUnlocked(backfill.record.manifestPath, {
+        ...current.data,
+        ownership: backfill.ownership,
+      }, current.body);
+    });
+  }
+}
+
+function validateFleetRunOwnership(repoRoot, fleetId, leaves, { allowLegacyBackfill = false } = {}) {
+  validateFleetOwnership(leaves);
+  const records = listFleetRunRecords(repoRoot, fleetId);
+  const recordsByRunId = new Map(records.map((record) => [record.data?.run_id, record]));
+  const leavesByRef = new Map(leaves.map((leaf) => [leaf.leaf_ref, leaf]));
+  const candidates = [];
+  const candidateKeys = new Set();
+
+  function addCandidate(record, leafRef, leaf) {
+    // Terminal children without ownership remain inspectable as legacy runs.
+    // Once a terminal child has an owner, keep validating its immutable value
+    // against the persisted leaf just like an active child.
+    const candidateKey = `${record.manifestPath}\0${leafRef}`;
+    if (
+      (runRecordIsFleetTerminal(record) && record.data?.ownership === undefined)
+      || candidateKeys.has(candidateKey)
+    ) return;
+    candidateKeys.add(candidateKey);
+    candidates.push({ record, leafRef, leaf });
+  }
+
+  for (const record of records) {
+    const leaf = leaves.find((candidate) => runRecordMatchesLeaf(record, candidate));
+    const leafRef = leaf?.leaf_ref || runRecordLeafRef(record);
+    if (leafRef) addCandidate(record, leafRef, leaf);
+  }
+
+  const manifestPath = getFleetManifestPath(repoRoot, fleetId);
+  if (fs.existsSync(manifestPath)) {
+    for (const child of readFleetManifest(repoRoot, fleetId).data.children) {
+      const leaf = leavesByRef.get(child.leaf_ref);
+      if (!child.run_id) {
+        if (leaf && !leaf.ownership && child.dispatch_status !== DISPATCH_STATUS.DISPATCHED) {
+          throw new FleetInputError(
+            `legacy ownership is missing for pending leaf '${child.leaf_ref}'; ` +
+            "rerun with --leaves-file containing the validated single-track ownership before dispatch"
+          );
+        }
+        continue;
+      }
+      let record = recordsByRunId.get(child.run_id);
+      if (!record) {
+        const childManifestPath = getManifestPath(repoRoot, child.run_id);
+        if (
+          leaf
+          && !fs.existsSync(childManifestPath)
+          && child.dispatch_status !== DISPATCH_STATUS.DISPATCHED
+        ) {
+          // A detached launch may return a reserved run id and fail before the
+          // child writes its manifest. The persisted leaf remains the ownership
+          // authority for this retryable pre-manifest state.
+          continue;
+        }
+        try {
+          record = { manifestPath: childManifestPath, ...readManifest(childManifestPath) };
+        } catch (error) {
+          throw new FleetInputError(
+            `cannot validate ownership for leaf '${child.leaf_ref}' run '${child.run_id}': ${error.message}`
+          );
+        }
+      }
+      addCandidate(record, child.leaf_ref, leaf);
+    }
+  }
+
+  const grouped = new Map();
+  for (const candidate of candidates) {
+    const group = grouped.get(candidate.leafRef) || [];
+    group.push(candidate);
+    grouped.set(candidate.leafRef, group);
+  }
+
+  const ownershipCohort = leaves
+    .filter((leaf) => leaf.ownership)
+    .map((leaf) => ({ leaf_ref: leaf.leaf_ref, ownership: leaf.ownership }));
+  const hydratedLeaves = [];
+  const manifestBackfills = [];
+
+  for (const [leafRef, group] of grouped) {
+    const leaf = group.find((candidate) => candidate.leaf)?.leaf || leavesByRef.get(leafRef);
+    let expected = leaf?.ownership || null;
+    const missingRecords = [];
+    for (const { record } of group) {
+      const actual = readRunRecordOwnership(record, leafRef);
+      if (!actual) {
+        missingRecords.push(record);
+        continue;
+      }
+      if (expected && !ownershipsEqual(actual, expected)) {
+        throw new FleetInputError(
+          `ownership drift for leaf '${leafRef}' run '${runRecordLabel(record)}': ` +
+          `manifest=${formatOwnership(actual)} leaf=${formatOwnership(expected)}; refusing to rewrite the child owner`
+        );
+      }
+      expected = actual;
+    }
+
+    if (!expected && missingRecords.length > 0) {
+      throw missingLegacyOwnershipError(missingRecords[0], leafRef, null);
+    }
+    if (missingRecords.length > 0) {
+      if (!allowLegacyBackfill) {
+        throw missingLegacyOwnershipError(missingRecords[0], leafRef, expected);
+      }
+      for (const record of missingRecords) {
+        manifestBackfills.push({ record, ownership: expected, leafRef });
+      }
+    }
+    if (leaf && !leaf.ownership && expected) {
+      hydratedLeaves.push({ leaf, ownership: expected });
+    }
+    if (!ownershipCohort.some((entry) => entry.leaf_ref === leafRef) && expected) {
+      ownershipCohort.push({ leaf_ref: leafRef, ownership: expected });
+    }
+  }
+
+  validateFleetOwnership(ownershipCohort);
+  for (const hydration of hydratedLeaves) hydration.leaf.ownership = hydration.ownership;
+  return { manifestBackfills, hydratedLeaves: hydratedLeaves.map(({ leaf }) => leaf.leaf_ref) };
+}
+
 function findFleetChild(fleet, leafRef) {
   return fleet.children.find((child) => child.leaf_ref === leafRef) || null;
 }
@@ -1109,6 +1408,7 @@ function issueLockHeld(repoRoot, fleetId, leaf) {
 }
 
 function reconcileFleet(repoRoot, fleetId, leaves) {
+  validateFleetRunOwnership(repoRoot, fleetId, leaves);
   const records = listFleetRunRecords(repoRoot, fleetId);
   let fleet = readFleetManifest(repoRoot, fleetId).data;
 
@@ -1149,6 +1449,9 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
 }
 
 function buildDispatchArgs({ repoRoot, fleetId, leaf, options }) {
+  const ownership = normalizeOwnership(leaf.ownership, {
+    label: `leaf '${leaf.leaf_ref}'.ownership`,
+  });
   const args = [
     options.dispatchScript,
     repoRoot,
@@ -1157,6 +1460,7 @@ function buildDispatchArgs({ repoRoot, fleetId, leaf, options }) {
     "--rubric-file", leaf.rubric_file,
     "--done-criteria-file", leaf.done_criteria_file,
     "--fleet-id", fleetId,
+    "--ownership-json", JSON.stringify(ownership),
     "--json",
   ];
 
@@ -1466,11 +1770,16 @@ function buildPublishArgs({ repoRoot, runId, options }) {
   ];
 }
 
-function buildRedispatchArgs({ repoRoot, runId, leaf, options }) {
+function buildRedispatchArgs({ repoRoot, fleetId, runId, leaf, options }) {
+  const ownership = normalizeOwnership(leaf.ownership, {
+    label: `leaf '${leaf.leaf_ref}'.ownership`,
+  });
   const args = [
     options.dispatchScript,
     repoRoot,
     "--manifest", getManifestPath(repoRoot, runId),
+    "--fleet-id", fleetId,
+    "--ownership-json", JSON.stringify(ownership),
     "--json",
   ];
   const valueFlags = [
@@ -1744,7 +2053,7 @@ function spawnRedispatchForChild({ repoRoot, fleetId, leaf, child, options, acti
     }
 
     const before = childReviewSnapshot(repoRoot, child.run_id);
-    const args = buildRedispatchArgs({ repoRoot, runId: child.run_id, leaf, options });
+    const args = buildRedispatchArgs({ repoRoot, fleetId, runId: child.run_id, leaf, options });
     const dispatch = spawn(process.execPath, args, {
       cwd: repoRoot,
       env: process.env,
@@ -2462,16 +2771,27 @@ async function driveChildReviewLoop({ repoRoot, fleetId, leaf, child, options, a
 }
 
 async function reviewFleet({ repoRoot, fleetId, leaves = [], options, activeChildren = new Map(), isInterrupted = () => false }) {
+  validateFleetRunOwnership(repoRoot, fleetId, leaves);
   transitionFleetToReviewing(repoRoot, fleetId);
   cleanupDeadRuntimeChildren(repoRoot, fleetId);
   const starting = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
   const leavesByRef = new Map(leaves.map((leaf) => [leaf.leaf_ref, leaf]));
   const reviewableChildren = starting.children.filter(childNeedsReviewLoop);
   const children = await runPool(reviewableChildren, options.parallel, (child) => {
+    let leaf = leavesByRef.get(child.leaf_ref);
+    if (!leaf && child.run_id) {
+      const record = readManifest(getManifestPath(repoRoot, child.run_id));
+      leaf = {
+        leaf_ref: child.leaf_ref,
+        ownership: normalizeOwnership(record.data?.ownership, {
+          label: `child manifest '${child.run_id}'.ownership`,
+        }),
+      };
+    }
     return driveChildReviewLoop({
       repoRoot,
       fleetId,
-      leaf: leavesByRef.get(child.leaf_ref) || { leaf_ref: child.leaf_ref },
+      leaf: leaf || { leaf_ref: child.leaf_ref },
       child,
       options,
       activeChildren,
@@ -2538,6 +2858,7 @@ function fleetHasReviewWork(summary) {
 function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
   const manifestExists = fs.existsSync(manifestPath);
   const explicitLeaves = options.leavesFile ? loadLeavesFile(options.leavesFile) : null;
+  if (explicitLeaves) validateFleetOwnershipSprintState(repoRoot, explicitLeaves);
 
   if (options.dryRun) {
     if (!explicitLeaves) {
@@ -2555,11 +2876,24 @@ function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
     return { leaves: explicitLeaves, explicitLeaves, manifestExists, replacedChildren: [] };
   }
 
+  // Ownership is immutable across every resume path. Check the caller's
+  // proposed cohort (or the currently persisted cohort) before replacement
+  // recovery or accepted-replacement writes can mutate fleet stores.
+  const candidateLeaves = explicitLeaves || readPersistedLeaves(repoRoot, fleetId);
+  const ownershipValidation = validateFleetRunOwnership(
+    repoRoot,
+    fleetId,
+    candidateLeaves,
+    { allowLegacyBackfill: Boolean(explicitLeaves) }
+  );
+  if (!explicitLeaves) validateFleetOwnershipSprintState(repoRoot, candidateLeaves);
+
   const recoveredReplacements = recoverAcceptedLeafReplacement(repoRoot, fleetId);
 
   if (explicitLeaves) {
     const persisted = assertLeavesMatchPersisted(repoRoot, fleetId, explicitLeaves);
     validateLeafLineage(repoRoot, explicitLeaves);
+    applyManifestOwnershipBackfills(ownershipValidation.manifestBackfills);
     if (persisted.replacements.length > 0) {
       const replacements = applyAcceptedLeafReplacements(repoRoot, fleetId, explicitLeaves);
       return {
@@ -2573,11 +2907,20 @@ function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
       persistFleetLeaves(repoRoot, fleetId, explicitLeaves);
       return { leaves: explicitLeaves, explicitLeaves, manifestExists, replacedChildren: recoveredReplacements };
     }
+    if (persisted.legacyOwnershipMigration) {
+      persistFleetLeaves(repoRoot, fleetId, explicitLeaves, { durable: true });
+      return { leaves: explicitLeaves, explicitLeaves, manifestExists, replacedChildren: recoveredReplacements };
+    }
     return { leaves: persisted.leaves, explicitLeaves, manifestExists, replacedChildren: recoveredReplacements };
   }
 
+  const persistedLeaves = readPersistedLeaves(repoRoot, fleetId);
+  const recoveredOwnershipValidation = validateFleetRunOwnership(repoRoot, fleetId, persistedLeaves);
+  if (recoveredOwnershipValidation.hydratedLeaves.length > 0) {
+    persistFleetLeaves(repoRoot, fleetId, persistedLeaves, { durable: true });
+  }
   return {
-    leaves: readPersistedLeaves(repoRoot, fleetId),
+    leaves: persistedLeaves,
     explicitLeaves: null,
     manifestExists,
     replacedChildren: recoveredReplacements,
@@ -2737,6 +3080,9 @@ async function runFleet(options) {
     if (!fs.existsSync(manifestPath)) {
       throw new FleetInputError(`fleet manifest does not exist: ${manifestPath}`);
     }
+    const leaves = readPersistedLeaves(repoRoot, fleetId);
+    validateFleetRunOwnership(repoRoot, fleetId, leaves);
+    validateFleetOwnershipSprintState(repoRoot, leaves);
     let interrupted = false;
     const activeChildren = new Map();
     const interrupt = () => {
@@ -2753,7 +3099,7 @@ async function runFleet(options) {
         ...(await reviewFleet({
           repoRoot,
           fleetId,
-          leaves: readPersistedLeaves(repoRoot, fleetId),
+          leaves,
           options,
           activeChildren,
           isInterrupted: () => interrupted,
@@ -2768,6 +3114,7 @@ async function runFleet(options) {
   }
 
   const { leaves, manifestExists, replacedChildren } = readDriveLeaves({ repoRoot, fleetId, manifestPath, options });
+  validateFleetRunOwnership(repoRoot, fleetId, leaves);
 
   if (options.dryRun) {
     const activeChildren = new Map();

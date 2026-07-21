@@ -110,6 +110,12 @@ roles:
   executor: codex               # who implements
   reviewer: claude              # who reviews (isolated)
 
+fleet_id: sprint-batch-2        # optional; immutable fleet back-pointer
+ownership:                      # required with fleet_id; immutable on resume
+  sprint: backlog/sprints/2026-07-relay-fleet.md
+  track: 2026-07-relay-fleet
+  component: relay-fleet
+
 model_hints:
   dispatch: null                # omit for Codex/Claude managed CLI defaults
   review: null                  # omit for Codex/Claude managed CLI defaults
@@ -178,6 +184,7 @@ bootstrap_exempt:
 | Field | Purpose |
 |-------|---------|
 | `roles.*` | Immutable per-run binding. Decouples who decides, who implements, who validates |
+| `fleet_id`, `ownership` | Fleet child lineage and its validated `{sprint, track, component}` finalize owner; immutable on resume |
 | `model_hints.*` | Optional per-phase model preference. Current runtime consumers: `dispatch`, `review`, `advisory_review`. For unmanaged harnesses, values must resolve to approved provider/model routes. Do not add Codex/Claude model hints in generated company defaults just to pin their managed CLI model. |
 | `dispatch.last_model` / executor config | Dispatch records the effective model route when one exists. The skill-bundled `skills/relay-dispatch/references/executor-models.json` intentionally ships empty; unmanaged executors need an explicit route from CLI/model hints/project routes or a local `~/.relay/executors.json` default, and the selected route still passes through the route policy gate. Codex/Claude managed CLI defaults normally record a null model route. |
 | Route policy | Stored outside the manifest in `~/.relay/policy.json`, optional repo-local `.relay/policy.json`, and optional project-local `~/.relay/projects/<repo-slug>/policy.json`. Executor/reviewer names are harnesses; provider/model route strings are the policy boundary. Final operator precedence is `CLI flags / --route-intent-file -> project routes.json -> routing rules -> defaults -> existing relay defaults -> policy gate`. Adapter capability gates run before this policy gate. |

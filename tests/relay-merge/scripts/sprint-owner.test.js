@@ -128,6 +128,47 @@ describe("normalizeRepoSprintPath", () => {
       fs.rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  it("rejects an external sprints-root symlink in sprint-state and the downstream #955 resolver", () => {
+    const repo = makeRepo();
+    const outsideSprintsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sprint-owner-external-root-"));
+    const sprintName = "2026-07-auth.md";
+    const sprintPath = path.join(outsideSprintsRoot, sprintName);
+    try {
+      fs.writeFileSync(sprintPath, `---
+status: active
+component: auth
+---
+
+# External sprint root
+`);
+      fs.mkdirSync(path.join(repo, "backlog"), { recursive: true });
+      fs.symlinkSync(outsideSprintsRoot, path.join(repo, "backlog", "sprints"), "dir");
+
+      const payloadResult = validateSprintStatePayload({
+        schema_version: 2,
+        active_sprint: {
+          path: `backlog/sprints/${sprintName}`,
+          frontmatter: { component: "auth" },
+        },
+      }, { component: "auth", repo });
+      assert.equal(payloadResult.ok, false);
+      assert.equal(payloadResult.reason, "sprint_path_escaped");
+      assert.match(payloadResult.detail, /sprints root must resolve within repository/i);
+
+      const ownerResult = resolveSprintOwner({
+        repo,
+        sprint: `backlog/sprints/${sprintName}`,
+        sprintState: () => assert.fail("explicit sprint must not invoke sprint-state"),
+      });
+      assert.equal(ownerResult.ok, false);
+      assert.equal(ownerResult.reason, "sprint_path_escaped");
+      assert.match(ownerResult.detail, /sprints root must resolve within repository/i);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(outsideSprintsRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("validateSprintStatePayload", () => {

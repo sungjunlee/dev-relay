@@ -35,6 +35,7 @@
  *   --rubric-grandfathered Retired alias; dispatch rejects it
  *   --request-id <id>      Link the run back to a relay-ready request
  *   --leaf-id <id>         Link the run back to a relay-ready leaf handoff
+ *   --ownership-json <json>  Validated fleet owner: sprint, track, component
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
  *   --register             Register session in executor's app (keeps worktree)
  *   --auto-recover-commit  Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)
@@ -127,6 +128,13 @@ const {
   validateRubricPathContainment,
 } = require("./manifest/rubric");
 const { findUnknownFlags, getPositionals, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const {
+  formatOwnership,
+  normalizeOwnership,
+  ownershipsEqual,
+  parseOwnershipJson,
+  validateOwnershipAgainstSprintState,
+} = require("./ownership");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const {
   buildGuidanceMetadata,
@@ -184,7 +192,7 @@ const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--coordination-marker", "--rubric-grandfathered",
-  "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--tags",
+  "--request-id", "--leaf-id", "--fleet-id", "--ownership-json", "--done-criteria-file", "--publish-policy", "--review-assurance", "--tags",
   "--register", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
@@ -222,6 +230,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --request-id       ${modeLabel("--request-id")} Link the run back to a relay-ready request`);
   console.log(`  --leaf-id          ${modeLabel("--leaf-id")} Link the run back to a relay-ready leaf handoff`);
   console.log(`  --fleet-id         ${modeLabel("--fleet-id")} Link the run back to a relay fleet`);
+  console.log(`  --ownership-json   ${modeLabel("--ownership-json")} Fleet owner JSON with sprint, track, and component`);
   console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file")} Persist a frozen Done Criteria anchor path`);
   console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
   console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)`);
@@ -375,6 +384,7 @@ const RUBRIC_GRANDFATHERED = hasCliFlag("--rubric-grandfathered");
 const REQUEST_ID = readArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
 const LEAF_ID = readArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
 const FLEET_ID = readArg(args, "--fleet-id", undefined, CLI_ARG_OPTIONS);
+const OWNERSHIP_JSON_RAW = readArg(args, "--ownership-json", undefined, CLI_ARG_OPTIONS);
 const DONE_CRITERIA_FILE = readArg(args, "--done-criteria-file", undefined, CLI_ARG_OPTIONS);
 const REVIEW_ASSURANCE_RAW = readArg(args, "--review-assurance", undefined, CLI_ARG_OPTIONS);
 const ROUTING_TAGS = readArg(args, "--tags", "", CLI_ARG_OPTIONS);
@@ -570,6 +580,21 @@ if (FLEET_ID) {
     console.error(`Error: ${error.message}`);
     process.exit(1);
   }
+}
+
+if (OWNERSHIP_JSON_RAW !== undefined && !FLEET_ID) {
+  console.error("Error: --ownership-json requires --fleet-id");
+  process.exit(1);
+}
+
+let OWNERSHIP = null;
+try {
+  OWNERSHIP = parseOwnershipJson(OWNERSHIP_JSON_RAW, {
+    required: Boolean(FLEET_ID),
+  });
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
 }
 // ---------------------------------------------------------------------------
 // Validation
@@ -1193,6 +1218,34 @@ function validateResumeReviewAssurance(manifest, incoming) {
       `same-run resume cannot change immutable policy.review_assurance (existing: ${existing}, incoming: ${requested})`
     );
   }
+}
+
+function validateResumeOwnership(manifest, incoming) {
+  const fleetBound = Boolean(manifest?.fleet_id || FLEET_ID);
+  if (fleetBound && !manifest?.ownership) {
+    const fleetId = manifest?.fleet_id || FLEET_ID;
+    throw new Error(
+      "same-run fleet resume cannot add or guess missing immutable manifest.ownership; " +
+      `resume the owning fleet '${fleetId}' with a validated single-track --leaves-file ` +
+      "to perform the audited ownership backfill"
+    );
+  }
+
+  const existing = manifest?.ownership
+    ? normalizeOwnership(manifest.ownership, { label: "manifest.ownership" })
+    : null;
+  if (!incoming) return existing;
+  if (!existing) {
+    throw new Error(
+      "same-run resume cannot add immutable manifest.ownership; ownership must be bound when the run is created"
+    );
+  }
+  if (!ownershipsEqual(existing, incoming)) {
+    throw new Error(
+      `same-run resume cannot change immutable manifest.ownership (existing: ${formatOwnership(existing)}, incoming: ${formatOwnership(incoming)})`
+    );
+  }
+  return existing;
 }
 
 function failRubricPersistence(message) {
@@ -2049,6 +2102,12 @@ async function main() {
     });
     manifestPath = manifestRecord.manifestPath;
     manifest = manifestRecord.data;
+    try {
+      validateResumeOwnership(manifest, OWNERSHIP);
+    } catch (error) {
+      console.error(`Error: ${error.message}`);
+      process.exit(1);
+    }
     const validatedPaths = validateManifestPaths(manifest.paths, {
       expectedRepoRoot: MANIFEST_INPUT ? undefined : ((repoPathRaw || looksLikeGitRepo(repoRoot)) ? repoRoot : undefined),
       manifestPath,
@@ -2060,6 +2119,17 @@ async function main() {
     branch = manifest.git?.working_branch || branch;
     runId = manifest.run_id || runId;
     wtPath = validatedPaths.worktree;
+    runtime = resolveDispatchRuntime(repoRoot);
+    if (manifest.ownership || OWNERSHIP) {
+      try {
+        validateOwnershipAgainstSprintState(repoRoot, manifest.ownership || OWNERSHIP, {
+          label: `leaf '${manifest.source?.leaf_id || LEAF_ID || branch}' ownership`,
+        });
+      } catch (error) {
+        console.error(`Error: ${error.message}`);
+        process.exit(1);
+      }
+    }
     manifest = {
       ...manifest,
       paths: {
@@ -2152,8 +2222,6 @@ async function main() {
       process.exit(1);
     }
 
-    runtime = resolveDispatchRuntime(repoRoot);
-
     // --- Environment drift check ---
     const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
     const needsDraftEnvironmentBackfill = manifest.state === STATES.DRAFT
@@ -2183,6 +2251,17 @@ async function main() {
       });
     }
   } else {
+    runtime = resolveDispatchRuntime(repoRoot);
+    if (OWNERSHIP) {
+      try {
+        validateOwnershipAgainstSprintState(repoRoot, OWNERSHIP, {
+          label: `leaf '${LEAF_ID || branch}' ownership`,
+        });
+      } catch (error) {
+        console.error(`Error: ${error.message}`);
+        process.exit(1);
+      }
+    }
     const issueForCollisionCheck = issueNumber
       || inferIssueFromPromptOrBranch(branch, PROMPT);
     const inflightRuns = issueForCollisionCheck
@@ -2192,7 +2271,6 @@ async function main() {
       console.error("Error: " + formatInflightCollisionError(inflightRuns, { issueNumber: issueForCollisionCheck }));
       process.exit(1);
     }
-    runtime = resolveDispatchRuntime(repoRoot);
     runId = runId || createRunId({ issueNumber, branch });
     if (FLEET_ID && issueForCollisionCheck && !DRY_RUN) {
       try {
@@ -2526,6 +2604,9 @@ async function main() {
     if (planFleetId) {
       plan.fleetId = planFleetId;
     }
+    if (OWNERSHIP || manifest?.ownership) {
+      plan.ownership = OWNERSHIP || manifest.ownership;
+    }
     if (MODEL_HINTS !== undefined || manifest?.model_hints !== undefined) {
       plan.model_hints = MODEL_HINTS ?? manifest?.model_hints ?? null;
     }
@@ -2595,6 +2676,7 @@ async function main() {
       reviewAssurance: REVIEW_ASSURANCE,
       modelHints: MODEL_HINTS,
       fleetId: FLEET_ID,
+      ownership: OWNERSHIP || undefined,
     });
     if (COORDINATION_MARKER !== undefined) {
       manifest = withCoordinationMarker(manifest, COORDINATION_MARKER);
@@ -3461,6 +3543,9 @@ async function main() {
   };
   if (manifest.fleet_id) {
     result.fleetId = manifest.fleet_id;
+  }
+  if (manifest.ownership) {
+    result.ownership = manifest.ownership;
   }
 
   if (JSON_OUT) {

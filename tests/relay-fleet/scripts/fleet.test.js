@@ -6,6 +6,11 @@ const os = require("os");
 const path = require("path");
 
 const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
+const TEST_OWNERSHIP = Object.freeze({
+  sprint: "backlog/sprints/2026-07-relay-fleet.md",
+  track: "2026-07-relay-fleet",
+  component: "relay-fleet",
+});
 
 const {
   getFleetIssueLockPath,
@@ -39,13 +44,17 @@ const {
   validateTransition,
   writeFleetManifest,
 } = require("../../../skills/relay-dispatch/scripts/manifest/fleet");
+const { writeFakeSprintStateBinary } = require("../../relay-dispatch/scripts/test-support");
 
 function initGitRepo(repoRoot) {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Fleet Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-fleet@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
-  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const sprintPath = path.join(repoRoot, TEST_OWNERSHIP.sprint);
+  fs.mkdirSync(path.dirname(sprintPath), { recursive: true });
+  fs.writeFileSync(sprintPath, "# Relay fleet sprint fixture\n", "utf-8");
+  execFileSync("git", ["add", "README.md", TEST_OWNERSHIP.sprint], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
 }
 
@@ -54,7 +63,10 @@ function setupRepo(prefix = "relay-fleet-") {
   process.env.RELAY_HOME = relayHome;
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   initGitRepo(repoRoot);
-  return { relayHome, repoRoot };
+  const sprintStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-fleet-sprint-state-"));
+  const sprintStateBin = writeFakeSprintStateBinary(sprintStateDir);
+  process.env.RELAY_SPRINT_STATE_BIN = sprintStateBin;
+  return { relayHome, repoRoot, sprintStateBin };
 }
 
 function writeNoOpCodex(binDir) {
@@ -343,6 +355,7 @@ test("dispatch --fleet-id writes the child back-pointer and releases the issue l
     "--executor", "codex",
     "--rubric-file", rubricPath,
     "--fleet-id", "fleet-dispatch",
+    "--ownership-json", JSON.stringify(TEST_OWNERSHIP),
     "--timeout", "5",
     "--json",
   ], {
@@ -358,6 +371,7 @@ test("dispatch --fleet-id writes the child back-pointer and releases the issue l
   const payload = JSON.parse(result.stdout);
   const manifest = readManifest(payload.manifestPath).data;
   assert.equal(manifest.fleet_id, "fleet-dispatch");
+  assert.deepEqual(manifest.ownership, TEST_OWNERSHIP);
   assert.equal(payload.fleetId, "fleet-dispatch");
   assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 477)), false);
 });
@@ -382,6 +396,7 @@ test("dispatch --fleet-id refuses an active same-issue fleet lock before executo
       "--executor", "codex",
       "--rubric-file", rubricPath,
       "--fleet-id", "fleet-blocked",
+      "--ownership-json", JSON.stringify(TEST_OWNERSHIP),
       "--timeout", "5",
       "--json",
     ], {

@@ -74,6 +74,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--no-comment` | `parsed` | Presence flag; no value is consumed. |
 | `--no-issue-close` | `parsed` | Presence flag; no value is consumed. |
 | `--older-than` | `parsed` | Numeric threshold; flag-like following tokens should mean the value is missing. |
+| `--ownership-json` | `verbatim` | Typed fleet ownership object; preserve the JSON token for strict parsing. |
 | `--pin` | `parsed` | Presence flag; no value is consumed. |
 | `--post-comment` | `parsed` | Presence flag; no value is consumed. |
 | `--pr` | `parsed` | Numeric PR selector; flag-like following tokens should mean the value is missing. |
@@ -145,6 +146,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--no-comment` | `parsed` | Presence flag; no value is consumed. |
 | `--no-issue-close` | `parsed` | Presence flag; no value is consumed. |
 | `--older-than` | `parsed` | Numeric threshold; flag-like following tokens should mean the value is missing. |
+| `--ownership-json` | `verbatim` | Typed fleet ownership object; preserve the JSON token for strict parsing. |
 | `--pin` | `parsed` | Presence flag; no value is consumed. |
 | `--post-comment` | `parsed` | Presence flag; no value is consumed. |
 | `--pr` | `parsed` | Numeric PR selector; flag-like following tokens should mean the value is missing. |

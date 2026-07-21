@@ -33,7 +33,10 @@ const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scri
 const { appendRunEvent, EVENTS, readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const { evaluateReviewGate } = require("../../../skills/relay-merge/scripts/review-gate");
 const { buildRubricGateRedispatchPrompt } = require("../../../skills/relay-review/scripts/review-runner/redispatch");
-const { createEnforcementFixture } = require("./test-support");
+const {
+  createEnforcementFixture,
+  writeFakeSprintStateBinary,
+} = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
 const WORKTREE_RUNTIME_FIXTURE_DIR = path.join(__dirname, "..", "fixtures", "worktree-runtime");
@@ -50,11 +53,20 @@ function setupRepo() {
   execFileSync("git", ["config", "user.name", "Relay Dispatch Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-dispatch@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
-  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const sprintPath = path.join(repoRoot, "backlog", "sprints", "2026-07-relay-fleet.md");
+  fs.mkdirSync(path.dirname(sprintPath), { recursive: true });
+  fs.writeFileSync(sprintPath, "# Relay fleet sprint fixture\n", "utf-8");
+  execFileSync("git", ["add", "README.md", "backlog/sprints/2026-07-relay-fleet.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["remote", "add", "origin", remoteRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  return { repoRoot, relayHome, remoteRoot };
+  const sprintStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-sprint-state-"));
+  const sprintStateLog = path.join(sprintStateDir, "invocations.jsonl");
+  const sprintStateBin = writeFakeSprintStateBinary(sprintStateDir, {
+    invocationLog: sprintStateLog,
+  });
+  process.env.RELAY_SPRINT_STATE_BIN = sprintStateBin;
+  return { repoRoot, relayHome, remoteRoot, sprintStateBin, sprintStateLog };
 }
 
 function setupRepoWithOrigin() {
@@ -5312,6 +5324,11 @@ fs.unlinkSync = function unlinkSync(targetPath) {
     "-b", "issue-918",
     "--prompt", "verify ordered cleanup",
     "--fleet-id", "issue-918-cleanup",
+    "--ownership-json", JSON.stringify({
+      sprint: "backlog/sprints/2026-07-relay-fleet.md",
+      track: "2026-07-relay-fleet",
+      component: "relay-fleet",
+    }),
     "--json",
   ])], { cwd: repoRoot, encoding: "utf-8", env });
 
@@ -8602,4 +8619,316 @@ test("resolveReasoningEffort override returns directly and silences unparseable 
   }
 
   assert.equal(writes.join(""), "");
+});
+
+test("dispatch canonicalizes typed fleet ownership and rejects only real resume-time drift", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "relay-fleet",
+  };
+  const absoluteOwnership = {
+    ...ownership,
+    sprint: path.join(os.tmpdir(), "retired-checkout", ownership.sprint),
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-957-ownership",
+    "--prompt", "persist fleet ownership",
+    "--fleet-id", "fleet-957-ownership",
+    "--ownership-json", JSON.stringify(absoluteOwnership),
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+  assert.deepEqual(first.ownership, ownership);
+
+  const record = readManifest(first.manifestPath);
+  assert.deepEqual(record.data.ownership, ownership);
+  const changesRequested = updateManifestState(
+    record.data,
+    STATES.CHANGES_REQUESTED,
+    "ownership_resume_test"
+  );
+  writeManifest(first.manifestPath, changesRequested, record.body);
+
+  const equivalent = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--manifest", first.manifestPath,
+    "--prompt", "resume equivalent fleet ownership",
+    "--fleet-id", "fleet-957-ownership",
+    "--ownership-json", JSON.stringify(ownership),
+    "--dry-run",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.equal(equivalent.status, 0, equivalent.stderr);
+  assert.deepEqual(JSON.parse(equivalent.stdout).ownership, ownership);
+
+  const drifted = { ...ownership, component: "other-component" };
+  const rejected = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--manifest", first.manifestPath,
+    "--fleet-id", "fleet-957-ownership",
+    "--ownership-json", JSON.stringify(drifted),
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /cannot change immutable manifest\.ownership/);
+  assert.deepEqual(readManifest(first.manifestPath).data.ownership, ownership);
+  assert.equal(fs.existsSync(path.join(first.worktree, "resume.txt")), false);
+});
+
+test("direct dispatch resume cannot backfill a legacy fleet child and names the audited migration path", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const sprintStateBin = writeFakeSprintStateBinary(binDir, { component: "merge-finalize" });
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_SPRINT_STATE_BIN: sprintStateBin,
+  };
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "merge-finalize",
+  };
+  const fleetId = "fleet-957-legacy-owner";
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-957-legacy-owner",
+    "--prompt", "persist then remove fleet ownership",
+    "--fleet-id", fleetId,
+    "--ownership-json", JSON.stringify(ownership),
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  const { ownership: _removedOwnership, ...legacyManifest } = record.data;
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(legacyManifest, STATES.CHANGES_REQUESTED, "legacy_owner_resume_test"),
+    record.body
+  );
+
+  const rejected = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--manifest", first.manifestPath,
+    "--prompt", "must not guess or add ownership",
+    "--fleet-id", fleetId,
+    "--ownership-json", JSON.stringify(ownership),
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /cannot add or guess missing immutable manifest\.ownership/i);
+  assert.match(
+    rejected.stderr,
+    new RegExp(`resume the owning fleet '${fleetId}'.*validated single-track --leaves-file.*audited ownership backfill`, "i")
+  );
+  assert.equal(readManifest(first.manifestPath).data.ownership, undefined);
+  assert.equal(fs.existsSync(path.join(first.worktree, "resume.txt")), false);
+});
+
+test("dispatch requires valid ownership before fleet manifest or lock side effects", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-957-owner-required",
+    "--prompt", "reject missing owner",
+    "--fleet-id", "fleet-957-owner-required",
+    "--dry-run",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--ownership-json is required/);
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
+});
+
+test("dispatch rejects standalone ownership before manifest, lock, worktree, or executor side effects", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ownership-guard-bin-"));
+  const executorMarker = path.join(os.tmpdir(), `relay-ownership-guard-executor-${process.pid}-${Date.now()}`);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/bin/sh\n: > ${JSON.stringify(executorMarker)}\nexit 99\n`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-957-standalone-owner",
+    "--prompt", "reject standalone ownership",
+    "--ownership-json", JSON.stringify({
+      sprint: "backlog/sprints/2026-07-relay-fleet.md",
+      track: "2026-07-relay-fleet",
+      component: "relay-fleet",
+    }),
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--ownership-json requires --fleet-id/);
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
+  assert.equal(fs.existsSync(executorMarker), false);
+});
+
+test("dispatch preserves valid fleet behavior when fleet id and ownership are paired", () => {
+  const { repoRoot, relayHome, sprintStateLog } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-valid-fleet-bin-"));
+  writeFakeCodex(binDir);
+  const fleetId = "fleet-957-valid-owner";
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "relay-fleet",
+  };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-957-valid-owner",
+    "--prompt", "dispatch valid fleet ownership",
+    "--fleet-id", fleetId,
+    "--ownership-json", JSON.stringify(ownership),
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome }));
+  const manifest = readManifest(result.manifestPath).data;
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.fleetId, fleetId);
+  assert.deepEqual(result.ownership, ownership);
+  assert.equal(manifest.fleet_id, fleetId);
+  assert.deepEqual(manifest.ownership, ownership);
+  assert.equal(fs.existsSync(path.join(result.worktree, "first.txt")), true);
+  const sprintStateInvocations = readJsonLines(sprintStateLog);
+  assert.equal(sprintStateInvocations.length, 1);
+  assert.deepEqual(sprintStateInvocations[0].slice(0, 3), ["--json", "--track", ownership.track]);
+  assert.equal(
+    fs.realpathSync(sprintStateInvocations[0][3]),
+    fs.realpathSync(path.join(repoRoot, "backlog"))
+  );
+});
+
+test("dispatch rejects stale sprint-state component ownership before manifest, lock, worktree, or executor side effects", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-stale-component-bin-"));
+  const executorMarker = path.join(binDir, "executor-invoked");
+  const sprintStateLog = path.join(binDir, "sprint-state-invocations.jsonl");
+  const sprintStateBin = writeFakeSprintStateBinary(binDir, {
+    component: "merge-finalize",
+    invocationLog: sprintStateLog,
+  });
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/bin/sh\n: > ${JSON.stringify(executorMarker)}\nexit 99\n`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "relay-fleet",
+  };
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-957-stale-component",
+    "--prompt", "reject stale component",
+    "--fleet-id", "fleet-957-stale-component",
+    "--leaf-id", "leaf-stale-component",
+    "--ownership-json", JSON.stringify(ownership),
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+      RELAY_SPRINT_STATE_BIN: sprintStateBin,
+    },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /leaf 'leaf-stale-component' ownership.*relay-fleet.*does not match trusted dev-backlog sprint-state owner.*merge-finalize/i
+  );
+  assert.equal(readJsonLines(sprintStateLog).length, 1);
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
+  assert.equal(fs.existsSync(executorMarker), false);
+});
+
+test("dispatch rejects a canonical missing sprint before manifest, lock, worktree, or executor side effects", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-missing-sprint-bin-"));
+  const executorMarker = path.join(binDir, "executor-invoked");
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/bin/sh\n: > ${JSON.stringify(executorMarker)}\nexit 99\n`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "relay-fleet",
+  };
+  fs.unlinkSync(path.join(repoRoot, ownership.sprint));
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-957-missing-sprint",
+    "--prompt", "reject missing sprint",
+    "--fleet-id", "fleet-957-missing-sprint",
+    "--leaf-id", "leaf-missing-sprint",
+    "--ownership-json", JSON.stringify(ownership),
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /leaf 'leaf-missing-sprint' ownership\.sprint.*2026-07-relay-fleet.*existing regular file.*backlog\/sprints/i
+  );
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
+  assert.equal(fs.existsSync(executorMarker), false);
+});
+
+test("dispatch rejects a contradictory sprint and track before fleet manifest or lock side effects", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-957-owner-contradiction",
+    "--prompt", "reject contradictory owner",
+    "--fleet-id", "fleet-957-owner-contradiction",
+    "--ownership-json", JSON.stringify({
+      sprint: "backlog/sprints/2026-07-relay-fleet.md",
+      track: "individually-valid-wrong-track",
+      component: "merge-finalize",
+    }),
+    "--dry-run",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ownership.*is contradictory: track .* must equal the sprint filename basename/i);
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
 });

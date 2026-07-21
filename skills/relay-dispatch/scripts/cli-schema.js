@@ -71,6 +71,7 @@ const FLAGS = [
   { flag: "--older-than", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
   { flag: "--out-dir", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied output directory path; keep the literal argv token." },
   { flag: "--output", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied evidence output path; keep the literal argv token." },
+  { flag: "--ownership-json", kind: VALUE, mode: MODE_VERBATIM, valueName: "<json>", rationale: "Typed fleet ownership object; preserve the JSON token for strict parsing." },
   { flag: "--pin", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--phase", kind: VALUE, mode: MODE_PARSED, valueName: "<phase[,phase...]>", rationale: "Closed phase selector; flag-like following tokens should mean the value is missing." },
   { flag: "--post-comment", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -154,7 +155,7 @@ const COMMAND_FLAGS = {
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
     "--model", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--coordination-marker", "--rubric-grandfathered", "--request-id", "--leaf-id",
-    "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--register", "--auto-recover-commit", "--no-auto-recover-commit",
+    "--fleet-id", "--ownership-json", "--done-criteria-file", "--publish-policy", "--review-assurance", "--register", "--auto-recover-commit", "--no-auto-recover-commit",
     "--tags", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [

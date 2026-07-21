@@ -21,11 +21,11 @@ Relay resolves and carries an owning sprint track explicitly across standalone f
 
 ### Batch 1 — align operator contracts
 
-- [~] #956 relay-merge/relay prose: resolve the owning sprint for every read/write
+- [x] #956 relay-merge/relay prose: resolve the owning sprint for every read/write → PR #1052 (merged)
 
 ### Batch 2 — carry track ownership through fleets
 
-- [ ] #957 relay-fleet: tag leaves before dispatch and reject or route mixed-track fleets
+- [~] #957 relay-fleet: tag leaves before dispatch and reject mixed-track fleets
 
 ### Batch 3 — integration proof and epic closeout
 
@@ -41,6 +41,7 @@ Relay resolves and carries an owning sprint track explicitly across standalone f
 
 ## Progress
 
-- 2026-07-21: #955 merged via PR #1051; live durable-learning proof recorded `durability.status=pushed` in one attempt with the canonical checkout untouched. #956 is in flight.
+- 2026-07-21: #956 merged via PR #1052; #957 is in flight on the fail-closed one-fleet-per-track branch.
+- 2026-07-21: #955 merged via PR #1051; live durable-learning proof recorded `durability.status=pushed` in one attempt with the canonical checkout untouched. #956 followed as Batch 1.
 - 2026-07-21: #955 dispatched through the hardened cursor + cline adversarial route as run `issue-955-20260720171527060-5631994b`; frozen criteria include standalone multi-track resolution and canonical-branch/push-race-independent Learnings durability.
 - 2026-07-21: Activated after #1036 merged in PR #1048. Live GitHub recheck confirmed #954–#957 remain open under milestone #13 and dev-backlog#291 is closed.

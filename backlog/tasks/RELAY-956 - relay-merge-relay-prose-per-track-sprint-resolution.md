@@ -1,7 +1,7 @@
 ---
 id: RELAY-956
 title: 'relay-merge/relay prose: per-track sprint resolution for reads/writes'
-status: In Progress
+status: Done
 labels:
   - enhancement
   - backlog
@@ -18,12 +18,12 @@ Make the relay and relay-merge operator contracts select the sprint that owns th
 ## Acceptance criteria
 
 <!-- AC:BEGIN -->
-- [ ] Relay reads Running Context and batch information from the owning track resolved through dev-backlog JSON.
-- [ ] Relay marks in-flight work in the owning track rather than an arbitrary active sprint.
-- [ ] Relay-merge writes Plan completion, Progress, and Running Context to the owning track.
-- [ ] Component/track resolution uses dev-backlog `sprint-state.js`; exactly one active sprint remains the N==1 fallback.
-- [ ] No relay-side track/component markdown parser is introduced.
-- [ ] SKILL.md files remain within the repository line limit and relevant lint/tests pass.
+- [x] Relay reads Running Context and batch information from the owning track resolved through dev-backlog JSON.
+- [x] Relay marks in-flight work in the owning track rather than an arbitrary active sprint.
+- [x] Relay-merge writes Plan completion, Progress, and Running Context to the owning track.
+- [x] Component/track resolution uses dev-backlog `sprint-state.js`; exactly one active sprint remains the N==1 fallback.
+- [x] No relay-side track/component markdown parser is introduced.
+- [x] SKILL.md files remain within the repository line limit and relevant lint/tests pass.
 <!-- AC:END -->
 
 ## Dependencies
