@@ -79,11 +79,19 @@ function normalizeOwnership(raw, { label = "ownership" } = {}) {
     );
   }
 
-  return Object.freeze({
-    sprint: normalizeSprintPath(raw.sprint, label),
-    track: normalizeSlug(raw.track, "track", label),
-    component: normalizeSlug(raw.component, "component", label),
-  });
+  const sprint = normalizeSprintPath(raw.sprint, label);
+  const track = normalizeSlug(raw.track, "track", label);
+  const component = normalizeSlug(raw.component, "component", label);
+  const sprintTrack = sprint.slice("backlog/sprints/".length, -".md".length);
+
+  if (track !== sprintTrack) {
+    throw new OwnershipValidationError(
+      `${label} is contradictory: track ${JSON.stringify(track)} must equal ` +
+      `the sprint filename basename ${JSON.stringify(sprintTrack)}`
+    );
+  }
+
+  return Object.freeze({ sprint, track, component });
 }
 
 function parseOwnershipJson(raw, { label = "--ownership-json", required = false } = {}) {

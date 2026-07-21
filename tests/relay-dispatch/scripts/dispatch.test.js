@@ -8668,6 +8668,52 @@ test("dispatch canonicalizes typed fleet ownership and rejects only real resume-
   assert.equal(fs.existsSync(path.join(first.worktree, "resume.txt")), false);
 });
 
+test("direct dispatch resume cannot backfill a legacy fleet child and names the audited migration path", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "merge-finalize",
+  };
+  const fleetId = "fleet-957-legacy-owner";
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-957-legacy-owner",
+    "--prompt", "persist then remove fleet ownership",
+    "--fleet-id", fleetId,
+    "--ownership-json", JSON.stringify(ownership),
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  const { ownership: _removedOwnership, ...legacyManifest } = record.data;
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(legacyManifest, STATES.CHANGES_REQUESTED, "legacy_owner_resume_test"),
+    record.body
+  );
+
+  const rejected = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--manifest", first.manifestPath,
+    "--prompt", "must not guess or add ownership",
+    "--ownership-json", JSON.stringify(ownership),
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /cannot add or guess missing immutable manifest\.ownership/i);
+  assert.match(
+    rejected.stderr,
+    new RegExp(`resume the owning fleet '${fleetId}'.*validated single-track --leaves-file.*audited ownership backfill`, "i")
+  );
+  assert.equal(readManifest(first.manifestPath).data.ownership, undefined);
+  assert.equal(fs.existsSync(path.join(first.worktree, "resume.txt")), false);
+});
+
 test("dispatch requires valid ownership before fleet manifest or lock side effects", () => {
   const { repoRoot, relayHome } = setupRepo();
   const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
@@ -8684,6 +8730,31 @@ test("dispatch requires valid ownership before fleet manifest or lock side effec
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /--ownership-json is required/);
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
+});
+
+test("dispatch rejects a contradictory sprint and track before fleet manifest or lock side effects", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-957-owner-contradiction",
+    "--prompt", "reject contradictory owner",
+    "--fleet-id", "fleet-957-owner-contradiction",
+    "--ownership-json", JSON.stringify({
+      sprint: "backlog/sprints/2026-07-relay-fleet.md",
+      track: "individually-valid-wrong-track",
+      component: "merge-finalize",
+    }),
+    "--dry-run",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ownership.*is contradictory: track .* must equal the sprint filename basename/i);
   assert.equal(listManifestPaths(repoRoot).length, 0);
   assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
 });

@@ -865,6 +865,17 @@ test("relay-fleet rejects missing and mixed ownership before manifest or dispatc
       pattern: /contradictory ownership within track.*leaf-01=.*leaf-02=/i,
     },
     {
+      name: "sprint-track-mismatch",
+      mutate(leaves) {
+        leaves[0].ownership = {
+          ...TEST_OWNERSHIP,
+          track: "individually-valid-wrong-track",
+          component: "merge-finalize",
+        };
+      },
+      pattern: /ownership.*is contradictory: track .* must equal the sprint filename basename/i,
+    },
+    {
       name: "prefixed-relative-sprint",
       mutate(leaves) {
         leaves[0].ownership = {
@@ -1033,6 +1044,20 @@ test("relay-fleet requires explicit ownership to migrate an active legacy child,
   assert.deepEqual(readManifest(getManifestPath(repoRoot, runId)).data.ownership, TEST_OWNERSHIP);
   const persisted = JSON.parse(fs.readFileSync(getFleetLeavesStorePath(repoRoot, fleetId), "utf-8"));
   assert.deepEqual(persisted.leaves.map((entry) => entry.ownership), [TEST_OWNERSHIP]);
+});
+
+test("relay-fleet documents the explicit active legacy migration and terminal inspection contract", () => {
+  const skill = fs.readFileSync(path.join(REPO_ROOT, "skills", "relay-fleet", "SKILL.md"), "utf-8");
+  const migrationReference = fs.readFileSync(
+    path.join(REPO_ROOT, "skills", "relay-fleet", "references", "sprint-to-leaves.md"),
+    "utf-8"
+  );
+
+  for (const content of [skill, migrationReference]) {
+    assert.match(content, /active pre-ownership fleet/i);
+    assert.match(content, /validated single-track `--leaves-file`/i);
+    assert.match(content, /terminal legacy children.*inspectable without backfill/i);
+  }
 });
 
 test("relay-fleet preflights every legacy ownership backfill before writing the first child", async () => {

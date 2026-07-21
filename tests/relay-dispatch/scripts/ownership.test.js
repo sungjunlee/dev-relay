@@ -47,6 +47,25 @@ test("normalizeOwnership canonicalizes absolute and repo-relative sprint spellin
   });
 });
 
+test("normalizeOwnership requires track to match the sprint basename but keeps component independent", () => {
+  assert.deepEqual(normalizeOwnership({
+    ...OWNER,
+    component: "merge-finalize",
+  }), {
+    ...OWNER,
+    component: "merge-finalize",
+  });
+
+  assert.throws(
+    () => normalizeOwnership({
+      ...OWNER,
+      track: "individually-valid-wrong-track",
+      component: "merge-finalize",
+    }),
+    /ownership is contradictory: track .* must equal the sprint filename basename/
+  );
+});
+
 test("normalizeOwnership rejects prefixed relative and repeated sprint markers", () => {
   for (const sprint of [
     "other/backlog/sprints/2026-07-relay-fleet.md",
@@ -68,6 +87,7 @@ test("normalizeOwnership rejects missing, opaque, extra, and malformed owner fie
     { ...OWNER, sprint: "../backlog/sprints/2026-07-relay-fleet.md" },
     { ...OWNER, sprint: "backlog/sprints/nested/2026-07-relay-fleet.md" },
     { ...OWNER, track: "Relay Fleet" },
+    { ...OWNER, track: "other-valid-track" },
     { ...OWNER, component: "relay_fleet" },
   ];
 

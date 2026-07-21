@@ -203,7 +203,8 @@ closes the fleet once every child is `merged`, `closed`, or `escalated`.
    Planning copies `{sprint, track, component}` from the same dev-backlog
    sprint-state JSON payload that supplies `next_batch`; fleet admission rejects
    missing, contradictory, or mixed-track owners before manifest creation or
-   child dispatch.
+   child dispatch. `track` is the sprint filename basename without `.md`, while
+   `component` remains an independent dev-backlog scope key.
 4. Stalled-child detection without a daemon → resume re-scans children via
    `fleet_id` back-pointer + `children[]` cross-check. No daemon.
 5. Phase 1 size → 2 sub-PRs (see build sequence).

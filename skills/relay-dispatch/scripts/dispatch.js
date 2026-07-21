@@ -1217,8 +1217,11 @@ function validateResumeReviewAssurance(manifest, incoming) {
 function validateResumeOwnership(manifest, incoming) {
   const fleetBound = Boolean(manifest?.fleet_id || FLEET_ID);
   if (fleetBound && !manifest?.ownership) {
+    const fleetId = manifest?.fleet_id || FLEET_ID;
     throw new Error(
-      "same-run fleet resume requires immutable manifest.ownership with sprint, track, and component"
+      "same-run fleet resume cannot add or guess missing immutable manifest.ownership; " +
+      `resume the owning fleet '${fleetId}' with a validated single-track --leaves-file ` +
+      "to perform the audited ownership backfill"
     );
   }
 
