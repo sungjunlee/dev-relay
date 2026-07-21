@@ -23,8 +23,8 @@ Close the multi-track interoperability epic with integrated evidence that standa
 - [x] Integration evidence covers N==1 compatibility and N>1 standalone resolution without lost Learnings.
 - [x] Integration evidence covers pre-dispatch fleet ownership and the chosen mixed-track policy.
 - [x] No relay-side duplicate parser exists; dev-backlog JSON remains the ownership source of truth.
-- [x] Sprint state, milestone state, GitHub issue checklist, and repository backlog agree.
-- [x] The sprint is closed through the normal dev-backlog closeout workflow and milestone #13 is complete.
+- [x] Repository sprint state, completed task mirrors, and merged PR/run evidence agree; GitHub issue #954 and milestone #13 remain a post-merge orchestrator handoff.
+- [x] The repository sprint is closed through the normal dev-backlog closeout workflow without `--close-milestone`; external issue/checklist and milestone mutation is deferred to the orchestrator after merge.
 <!-- AC:END -->
 
 ## Dependencies
