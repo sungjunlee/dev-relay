@@ -421,4 +421,4 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
   return orderReport(report);
 }
 
-module.exports = { deriveStatusReport, attributeRuntime, detectDuplicateMappings, discoverBackPointers, discoverFleetBackPointers, summarizeLiveDispatch };
+module.exports = { deriveStatusReport, attributeRuntime, detectDuplicateMappings, discoverBackPointers, discoverFleetBackPointers, summarizeLiveDispatch, taskDisplayString };

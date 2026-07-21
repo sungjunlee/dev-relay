@@ -10,7 +10,7 @@ const SCRIPTS = path.join(REPO_ROOT, "skills", "relay-orca", "scripts");
 const PROOF = require(path.join(SCRIPTS, "lib", "closed-program-proof.js"));
 const { programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
 const { RECEIPT_NOTE } = require(path.join(SCRIPTS, "lib", "receipt.js"));
-const { verificationBinding, canonicalJson, sha256 } = require(path.join(SCRIPTS, "lib", "integration-evidence.js"));
+const { verificationBinding, sha256 } = require(path.join(SCRIPTS, "lib", "integration-evidence.js"));
 const { canonicalIntegrationQuestion } = require(path.join(SCRIPTS, "lib", "integration-lifecycle.js"));
 
 const PROGRAM_ID = "proof-program/2026-07";
@@ -34,7 +34,7 @@ function receiptTask(outcomeId, kind, orcaTaskId) {
 function makeVerification(passed = true) {
   return verificationBinding({
     input_sha256: `sha256:${"a".repeat(64)}`,
-    result_sha256: `sha256:${passed ? "b" : "c"}`.repeat(64),
+    result_sha256: sha256(passed ? "fixture-result-passed" : "fixture-result-failed"),
     passed,
   });
 }
@@ -190,7 +190,7 @@ test("missing, cross-runtime, stale, and failed generic evidence fail closed", (
   ]) {
     const result = verify(overrides);
     assert.equal(result.ok, false);
-    assert.match(result.reasonCode, /^PROOF_EVIDENCE_/);
+    assert.match(result.reasonCode, /^(PROOF_EVIDENCE_|PROOF_CROSS_|PROOF_STALE_)/);
   }
 });
 
@@ -216,6 +216,27 @@ test("runtime identity requires all three structured Orca reads to be present an
     assert.equal(result.ok, false);
     assert.equal(result.reasonCode, "PROOF_CROSS_RUNTIME");
   }
+});
+
+test("program-scoped proof ignores unrelated foreign rows for the later admission filter", () => {
+  const inputs = fixture();
+  inputs.orcaSnapshot.task_list.tasks.push({ id: "foreign-active", task_title: "relay-orca: another-program/old", status: "dispatched" });
+  inputs.orcaSnapshot.gate_list.gates.push({ id: "foreign-gate", task_id: "foreign-active", question: "unrelated", options: ["yes", "no"], status: "pending" });
+  const result = PROOF.verifyClosedProgram(inputs);
+  assert.equal(result.ok, true);
+});
+
+test("the compact injected snapshot shape used by the admission boundary is supported", () => {
+  const inputs = fixture();
+  const snapshot = inputs.orcaSnapshot;
+  inputs.orcaSnapshot = {
+    runtimeId: RUNTIME_ID,
+    taskRuntimeId: RUNTIME_ID,
+    gateRuntimeId: RUNTIME_ID,
+    tasks: snapshot.task_list.tasks,
+    gates: snapshot.gate_list.gates,
+  };
+  assert.equal(PROOF.verifyClosedProgram(inputs).ok, true);
 });
 
 test("a false-complete durable summary cannot mask an incomplete manifest", () => {
@@ -245,4 +266,3 @@ test("the verifier does not change the frozen receipt or report shapes", () => {
   assert.equal(JSON.stringify(inputs.receipt), receiptBefore);
   assert.deepEqual(Object.keys(result.final_summary).sort(), ["blocking_reasons", "lifecycle_diagnostics", "program_complete", "stopped_on"].sort());
 });
-
