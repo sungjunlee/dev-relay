@@ -485,6 +485,7 @@ module.exports = {
   CANONICAL_OPTIONS,
   EVIDENCE_PROVENANCE_FIELDS,
   IntegrationLifecycleError,
+  gateId,
   canonicalIntegrationQuestion,
   canonicalGateKey,
   gateResolution,
