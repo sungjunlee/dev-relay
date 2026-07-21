@@ -27,9 +27,13 @@ const {
 } = require(path.join(SCRIPTS, "lib", "operator-prompt.js"));
 const { showDispatch } = require(path.join(SCRIPTS, "lib", "run-orca.js"));
 const { provenanceMismatch } = require(path.join(SCRIPTS, "lib", "run-orchestrator.js"));
+const { canonicalIntegrationQuestion } = require(path.join(SCRIPTS, "lib", "integration-lifecycle.js"));
+const { verificationBinding, sha256 } = require(path.join(SCRIPTS, "lib", "integration-evidence.js"));
 const { installFakeOrcaRun } = require(path.join(__dirname, "..", "fixtures", "fake-orca-run.js"));
-const { readyStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
+const { readyStatus, DEFAULT_RUNTIME_ID, DEFAULT_LIVE_AGENT_HANDLE } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
 const { assertReceiptEngineAgnostic } = require("./receipt-hygiene.js");
+
+const PROBE_JS = path.join(SCRIPTS, "probe-orca.js");
 
 // Plan-library codes re-raised verbatim by run (D1/D9).
 const PLAN_CODES = { UNPREPARED_FLEET_LEAF: 12, CONCURRENCY_EXCEEDED: 16, NESTED_RELAY_ORCA: 20 };
@@ -130,6 +134,106 @@ function makeGitWorktreeReceiptWorld() {
     primarySlug: computeRepoSlug(primaryRoot),
     worktreeSlug: computeRepoSlug(fs.realpathSync(worktree)),
   };
+}
+
+// #1021 DC #7: build a retained closed-program context (accepted program + canonical receipt
+// + trusted durable/generic evidence) scoped to the run's temp git repo `world`, plus the
+// live task/gate rows a retained runtime still lists. verifyClosedProgram recomputes clean
+// over these on the next probe, so the completed task + passed gate are exempt and the next
+// run admits WITHOUT reset. Modeled on probe-orca.test.js's historicalContextFixture, but
+// its repo identity is the caller's world (not REPO_ROOT) so the context matches --repo-root.
+function priorProgramRunContext(world, { programId = "prior-program-run", taskId = "prior-task-1" } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-prior-context-"));
+  const repo = { slug: world.slug, root: fs.realpathSync(world.repoRoot) };
+  const outcomeId = "integration";
+  const marker = `relay-orca: ${programSegment(programId)}/${outcomeId}`;
+  const checkRef = "full-suite";
+  const verification = verificationBinding({
+    input_sha256: sha256("prior-input"),
+    result_sha256: sha256("prior-result"),
+    passed: true,
+  });
+  const program = {
+    id: programId,
+    runtime_id: DEFAULT_RUNTIME_ID,
+    exit_gates: [`integration:${checkRef}`],
+    integration_evidence_version: 1,
+    integration_evidence: [{ check_ref: checkRef, program_id: programId, runtime_id: DEFAULT_RUNTIME_ID, verification }],
+    outcomes: [{ id: outcomeId, task_kind: "integration_gate", accepted_outcomes: ["passed"] }],
+  };
+  const task = {
+    outcome_id: outcomeId,
+    task_id: `plan-${outcomeId}`,
+    kind: "integration_gate",
+    wave: 1,
+    orca_task_id: taskId,
+    dispatch_id: `dispatch-${taskId}`,
+    assignee: DEFAULT_LIVE_AGENT_HANDLE,
+    relay_ids: { request: null, run: null, fleet: null },
+  };
+  const receipt = {
+    schema: 1,
+    program_id: programId,
+    source: path.join(root, "accepted-program.json"),
+    repo: { slug: repo.slug, root: repo.root },
+    runtime_id: DEFAULT_RUNTIME_ID,
+    tasks: [task],
+    terminals_created: [],
+    created_at: "2026-07-21T00:00:00.000Z",
+    updated_at: "2026-07-21T00:00:00.000Z",
+    note: RECEIPT_NOTE,
+  };
+  const durable = { [outcomeId]: { outcome_id: outcomeId, runtime_id: DEFAULT_RUNTIME_ID, integration: { passed: true } } };
+  const generic = { [checkRef]: { schema: 1, program_id: programId, runtime_id: DEFAULT_RUNTIME_ID, check_ref: checkRef, verification, evidence: "prior integration evidence" } };
+  const context = {
+    schema: 1,
+    // Deliberately false: the probe must ignore this claim and recompute Leaf 1 afresh.
+    success: false,
+    repo_root: world.repoRoot,
+    accepted_program: { path: path.join(root, "accepted-program.json") },
+    canonical_receipt: { path: path.join(root, "receipt.json") },
+    trusted_evidence: {
+      durable_outcomes: { path: path.join(root, "durable.json") },
+      generic_integration: { path: path.join(root, "generic.json") },
+    },
+  };
+  fs.writeFileSync(path.join(root, "accepted-program.json"), JSON.stringify(program), "utf8");
+  fs.writeFileSync(path.join(root, "receipt.json"), JSON.stringify(receipt), "utf8");
+  fs.writeFileSync(path.join(root, "durable.json"), JSON.stringify(durable), "utf8");
+  fs.writeFileSync(path.join(root, "generic.json"), JSON.stringify(generic), "utf8");
+  fs.writeFileSync(path.join(root, "context.json"), JSON.stringify(context), "utf8");
+  return {
+    root,
+    contextPath: path.join(root, "context.json"),
+    task: { id: taskId, task_title: marker, display_name: marker, status: "completed" },
+    gate: {
+      id: `gate-${taskId}`,
+      task_id: taskId,
+      question: canonicalIntegrationQuestion(programId, outcomeId, programSegment),
+      options: ["passed", "failed"],
+      status: "passed",
+      resolution: "passed",
+    },
+    cleanup() {
+      fs.rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+function runProbeCli(args, env = {}) {
+  try {
+    const stdout = execFileSync(process.execPath, [PROBE_JS, ...args], {
+      encoding: "utf-8",
+      env: { ...process.env, ...env },
+      stdio: "pipe",
+    });
+    return { status: 0, body: JSON.parse(stdout) };
+  } catch (error) {
+    return {
+      status: error.status,
+      body: error.stdout ? JSON.parse(String(error.stdout)) : null,
+    };
+  }
 }
 
 function runProgram(fixtureName, extraArgs, scenario, options = {}) {
@@ -302,6 +406,150 @@ test("D11.2: probe rejects admission → ADMISSION_REJECTED exit 40, zero mutati
     assertNoPoison(r.fake);
   } finally {
     r.fake.cleanup();
+  }
+});
+
+test("#1021 run forwards every explicit prior-program context to admission", () => {
+  const contextRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-context-"));
+  const contextPath = path.join(contextRoot, "context.json");
+  fs.writeFileSync(contextPath, JSON.stringify({}), "utf8");
+  const r = runProgram(
+    "run-two-wave1.json",
+    ["--operator-handle", "h1", "--prior-program-context", contextPath],
+    {
+      gateList: {
+        id: "x",
+        ok: true,
+        result: { gates: [{ id: "g1", task_id: "foreign-task" }], count: 1 },
+        _meta: { runtimeId: "00000000-0000-4000-8000-000000000001" },
+      },
+    },
+  );
+  try {
+    assert.equal(r.status, REASONS.ADMISSION_REJECTED);
+    assert.match(r.body.blocking_reasons[0].message, /prior-program context/);
+    assertNoMutations(r.fake);
+    assertNoPoison(r.fake);
+  } finally {
+    r.fake.cleanup();
+    fs.rmSync(contextRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #1021 DC #7 — retained-runtime admission chain: probe admits the closed program's
+// residue, then the SAME context lets the next run pass admission without reset.
+// ---------------------------------------------------------------------------
+
+test("#1021 D7: probe admits a retained closed-program runtime, then the next run forwards the same context and dispatches without reset", () => {
+  const world = makeReceiptWorld();
+  const history = priorProgramRunContext(world, { programId: "prior-program-run" });
+  // The retained runtime still lists the prior program's completed integration task and its
+  // passed canonical gate. Both are covered by the recomputed proof, so admission exempts them.
+  const scenario = {
+    taskList: { id: "x", ok: true, result: { tasks: [history.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [history.gate], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  };
+  const fake = installFakeOrcaRun(scenario);
+  try {
+    // (1) A probe on the retained runtime with the same context returns exit 0 / admitted:true
+    // and reports zero post-filter blocking residue (the completed task + passed gate exempt).
+    const probe = runProbeCli(
+      ["--json", "--orca-bin", fake.orcaPath, "--repo-root", world.repoRoot, "--prior-program-context", history.contextPath],
+    );
+    assert.equal(probe.status, 0, "probe admits the retained runtime with the prior-program context");
+    assert.equal(probe.body.admitted, true);
+    assert.deepEqual(probe.body.existing_state, { tasks: 0, gates: 0 });
+
+    // (2) The next run forwards the SAME explicit context, passes admission, and dispatches —
+    // no reset --tasks, no manual receipt/dispatch intervention.
+    const r = runRun(
+      [
+        "--json",
+        "--orca-bin",
+        fake.orcaPath,
+        "--repo-root",
+        world.repoRoot,
+        "--program-file",
+        fixture("run-two-wave1.json"),
+        "--operator-handle",
+        "h1",
+        "--operator-handle",
+        "h2",
+        "--prior-program-context",
+        history.contextPath,
+      ],
+      { RELAY_ORCA_PROGRAMS_ROOT: world.programsRoot },
+    );
+    assert.equal(r.status, 0);
+    const body = JSON.parse(r.stdout);
+    assert.equal(body.ok, true);
+    assert.equal(body.admission.admitted, true, "the retained runtime is admitted, not reset");
+    assert.equal(body.admission.runtime_id, DEFAULT_RUNTIME_ID);
+    for (const outcome of ["alpha", "bravo"]) {
+      assert.equal(taskByOutcome(body, outcome).status, "dispatched");
+    }
+    // Admission adopted the retained runtime WITHOUT clearing it: no reset of any kind ran.
+    assert.equal(fake.readLog().join(" ").includes("reset"), false, "admission must not reset the retained runtime");
+    assert.equal(fake.readPoison(), null, "reset/worktree poison marker must never be written");
+  } finally {
+    fake.cleanup();
+    history.cleanup();
+    fs.rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+test("#1021 R3 finding 2: a prior-program context whose accepted program id equals the launching program is self-referential → rejected, zero receipt overwrite", () => {
+  const world = makeReceiptWorld();
+  // The prior-program context claims the SAME accepted program id as the program being
+  // launched ("epic-run-two"). A context is a record of a DIFFERENT closed program; one that
+  // vouches for the very program it launches is self-referential and must fail closed at
+  // admission (AMBIGUOUS_GLOBAL_STATE → ADMISSION_REJECTED) BEFORE any materialization.
+  const history = priorProgramRunContext(world, { programId: "epic-run-two" });
+  // Pre-seed a sentinel receipt at the launched program's canonical path. A rejected run must
+  // leave it byte-identical — zero overwrite, zero mutation.
+  const receiptPath = receiptPathForWorld(world, "epic-run-two");
+  fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+  const sentinel = `${JSON.stringify({ schema: 1, sentinel: "unchanged" })}\n`;
+  fs.writeFileSync(receiptPath, sentinel, "utf8");
+  const fake = installFakeOrcaRun({
+    taskList: { id: "x", ok: true, result: { tasks: [history.task], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+    gateList: { id: "x", ok: true, result: { gates: [history.gate], count: 1 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } },
+  });
+  try {
+    const r = runRun(
+      [
+        "--json",
+        "--orca-bin",
+        fake.orcaPath,
+        "--repo-root",
+        world.repoRoot,
+        "--program-file",
+        fixture("run-two-wave1.json"),
+        "--operator-handle",
+        "h1",
+        "--operator-handle",
+        "h2",
+        "--prior-program-context",
+        history.contextPath,
+      ],
+      { RELAY_ORCA_PROGRAMS_ROOT: world.programsRoot },
+    );
+    assert.equal(r.status, REASONS.ADMISSION_REJECTED);
+    const body = JSON.parse(r.stdout);
+    assert.equal(body.ok, false);
+    assert.equal(body.admission.admitted, false);
+    assert.match(body.blocking_reasons[0].message, /self-referential/);
+    // Zero receipt overwrite: the pre-existing receipt is byte-identical after the rejected run.
+    assert.equal(fs.readFileSync(receiptPath, "utf8"), sentinel, "a rejected self-referential run must not overwrite the receipt");
+    // Zero mutation: no task-create/dispatch/terminal/task-update, no reset/worktree poison marker.
+    assertNoMutations(fake);
+    assertNoPoison(fake);
+    assert.equal(fake.readLog().join(" ").includes("reset"), false, "a rejected self-referential run must not reset the runtime");
+  } finally {
+    fake.cleanup();
+    history.cleanup();
+    fs.rmSync(world.base, { recursive: true, force: true });
   }
 });
 
