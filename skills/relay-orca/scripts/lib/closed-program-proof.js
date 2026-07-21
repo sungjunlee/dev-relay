@@ -401,7 +401,7 @@ function fleetChildKey(child) {
   const runId = [child.run_id, child.runId].find(nonEmpty) || "";
   const leafRef = [child.leaf_ref, child.leafRef].find(nonEmpty) || "";
   if (runId === "" && leafRef === "") return null;
-  return `${runId} ${leafRef}`;
+  return `${runId}\0${leafRef}`;
 }
 
 // Sorted multiset of child identity keys (duplicates preserved so counts must match), or
