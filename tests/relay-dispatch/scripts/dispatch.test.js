@@ -8647,6 +8647,7 @@ test("dispatch canonicalizes typed fleet ownership and rejects only real resume-
   const equivalent = spawnSync(process.execPath, [SCRIPT, repoRoot,
     "--manifest", first.manifestPath,
     "--prompt", "resume equivalent fleet ownership",
+    "--fleet-id", "fleet-957-ownership",
     "--ownership-json", JSON.stringify(ownership),
     "--dry-run",
     "--json",
@@ -8658,6 +8659,7 @@ test("dispatch canonicalizes typed fleet ownership and rejects only real resume-
   const drifted = { ...ownership, component: "other-component" };
   const rejected = spawnSync(process.execPath, [SCRIPT, repoRoot,
     "--manifest", first.manifestPath,
+    "--fleet-id", "fleet-957-ownership",
     "--ownership-json", JSON.stringify(drifted),
     "--json",
   ], { cwd: repoRoot, encoding: "utf-8", env });
@@ -8700,6 +8702,7 @@ test("direct dispatch resume cannot backfill a legacy fleet child and names the 
   const rejected = spawnSync(process.execPath, [SCRIPT, repoRoot,
     "--manifest", first.manifestPath,
     "--prompt", "must not guess or add ownership",
+    "--fleet-id", fleetId,
     "--ownership-json", JSON.stringify(ownership),
     "--json",
   ], { cwd: repoRoot, encoding: "utf-8", env });
@@ -8732,6 +8735,66 @@ test("dispatch requires valid ownership before fleet manifest or lock side effec
   assert.match(result.stderr, /--ownership-json is required/);
   assert.equal(listManifestPaths(repoRoot).length, 0);
   assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
+});
+
+test("dispatch rejects standalone ownership before manifest, lock, worktree, or executor side effects", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ownership-guard-bin-"));
+  const executorMarker = path.join(os.tmpdir(), `relay-ownership-guard-executor-${process.pid}-${Date.now()}`);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/bin/sh\n: > ${JSON.stringify(executorMarker)}\nexit 99\n`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-957-standalone-owner",
+    "--prompt", "reject standalone ownership",
+    "--ownership-json", JSON.stringify({
+      sprint: "backlog/sprints/2026-07-relay-fleet.md",
+      track: "2026-07-relay-fleet",
+      component: "relay-fleet",
+    }),
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--ownership-json requires --fleet-id/);
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 957)), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
+  assert.equal(fs.existsSync(executorMarker), false);
+});
+
+test("dispatch preserves valid fleet behavior when fleet id and ownership are paired", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-valid-fleet-bin-"));
+  writeFakeCodex(binDir);
+  const fleetId = "fleet-957-valid-owner";
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "relay-fleet",
+  };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-957-valid-owner",
+    "--prompt", "dispatch valid fleet ownership",
+    "--fleet-id", fleetId,
+    "--ownership-json", JSON.stringify(ownership),
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome }));
+  const manifest = readManifest(result.manifestPath).data;
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.fleetId, fleetId);
+  assert.deepEqual(result.ownership, ownership);
+  assert.equal(manifest.fleet_id, fleetId);
+  assert.deepEqual(manifest.ownership, ownership);
+  assert.equal(fs.existsSync(path.join(result.worktree, "first.txt")), true);
 });
 
 test("dispatch rejects a contradictory sprint and track before fleet manifest or lock side effects", () => {

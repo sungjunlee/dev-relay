@@ -581,6 +581,11 @@ if (FLEET_ID) {
   }
 }
 
+if (OWNERSHIP_JSON_RAW !== undefined && !FLEET_ID) {
+  console.error("Error: --ownership-json requires --fleet-id");
+  process.exit(1);
+}
+
 let OWNERSHIP = null;
 try {
   OWNERSHIP = parseOwnershipJson(OWNERSHIP_JSON_RAW, {
