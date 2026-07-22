@@ -192,6 +192,18 @@ class MergeFreshnessRefusal extends Error {
   }
 }
 
+class DraftPrRefusal extends Error {
+  constructor(prNumber) {
+    super(`Draft PR #${prNumber} could not be marked ready for review`);
+    this.name = "DraftPrRefusal";
+    this.result = {
+      status: "refused_draft_pr",
+      next_action: "mark_ready_and_rerun",
+      pr_number: prNumber,
+    };
+  }
+}
+
 function splitLines(value) {
   return String(value || "").split(/\r?\n/).filter(Boolean);
 }
@@ -269,7 +281,7 @@ function fetchReviewContext(repoPath, prNumber) {
 
 function fetchPreMergeContext(repoPath, prNumber) {
   const raw = execGh(repoPath, ["pr", "view", String(prNumber),
-    "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,title"]);
+    "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,isDraft,title"]);
   const parsed = JSON.parse(raw);
   const checks = parsed.statusCheckRollup || [];
   return {
@@ -278,6 +290,7 @@ function fetchPreMergeContext(repoPath, prNumber) {
     commits: parsed.commits || [],
     mergeable: parsed.mergeable || null,
     headRefOid: parsed.headRefOid || null,
+    isDraft: parsed.isDraft === true,
     title: typeof parsed.title === "string" && parsed.title ? parsed.title : null,
     checks,
     unsafeChecks: checks.filter(isUnsafeStatusCheck),
@@ -506,6 +519,34 @@ function assertStackedBaseGuard(guard, prNumber) {
     `(default: '${guard.defaultBranchName || "unknown"}')${basePrText}. ` +
     "Merge the base PR first or rerun with --allow-stacked-base-hazard <reason>."
   );
+}
+
+function buildDraftPrGuard(preMerge, prNumber) {
+  return {
+    status: preMerge?.isDraft ? "draft" : "clear",
+    prNumber,
+  };
+}
+
+function assertDraftPrGuard(repoPath, safeData, guard, { currentHeadSha, dryRun }) {
+  if (!guard || guard.status !== "draft") return guard;
+  if (dryRun) return { ...guard, status: "would_auto_ready" };
+
+  try {
+    execGh(repoPath, ["pr", "ready", String(guard.prNumber)]);
+  } catch {
+    throw new DraftPrRefusal(guard.prNumber);
+  }
+
+  appendRunEvent(repoPath, safeData.run_id, {
+    event: EVENTS.DRAFT_PR_AUTO_READY,
+    state_from: STATES.READY_TO_MERGE,
+    state_to: STATES.READY_TO_MERGE,
+    head_sha: currentHeadSha,
+    round: safeData.review?.rounds || null,
+    pr_number: guard.prNumber,
+  });
+  return { ...guard, status: "auto_readied" };
 }
 
 function assertPreMergeSafety(preMerge, prNumber) {
@@ -1396,6 +1437,7 @@ function main() {
   let issueCloseWarning = null;
   let reviewGate = null;
   let stackedBaseGuard = { status: "not_checked", reason: null };
+  let preMergeContext = null;
   let freshness = null;
   let freshnessOverrideRequired = false;
   let currentHeadSha = safeData.git?.head_sha || null;
@@ -1515,12 +1557,12 @@ function main() {
       }
     } else if (skipReviewReason) {
       assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit });
-      const preMerge = fetchPreMergeContext(repoPath, prNumber);
-      prTitle = preMerge.title;
+      preMergeContext = fetchPreMergeContext(repoPath, prNumber);
+      prTitle = preMergeContext.title;
       stackedBaseGuard = buildStackedBaseGuard(
         repoPath,
         prNumber,
-        preMerge.baseRefName,
+        preMergeContext.baseRefName,
         stackedBaseOverrideReason
       );
       if (stackedBaseGuard.status === "blocked" && !dryRun) {
@@ -1538,16 +1580,16 @@ function main() {
         prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit,
       });
     } else if (safeData.state === STATES.READY_TO_MERGE) {
-      const preMerge = fetchPreMergeContext(repoPath, prNumber);
-      prTitle = preMerge.title;
+      preMergeContext = fetchPreMergeContext(repoPath, prNumber);
+      prTitle = preMergeContext.title;
       reviewGate = evaluateReviewGate({
         prNumber,
-        comments: preMerge.comments,
-        commits: preMerge.commits,
+        comments: preMergeContext.comments,
+        commits: preMergeContext.commits,
         manifestData: safeData,
         expectedReviewerLogin: safeData.review?.reviewer_login || null,
         runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
-        headRefOid: preMerge.headRefOid,
+        headRefOid: preMergeContext.headRefOid,
       });
       if (!reviewGate.readyToMerge) {
         if (!dryRun) {
@@ -1565,7 +1607,7 @@ function main() {
       stackedBaseGuard = buildStackedBaseGuard(
         repoPath,
         prNumber,
-        preMerge.baseRefName,
+        preMergeContext.baseRefName,
         stackedBaseOverrideReason
       );
       if (stackedBaseGuard.status === "blocked" && !dryRun) {
@@ -1579,14 +1621,14 @@ function main() {
         });
       }
       assertStackedBaseGuard(stackedBaseGuard, prNumber);
-      assertPreMergeSafety(preMerge, prNumber);
+      assertPreMergeSafety(preMergeContext, prNumber);
     } else if (forceFinalizeNonready) {
-      const preMerge = fetchPreMergeContext(repoPath, prNumber);
-      prTitle = preMerge.title;
+      preMergeContext = fetchPreMergeContext(repoPath, prNumber);
+      prTitle = preMergeContext.title;
       stackedBaseGuard = buildStackedBaseGuard(
         repoPath,
         prNumber,
-        preMerge.baseRefName,
+        preMergeContext.baseRefName,
         stackedBaseOverrideReason
       );
       if (stackedBaseGuard.status === "blocked" && !dryRun) {
@@ -1600,11 +1642,15 @@ function main() {
         });
       }
       assertStackedBaseGuard(stackedBaseGuard, prNumber);
-      assertPreMergeSafety(preMerge, prNumber);
+      assertPreMergeSafety(preMergeContext, prNumber);
     }
   }
 
   if (mergeAllowed) {
+    if (!alreadyMerged) {
+      const draftPrGuard = buildDraftPrGuard(preMergeContext, prNumber);
+      assertDraftPrGuard(repoPath, safeData, draftPrGuard, { currentHeadSha, dryRun });
+    }
     if (freshnessOverrideRequired && !dryRun) {
       appendBehindMainOverrideEvent(repoPath, safeData, {
         prNumber,
@@ -1874,6 +1920,15 @@ if (require.main === module) {
   try {
     main();
   } catch (error) {
+    if (error instanceof DraftPrRefusal) {
+      if (args.includes("--json")) {
+        console.log(JSON.stringify(error.result, null, 2));
+      } else {
+        console.log(`Merge refused: PR #${error.result.pr_number} is still a draft and could not be marked ready.`);
+        console.log(`  Next action: ${error.result.next_action}`);
+      }
+      process.exit(2);
+    }
     if (error instanceof MergeFreshnessRefusal) {
       if (args.includes("--json")) {
         console.log(JSON.stringify(error.result, null, 2));

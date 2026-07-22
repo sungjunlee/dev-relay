@@ -277,6 +277,9 @@ function writeFakeGh(logPath, {
   statusCheckRollup = [],
   stateAfterMerge = "MERGED",
   mergeCommitAfterMerge = { oid: "merged-sha" },
+  isDraft = false,
+  prReadyExitCode = 0,
+  prReadyStderr = "",
   prMergeExitCode = 0,
   prMergeStderr = "",
   title = "fix(relay): finalize test PR",
@@ -296,6 +299,9 @@ function writeFakeGh(logPath, {
     statusCheckRollup,
     stateAfterMerge,
     mergeCommitAfterMerge,
+    isDraft,
+    prReadyExitCode,
+    prReadyStderr,
     prMergeExitCode,
     prMergeStderr,
     title,
@@ -311,6 +317,16 @@ function saveState(next) {
   fs.writeFileSync(statePath, JSON.stringify(next), "utf-8");
 }
 fs.appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n", "utf-8");
+if (args[0] === "pr" && args[1] === "ready") {
+  const state = loadState();
+  if (state.prReadyExitCode) {
+    process.stderr.write(state.prReadyStderr || "ready failed");
+    process.exit(state.prReadyExitCode);
+  }
+  state.isDraft = false;
+  saveState(state);
+  process.exit(0);
+}
 if (args[0] === "pr" && args[1] === "merge") {
   const state = loadState();
   state.state = state.stateAfterMerge;
@@ -333,6 +349,7 @@ if (args[0] === "pr" && args[1] === "view") {
     commits: state.commits,
     mergeable: state.mergeable,
     statusCheckRollup: state.statusCheckRollup,
+    isDraft: state.isDraft,
     title: state.title
   }));
 }
@@ -512,11 +529,12 @@ function advanceOriginMain(fixture, commits) {
   });
 }
 
-function spawnFreshnessFinalize(fixture, { extraArgs = [] } = {}) {
+function spawnFreshnessFinalize(fixture, { extraArgs = [], ghOptions = {} } = {}) {
   const logPath = path.join(fixture.repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
     comments: [DEFAULT_REVIEW_COMMENT],
     commits: [{ oid: fixture.headSha, committedDate: DEFAULT_COMMIT_DATE }],
+    ...ghOptions,
   });
   const result = spawnSync("node", [
     SCRIPT,
@@ -573,6 +591,73 @@ test("finalize-run freshness gate passes an up-to-date head without informationa
   assert.equal(finalized.result.state, STATES.MERGED);
   assert.equal(finalized.result.mergePerformed, true);
   assert.equal("freshness" in finalized.result, false);
+});
+
+test("finalize-run marks a draft PR ready once before merging", () => {
+  const fixture = setupRepo();
+  const finalized = execFinalize(fixture, {
+    ghOptions: {
+      comments: [DEFAULT_REVIEW_COMMENT],
+      isDraft: true,
+    },
+  });
+
+  assert.equal(finalized.result.state, STATES.MERGED);
+  assert.equal(finalized.result.mergePerformed, true);
+  const ghLog = fs.readFileSync(finalized.logPath, "utf-8");
+  assert.equal((ghLog.match(/^pr ready 123$/gm) || []).length, 1);
+  assert.equal((ghLog.match(/^pr merge 123 /gm) || []).length, 1);
+  assert.ok(ghLog.indexOf("pr ready 123") < ghLog.indexOf("pr merge 123 "));
+
+  const draftEvents = finalized.events.filter((entry) => entry.event === "draft_pr_auto_ready");
+  assert.equal(draftEvents.length, 1);
+  assert.equal(draftEvents[0].state_from, STATES.READY_TO_MERGE);
+  assert.equal(draftEvents[0].state_to, STATES.READY_TO_MERGE);
+  assert.equal(draftEvents[0].pr_number, 123);
+});
+
+test("finalize-run refuses a draft PR when marking it ready fails", () => {
+  const fixture = setupRepo();
+  const rawGraphqlError = "GraphQL: Pull Request is still a draft (markPullRequestReadyForReview)";
+  const { result, logPath } = spawnFreshnessFinalize(fixture, {
+    ghOptions: {
+      isDraft: true,
+      prReadyExitCode: 1,
+      prReadyStderr: rawGraphqlError,
+    },
+  });
+
+  assert.equal(result.status, 2, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    status: "refused_draft_pr",
+    next_action: "mark_ready_and_rerun",
+    pr_number: 123,
+  });
+  assert.doesNotMatch(result.stdout, /GraphQL|still a draft/);
+  assert.doesNotMatch(result.stderr, /GraphQL|still a draft/);
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+  assert.equal((ghLog.match(/^pr ready 123$/gm) || []).length, 1);
+  assert.doesNotMatch(ghLog, /^pr merge 123 /m);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.READY_TO_MERGE);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+});
+
+test("finalize-run dry-run does not mark a draft PR ready", () => {
+  const fixture = setupRepo();
+  const finalized = execFinalize(fixture, {
+    extraArgs: ["--dry-run"],
+    ghOptions: {
+      comments: [DEFAULT_REVIEW_COMMENT],
+      isDraft: true,
+    },
+  });
+
+  assert.equal(finalized.result.dryRun, true);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.READY_TO_MERGE);
+  assert.deepEqual(finalized.events, []);
+  const ghLog = fs.readFileSync(finalized.logPath, "utf-8");
+  assert.doesNotMatch(ghLog, /^pr ready 123$/m);
+  assert.doesNotMatch(ghLog, /^pr merge 123 /m);
 });
 
 test("finalize-run freshness gate skips when remote PR head is unresolvable", () => {
