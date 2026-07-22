@@ -38,8 +38,8 @@
  *   --ownership-json <json>  Validated fleet owner: sprint, track, component
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
  *   --register             Register session in executor's app (keeps worktree)
- *   --auto-recover-commit  Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)
- *   --no-auto-recover-commit  Opt out of codex default auto recover-commit
+ *   --auto-recover-commit  Run recover-commit after completed-uncommitted (default: on for codex and claude, off for other executors)
+ *   --no-auto-recover-commit  Opt out of codex and claude default auto recover-commit
  *   --detach               Launch detached supervisor and print a receipt
  *   --dry-run              Show plan without executing
  *   --json                 Output as JSON
@@ -233,8 +233,8 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --ownership-json   ${modeLabel("--ownership-json")} Fleet owner JSON with sprint, track, and component`);
   console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file")} Persist a frozen Done Criteria anchor path`);
   console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
-  console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)`);
-  console.log(`  --no-auto-recover-commit  ${modeLabel("--no-auto-recover-commit")} Opt out of codex default auto recover-commit`);
+  console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Run recover-commit after completed-uncommitted (default: on for codex and claude, off for other executors)`);
+  console.log(`  --no-auto-recover-commit  ${modeLabel("--no-auto-recover-commit")} Opt out of codex and claude default auto recover-commit`);
   console.log(`  --allow-conflicting-run  ${modeLabel("--allow-conflicting-run")} Bypass the in-flight run check (logs conflicting_run_override event)`);
   console.log(`  --detach           ${modeLabel("--detach")} Launch detached supervisor and print a receipt`);
   console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
@@ -510,7 +510,7 @@ function resolveDispatchRuntime(repoRoot) {
       ? true
       : NO_AUTO_RECOVER_COMMIT
         ? false
-        : executor === "codex",
+        : executor === "codex" || executor === "claude",
     executor,
     executorNetworkPolicy: {
       access: NETWORK_ACCESS,

@@ -117,15 +117,15 @@ test("dispatch help mirrors executor timeout and auto-recover defaults", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /default: 2400 for codex, 1800 for others/);
-  assert.match(result.stdout, /auto-recover-commit.*default: on for codex, off otherwise/);
+  assert.match(result.stdout, /auto-recover-commit.*default: on for codex and claude, off for other executors/);
 });
 
 test("recovery playbook documents landed auto-recover behavior, not stale deferral", () => {
   const playbook = readRepoFile("skills/relay-dispatch/references/recovery-playbook.md");
 
   assert.match(playbook, /#393 added Path 2/);
-  assert.match(playbook, /Codex `completed-uncommitted` results unless `--no-auto-recover-commit` is passed/);
-  assert.match(playbook, /For Claude and opencode, `--auto-recover-commit` remains an explicit opt-in/);
+  assert.match(playbook, /Codex and Claude `completed-uncommitted` results unless `--no-auto-recover-commit` is passed/);
+  assert.match(playbook, /For opencode and other executors, `--auto-recover-commit` remains an explicit opt-in/);
   assert.doesNotMatch(playbook, /#393[^.\n]*(?:deferred|Until #393 lands)/i);
   assert.doesNotMatch(playbook, /defer to a follow-up issue/i);
 });
