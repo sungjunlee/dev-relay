@@ -7,10 +7,14 @@ const { summarizeLineage } = require("./redispatch");
 const DEFAULT_MAX_REVIEW_ROUNDS = 2;
 
 function getMaxReviewRounds(data) {
-  const configured = Number(data?.review?.max_rounds);
-  return Number.isInteger(configured) && configured > 0
-    ? configured
-    : DEFAULT_MAX_REVIEW_ROUNDS;
+  const configured = data?.review?.max_rounds;
+  if (configured === undefined || configured === null) {
+    return DEFAULT_MAX_REVIEW_ROUNDS;
+  }
+  if (!Number.isInteger(configured) || configured <= 0) {
+    throw new Error("Persisted review.max_rounds must be a positive integer");
+  }
+  return configured;
 }
 
 function shouldEscalateRepairCycle({ data, round, blocking }) {

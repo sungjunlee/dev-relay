@@ -45,6 +45,7 @@ const EVENTS = Object.freeze({
   MERGE_FINALIZE: "merge_finalize",
   MODEL_HINTS_UPDATED: "model_hints_updated",
   OPERATOR_EXECUTION_EVIDENCE: "operator_execution_evidence",
+  POLICY_UPDATED: "policy_updated",
   PUBLISH_RESULT: "publish_result",
   PR_BODY_SNAPSHOT_FAILED: "pr_body_snapshot_failed",
   PR_NUMBER_STAMPED: "pr_number_stamped",
@@ -159,6 +160,15 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
       : {}),
     ...(eventData.origin !== undefined
       ? { origin: normalizeEventValue(eventData.origin) }
+      : {}),
+    ...(eventData.state !== undefined
+      ? { state: normalizeEventValue(eventData.state) }
+      : {}),
+    ...(eventData.old_max_rounds !== undefined
+      ? { old_max_rounds: normalizeEventValue(eventData.old_max_rounds) }
+      : {}),
+    ...(eventData.new_max_rounds !== undefined
+      ? { new_max_rounds: normalizeEventValue(eventData.new_max_rounds) }
       : {}),
     ...(eventData.override_class !== undefined
       ? { override_class: normalizeEventValue(eventData.override_class) }

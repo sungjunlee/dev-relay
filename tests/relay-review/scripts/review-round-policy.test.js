@@ -25,6 +25,15 @@ test("an explicit extended policy preserves additional review rounds", () => {
   assert.equal(shouldEscalateRepairCycle({ data, round: 5, blocking: true }), true);
 });
 
+test("persisted max_rounds must be a plain positive integer and is never coerced", () => {
+  for (const maxRounds of ["5", 0, -1, 2.5, Number.NaN]) {
+    assert.throws(
+      () => getMaxReviewRounds({ review: { max_rounds: maxRounds } }),
+      /must be a positive integer/
+    );
+  }
+});
+
 test("assurance-derived caps bound compact and hardened repair depth", () => {
   const compact = { review: { max_rounds: 1 } };
   const hardened = { review: { max_rounds: 3 } };

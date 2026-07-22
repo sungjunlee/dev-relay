@@ -57,6 +57,9 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--done-criteria-file` | `verbatim` | Operator-supplied anchor path; keep the literal argv token. |
 | `--dry-run` | `parsed` | Presence flag; no value is consumed. |
 | `--executor, -e` | `parsed` | Closed selector; flag-like following tokens should mean the value is missing. |
+| `--expected-head` | `parsed` | Optimistic policy-update guard; flag-like following tokens should mean the value is missing. |
+| `--expected-round` | `parsed` | Optimistic policy-update guard; flag-like following tokens should mean the value is missing. |
+| `--expected-state` | `parsed` | Optimistic policy-update guard; flag-like following tokens should mean the value is missing. |
 | `--force` | `parsed` | Presence flag; no value is consumed. |
 | `--force-finalize-nonready` | `parsed` | Presence flag; no value is consumed. |
 | `--head-sha` | `parsed` | Structured SHA field; flag-like following tokens should mean the value is missing. |
@@ -129,6 +132,9 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--done-criteria-file` | `verbatim` | Operator-supplied anchor path; keep the literal argv token. |
 | `--dry-run` | `parsed` | Presence flag; no value is consumed. |
 | `--executor, -e` | `parsed` | Closed selector; flag-like following tokens should mean the value is missing. |
+| `--expected-head` | `parsed` | Optimistic policy-update guard; flag-like following tokens should mean the value is missing. |
+| `--expected-round` | `parsed` | Optimistic policy-update guard; flag-like following tokens should mean the value is missing. |
+| `--expected-state` | `parsed` | Optimistic policy-update guard; flag-like following tokens should mean the value is missing. |
 | `--force` | `parsed` | Presence flag; no value is consumed. |
 | `--force-finalize-nonready` | `parsed` | Presence flag; no value is consumed. |
 | `--head-sha` | `parsed` | Structured SHA field; flag-like following tokens should mean the value is missing. |
