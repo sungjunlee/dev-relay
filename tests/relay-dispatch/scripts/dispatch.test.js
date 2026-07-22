@@ -887,7 +887,7 @@ childProcess.execFileSync = function patchedExecFileSync(command, args, options)
     ...(failGitPush ? { RELAY_TEST_FAIL_GIT_PUSH: "1" } : {}),
   }, preloadPath);
 
-  return { env, ghLogPath, execLogPath, ghStatePath, pushPrCountPath };
+  return { env, ghLogPath, execLogPath, ghStatePath, pushPrCountPath, binDir };
 }
 
 function createGitOnlyPath() {
@@ -6882,21 +6882,83 @@ test("dispatch auto-recovers uncommitted codex runs by default", () => {
   assert.match(recoveryEvent.reason, /auto-recover-commit enabled/);
 });
 
-test("dispatch leaves uncommitted non-codex runs unrecovered by default", () => {
+test("dispatch Claude resume auto-recovers completed-uncommitted work by default", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
-  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+  process.env.RELAY_HOME = relayHome;
+  const { env, ghLogPath, execLogPath, pushPrCountPath, binDir } = createPushPrTestEnv({
     relayHome,
     ghState: {
       prCreateUrl: "https://github.com/acme/dev-relay/pull/509",
+    },
+    codexMode: "commit",
+    executor: "claude",
+  });
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-1060-claude-default-auto-recover",
+    "--prompt", "complete the first implementation pass",
+    "--executor", "claude",
+    "--json",
+  ], env));
+
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body,
+  );
+  writeUncommittedClaude(binDir);
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "address review feedback without committing",
+    "--executor", "claude",
+    "--json",
+  ], env));
+
+  assert.equal(result.mode, "resume");
+  assert.equal(result.status, "completed-uncommitted");
+  assert.equal(result.commitMode, "auto-recovered");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.prNumber, 509);
+  assert.match(result.commits, /Recover relay run/);
+  assert.equal(result.uncommitted, null);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.git.pr_number, 509);
+  assert.equal(manifest.git.head_sha, result.headSha);
+  const ghCalls = readJsonLines(ghLogPath);
+  assert(ghCalls.some((args) => args[0] === "pr" && args[1] === "create"));
+  assert(readJsonLines(execLogPath).some(({ command, args }) => command === "git" && args.includes("push")));
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 1);
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const recoveryIndex = events.findIndex((event) => event.event === "recover_commit");
+  const finalDispatchResultIndex = events.reduce(
+    (index, event, eventIndex) => event.event === "dispatch_result" ? eventIndex : index,
+    -1,
+  );
+  assert.ok(recoveryIndex >= 0, JSON.stringify(events, null, 2));
+  assert.ok(recoveryIndex < finalDispatchResultIndex, "recovery must be journaled before dispatch result/review handoff");
+  assert.match(events[recoveryIndex].reason, /auto-recover-commit enabled/);
+});
+
+test("dispatch --no-auto-recover-commit disables Claude default recovery", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  process.env.RELAY_HOME = relayHome;
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/1060",
     },
     codexMode: "uncommitted",
     executor: "claude",
   });
 
   const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-508-claude-default-no-recover",
+    "-b", "issue-1060-claude-no-auto-recover",
     "--prompt", "work without commit",
     "--executor", "claude",
+    "--no-auto-recover-commit",
     "--json",
   ], env));
 
@@ -6910,6 +6972,10 @@ test("dispatch leaves uncommitted non-codex runs unrecovered by default", () => 
   assert.deepEqual(readJsonLines(ghLogPath), []);
   assert.deepEqual(readJsonLines(execLogPath), []);
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+  assert.equal(
+    readJsonLines(getEventsPath(repoRoot, result.runId)).some((event) => event.event === "recover_commit"),
+    false,
+  );
 });
 
 test("dispatch blocks delayed publication internal review when work is uncommitted", () => {
@@ -6930,6 +6996,7 @@ test("dispatch blocks delayed publication internal review when work is uncommitt
       "--prompt", "work without commit",
       "--publish-policy", "after-internal-review",
       "--executor", "claude",
+      "--no-auto-recover-commit",
       "--json",
     ], env);
   } catch (caught) {
