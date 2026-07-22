@@ -540,8 +540,8 @@ function assertDraftPrGuard(repoPath, safeData, guard, { currentHeadSha, dryRun 
 
   appendRunEvent(repoPath, safeData.run_id, {
     event: EVENTS.DRAFT_PR_AUTO_READY,
-    state_from: STATES.READY_TO_MERGE,
-    state_to: STATES.READY_TO_MERGE,
+    state_from: safeData.state,
+    state_to: safeData.state,
     head_sha: currentHeadSha,
     round: safeData.review?.rounds || null,
     pr_number: guard.prNumber,

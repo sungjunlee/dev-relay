@@ -616,6 +616,19 @@ test("finalize-run marks a draft PR ready once before merging", () => {
   assert.equal(draftEvents[0].pr_number, 123);
 });
 
+test("finalize-run records the actual non-ready state when force-finalize marks a draft PR ready", () => {
+  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+  const finalized = execFinalize(fixture, {
+    extraArgs: ["--force-finalize-nonready", "--reason", "manual draft PR recovery"],
+    ghOptions: { isDraft: true },
+  });
+
+  const draftEvents = finalized.events.filter((entry) => entry.event === "draft_pr_auto_ready");
+  assert.equal(draftEvents.length, 1);
+  assert.equal(draftEvents[0].state_from, STATES.ESCALATED);
+  assert.equal(draftEvents[0].state_to, STATES.ESCALATED);
+});
+
 test("finalize-run refuses a draft PR when marking it ready fails", () => {
   const fixture = setupRepo();
   const rawGraphqlError = "GraphQL: Pull Request is still a draft (markPullRequestReadyForReview)";
