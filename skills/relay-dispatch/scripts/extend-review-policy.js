@@ -312,9 +312,21 @@ function extendReviewPolicy(options, dependencies = {}) {
       try {
         runtime.writeManifestUnlocked(resolved.manifestPath, updated, current.body);
       } catch (error) {
-        refuse("manifest_write_failed", `Manifest policy write failed: ${error.message}`, {
-          manifest_path: resolved.manifestPath,
-        });
+        const rollbackErrors = [];
+        try {
+          restoreFileBytes(resolved.manifestPath, originalManifestBytes, originalManifestStat, runtime.fs);
+        } catch (rollbackError) {
+          rollbackErrors.push(`manifest: ${rollbackError.message}`);
+        }
+        refuse(
+          rollbackErrors.length ? "policy_update_rollback_failed" : "manifest_write_failed",
+          `Manifest policy write failed: ${error.message}` +
+            (rollbackErrors.length ? `; rollback also failed (${rollbackErrors.join("; ")})` : "; original manifest bytes were restored"),
+          {
+            manifest_path: resolved.manifestPath,
+            rollback_errors: rollbackErrors,
+          }
+        );
       }
 
       let event;

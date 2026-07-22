@@ -13,6 +13,7 @@ const {
   readManifest,
   releaseManifestLock,
   writeManifest,
+  writeManifestUnlocked,
 } = require("../../../skills/relay-dispatch/scripts/manifest/store");
 const {
   ensureRunLayout,
@@ -263,7 +264,7 @@ test("an unwritable event sink blocks the mutation instead of acting as a warnin
   }
 });
 
-test("simulated manifest write failure rolls back with zero event mutation", () => {
+test("simulated post-write manifest failure restores exact bytes with zero event mutation", () => {
   const fixture = setupFixture({ eventsContent: '{"event":"dispatch_start"}\n' });
   const before = bytes(fixture);
   process.env.RELAY_HOME = fixture.relayHome;
@@ -278,7 +279,8 @@ test("simulated manifest write failure rolls back with zero event mutation", () 
       expectedRound: "7",
       expectedHead: HEAD_SHA,
     }, {
-      writeManifestUnlocked() {
+      writeManifestUnlocked(manifestPath, data, body) {
+        writeManifestUnlocked(manifestPath, data, body);
         const error = new Error("simulated write failure");
         error.code = "EIO";
         throw error;
