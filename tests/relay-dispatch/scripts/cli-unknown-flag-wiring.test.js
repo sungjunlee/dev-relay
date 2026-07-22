@@ -28,6 +28,9 @@ const CLI_TARGETS = [
   ["relay-dispatch", "skills/relay-dispatch/scripts/recover-state.js",
     ["--repo", ".", "--run-id", "fake", "--to", "review_pending",
      "--reason", "test", "--no-merge"], "--no-merge"],
+  ["relay-dispatch", "skills/relay-dispatch/scripts/extend-review-policy.js",
+    ["--repo", ".", "--run-id", "fake", "--max-rounds", "3",
+     "--reason", "test", "--no-merge"], "--no-merge"],
   ["relay-review", "skills/relay-review/scripts/review-runner.js",
     ["--repo", ".", "--run-id", "fake", "--no-merge"], "--no-merge"],
 ];

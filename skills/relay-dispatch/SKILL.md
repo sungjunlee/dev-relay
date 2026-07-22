@@ -109,6 +109,7 @@ Risk-aware task profiles derive compact/standard/hardened from task properties, 
 - Crash-only settlement after signal/reboot/OOM or from another shell → `references/recovery-playbook.md` (`reconcile-run.js`).
 - Executor finished but did not commit / push / open the PR → `references/recovery-playbook.md` (`recover-commit.js`).
 - Manifest state needs adjustment after an external event (direct push, hung dispatch, escalation) → `references/recovery-playbook.md` (`recover-state.js`, includes the whitelist transition table).
+- A run needs an exceptional monotonic `review.max_rounds` increase → `references/review-policy-extension.md` (`extend-review-policy.js`; cap extension is not convergence evidence).
 - Standalone worktree creation, cleanup, run-close, reliability report → `references/operator-utilities.md`.
 
 ## Caveats

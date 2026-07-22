@@ -43,6 +43,9 @@ const FLAGS = [
   { flag: "--dry-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--effective", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--executor", aliases: ["-e"], kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--expected-head", kind: VALUE, mode: MODE_PARSED, valueName: "<sha>", rationale: "Optimistic policy-update guard; flag-like following tokens should mean the value is missing." },
+  { flag: "--expected-round", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Optimistic policy-update guard; flag-like following tokens should mean the value is missing." },
+  { flag: "--expected-state", kind: VALUE, mode: MODE_PARSED, valueName: "<state>", rationale: "Optimistic policy-update guard; flag-like following tokens should mean the value is missing." },
   { flag: "--fallback", kind: VALUE, mode: MODE_PARSED, valueName: "<mode>", allowedValues: ["catalog"], rationale: "Explicit model-resolution fallback selector; flag-like following tokens should mean the value is missing." },
   { flag: "--file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied input file path; keep the literal argv token." },
   { flag: "--fleet-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay fleet identifier; flag-like following tokens should mean the value is missing." },
@@ -157,6 +160,10 @@ const COMMAND_FLAGS = {
     "--test-command", "--coordination-marker", "--rubric-grandfathered", "--request-id", "--leaf-id",
     "--fleet-id", "--ownership-json", "--done-criteria-file", "--publish-policy", "--review-assurance", "--register", "--auto-recover-commit", "--no-auto-recover-commit",
     "--tags", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help",
+  ],
+  "extend-review-policy": [
+    "--repo", "--run-id", "--manifest", "--max-rounds", "--reason",
+    "--expected-state", "--expected-round", "--expected-head", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [
     "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method",
