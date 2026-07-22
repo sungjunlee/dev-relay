@@ -32,6 +32,7 @@ const EVENTS = Object.freeze({
   DISPATCH_INTERRUPTED: "dispatch_interrupted",
   DISPATCH_RESULT: "dispatch_result",
   DISPATCH_START: "dispatch_start",
+  DRAFT_PR_AUTO_READY: "draft_pr_auto_ready",
   ENVIRONMENT_DRIFT: "environment_drift",
   ESCALATION_DECISION: "escalation_decision",
   EXECUTION_EVIDENCE_REBRANDED: "execution_evidence_rebranded",

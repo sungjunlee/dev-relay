@@ -51,6 +51,10 @@ const PR_VIEW_JSON_REGISTRY = Object.freeze({
   "baseRefName,comments,commits,mergeable,statusCheckRollup": mergeGateResponse,
   "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid": mergeGateResponse,
   "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,title": mergeGateResponse,
+  "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,isDraft,title": (fixture) => ({
+    ...mergeGateResponse(fixture),
+    isDraft: fixture.isDraft || false,
+  }),
   "comments,commits,headRefOid": mergeGateResponse,
   "comments,commits,headRefName,headRefOid": (fixture) => ({
     comments: fixture.comments || [],
@@ -121,6 +125,7 @@ function saveChecksIndex(next) {
     fs.writeFileSync(checksStatePath, JSON.stringify({ index: next }), "utf-8");
   }
 }
+const mergeGateResponse = ${mergeGateResponse.toString()};
 const prViewJsonRegistry = {
 ${serializedPrViewRegistry}
 };

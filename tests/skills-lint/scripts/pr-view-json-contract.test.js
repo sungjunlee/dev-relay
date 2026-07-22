@@ -79,7 +79,7 @@ test("enumerates pr view fields from an argv variable assembled separately", () 
 });
 
 test("#894 regression: missing title-bearing merge fields names finalize-run", () => {
-  const titleBearingFields = "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,title";
+  const titleBearingFields = "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,isDraft,title";
   const registryWithoutTitleBearingFields = Object.fromEntries(
     Object.entries(PR_VIEW_JSON_REGISTRY).filter(([fields]) => fields !== titleBearingFields),
   );
