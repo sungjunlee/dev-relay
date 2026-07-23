@@ -60,6 +60,7 @@ const DIAGNOSTIC_CODES = Object.freeze([
   "PR_CHANGED",
   "ISSUE_REOPENED",
   "STALE_WORKER_DONE",
+  "SUPERSEDED_MARKED_RUN",
 ]);
 
 function orderOutcome(outcome) {

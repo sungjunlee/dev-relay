@@ -346,6 +346,15 @@ Each diagnostic is `{ code, outcome_id | null, message, ids }` with `code` one o
 | `PR_CHANGED` | the PR head moved or its state regressed relative to durable evidence |
 | `ISSUE_REOPENED` | the issue is open though the outcome's evidence contract requires closure |
 | `STALE_WORKER_DONE` | an Orca task reports done but durable evidence is incomplete |
+| `SUPERSEDED_MARKED_RUN` | a closed marked relay run is residue for the same outcome whose mapped relay run is currently `complete_with_evidence`; `ids` carries `superseded_run_id` and `superseding_run_id` |
+
+`SUPERSEDED_MARKED_RUN` is the ONE discovery path that removes a block instead of adding one,
+so its attribution is exact by construction, never by terminator heuristics: outcome ids are
+not charset-restricted, so the marked id is read up to the real terminator relay's manifest
+store emits (a quoted frontmatter scalar closes on its quote; any other form runs to the end
+of its line) and must EQUAL a receipt outcome id. Any residual ambiguity — an unresolvable
+marker, several marked ids, an id absent from the receipt, or a duplicated receipt outcome —
+keeps the manifest an `adopt_relay_run` candidate that still blocks re-dispatch.
 
 Diagnostics carry stable IDs (task/dispatch/run/PR numbers) and remediation hints but NEVER
 terminal output, secrets, or env values. **Every** subprocess-derived value that reaches a

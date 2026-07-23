@@ -49,6 +49,92 @@ function referencesProgram(text, programId, programSegment) {
   return body.includes("relay-orca") && (body.includes(programId) || (segment && body.includes(segment)));
 }
 
+const MARKER_LABEL = "relay-orca: ";
+
+// The supersession path REMOVES a block, so its attribution must be exact BY CONSTRUCTION.
+// Outcome ids are not charset-restricted (compile-program only requires an id that slugs to
+// a stable task id), so `:`, `.`, `;`, `)` are legal id characters and no terminator charset
+// can bound an id — a `…/a:legacy` marker would "exactly" match outcome `a`. Instead, read
+// the id the marker actually names, up to the real terminator relay's manifest store emits:
+// a quoted frontmatter scalar closes on its quote (single-quoted with `''` doubling, or the
+// JSON form), and every other form runs to the end of its line. Returns the marker-bearing
+// values of one line, or `null` when a marker's terminator cannot be resolved — an
+// unresolvable terminator is ambiguity, and ambiguity must block, never supersede.
+function markerValuesForLine(line) {
+  const trimmedEnd = line.replace(/\s+$/, "");
+  const quoted = trimmedEnd.match(/^\s*[A-Za-z0-9_.-]+:\s*(['"])(.*)$/);
+  if (!quoted) return [trimmedEnd];
+  const [, quote, rest] = quoted;
+  if (quote === "'") {
+    if (!rest.endsWith("'")) return null;
+    return [rest.slice(0, -1).replace(/''/g, "'")];
+  }
+  try {
+    return [JSON.parse(`${quote}${rest}`)];
+  } catch {
+    return null;
+  }
+}
+
+function markerPrefixes(programId, programSegment) {
+  const prefixes = [];
+  if (typeof programSegment === "function") prefixes.push(programSegment(programId));
+  if (typeof programId === "string" && programId.length > 0) prefixes.push(programId);
+  return [...new Set(prefixes.filter((prefix) => typeof prefix === "string" && prefix.length > 0))];
+}
+
+// Every outcome id this manifest's coordination markers name, extracted exactly. The
+// segment marker is authoritative; the raw-program form is retained for older manifests
+// because referencesProgram intentionally still discovers those markers. Returns `null` on
+// any unresolvable shape (unterminated quote, empty id, two markers inside one value) so
+// the caller falls back to blocking.
+function exactMarkedOutcomeIds(text, prefixes) {
+  const outcomeIds = new Set();
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  for (const line of lines) {
+    if (!line.includes(MARKER_LABEL)) continue;
+    const values = markerValuesForLine(line);
+    if (values === null) return null;
+    for (const value of values) {
+      for (const prefix of prefixes) {
+        const needle = `${MARKER_LABEL}${prefix}/`;
+        const start = value.indexOf(needle);
+        if (start < 0) continue;
+        if (value.indexOf(needle, start + needle.length) >= 0) return null;
+        const outcomeId = value.slice(start + needle.length);
+        if (!outcomeId) return null;
+        outcomeIds.add(outcomeId);
+      }
+    }
+  }
+  return [...outcomeIds];
+}
+
+// A closed marked run is superseded only when its marker names — exactly — one id that
+// EQUALS one receipt outcome, and that same outcome has exactly one mapped relay run whose
+// live reconciler result is complete_with_evidence. Every missing or ambiguous fact
+// (unresolvable marker, several marked ids, an id absent from the receipt, a duplicated
+// receipt outcome) falls back to the blocking adopt_relay_run behavior.
+function supersedingRunFor({ entry, tasks, outcomes, programId, programSegment }) {
+  if (!entry || !entry.parsed || entry.parsed.state !== "closed") return null;
+  const outcomeIds = exactMarkedOutcomeIds(entry.text, markerPrefixes(programId, programSegment));
+  if (!outcomeIds || outcomeIds.length !== 1) return null;
+  const [outcomeId] = outcomeIds;
+  const receiptTasks = (Array.isArray(tasks) ? tasks : []).filter(
+    (task) => task && task.outcome_id === outcomeId,
+  );
+  if (receiptTasks.length !== 1) return null;
+  const classified = (Array.isArray(outcomes) ? outcomes : []).filter(
+    (outcome) => outcome && outcome.outcome_id === outcomeId && outcome.state === "complete_with_evidence",
+  );
+  const mappedRuns = receiptTasks
+    .filter((task) => task.relay_ids && typeof task.relay_ids.run === "string" && task.relay_ids.run.length > 0)
+    .map((task) => task.relay_ids.run);
+  const uniqueMappedRuns = [...new Set(mappedRuns)];
+  if (classified.length !== 1 || mappedRuns.length !== 1 || uniqueMappedRuns.length !== 1) return null;
+  return { outcomeId, supersedingRunId: uniqueMappedRuns[0] };
+}
+
 // D4.1: a live task row's display string is the FIRST non-empty of `task_title`,
 // `display_name`, `title`. The real mid-2026 task-list row carries `task_title`
 // (and `display_name`) and NO `title`; older rows may still carry only `title`.
@@ -346,13 +432,25 @@ function detectDuplicateMappings(tasks) {
 }
 
 // live→receipt back-pointer discovery (D7): a relay manifest referencing this program
-// but absent from the receipt's mappings. Text only; NO mutation is performed.
-function discoverBackPointers({ manifests, tasks, programId, programSegment }) {
+// but absent from the receipt's mappings. Text only; NO mutation is performed. The optional
+// diagnostics sink preserves the historical array return value while allowing status to
+// report proven superseded residue without turning it into repair work.
+function discoverBackPointers({ manifests, tasks, outcomes = [], programId, programSegment }, diagnostics = []) {
   const knownRunIds = new Set(tasks.map((task) => task.relay_ids && task.relay_ids.run).filter(Boolean));
   const candidates = [];
   manifests.forEach((entry) => {
     if (!entry.run_id || knownRunIds.has(entry.run_id)) return;
     if (!referencesProgram(entry.text, programId, programSegment)) return;
+    const superseding = supersedingRunFor({ entry, tasks, outcomes, programId, programSegment });
+    if (superseding) {
+      diagnostics.push(diag(
+        "SUPERSEDED_MARKED_RUN",
+        null,
+        `closed marked relay run ${entry.run_id} is superseded by mapped run ${superseding.supersedingRunId} for outcome ${superseding.outcomeId}; no adoption is required`,
+        { superseded_run_id: entry.run_id, superseding_run_id: superseding.supersedingRunId },
+      ));
+      return;
+    }
     candidates.push({
       kind: "adopt_relay_run",
       outcome_id: null,
@@ -448,7 +546,10 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
     });
   }
   entries.forEach((entry) => repairForOutcome(entry).forEach((repair) => repairCandidates.push(repair)));
-  discoverBackPointers({ manifests, tasks: receipt.tasks, programId, programSegment }).forEach((candidate) => repairCandidates.push(candidate));
+  const backPointerDiagnostics = [];
+  discoverBackPointers({ manifests, tasks: receipt.tasks, outcomes: entries.map((entry) => entry.outcome), programId, programSegment }, backPointerDiagnostics)
+    .forEach((candidate) => repairCandidates.push(candidate));
+  backPointerDiagnostics.forEach((diagnostic) => diagnostics.push(diagnostic));
   discoverFleetBackPointers({ fleetManifests, tasks: receipt.tasks, programId, programSegment }).forEach((candidate) => repairCandidates.push(candidate));
 
   const report = {
