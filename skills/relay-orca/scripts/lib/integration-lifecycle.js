@@ -31,26 +31,31 @@ function unwrap(value) {
   return value && typeof value === "object" ? value : {};
 }
 
-function parseEnvelope(proc, command) {
+function parseEnvelope(proc, command, failureReasonCode = "INTEGRATION_CAPABILITY_GAP") {
   let parsed = null;
   try {
     parsed = JSON.parse(String(proc && proc.stdout ? proc.stdout : ""));
   } catch (error) {
-    fail("INTEGRATION_CAPABILITY_GAP", `${command} returned non-JSON output: ${error.message}`);
+    fail(failureReasonCode, `${command} returned non-JSON output: ${error.message}`);
   }
   if (!proc || proc.status !== 0 || !parsed || parsed.ok !== true) {
     const detail = proc && proc.stderr ? `: ${boundedExcerpt(proc.stderr)}` : "";
-    fail("INTEGRATION_CAPABILITY_GAP", `${command} is unavailable or rejected by the installed Orca contract${detail}`);
+    fail(failureReasonCode, `${command} is unavailable or rejected by the installed Orca contract${detail}`);
   }
   return parsed;
 }
 
-function runJson(ctx, args, label) {
+function runJson(ctx, args, label, failureReasonCode = "INTEGRATION_CAPABILITY_GAP") {
   if (!ctx || typeof ctx.run !== "function" || !nonEmpty(ctx.orcaBin)) {
-    fail("INTEGRATION_CAPABILITY_GAP", `${label} cannot run: injected Orca runner is missing`);
+    fail(failureReasonCode, `${label} cannot run: injected Orca runner is missing`);
   }
-  const proc = ctx.run(ctx.orcaBin, args, {});
-  return parseEnvelope(proc, label);
+  let proc;
+  try {
+    proc = ctx.run(ctx.orcaBin, args, {});
+  } catch (error) {
+    fail(failureReasonCode, `${label} failed through the injected Orca runner: ${error.message}`);
+  }
+  return parseEnvelope(proc, label, failureReasonCode);
 }
 
 function resultOf(payload) {
@@ -79,6 +84,46 @@ function coordinatorFrom(payload) {
     preamble.coordinator_handle,
     preamble.coordinatorHandle,
   ].find(nonEmpty) || null;
+}
+
+function terminalRows(payload) {
+  const result = payload && payload.result;
+  if (Array.isArray(result)) return result;
+  if (!result || typeof result !== "object") return null;
+  return [result.terminals, result.terminal_rows, result.rows, result.items, result.terminal]
+    .find(Array.isArray) || null;
+}
+
+function terminalHandle(row) {
+  if (typeof row === "string") return row;
+  if (!row || typeof row !== "object") return null;
+  return [row.handle, row.id, row.terminal_handle, row.terminalHandle].find(nonEmpty) || null;
+}
+
+// The coordinator handle is routing metadata, not lifecycle authority. The live terminal set
+// is the only identity check that remains valid when Orca reissues terminal handles. This read is
+// intentionally performed through the injected runner so scripts/lib stays subprocess-free.
+function verifyCoordinatorLiveness(ctx) {
+  if (!nonEmpty(ctx && ctx.coordinatorHandle)) {
+    fail("INTEGRATION_COORDINATOR_PROVENANCE_MISSING", "an explicit coordinator handle is required for live terminal verification");
+  }
+  const payload = runJson(
+    ctx,
+    ["terminal", "list", "--json"],
+    "orca terminal list",
+    "INTEGRATION_COORDINATOR_PROVENANCE_MISSING",
+  );
+  const terminals = terminalRows(payload);
+  if (!terminals) {
+    fail("INTEGRATION_COORDINATOR_PROVENANCE_MISSING", "orca terminal list returned no parseable live terminal set");
+  }
+  if (!terminals.some((terminal) => terminalHandle(terminal) === ctx.coordinatorHandle)) {
+    fail(
+      "INTEGRATION_COORDINATOR_PROVENANCE_MISSING",
+      `coordinator handle ${ctx.coordinatorHandle} is absent from the current live terminal set`,
+    );
+  }
+  return ctx.coordinatorHandle;
 }
 
 function taskRows(payload) {
@@ -253,6 +298,7 @@ function currentProvenance(ctx) {
   const currentRuntime = runtimeId(statusPayload);
   if (!nonEmpty(currentRuntime)) fail("INTEGRATION_RUNTIME_PROVENANCE_MISSING", "live Orca runtime id is unavailable; coordinator mutation is unsafe");
   if (ctx.runtimeId && currentRuntime !== ctx.runtimeId) fail("INTEGRATION_RUNTIME_PROVENANCE_MISMATCH", `live Orca runtime ${currentRuntime} does not match verified runtime ${ctx.runtimeId}`);
+  const liveCoordinator = verifyCoordinatorLiveness(ctx);
   const currentCoordinator = coordinatorFrom(statusPayload);
   if (nonEmpty(currentCoordinator) && currentCoordinator !== ctx.coordinatorHandle) {
     fail("INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH", `coordinator handle ${ctx.coordinatorHandle} is stale; live coordinator is ${currentCoordinator}`);
@@ -271,15 +317,13 @@ function currentProvenance(ctx) {
   const liveDispatch = dispatch.id || dispatch.dispatch_id || dispatch.dispatchId;
   const liveAssignee = dispatch.assignee_handle || dispatch.assignee || dispatch.to;
   const dispatchCoordinator = coordinatorFrom(dispatchPayload);
-  const verifiedCoordinator = dispatchCoordinator || currentCoordinator;
-  if (!nonEmpty(verifiedCoordinator)) fail("INTEGRATION_COORDINATOR_PROVENANCE_MISSING", "live/current coordinator handle is unavailable; never infer it from stale receipt or history");
-  if (verifiedCoordinator !== ctx.coordinatorHandle) {
-    fail("INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH", `coordinator handle ${ctx.coordinatorHandle} is stale; live coordinator is ${verifiedCoordinator}`);
+  if (nonEmpty(dispatchCoordinator) && dispatchCoordinator !== ctx.coordinatorHandle) {
+    fail("INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH", `coordinator handle ${ctx.coordinatorHandle} is stale; live dispatch metadata names ${dispatchCoordinator}`);
   }
   if (liveTask !== ctx.taskId || liveDispatch !== ctx.dispatchId || liveAssignee !== ctx.assignee || dispatch.terminal_present === false || result.terminal_present === false) {
     fail("INTEGRATION_DISPATCH_PROVENANCE_MISMATCH", `fresh dispatch provenance mismatch (task=${liveTask || "missing"}, dispatch=${liveDispatch || "missing"}, assignee=${liveAssignee || "missing"})`);
   }
-  return { runtimeId: currentRuntime, coordinator: verifiedCoordinator, task, tasks, dispatch };
+  return { runtimeId: currentRuntime, coordinator: liveCoordinator, task, tasks, dispatch };
 }
 
 // The evidence artifact lives at a DETERMINISTIC path derived from the program/outcome alone,

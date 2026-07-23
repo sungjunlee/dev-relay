@@ -41,6 +41,13 @@ function defaultResumeScenario(overrides = {}) {
     // Per-task dispatch-show seed (pre-resume state): { terminal_present, assignee,
     // dispatch_id, runtimeId }. A real dispatch supersedes it for that task.
     dispatch: overrides.dispatch || {},
+    liveTerminals: overrides.liveTerminals !== undefined
+      ? overrides.liveTerminals
+      : (overrides.coordinator !== undefined ? [overrides.coordinator] : []),
+    terminalListOk: overrides.terminalListOk !== undefined ? overrides.terminalListOk : true,
+    terminalListMalformed: overrides.terminalListMalformed === true,
+    structuredCoordinator: overrides.structuredCoordinator,
+    preamble: overrides.preamble,
     // Execution knobs (fail-closed / optional): an orca task id whose `dispatch --inject`
     // returns ok:false, and terminal-create failure modes.
     dispatchFailFor: overrides.dispatchFailFor || null,
@@ -50,11 +57,8 @@ function defaultResumeScenario(overrides = {}) {
     terminalCreateOkFalse: overrides.terminalCreateOkFalse || false,
     terminalCreateEmptyHandle: overrides.terminalCreateEmptyHandle || false,
     terminalSendOkFalse: overrides.terminalSendOkFalse || false,
-    // #1019: the live coordinator handle. UNDEFINED by default, which keeps `status` and
-    // `dispatch-show` byte-identical for every pre-#1019 scenario (the integration lifecycle
-    // then fails closed on missing coordinator provenance, as it should). Setting it opts a
-    // scenario into a runtime that can actually complete the integration-gate lifecycle, so
-    // an over-broad advancement filter really does create/resolve gates and get caught.
+    // #1019: the coordinator handle is verified by the live terminal list. UNDEFINED by
+    // default keeps non-integration scenarios free of coordinator-specific fixture state.
     coordinator: overrides.coordinator,
   };
 }
@@ -73,17 +77,27 @@ const stateDir = ${JSON.stringify(stateDir)};
 function appendLog(line) { if (logPath) fs.appendFileSync(logPath, line + "\\n", "utf-8"); }
 appendLog(args.join(" "));
 // The real dispatch-show payload nests provenance under result.dispatch (D4.3/D5.2).
-function nestDispatch(flat, coordinator) {
-  const dispatch = { id: flat.dispatch_id, task_id: flat.task_id, assignee_handle: flat.assignee, status: flat.status || "dispatched" };
+function nestDispatch(flat, structuredCoordinator, preamble) {
+  const dispatch = {
+    id: flat.dispatch_id,
+    task_id: flat.task_id,
+    assignee_handle: flat.assignee,
+    status: flat.status || "dispatched",
+    failure_count: flat.failure_count || 0,
+    last_failure: flat.last_failure || null,
+    dispatched_at: flat.dispatched_at || null,
+    completed_at: flat.completed_at || null,
+    created_at: flat.created_at || null,
+    last_heartbeat_at: flat.last_heartbeat_at || null,
+    assignee_pane_key: flat.assignee_pane_key || flat.assignee,
+  };
   const result = { dispatch: dispatch };
   if (flat.terminal_present !== undefined) result.terminal_present = flat.terminal_present;
-  // #1019: the real --preamble read is a string. Keep the normalized coordinator object
-  // alongside it for the existing lifecycle fixture contract; the dispatch row itself has
-  // only the real assignee_handle provenance field and no coordinator field.
-  if (coordinator !== undefined) {
-    result.preamble = String(coordinator);
-    result.coordinator = { handle: coordinator };
-  }
+  // The real --preamble read is a string and, with --from <assignee>, can name the assignee
+  // as coordinator. It is corroboration only; structuredCoordinator is the optional feature
+  // detection variant used by dedicated lifecycle tests.
+  result.preamble = preamble !== undefined ? String(preamble) : "Coordinator: " + flat.assignee;
+  if (structuredCoordinator !== undefined) result.coordinator_handle = structuredCoordinator;
   return result;
 }
 function loadScenario() { return JSON.parse(fs.readFileSync(scenarioPath, "utf-8")); }
@@ -113,8 +127,16 @@ if (args[0] === "status") {
   if (!scenario.omitRuntimeId) runtime.runtimeId = scenario.runtimeId;
   const statusMeta = scenario.omitRuntimeId ? {} : meta;
   const statusResult = { app: { running: true, pid: 1 }, runtime, graph: { state: "ready" } };
-  if (scenario.coordinator !== undefined) statusResult.coordinator = { handle: scenario.coordinator };
+  if (scenario.structuredCoordinator !== undefined) statusResult.coordinator_handle = scenario.structuredCoordinator;
   emit({ id: "status-1", ok: true, result: statusResult, _meta: statusMeta }, 0);
+}
+if (args[0] === "terminal" && args[1] === "list") {
+  if (!scenario.terminalListOk) { process.stderr.write("orca terminal list unreachable\\n"); process.exit(1); }
+  if (scenario.terminalListMalformed) emit({ id: "terminal-list-1", ok: true, result: { count: 0 }, _meta: meta }, 0);
+  const terminals = (Array.isArray(scenario.liveTerminals) ? scenario.liveTerminals : []).map((terminal) => (
+    typeof terminal === "string" ? { handle: terminal, id: terminal, status: "running" } : terminal
+  ));
+  emit({ id: "terminal-list-1", ok: true, result: { terminals, count: terminals.length }, _meta: meta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "task-list") {
   if (scenario.taskListOk === false) { process.stderr.write("orca task-list unreachable\\n"); process.exit(1); }
@@ -182,7 +204,7 @@ if (args[0] === "orchestration" && args[1] === "dispatch-show") {
   Object.keys(seed).forEach((k) => { if (k === "runtimeId") seedRuntime = seed[k]; else result[k] = seed[k]; });
   try { Object.assign(result, JSON.parse(fs.readFileSync(stateFile(task), "utf-8"))); } catch (e) { /* no real dispatch yet */ }
   const dispatchMeta = seedRuntime !== undefined ? { runtimeId: seedRuntime } : meta;
-  emit({ id: "ds-" + task, ok: true, result: nestDispatch(result, scenario.coordinator), _meta: dispatchMeta }, 0);
+  emit({ id: "ds-" + task, ok: true, result: nestDispatch(result, scenario.structuredCoordinator, scenario.preamble), _meta: dispatchMeta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "dispatch") {
   const task = argValue("--task");

@@ -68,6 +68,20 @@ An unverified task is never reported `dispatched`. A step 1–2 failure records 
 `escalated`, dispatches no further pending task, and leaves already-verified running operators
 untouched (stop semantics are #946).
 
+### Integration coordinator verification on Orca 1.4.148
+
+The integration lifecycle targets payloads observed with `ORCA_APP_VERSION=1.4.148`. Coordinator
+identity is verified by the read-only `orca terminal list --json` live terminal set: the explicitly
+supplied `--coordinator-handle` must be present before any gate mutation. A failed, unparseable, or
+missing handle fails closed as `INTEGRATION_COORDINATOR_PROVENANCE_MISSING`.
+
+In this build, `orca status --json` returns `result.app`, `result.runtime`, and `result.graph` but
+no coordinator field. `dispatch-show --preamble --from <assignee> --json` returns a dispatch row
+with `id`, `task_id`, `assignee_handle`, status/failure/timestamp fields, and a plain-string
+`preamble`; the string can name the assignee and is never coordinator authority. If a payload does
+carry a recognized structured coordinator field, it is optional feature detection: a mismatch with
+the live handle still fails closed as `INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH`.
+
 ## Integration-gate completion contract (#1019)
 
 An integration operator must write the live report at the exact path supplied in the prompt,
@@ -87,7 +101,7 @@ the exact question and the exact options `["passed","failed"]`; it lists, create
 and re-lists under a bounded lock. Lost create responses are recovered by re-list/adopt, while
 duplicates, noncanonical gates, missing physical ids, and conflicting results stop the flow.
 
-After fresh runtime, coordinator, task, dispatch, assignee, and report validation, the
+After fresh runtime, live coordinator-terminal, task, dispatch, assignee, and report validation, the
 coordinator resolves the adopted physical gate to the canonical `passed` resolution and sends
 a fresh instruction. That instruction includes one copy-paste command in the real CLI shape:
 

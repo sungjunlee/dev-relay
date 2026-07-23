@@ -122,10 +122,21 @@ PROPOSED follow-up: `{ "id", "source_gate" | "source_outcome", "description",
 
 `integration_gate` is a coordinator-owned terminal boundary. The read-only integration
 operator writes deterministic live evidence; it never creates or resolves an Orca gate.
-The coordinator must supply an explicit current `--coordinator-handle` and revalidate it
-from live runtime/dispatch reads on every run, resume, redispatch, and restart. A receipt,
-history entry, prior completion message, or stale assignee is never a source for coordinator
-identity.
+The coordinator must supply an explicit current `--coordinator-handle` and verify that it is
+present in the live terminal set from a read-only `orca terminal list --json` query on every run,
+resume, redispatch, and restart. A failed/unparseable query or absent handle fails closed with
+`INTEGRATION_COORDINATOR_PROVENANCE_MISSING` before any lifecycle mutation. A recognized
+structured coordinator field, when present in a payload, remains an optional feature-detection
+check; a mismatch still fails closed as `INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH`, while
+absence is not a failure. A receipt, history entry, prior completion message, or stale assignee is
+never a source for coordinator identity.
+
+The payload shapes targeted here were observed with `ORCA_APP_VERSION=1.4.148`: `status --json`
+has `result.app`, `result.runtime`, and `result.graph` without coordinator identity; a
+`dispatch-show --preamble --from <assignee> --json` dispatch row carries `id`, `task_id`,
+`assignee_handle`, status/failure/timestamp fields, and `preamble` is a plain string. The preamble
+is never parsed as a coordinator object or used as sole authority; text that names the assignee or
+contradicts the live handle cannot override liveness.
 
 The physical gate id is not caller-selectable in the installed Orca CLI, so the stable
 logical identity is exactly:
@@ -149,7 +160,7 @@ verified dispatch
   -> operator writes <outcome-id>.json with {"passed":true,"evidence":"...",
        "runtime_id":"<live>","task_id":"<this task>","dispatch_id":"<this dispatch>",
        "assignee":"<this pane>"}
-  -> fresh runtime/coordinator/task/dispatch/assignee/report revalidation
+  -> fresh runtime/coordinator-terminal/task/dispatch/assignee/report revalidation
        (the report's runtime_id/task_id/dispatch_id/assignee MUST match the live dispatch;
         a reused or prior-run artifact fails closed and never resolves the gate)
   -> coordinator resolves that physical gate to passed

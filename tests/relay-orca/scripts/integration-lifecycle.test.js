@@ -86,6 +86,10 @@ function initialState(extra = {}) {
   };
 }
 
+function lifecycleMutations(fake) {
+  return fake.readLog().filter((argv) => ["gate-create", "gate-resolve", "send"].includes(argv[1]));
+}
+
 test("#1019 happy path is gate-create, evidence, resolve, fresh instruction, worker_done, completed re-read", () => {
   const fake = installFakeOrcaIntegrationLifecycle(initialState());
   const report = reportFile();
@@ -101,12 +105,95 @@ test("#1019 happy path is gate-create, evidence, resolve, fresh instruction, wor
     const completed = advanceIntegrationGate(context(fake, report.reportPath));
     assert.equal(completed.ok, true);
     const log = fake.readLog().map((argv) => argv.slice(0, 2).join(" "));
+    assert.ok(log.includes("terminal list"), "coordinator liveness must be checked through the live terminal query");
     assert.ok(log.includes("orchestration gate-create"));
     assert.ok(log.includes("orchestration gate-resolve"));
     assert.ok(log.includes("orchestration send"));
     assert.equal(fake.readSends().filter((argv) => argv.includes("worker_done")).length, 1);
     assert.equal(fake.readState().tasks[0].status, "completed");
     assert.equal(fake.readPoison(), null);
+  } finally {
+    fake.cleanup();
+    fs.rmSync(report.dir, { recursive: true, force: true });
+  }
+});
+
+test("#1067 coordinator liveness matrix is fail-closed and structured metadata remains optional", () => {
+  const cases = [
+    { label: "handle absent from live terminal set", state: initialState({ liveTerminals: [] }) },
+    { label: "terminal query failed", state: initialState({ terminalListOk: false }) },
+    { label: "terminal query is unparseable", state: initialState({ terminalListMalformed: true }) },
+  ];
+  for (const scenario of cases) {
+    const fake = installFakeOrcaIntegrationLifecycle(scenario.state);
+    const report = reportFile();
+    try {
+      assert.throws(() => prepareIntegrationGate(context(fake, report.reportPath)), (error) => {
+        assert.ok(error instanceof IntegrationLifecycleError, scenario.label);
+        assert.equal(error.reasonCode, "INTEGRATION_COORDINATOR_PROVENANCE_MISSING", scenario.label);
+        return true;
+      }, scenario.label);
+      assert.deepEqual(lifecycleMutations(fake), [], `${scenario.label} must not mutate the lifecycle`);
+      assert.equal(fake.readPoison(), null);
+    } finally {
+      fake.cleanup();
+      fs.rmSync(report.dir, { recursive: true, force: true });
+    }
+  }
+
+  const matching = installFakeOrcaIntegrationLifecycle(initialState({ structuredCoordinator: COORDINATOR }));
+  const matchingReport = reportFile();
+  try {
+    const prepared = prepareIntegrationGate(context(matching, matchingReport.reportPath));
+    assert.equal(prepared.ok, true, "a matching structured coordinator field remains compatible");
+    assert.equal(matching.readState().gates.length, 1);
+  } finally {
+    matching.cleanup();
+    fs.rmSync(matchingReport.dir, { recursive: true, force: true });
+  }
+
+  const mismatching = installFakeOrcaIntegrationLifecycle(initialState({
+    structuredCoordinator: "coord-stale",
+    liveTerminals: [COORDINATOR],
+  }));
+  const mismatchingReport = reportFile();
+  try {
+    assert.throws(() => prepareIntegrationGate(context(mismatching, mismatchingReport.reportPath)), (error) => {
+      assert.equal(error.reasonCode, "INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH");
+      return true;
+    });
+    assert.deepEqual(lifecycleMutations(mismatching), [], "a structured mismatch must not mutate the lifecycle");
+  } finally {
+    mismatching.cleanup();
+    fs.rmSync(mismatchingReport.dir, { recursive: true, force: true });
+  }
+});
+
+test("#1067 string preambles are inert corroboration, including contradictory text", () => {
+  const fake = installFakeOrcaIntegrationLifecycle(initialState({ preamble: "Coordinator: coord-stale" }));
+  const report = reportFile();
+  try {
+    const status = JSON.parse(fake.run(["status", "--json"]).stdout);
+    assert.deepEqual(Object.keys(status.result).sort(), ["app", "graph", "runtime"]);
+    assert.equal("coordinator" in status.result, false);
+    assert.equal(status._meta.runtimeId, DEFAULT_RUNTIME_ID);
+    const dispatch = JSON.parse(fake.run([
+      "orchestration", "dispatch-show", "--task", TASK_ID, "--preamble", "--from", ASSIGNEE, "--json",
+    ]).stdout);
+    assert.equal(typeof dispatch.result.preamble, "string");
+    assert.match(dispatch.result.preamble, /coord-stale/);
+    assert.equal(dispatch.result.dispatch.assignee_handle, ASSIGNEE);
+    assert.equal("coordinator_handle" in dispatch.result.dispatch, false);
+    assert.equal("from" in dispatch.result.dispatch, false);
+    assert.equal(dispatch._meta.runtimeId, DEFAULT_RUNTIME_ID);
+
+    // The contradictory text cannot replace the criterion-1 liveness proof or cause a
+    // coordinator mismatch. The canonical gate mutation is authorized by the verified live
+    // handle and the remaining dispatch/runtime bindings, never by preamble text.
+    const prepared = prepareIntegrationGate(context(fake, report.reportPath));
+    assert.equal(prepared.ok, true);
+    assert.equal(fake.readState().gates.length, 1);
+    assert.equal(lifecycleMutations(fake).filter((argv) => argv[1] === "gate-create").length, 1);
   } finally {
     fake.cleanup();
     fs.rmSync(report.dir, { recursive: true, force: true });
@@ -262,7 +349,7 @@ test("#1019 duplicate or noncanonical gates fail closed before further mutation"
 
 test("#1019 stale coordinator, dispatch, assignee, and report provenance fail closed", () => {
   const cases = [
-    { label: "coordinator", reasonCode: "INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH", state: initialState({ coordinator: "coord-stale" }) },
+    { label: "coordinator", reasonCode: "INTEGRATION_COORDINATOR_PROVENANCE_MISMATCH", state: initialState({ structuredCoordinator: "coord-stale", liveTerminals: [COORDINATOR] }) },
     { label: "dispatch", reasonCode: "INTEGRATION_DISPATCH_PROVENANCE_MISMATCH", state: initialState({ dispatch: { [TASK_ID]: { dispatch_id: "dispatch-other", assignee: ASSIGNEE } } }) },
     // A stale --from is rejected at the dispatch-show CLI boundary, surfacing as a capability gap.
     { label: "assignee", reasonCode: "INTEGRATION_CAPABILITY_GAP", state: initialState({ dispatch: { [TASK_ID]: { dispatch_id: DISPATCH_ID, assignee: "term-other" } } }) },

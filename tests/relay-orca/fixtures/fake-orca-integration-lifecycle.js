@@ -13,6 +13,11 @@ function defaultScenario(overrides = {}) {
   return {
     runtimeId: overrides.runtimeId || DEFAULT_RUNTIME_ID,
     coordinator: overrides.coordinator || "coord-current",
+    liveTerminals: overrides.liveTerminals !== undefined ? overrides.liveTerminals : [overrides.coordinator || "coord-current"],
+    terminalListOk: overrides.terminalListOk !== undefined ? overrides.terminalListOk : true,
+    terminalListMalformed: overrides.terminalListMalformed === true,
+    structuredCoordinator: overrides.structuredCoordinator,
+    preamble: overrides.preamble,
     tasks: overrides.tasks || [],
     dispatch: overrides.dispatch || {},
     gates: overrides.gates || [],
@@ -38,7 +43,11 @@ function log() { fs.appendFileSync(logPath, JSON.stringify(args) + "\\n", "utf8"
 function poison(reason) { fs.writeFileSync(poisonPath, reason + ":" + args.join(" "), "utf8"); process.exit(99); }
 function value(flag) { const index = args.indexOf(flag); return index >= 0 ? args[index + 1] : null; }
 function has(flag) { return args.includes(flag); }
-function emit(body, code = 0) { if (body !== null) process.stdout.write(JSON.stringify(body)); process.exit(code); }
+function emit(body, code = 0) {
+  if (body !== null && body && typeof body === "object" && !body._meta) body._meta = { runtimeId: readState().runtimeId };
+  if (body !== null) process.stdout.write(JSON.stringify(body));
+  process.exit(code);
+}
 function envelope(result) { return { ok: true, result, _meta: { runtimeId: readState().runtimeId } }; }
 function taskFor(state, taskId) {
   return state.tasks.find((task) => task.id === taskId) || null;
@@ -68,7 +77,17 @@ if (has("task-update")) poison("TASK_UPDATE_INVOKED");
 const state = readState();
 
 if (args[0] === "status" && args[1] === "--json") {
-  emit(envelope({ runtime: { runtimeId: state.runtimeId }, coordinator: { handle: state.coordinator } }));
+  const result = { app: { running: true, pid: 1 }, runtime: { runtimeId: state.runtimeId }, graph: { state: "ready" } };
+  if (state.structuredCoordinator !== undefined) result.coordinator_handle = state.structuredCoordinator;
+  emit(envelope(result));
+}
+if (args[0] === "terminal" && args[1] === "list" && has("--json")) {
+  if (!state.terminalListOk) emit({ ok: false, error: "terminal list failed" }, 1);
+  if (state.terminalListMalformed) emit(envelope({ count: 0 }));
+  const terminals = (Array.isArray(state.liveTerminals) ? state.liveTerminals : []).map((terminal) => (
+    typeof terminal === "string" ? { handle: terminal, id: terminal, status: "running" } : terminal
+  ));
+  emit(envelope({ terminals, count: terminals.length }));
 }
 if (args[0] === "orchestration" && args[1] === "task-list") {
   emit(envelope({ tasks: state.tasks }));
@@ -78,7 +97,28 @@ if (args[0] === "orchestration" && args[1] === "dispatch-show") {
   const taskId = value("--task");
   const dispatch = state.dispatch[taskId] || {};
   if (has("--from") && value("--from") !== dispatch.assignee) emit({ ok: false, error: "dispatch-show stale --from" }, 3);
-  emit(envelope({ dispatch: { task_id: taskId, id: dispatch.dispatch_id, assignee_handle: dispatch.assignee, terminal_present: dispatch.terminal_present !== false }, preamble: { coordinator_handle: state.coordinator } }));
+  const dispatchRow = {
+    id: dispatch.dispatch_id,
+    task_id: taskId,
+    assignee_handle: dispatch.assignee,
+    status: dispatch.status || "dispatched",
+    failure_count: dispatch.failure_count || 0,
+    last_failure: dispatch.last_failure || null,
+    dispatched_at: dispatch.dispatched_at || null,
+    completed_at: dispatch.completed_at || null,
+    created_at: dispatch.created_at || null,
+    last_heartbeat_at: dispatch.last_heartbeat_at || null,
+    assignee_pane_key: dispatch.assignee_pane_key || dispatch.assignee,
+  };
+  const result = {
+    dispatch: dispatchRow,
+    // Real Orca injects the assignee into this text when dispatch-show is called with --from
+    // <assignee>. It is deliberately not coordinator identity authority.
+    preamble: state.preamble !== undefined ? String(state.preamble) : "Coordinator: " + value("--from"),
+  };
+  if (dispatch.terminal_present !== undefined) result.terminal_present = dispatch.terminal_present;
+  if (state.structuredCoordinator !== undefined) result.coordinator_handle = state.structuredCoordinator;
+  emit(envelope(result));
 }
 if (args[0] === "orchestration" && args[1] === "gate-list") {
   if (!has("--task") || !has("--json")) emit({ ok: false, error: "gate-list requires --task and --json" }, 2);
