@@ -31,6 +31,8 @@ const RECONCILIATION_SENTENCE =
   "Live reconciliation is still required; this payload is not completion evidence.";
 const LIFECYCLE_NOTE =
   "Orca worker_done and task status are lifecycle signals, never completion authority.";
+const HEARTBEAT_NOTE =
+  "Heartbeat cadence: send a heartbeat on phase change or after roughly 15 minutes of silence, not every few minutes; escalations, blockers, and the final worker_done remain immediate.";
 const OWNERSHIP_NOTE =
   "The coordinator and Orca terminals never edit implementation code directly; relay owns every implementation worktree and durable run manifest.";
 const READ_ONLY_MARKER = "read-only";
@@ -43,6 +45,7 @@ function payloadContractBlock() {
   return [
     "Completion payload contract (return ALL fields):",
     ...PAYLOAD_FIELDS.map((field) => `  - ${field}`),
+    HEARTBEAT_NOTE,
     RECONCILIATION_SENTENCE,
     LIFECYCLE_NOTE,
   ].join("\n");
@@ -152,6 +155,7 @@ module.exports = {
   PAYLOAD_FIELDS,
   RECONCILIATION_SENTENCE,
   LIFECYCLE_NOTE,
+  HEARTBEAT_NOTE,
   OWNERSHIP_NOTE,
   READ_ONLY_MARKER,
   NO_EDIT_CLAUSE,

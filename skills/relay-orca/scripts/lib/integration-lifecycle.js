@@ -387,7 +387,7 @@ function completionCommand(ctx) {
   const body = `Canonical integration gate passed for ${marker}. Send this command exactly once from the current dispatched pane.`;
   const argv = [
     "orchestration", "send", "--to", ctx.coordinatorHandle, "--subject", subject,
-    "--from", ctx.assignee, "--body", body, "--type", "worker_done",
+    "--body", body, "--type", "worker_done",
     "--task-id", ctx.taskId, "--dispatch-id", ctx.dispatchId, "--report-path", ctx.reportPath,
     "--phase", "integration_gate", "--json",
   ];

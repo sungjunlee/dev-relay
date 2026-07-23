@@ -1822,7 +1822,7 @@ test("#1008 mapping intake enables complete_with_evidence on the next status rec
 // --- #1019 R2: resume surfaces the copy-paste worker_done command while awaiting completion ---
 
 test("#1019 integrationBlockingEntry surfaces the full copy-paste worker_done command while awaiting completion", () => {
-  const copyPaste = "orca orchestration send --to coord-current --subject 'worker_done: relay-orca: seg/out' --from term-fresh --body 'send once' --type worker_done --task-id task_x --dispatch-id disp_x --report-path /runs/out.json --phase integration_gate --json";
+  const copyPaste = "orca orchestration send --to coord-current --subject 'worker_done: relay-orca: seg/out' --body 'send once' --type worker_done --task-id task_x --dispatch-id disp_x --report-path /runs/out.json --phase integration_gate --json";
   const entry = integrationBlockingEntry({
     ok: false,
     state: "awaiting_worker_done",

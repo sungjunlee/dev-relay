@@ -69,6 +69,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/stop.js" \
 
 ## Orca version and capability policy
 
+- The command and payload shapes in this guide target the observed `ORCA_APP_VERSION=1.4.148`.
 - The targeted mid-2026 Orca CLI exposes **no version subcommand** (`orca version` →
   "Unknown command"; `orca --version` prints usage). Version is best-effort only and never
   blocks admission.
@@ -98,14 +99,38 @@ coordinator (a terminal session running relay-orca's CLI scripts)
   run manifests**; relay-orca never invokes any `orca worktree` subcommand.
 - Each operator terminal must already be running an agent CLI: `orca orchestration dispatch
   --inject` requires a **live recognized agent**, and a bare/self-created terminal cannot accept
-  an injection. Create one with `orca terminal create` and start the agent in it (empirically,
-  starting the agent via a `terminal send` command is more reliable than `--command` at create
-  time, which can race and exit).
+  an injection. Use the current two-step startup pattern, and wait for the TUI to be idle before
+  any dispatch or prompt delivery:
+
+  ```bash
+  orca terminal create --command "<agent-cli>" --json
+  orca terminal wait --terminal <handle> --for tui-idle --timeout-ms <n> --json
+  ```
+
+  The handle returned by `terminal create` is the handle passed to `terminal wait` and later
+  dispatches.
 - **Explicit `--operator-handle`s are required.** `run` and `resume` dispatch ONLY to handles you
   pass and **never self-create a terminal**. `run` with zero handles fails closed
   (`OPERATOR_DISPATCH_FAILED`, exit 44) before any mutation; `resume` fails closed
   (`RESUME_NO_OPERATOR_HANDLE`, exit 66) with zero mutation. A handle carries at most one active
   task. See [operator-dispatch.md](operator-dispatch.md).
+- Terminal handles are **routing metadata**, not lifecycle authority. An Orca app restart may
+  reissue every handle; a changed handle is normal. Re-resolve live handles with
+  `orca terminal list --json` and route subsequent sends to the new handle. Lifecycle authority
+  remains the payload `taskId` + `dispatchId`, verified against the dispatched pane. The
+  receipt-side, proof-based rebind design is tracked in [#1063](https://github.com/sungjunlee/dev-relay/issues/1063).
+
+## Wait discipline
+
+For Orca-side lifecycle signals, use the sanctioned wait primitive instead of a sleep or polling
+supervision loop:
+
+```bash
+orca orchestration check --wait --types worker_done,escalation,decision_gate --timeout-ms <n>
+```
+
+This waits for `worker_done`, escalations, and decision gates. Durable-truth signals such as relay
+manifests, PRs, and issues are outside Orca's check surface and still need their own watch.
 
 ## One active program per runtime (v0) and reset discipline
 
@@ -158,6 +183,13 @@ run on any path. Manual decision recovery: [recovery.md](recovery.md).
   defaults), resolved at relay dispatch time. It **never** appears in the accepted-program JSON or
   in the operator prompts: the program schema carries no execution engine field, and prompts
   source only an operator name and mode from `recommended_route`.
+- Before each ordinary relay run, read its routing contract and pin the executor/model with
+  `--executor` + `--model` (or `--model-hints dispatch=...`), the reviewer/model with
+  `--reviewer` + `--reviewer-model`, and the review assurance with `--review-assurance`. Do not
+  let policy defaults silently route the reviewer to the executor, self-select `hardened`
+  assurance, or leave the dispatch `route-plan` model null; CLI defaults can change between
+  pilots. The accepted program remains engine-agnostic, but the operator's relay invocation must
+  be explicit and auditable.
 - Because the operator contract is engine-independent, the same program runs across supported
   agent CLIs with no engine-specific skill branch. In the pilot, operator A ran `claude` and
   operator B ran `codex` under an **identical operator contract**; each drove a full ordinary
@@ -171,3 +203,11 @@ factory. It preserves relay's lifecycle truth (durable relay manifests, PRs, and
 evidence — `worker_done` is never completion authority) and adds no new orchestration service to
 operate. Program completion is proven only from live relay/GitHub/gate evidence, and several
 steps above still require a supervised operator in the loop. Treat every run accordingly.
+
+## Closeout hygiene
+
+After a program's outcomes are durably complete, the coordinator closes **only** operator
+terminals it created. For each such handle, verify that it is idle with `orca terminal read` or
+`orca terminal show`, then run `orca terminal close --terminal <handle>`. User-owned panes are
+never closed. Auto-closing inside `stop.js` remains a non-goal; its only mutation remains
+`orca orchestration run-stop`.

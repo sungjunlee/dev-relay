@@ -192,9 +192,10 @@ absent owner record are never stolen — that contention still times out fail-cl
 no mtime-lease fallback: an old mtime is not evidence that the owner is gone.
 
 The completion instruction contains a concrete command in the authoritative shape, with
-`--from <fresh-assignee>`, `--to <current-coordinator>`, `--type worker_done`, `--task-id`,
-`--dispatch-id`, `--report-path`, `--phase integration_gate`, and `--json`. It does not use
-raw `--payload` JSON. If gate identity, coordinator/dispatch/report provenance, completion
+`--to <current-coordinator>`, `--type worker_done`, `--task-id`, `--dispatch-id`,
+`--report-path`, `--phase integration_gate`, and `--json`; `orca orchestration send` resolves
+and validates the sender from the invoking terminal, so `--from` is reserved for impersonation
+and omitted. It does not use raw `--payload` JSON. If gate identity, coordinator/dispatch/report provenance, completion
 delivery, or the terminal transition cannot be expressed by the installed contract, the
 coordinator reports the exact missing capability and stops. There is no `task-update`, reset,
 receipt-edit, or manual-dispatch-replay fallback.

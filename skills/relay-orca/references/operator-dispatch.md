@@ -35,6 +35,10 @@ appears in a prompt — engine selection is `relay-config`, resolved at relay di
 `integration_gate` and `advisory_review` prompts always contain the literal token `read-only`
 and never instruct file edits.
 
+Every operator prompt states the heartbeat cadence: send a heartbeat on phase change or after
+roughly 15 minutes of silence, not every few minutes; escalations, blockers, and the final
+`worker_done` remain immediate.
+
 ## Completion payload contract
 
 Every operator prompt embeds the completion payload contract — the operator returns ALL of:
@@ -107,15 +111,17 @@ a fresh instruction. That instruction includes one copy-paste command in the rea
 
 ```bash
 orca orchestration send \
-  --from <fresh-assignee> --to <current-coordinator> \
+  --to <current-coordinator> \
   --subject '<marker>' --body '<completion text>' \
   --type worker_done --task-id <task-id> --dispatch-id <dispatch-id> \
   --report-path <deterministic-report> --phase integration_gate --json
 ```
 
-The operator runs it exactly once from the current dispatched pane. The coordinator then
-re-reads `task-list` and accepts completion only when that task is `completed`. The command
-never uses raw `--payload` JSON. A stale runtime/coordinator/task/dispatch/assignee/report,
+The operator runs it exactly once from the current dispatched pane. `orca orchestration send`
+auto-resolves the sender from the invoking terminal and validates that pane; `--from` is reserved
+for deliberate impersonation and is omitted here. The coordinator then re-reads `task-list` and
+accepts completion only when that task is `completed`. The command never uses raw `--payload` JSON.
+A stale runtime/coordinator/task/dispatch/assignee/report,
 unavailable gate identity, completion-delivery gap, or missing terminal transition fails closed
 with the exact capability gap. No `task-update`, reset, receipt edit, or manual dispatch replay
 is a repair path. Redispatch and restart regenerate every provenance field and the completion
