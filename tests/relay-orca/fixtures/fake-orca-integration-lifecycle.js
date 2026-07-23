@@ -150,7 +150,7 @@ if (args[0] === "orchestration" && args[1] === "send") {
   if (type === "worker_done") {
     const taskId = value("--task-id");
     const dispatch = state.dispatch[taskId] || {};
-    if (value("--from") !== dispatch.assignee || value("--to") !== state.coordinator) emit({ ok: false, error: "worker_done provenance rejected" }, 3);
+    if (has("--from") || value("--to") !== state.coordinator) emit({ ok: false, error: "worker_done sender must auto-resolve from the invoking terminal" }, 3);
     if (value("--dispatch-id") !== dispatch.dispatch_id) emit({ ok: false, error: "worker_done dispatch rejected" }, 3);
     const task = taskFor(state, taskId);
     if (task) { task.status = state.taskListAfterWorkerDone; task.worker_done = true; }

@@ -22,6 +22,7 @@ const {
   PAYLOAD_FIELDS,
   RECONCILIATION_SENTENCE,
   LIFECYCLE_NOTE,
+  HEARTBEAT_NOTE,
   READ_ONLY_MARKER,
   NO_EDIT_CLAUSE,
 } = require(path.join(SCRIPTS, "lib", "operator-prompt.js"));
@@ -786,6 +787,7 @@ test("D11.10: operator prompts carry the pinned literals and never name an engin
     PAYLOAD_FIELDS.forEach((field) => assert.ok(prompt.includes(field), `${task.kind} prompt missing payload field ${field}`));
     assert.ok(prompt.includes(RECONCILIATION_SENTENCE), `${task.kind} prompt missing reconciliation sentence`);
     assert.ok(prompt.includes(LIFECYCLE_NOTE), `${task.kind} prompt missing lifecycle note`);
+    assert.ok(prompt.includes(HEARTBEAT_NOTE), `${task.kind} prompt missing heartbeat cadence`);
     // No executor/reviewer engine or model name anywhere.
     const lowered = prompt.toLowerCase();
     FORBIDDEN_ENGINE_TOKENS.forEach((token) =>

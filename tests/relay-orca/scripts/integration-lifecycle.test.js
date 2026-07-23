@@ -387,14 +387,15 @@ test("#1019 stale coordinator, dispatch, assignee, and report provenance fail cl
   }
 });
 
-test("#1019 completion command is explicit and never raw-payload shaped", () => {
+test("#1019 completion command auto-resolves the sender and is never raw-payload shaped", () => {
   const report = reportFile();
   try {
     const command = completionCommand(context({ dir: "locks" }, report.reportPath));
     assert.deepEqual(command.argv.slice(0, 2), ["orchestration", "send"]);
-    ["--from", ASSIGNEE, "--to", COORDINATOR, "--type", "worker_done", "--task-id", TASK_ID, "--dispatch-id", DISPATCH_ID, "--report-path", report.reportPath, "--phase", "integration_gate", "--json"].forEach((token) => assert.ok(command.argv.includes(token), token));
+    ["--to", COORDINATOR, "--type", "worker_done", "--task-id", TASK_ID, "--dispatch-id", DISPATCH_ID, "--report-path", report.reportPath, "--phase", "integration_gate", "--json"].forEach((token) => assert.ok(command.argv.includes(token), token));
+    assert.equal(command.argv.includes("--from"), false, "sender must auto-resolve from the invoking terminal");
     assert.equal(command.argv.includes("--payload"), false);
-    assert.match(command.copy_paste, /--from/);
+    assert.doesNotMatch(command.copy_paste, /--from/);
     assert.match(command.copy_paste, /--to/);
     assert.match(command.copy_paste, /--report-path/);
   } finally {
