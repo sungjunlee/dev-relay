@@ -41,6 +41,12 @@ function exactSpecIdentity(task, expectedSegment, expectedOutcome, expectedProgr
     if (spec.marker !== "relay-orca" || spec.outcome_id !== expectedOutcome) return false;
     const segment = spec.program_segment ?? spec.programSegment;
     const programId = spec.program_id ?? spec.programId;
+    // Specs materialized before the segment was serialized carry only the program id.
+    // The segment is derived from that id by the shared encoder, so an exact program-id
+    // match is identity of equal strength (the task-title coordination marker, checked
+    // for every row, already binds `<segment>/<outcome-id>` exactly). A spec carrying
+    // NEITHER field is not identity — the marker alone never qualifies.
+    if (segment === undefined) return programId !== undefined && programId === expectedProgramId;
     if (segment !== expectedSegment) return false;
     if (programId !== undefined && programId !== expectedProgramId) return false;
     return true;

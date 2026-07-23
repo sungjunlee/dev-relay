@@ -41,7 +41,10 @@ On a runtime-id mismatch, `resume` takes fresh `status`, task-list, and gate-lis
 same reconciliation pass. It rebinds the receipt automatically, with no new flag, only when the
 proof is complete: the live task inventory is an exact match for every receipt-recorded
 `orca_task_id`, each `task_title` is the exact `relay-orca: <program-segment>/<outcome-id>` marker,
-and each materialized spec carries the exact program segment and outcome id. A successful rebind
+and each materialized spec carries the exact outcome id plus exact program identity — the exact
+program segment when the spec records one, otherwise the exact program id, which is what specs
+materialized before the segment was serialized carry (a spec with neither field never qualifies).
+A successful rebind
 changes only the receipt `runtime_id` and appends one `runtime_rebound` event containing the old
 and new ids plus every verified `{ orca_task_id, outcome_id }` row; it never repairs dispatches,
 terminals, task state, gates, or lifecycle signals. The normal reconciliation then continues.

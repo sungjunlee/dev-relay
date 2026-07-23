@@ -107,6 +107,23 @@ function fingerprintedOrcaTask(programId, outcome, extra = {}) {
   };
 }
 
+// Pre-upgrade fingerprint rows: Orca tasks materialized BEFORE `program_segment` was
+// serialized into the spec (real 2026-07-15 pilot rows have exactly this shape). Identity
+// rests on `program_id`, from which the segment is derived. `specOverrides` values set to
+// undefined drop the key entirely, so callers can model a spec missing the program id too.
+function preUpgradeOrcaTask(programId, outcome, specOverrides = {}) {
+  const spec = {
+    marker: "relay-orca",
+    program_id: programId,
+    outcome_id: outcome,
+    task_kind: "relay_run",
+    wave: 1,
+    depends_on: [],
+    ...specOverrides,
+  };
+  return { ...orcaTask(programId, outcome), spec: JSON.stringify(spec) };
+}
+
 // A task-list entry NOT marked for this program — makes the runtime foreign_state.
 function foreignTask(id) {
   return { id, task_title: `relay-orca: other-program/${id}`, status: "dispatched", worker_done: false };
@@ -372,6 +389,74 @@ test("#1063 complete fingerprint proof → resume rebinds once and continues nor
       verified_rows: [{ orca_task_id: "orca-live-a", outcome_id: "a" }],
     }]);
     assert.deepEqual({ ...persisted, runtime_id: before.runtime_id, events: undefined }, { ...before, events: undefined });
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 pre-upgrade spec (no program_segment, matching program_id) → resume still rebinds once", () => {
+  const programId = "epic-runtime-rebind-pre-upgrade";
+  const { world, oldRuntime, newRuntime } = rebindWorld({
+    programId,
+    liveTasks: [preUpgradeOrcaTask(programId, "a")],
+  });
+  const before = parseReceipt(world.receiptOnDisk()).receipt;
+  try {
+    const result = world.run();
+    assert.equal(result.status, 0);
+    assert.equal(result.body.runtime, "ok");
+    assert.deepEqual(result.body.decision_required, []);
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "rebind does not mutate an Orca task or dispatch");
+    const persisted = parseReceipt(world.receiptOnDisk()).receipt;
+    assert.equal(persisted.runtime_id, newRuntime);
+    assert.deepEqual(persisted.events, [{
+      event: "runtime_rebound",
+      old_runtime_id: oldRuntime,
+      new_runtime_id: newRuntime,
+      verified_rows: [{ orca_task_id: "orca-live-a", outcome_id: "a" }],
+    }]);
+    assert.deepEqual({ ...persisted, runtime_id: before.runtime_id, events: undefined }, { ...before, events: undefined });
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 pre-upgrade spec with mismatching program_id → runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-pre-upgrade-wrong-id";
+  const { world } = rebindWorld({
+    programId,
+    liveTasks: [preUpgradeOrcaTask(programId, "a", { program_id: "epic-some-other-program" })],
+  });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.ok(result.body.decision_required.some((entry) => entry.reason_code === "RESUME_RUNTIME_CHANGED"));
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 spec carrying neither program_segment nor program_id → runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-no-identity";
+  const { world } = rebindWorld({
+    programId,
+    liveTasks: [preUpgradeOrcaTask(programId, "a", { program_id: undefined })],
+  });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.ok(result.body.decision_required.some((entry) => entry.reason_code === "RESUME_RUNTIME_CHANGED"));
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
     assertNoPoison(world);
   } finally {
     world.cleanup();
