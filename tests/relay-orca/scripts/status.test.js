@@ -325,6 +325,77 @@ test("#1066: marked-run discovery only suppresses a closed exact-outcome residue
   }
 });
 
+// #1066 R2: supersession is the ONE discovery path that REMOVES a block, so it may never
+// attribute a marker by guessing where the outcome id ends. Outcome ids are not
+// charset-restricted, so `:`/`.`/`;`/`)` are legal id characters: a `…/a:legacy` marker must
+// NOT be read as outcome `a`. The id is taken up to the real terminator relay's manifest
+// store emits (quote for a frontmatter scalar, end-of-line otherwise) and must EQUAL a
+// receipt outcome; every residual ambiguity keeps the blocking adopt_relay_run candidate.
+test("#1066 R2: supersession attributes the marked outcome id exactly; ambiguity keeps blocking", () => {
+  const programId = "pilot-1066";
+  const segment = "pilot-1066-segment";
+  const programSegment = () => segment;
+  const MAPPED_TASKS = [{ outcome_id: "a", relay_ids: { run: "run-superseding" } }];
+  const COMPLETE_OUTCOMES = [{ outcome_id: "a", state: "complete_with_evidence" }];
+  const discover = ({ text, tasks = MAPPED_TASKS, outcomes = COMPLETE_OUTCOMES }) => {
+    const diagnostics = [];
+    const candidates = discoverBackPointers({
+      manifests: [{ run_id: "run-closed", text, parsed: { state: "closed" } }],
+      tasks,
+      outcomes,
+      programId,
+      programSegment,
+    }, diagnostics);
+    return { candidates, diagnostics };
+  };
+  const assertBlocks = (label, options) => {
+    const result = discover(options);
+    assert.equal(result.candidates.length, 1, `${label}: the adopt_relay_run candidate is retained`);
+    assert.equal(result.candidates[0].kind, "adopt_relay_run", `${label}: the retained candidate still blocks`);
+    assert.deepEqual(result.diagnostics, [], `${label}: nothing is reported as superseded`);
+  };
+  const assertSupersedes = (label, options) => {
+    const result = discover(options);
+    assert.deepEqual(result.candidates, [], `${label}: the genuine residue is not proposed for adoption`);
+    assert.equal(result.diagnostics.length, 1, `${label}: exactly one diagnostic`);
+    assert.equal(result.diagnostics[0].code, "SUPERSEDED_MARKED_RUN", `${label}: the superseded diagnostic is emitted`);
+  };
+
+  // The reproduction: a legal `a:legacy` outcome id must not be truncated to outcome `a`.
+  assertBlocks("colon inside the marked id", { text: `relay-orca: ${segment}/a:legacy` });
+  assertBlocks("colon inside the marked id (frontmatter scalar)", { text: `---\ncoordination:\n  marker: 'relay-orca: ${segment}/a:legacy'\n---\n` });
+  // The remaining terminator characters the old heuristic accepted are equally legal id chars.
+  for (const suffix of [".legacy", ";legacy", ")legacy", "]legacy", "}legacy", ",legacy", "'legacy"]) {
+    assertBlocks(`suffix ${suffix} inside the marked id`, { text: `relay-orca: ${segment}/a${suffix}` });
+  }
+
+  // The genuine shapes still unblock: the store's quoted frontmatter scalar (both quote
+  // forms, with `''` doubling), a plain body line, CRLF text, and the legacy raw-id prefix.
+  assertSupersedes("single-quoted frontmatter scalar", { text: `---\ncoordination:\n  marker: 'relay-orca: ${segment}/a'\n---\n# Notes\n` });
+  assertSupersedes("double-quoted frontmatter scalar", { text: `---\ncoordination:\n  marker: "relay-orca: ${segment}/a"\n---\n` });
+  assertSupersedes("body line", { text: `# Notes\nrelay-orca: ${segment}/a\n` });
+  assertSupersedes("CRLF body line", { text: `# Notes\r\nrelay-orca: ${segment}/a\r\n` });
+  assertSupersedes("legacy raw-program-id prefix", { text: `relay-orca: ${programId}/a\n` });
+  assertSupersedes("the same marker repeated on separate lines", { text: `relay-orca: ${segment}/a\nrelay-orca: ${segment}/a\n` });
+
+  // Residual ambiguity shapes — each keeps the blocking candidate.
+  assertBlocks("unterminated quoted scalar", { text: `---\ncoordination:\n  marker: 'relay-orca: ${segment}/a\n---\n` });
+  assertBlocks("unparseable double-quoted scalar", { text: `---\ncoordination:\n  marker: "relay-orca: ${segment}/a\\q"\n---\n` });
+  assertBlocks("trailing prose on the marker line", { text: `relay-orca: ${segment}/a and more notes` });
+  assertBlocks("empty marked outcome id", { text: `relay-orca: ${segment}/` });
+  assertBlocks("two markers inside one value", { text: `note: 'relay-orca: ${segment}/a relay-orca: ${segment}/a'` });
+  assertBlocks("two marked outcome ids", {
+    text: `relay-orca: ${segment}/a\nrelay-orca: ${segment}/b\n`,
+    tasks: [...MAPPED_TASKS, { outcome_id: "b", relay_ids: { run: "run-superseding-b" } }],
+    outcomes: [...COMPLETE_OUTCOMES, { outcome_id: "b", state: "complete_with_evidence" }],
+  });
+  assertBlocks("marked id absent from the receipt", { text: `relay-orca: ${segment}/zzz` });
+  assertBlocks("marked id duplicated across receipt outcomes", {
+    text: `relay-orca: ${segment}/a`,
+    tasks: [...MAPPED_TASKS, { outcome_id: "a", relay_ids: { run: "run-superseding" } }],
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Scenario 1 — clean running program
 // ---------------------------------------------------------------------------
