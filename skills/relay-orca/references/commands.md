@@ -227,6 +227,10 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
 **live** to derive a normalized program view. It is strictly **READ-ONLY**: no GitHub write,
 no relay manifest write, no Orca mutating subcommand or `reset`/`worktree`, and no receipt
 write. Durable truth outranks runtime signals and `worker_done` is never completion evidence.
+When `runtime` is `mismatch`, status also checks the fresh live task inventory and materialized
+fingerprints. A complete proof adds a read-only `repair_candidates` entry of kind
+`runtime_rebind` naming `old_runtime_id`, `new_runtime_id`, and `verified_rows`; status never
+writes the receipt. An incomplete proof retains the ordinary `RUNTIME_MISMATCH` diagnostic.
 
 ### Status report (`--json`)
 
@@ -347,7 +351,7 @@ force-close (see [recovery.md](recovery.md)).
 
 | reason_code | exit | Trigger |
 | --- | --- | --- |
-| `RESUME_RUNTIME_CHANGED` | 60 | Live runtime id differs from the receipt `runtime_id`. |
+| `RESUME_RUNTIME_CHANGED` | 60 | Live runtime id differs and the fresh exact task-marker/spec proof is incomplete or ambiguous; a complete proof rebinds flaglessly before normal reconciliation. |
 | `RESUME_AMBIGUOUS_STATE` | 61 | Runtime foreign/unreachable, or an outcome cannot be classified for resumption (e.g. a stale-`worker_done` inconsistency). |
 | `RESUME_CONFLICTING_MAPPING` | 62 | Duplicate or contradictory (changed) mappings. |
 | `RESUME_MISSING_PROVENANCE` | 63 | A live dispatch exists but the recorded dispatch context/assignee is missing. |

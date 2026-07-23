@@ -57,6 +57,7 @@ const READ_TIMEOUT_MS = 15000;
 const READ_MAX_BUFFER = 4 * 1024 * 1024;
 const DEFAULT_RUN_TIMEOUT_MS = 30000;
 const RUN_MAX_BUFFER = 4 * 1024 * 1024;
+const RUNTIME_REBOUND_EVENT = "runtime_rebound";
 
 function usageError(message) {
   process.stderr.write(`relay-orca resume: ${message}\n`);
@@ -229,6 +230,7 @@ function reconcile({ receipt, opts, repo, receiptPath }) {
   const manifests = listManifestFiles(repo.slug).map((entry) => ({ run_id: entry.run_id, text: entry.text, parsed: parseManifest(entry.text) }));
   const fleetManifests = listFleetManifestFiles(repo.slug).map((entry) => ({ run_id: entry.run_id, text: entry.text, parsed: parseManifest(entry.text) }));
   const liveDispatch = new Map();
+  const runtimeRebindProof = { proof: null };
   const report = deriveStatusReport({
     receipt,
     programId: opts.programId,
@@ -241,8 +243,10 @@ function reconcile({ receipt, opts, repo, receiptPath }) {
     programSegment,
     liveDispatchSink: liveDispatch,
     strictIntegration: true,
+    acceptCompleteRuntimeRebind: true,
+    runtimeRebindProofSink: runtimeRebindProof,
   });
-  return { report, liveDispatch };
+  return { report, liveDispatch, runtimeRebindProof: runtimeRebindProof.proof };
 }
 
 function makeIntegrationReportPathResolver(opts, receiptPath) {
@@ -275,6 +279,27 @@ function makeReceiptPersistor(receipt, receiptPath) {
     writeReceiptAtomic(receiptPath, serializeReceiptWithRecords(receipt));
     return receiptPath;
   };
+}
+
+// A complete proof grants exactly one receipt mutation at the subprocess boundary:
+// replace runtime_id and append the dedicated audit event in one atomic write. No
+// timestamp, mapping, terminal handle, or lifecycle field is synthesized here.
+function applyRuntimeRebind(receipt, receiptPath, proof) {
+  if (!proof || proof.complete !== true) return false;
+  if (receipt.runtime_id !== proof.old_runtime_id || receipt.runtime_id === proof.new_runtime_id) return false;
+  const event = {
+    event: RUNTIME_REBOUND_EVENT,
+    old_runtime_id: proof.old_runtime_id,
+    new_runtime_id: proof.new_runtime_id,
+    verified_rows: proof.verified_rows.map((row) => ({
+      orca_task_id: row.orca_task_id,
+      outcome_id: row.outcome_id,
+    })),
+  };
+  receipt.runtime_id = proof.new_runtime_id;
+  receipt.events = Array.isArray(receipt.events) ? receipt.events.concat([event]) : [event];
+  writeReceiptAtomic(receiptPath, serializeReceiptWithRecords(receipt));
+  return true;
 }
 
 // Source a decision-gate definition (question/options/downstream_wave provenance) from an
@@ -601,6 +626,7 @@ function main() {
   let receiptPath;
   let report;
   let liveDispatch;
+  let runtimeRebindProof;
   try {
     repo = resolveRepoContext({ repoRootOverride: opts.repoRoot });
     receiptPath = receiptPathFor(repo.slug, opts.programId);
@@ -618,7 +644,7 @@ function main() {
     // #947: an explicit --resolve-decision / --record-authorization writes its record to the
     // receipt up front, so the decision persists regardless of the reconciliation verdict.
     recordOperatorDecisions(receipt, receiptPath, opts);
-    ({ report, liveDispatch } = reconcile({ receipt, opts, repo, receiptPath }));
+    ({ report, liveDispatch, runtimeRebindProof } = reconcile({ receipt, opts, repo, receiptPath }));
   } catch (error) {
     if (error instanceof StatusError || error instanceof CanonicalizationError) failReceipt(error, opts.json);
     if (error instanceof IntegrationLifecycleError) {
@@ -631,8 +657,11 @@ function main() {
     throw error;
   }
 
-  // Reconciliation is complete; the plan is pure. A program-level decision performs ZERO
+  // Reconciliation is complete. A complete fresh fingerprint proof permits the one
+  // flagless receipt rebind before the normal plan; an incomplete proof leaves the
+  // existing fail-closed plan untouched. A program-level decision performs ZERO
   // mutation and exits 60-63; otherwise the safe actions execute through the verified path.
+  applyRuntimeRebind(receipt, receiptPath, runtimeRebindProof);
   const plan = planResume({ receipt, report, liveDispatch, hasOperatorHandle: opts.operatorHandles.length > 0 });
   let terminalsCreated = [];
   let blockingReasons = plan.blockingReasons.slice();
@@ -657,4 +686,4 @@ function main() {
 // without triggering a real resume run.
 if (require.main === module) main();
 
-module.exports = { syntheticTask, reportActions, integrationBlockingEntry, integrationGateAdvanceable, integrationTasksToAdvance, advanceIntegrationTasks };
+module.exports = { syntheticTask, reportActions, integrationBlockingEntry, integrationGateAdvanceable, integrationTasksToAdvance, advanceIntegrationTasks, applyRuntimeRebind };

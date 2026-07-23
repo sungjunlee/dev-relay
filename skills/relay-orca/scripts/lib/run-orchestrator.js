@@ -81,17 +81,19 @@ function taskTitle(program, task, programSegment) {
   return coordinationMarkerFor(program.id, task.outcome_id, programSegment);
 }
 
-function taskSpec(program, task) {
+function taskSpec(program, task, programSegment) {
   // Machine-readable task metadata embedded in --spec (D4). No operator prompt is
   // embedded here: the prompt is delivered only AFTER provenance verification (D6).
-  return JSON.stringify({
+  const spec = {
     marker: "relay-orca",
     program_id: program.id,
+    ...(typeof programSegment === "function" ? { program_segment: programSegment(program.id) } : {}),
     outcome_id: task.outcome_id,
     task_kind: task.kind,
     wave: task.wave,
     depends_on: task.depends_on,
-  });
+  };
+  return JSON.stringify(spec);
 }
 
 // D4 materialization. Waves are ordered and dependencies resolve to strictly
@@ -107,7 +109,7 @@ function materialize(plan, program, report, orcaBin, options) {
       const deps = task.depends_on.map((dep) => orcaIdByPlanId.get(dep));
       const res = createTask(options.runOrca, orcaBin, {
         title: taskTitle(program, task, options.programSegment),
-        spec: taskSpec(program, task),
+        spec: taskSpec(program, task, options.programSegment),
         deps,
       });
       if (!res.ok) {

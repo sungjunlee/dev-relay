@@ -2,7 +2,9 @@
 
 `resume` is **reconcile-first and fail-closed for runtime restoration**: it loads the
 reconstructible receipt, runs the SAME live reconciliation as `status` before restoring an Orca
-dispatch, and only then restores what is safe (reuse valid mappings, reacquire a lost operator
+dispatch, and on a runtime-id mismatch may perform a flagless proof-based receipt rebind only
+when every receipt-recorded task is present in the fresh live task-list with an exact coordination
+marker and materialized spec identity. It then restores what is safe (reuse valid mappings, reacquire a lost operator
 terminal, re-dispatch a verifiably-absent, relay-clean wave-1 outcome, or advance an equivalent
 later-wave outcome after every earlier wave is `complete_with_evidence`, through the same verified
 path — always to an explicitly provided `--operator-handle`, never a self-created terminal). The
@@ -35,15 +37,28 @@ reference — never a destructive action. Resolve the decision by hand, then re-
 
 ### `RESUME_RUNTIME_CHANGED` (exit 60) — live runtime id ≠ receipt
 
-The Orca runtime was restarted (or replaced): the live `runtime_id` no longer matches the
-receipt, so every recorded `orca_task_id`/`dispatch_id`/terminal belongs to a runtime that is
-gone. Bounded steps:
+On a runtime-id mismatch, `resume` takes fresh `status`, task-list, and gate-list reads in the
+same reconciliation pass. It rebinds the receipt automatically, with no new flag, only when the
+proof is complete: the live task inventory is an exact match for every receipt-recorded
+`orca_task_id`, each `task_title` is the exact `relay-orca: <program-segment>/<outcome-id>` marker,
+and each materialized spec carries the exact outcome id plus exact program identity — the exact
+program segment when the spec records one, otherwise the exact program id, which is what specs
+materialized before the segment was serialized carry (a spec with neither field never qualifies).
+A successful rebind
+changes only the receipt `runtime_id` and appends one `runtime_rebound` event containing the old
+and new ids plus every verified `{ orca_task_id, outcome_id }` row; it never repairs dispatches,
+terminals, task state, gates, or lifecycle signals. The normal reconciliation then continues.
 
-1. Inspect the live view: `node scripts/status.js --program-id <id> --json`.
-2. Confirm — from live relay manifests, PRs, and issues — which outcomes already have durable
-   work, so a fresh run cannot duplicate it.
-3. Only then, against the new runtime, re-run `node scripts/run.js --program-file <program>` for
-   the outcomes that are genuinely unstarted. Leave in-flight relay runs alone.
+`status` performs the same proof read-only and reports a `repair_candidates` entry with the old and
+new runtime ids when the proof is complete; it never writes the receipt.
+
+Any incomplete or ambiguous proof remains fail-closed as `RESUME_RUNTIME_CHANGED` (exit 60) with
+zero mutation: a missing receipt row, a foreign or extra live row, a marker mismatch, a spec
+identity mismatch, a partial match, a failed/malformed/ambiguous live read, or any other inventory
+ambiguity. The existing no-context rejection path is unchanged for these shapes. Inspect with
+`node scripts/status.js --program-id <id> --json`, then confirm durable relay/GitHub truth and use
+the normal run/reconciliation path for genuinely unstarted work; never salvage `worker_done` or
+manually mutate Orca state.
 
 ### `RESUME_AMBIGUOUS_STATE` (exit 61) — foreign/unreachable runtime or an unclassifiable outcome
 

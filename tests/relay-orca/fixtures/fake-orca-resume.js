@@ -31,6 +31,7 @@ function defaultResumeScenario(overrides = {}) {
     runtimeId,
     statusOk: overrides.statusOk !== undefined ? overrides.statusOk : true,
     taskListOk: overrides.taskListOk !== undefined ? overrides.taskListOk : true,
+    taskListMalformed: overrides.taskListMalformed === true,
     gateListOk: overrides.gateListOk !== undefined ? overrides.gateListOk : true,
     omitRuntimeId: overrides.omitRuntimeId === true,
     taskListRuntimeId: overrides.taskListRuntimeId,
@@ -76,9 +77,13 @@ function nestDispatch(flat, coordinator) {
   const dispatch = { id: flat.dispatch_id, task_id: flat.task_id, assignee_handle: flat.assignee, status: flat.status || "dispatched" };
   const result = { dispatch: dispatch };
   if (flat.terminal_present !== undefined) result.terminal_present = flat.terminal_present;
-  // #1019: the real --preamble read carries the live coordinator handle. Emitted only when
-  // the scenario defines one, so pre-#1019 scenarios keep their exact previous payload.
-  if (coordinator !== undefined) result.preamble = { coordinator_handle: coordinator };
+  // #1019: the real --preamble read is a string. Keep the normalized coordinator object
+  // alongside it for the existing lifecycle fixture contract; the dispatch row itself has
+  // only the real assignee_handle provenance field and no coordinator field.
+  if (coordinator !== undefined) {
+    result.preamble = String(coordinator);
+    result.coordinator = { handle: coordinator };
+  }
   return result;
 }
 function loadScenario() { return JSON.parse(fs.readFileSync(scenarioPath, "utf-8")); }
@@ -115,7 +120,8 @@ if (args[0] === "orchestration" && args[1] === "task-list") {
   if (scenario.taskListOk === false) { process.stderr.write("orca task-list unreachable\\n"); process.exit(1); }
   const tasks = Array.isArray(scenario.tasks) ? scenario.tasks : [];
   const taskMeta = scenario.taskListRuntimeId !== undefined ? { runtimeId: scenario.taskListRuntimeId } : meta;
-  emit({ id: "task-list-1", ok: true, result: { tasks, count: tasks.length }, _meta: taskMeta }, 0);
+  const taskResult = scenario.taskListMalformed ? { count: tasks.length } : { tasks, count: tasks.length };
+  emit({ id: "task-list-1", ok: true, result: taskResult, _meta: taskMeta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "gate-list") {
   if (scenario.gateListOk === false) { process.stderr.write("orca gate-list unreachable\\n"); process.exit(1); }
@@ -223,7 +229,7 @@ if (args[0] === "terminal" && args[1] === "send") {
     }
   }
   if (scenario.terminalSendOkFalse) emit({ ok: false, error: "terminal send failed" }, 1);
-  emit({ ok: true, result: { delivered: true } }, 0);
+  emit({ ok: true, result: { delivered: true }, _meta: meta }, 0);
 }
 
 process.stderr.write("Unsupported fake orca (resume) invocation: " + args.join(" ") + "\\n");

@@ -119,7 +119,6 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
 Exit gates come ONLY from the program's `exit_gates`; generic `integration:<check>` evidence is accepted only through the version-1 accepted-program identity/freshness contract (exact program/runtime/raw-ref plus immutable verification binding); a failing integration gate is never masked by task completion. Follow-up proposals are advisory (accepted by the operator as a new later wave). Gate kinds, ordering/masking, follow-up lifecycle, decision/budget/authorization records, the completion rule, stop conditions, and fail-closed codes 70–72: [references/gates-and-completion.md](references/gates-and-completion.md).
 
 Crash-safe resume (reconcile first, then reuse/re-dispatch only what is safe; fail closed on ambiguity):
-
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
   --program-id epic-941 \
@@ -127,8 +126,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
   --gate-evidence-dir /tmp/relay-orca-integration-gates \
   --json
 ```
-
-`resume` loads the receipt, runs the SAME reconciliation as `status` **before any mutation**, reuses valid mappings, reacquires lost operator terminals, and re-dispatches ONLY outcomes whose Orca dispatch is verifiably absent AND whose relay side is clean — through the verified path. For integration tasks it re-generates all coordinator/dispatch/assignee/report provenance from fresh reads, adopts or resolves only the canonical gate, sends a fresh explicit `worker_done` instruction after resolution, and requires a task-list re-read of `completed`; it never retries or falls back to `task-update`. It never resets Orca, deletes a task/worktree/branch/PR, or force-closes a relay run. Running it twice is idempotent. Fail-closed decision codes 60–63 and recovery steps: [references/commands.md](references/commands.md) and [references/recovery.md](references/recovery.md).
+`resume` reconciles before mutation; on a mismatch it performs a flagless receipt rebind only after complete exact task-marker/spec proof. The atomic write changes `runtime_id` and appends one `runtime_rebound` event, never lifecycle state or handles. Incomplete/foreign/partial/ambiguous proofs retain exit 60 with zero mutation; normal safe reuse/re-dispatch then proceeds. It never resets Orca, deletes work, or force-closes relay state. Details and fail-closed codes 60–63:
+[references/commands.md](references/commands.md) and [references/recovery.md](references/recovery.md).
 
 Coordinator-only stop (records a bounded stop record; never cancels outcomes):
 

@@ -89,6 +89,41 @@ function orcaTask(programId, outcome, extra = {}) {
   };
 }
 
+// Real mid-2026 fingerprint rows: task_title is the exact coordination marker and the
+// materialized spec is a JSON string carrying the same program segment + outcome identity.
+function fingerprintedOrcaTask(programId, outcome, extra = {}) {
+  return {
+    ...orcaTask(programId, outcome),
+    spec: JSON.stringify({
+      marker: "relay-orca",
+      program_id: programId,
+      program_segment: programSegment(programId),
+      outcome_id: outcome,
+      task_kind: "relay_run",
+      wave: 1,
+      depends_on: [],
+    }),
+    ...extra,
+  };
+}
+
+// Pre-upgrade fingerprint rows: Orca tasks materialized BEFORE `program_segment` was
+// serialized into the spec (real 2026-07-15 pilot rows have exactly this shape). Identity
+// rests on `program_id`, from which the segment is derived. `specOverrides` values set to
+// undefined drop the key entirely, so callers can model a spec missing the program id too.
+function preUpgradeOrcaTask(programId, outcome, specOverrides = {}) {
+  const spec = {
+    marker: "relay-orca",
+    program_id: programId,
+    outcome_id: outcome,
+    task_kind: "relay_run",
+    wave: 1,
+    depends_on: [],
+    ...specOverrides,
+  };
+  return { ...orcaTask(programId, outcome), spec: JSON.stringify(spec) };
+}
+
 // A task-list entry NOT marked for this program — makes the runtime foreign_state.
 function foreignTask(id) {
   return { id, task_title: `relay-orca: other-program/${id}`, status: "dispatched", worker_done: false };
@@ -303,6 +338,263 @@ test("D9.2: runtime restart (live id != receipt) → RESUME_RUNTIME_CHANGED exit
     assert.ok(r.body.decision_required.some((d) => d.reason_code === "RESUME_RUNTIME_CHANGED"));
     assert.deepEqual(mutationLines(world.orca.readLog()), [], "no mutation on a runtime-changed abort");
     assert.equal(world.receiptOnDisk(), before, "receipt byte-identical on abort");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #1063 — proof-based flagless runtime rebind
+// ---------------------------------------------------------------------------
+
+function rebindWorld({ programId, liveTasks, orcaScenario = {}, outcomes = ["a"] }) {
+  const oldRuntime = DEFAULT_RUNTIME_ID;
+  const newRuntime = "99999999-9999-4999-8999-999999999999";
+  const world = buildWorld({
+    programId,
+    runtimeId: oldRuntime,
+    orcaScenario: { runtimeId: newRuntime, tasks: liveTasks, ...orcaScenario },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    runtimeId: oldRuntime,
+    tasks: outcomes.map((outcome) => ({ outcome_id: outcome })),
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  return { world, oldRuntime, newRuntime };
+}
+
+test("#1063 complete fingerprint proof → resume rebinds once and continues normal reconciliation", () => {
+  const programId = "epic-runtime-rebind-clean";
+  const { world, oldRuntime, newRuntime } = rebindWorld({
+    programId,
+    liveTasks: [fingerprintedOrcaTask(programId, "a")],
+  });
+  const before = parseReceipt(world.receiptOnDisk()).receipt;
+  try {
+    const result = world.run();
+    assert.equal(result.status, 0);
+    assert.equal(result.body.runtime, "ok");
+    assert.deepEqual(result.body.decision_required, []);
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "rebind does not mutate an Orca task or dispatch");
+    const persisted = parseReceipt(world.receiptOnDisk()).receipt;
+    assert.equal(persisted.runtime_id, newRuntime);
+    assert.deepEqual(persisted.events, [{
+      event: "runtime_rebound",
+      old_runtime_id: oldRuntime,
+      new_runtime_id: newRuntime,
+      verified_rows: [{ orca_task_id: "orca-live-a", outcome_id: "a" }],
+    }]);
+    assert.deepEqual({ ...persisted, runtime_id: before.runtime_id, events: undefined }, { ...before, events: undefined });
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 pre-upgrade spec (no program_segment, matching program_id) → resume still rebinds once", () => {
+  const programId = "epic-runtime-rebind-pre-upgrade";
+  const { world, oldRuntime, newRuntime } = rebindWorld({
+    programId,
+    liveTasks: [preUpgradeOrcaTask(programId, "a")],
+  });
+  const before = parseReceipt(world.receiptOnDisk()).receipt;
+  try {
+    const result = world.run();
+    assert.equal(result.status, 0);
+    assert.equal(result.body.runtime, "ok");
+    assert.deepEqual(result.body.decision_required, []);
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "rebind does not mutate an Orca task or dispatch");
+    const persisted = parseReceipt(world.receiptOnDisk()).receipt;
+    assert.equal(persisted.runtime_id, newRuntime);
+    assert.deepEqual(persisted.events, [{
+      event: "runtime_rebound",
+      old_runtime_id: oldRuntime,
+      new_runtime_id: newRuntime,
+      verified_rows: [{ orca_task_id: "orca-live-a", outcome_id: "a" }],
+    }]);
+    assert.deepEqual({ ...persisted, runtime_id: before.runtime_id, events: undefined }, { ...before, events: undefined });
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 pre-upgrade spec with mismatching program_id → runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-pre-upgrade-wrong-id";
+  const { world } = rebindWorld({
+    programId,
+    liveTasks: [preUpgradeOrcaTask(programId, "a", { program_id: "epic-some-other-program" })],
+  });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.ok(result.body.decision_required.some((entry) => entry.reason_code === "RESUME_RUNTIME_CHANGED"));
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 spec carrying neither program_segment nor program_id → runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-no-identity";
+  const { world } = rebindWorld({
+    programId,
+    liveTasks: [preUpgradeOrcaTask(programId, "a", { program_id: undefined })],
+  });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.ok(result.body.decision_required.some((entry) => entry.reason_code === "RESUME_RUNTIME_CHANGED"));
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 missing live row → existing runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-missing";
+  const { world } = rebindWorld({ programId, liveTasks: [] });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.ok(result.body.decision_required.some((entry) => entry.reason_code === "RESUME_RUNTIME_CHANGED"));
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 foreign live row → runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-foreign";
+  const { world } = rebindWorld({
+    programId,
+    liveTasks: [{ id: "foreign-task", task_title: "relay-orca: other-program/outcome", display_name: "relay-orca: other-program/outcome" }],
+  });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 marker mismatch → runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-marker";
+  const { world } = rebindWorld({
+    programId,
+    liveTasks: [fingerprintedOrcaTask(programId, "a", { task_title: "relay-orca: wrong-segment/a" })],
+  });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 spec identity mismatch → runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-spec";
+  const badSpec = JSON.stringify({ marker: "relay-orca", program_id: programId, program_segment: programSegment(programId), outcome_id: "other", task_kind: "relay_run", wave: 1, depends_on: [] });
+  const { world } = rebindWorld({
+    programId,
+    liveTasks: [fingerprintedOrcaTask(programId, "a", { spec: badSpec })],
+  });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 partial live match → runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-partial";
+  const { world } = rebindWorld({
+    programId,
+    outcomes: ["a", "b"],
+    liveTasks: [fingerprintedOrcaTask(programId, "a")],
+  });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 ambiguous live task-list read → runtime-changed exit 60 with zero mutation", () => {
+  const programId = "epic-runtime-rebind-ambiguous";
+  const { world } = rebindWorld({
+    programId,
+    liveTasks: [fingerprintedOrcaTask(programId, "a")],
+    orcaScenario: { taskListMalformed: true },
+  });
+  const before = world.receiptOnDisk();
+  try {
+    const result = world.run();
+    assert.equal(result.status, 60);
+    assert.equal(result.body.runtime, "mismatch");
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 immediate second resume is idempotent after a successful rebind", () => {
+  const programId = "epic-runtime-rebind-idempotent";
+  const { world } = rebindWorld({
+    programId,
+    liveTasks: [fingerprintedOrcaTask(programId, "a")],
+  });
+  try {
+    const first = world.run();
+    assert.equal(first.status, 0);
+    const beforeSecond = world.receiptOnDisk();
+    const logStart = world.orca.readLog().length;
+    const second = world.run();
+    assert.equal(second.status, 0);
+    assert.equal(world.receiptOnDisk(), beforeSecond);
+    assert.deepEqual(mutationLines(world.orca.readLog().slice(logStart)), []);
+    const persisted = parseReceipt(world.receiptOnDisk()).receipt;
+    assert.equal(persisted.events.filter((event) => event.event === "runtime_rebound").length, 1);
     assertNoPoison(world);
   } finally {
     world.cleanup();
