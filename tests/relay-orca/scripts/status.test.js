@@ -14,6 +14,7 @@ const STATUS_JS = path.join(SCRIPTS, "status.js");
 const { REASONS } = require(path.join(SCRIPTS, "lib", "status-reasons.js"));
 const { REPORT_KEYS, OUTCOME_KEYS, DIAGNOSTIC_CODES } = require(path.join(SCRIPTS, "lib", "status-report.js"));
 const { classifyOutcome } = require(path.join(SCRIPTS, "lib", "status-classify.js"));
+const { discoverBackPointers } = require(path.join(SCRIPTS, "lib", "status-derive.js"));
 const { orcaDispatchShow } = require(path.join(SCRIPTS, "lib", "orca-reads.js"));
 const { RECEIPT_NOTE } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
@@ -257,7 +258,7 @@ function diagCodes(body, outcomeId) {
 // D9 report shape + verbatim taxonomy sanity
 // ---------------------------------------------------------------------------
 
-test("D7: the nine detector codes exist verbatim in DIAGNOSTIC_CODES", () => {
+test("D7: the detector codes exist verbatim in DIAGNOSTIC_CODES", () => {
   assert.deepEqual(
     [...DIAGNOSTIC_CODES].sort(),
     [
@@ -270,8 +271,58 @@ test("D7: the nine detector codes exist verbatim in DIAGNOSTIC_CODES", () => {
       "PR_CHANGED",
       "RUNTIME_MISMATCH",
       "STALE_WORKER_DONE",
+      "SUPERSEDED_MARKED_RUN",
     ],
   );
+});
+
+test("#1066: marked-run discovery only suppresses a closed exact-outcome residue with mapped complete evidence", () => {
+  const programId = "pilot-1066";
+  const programSegment = () => "pilot-1066-segment";
+  const discover = ({ state, markerOutcome = "a", tasks, outcomes }) => {
+    const diagnostics = [];
+    const candidates = discoverBackPointers({
+      manifests: [{ run_id: `run-${state || "absent"}`, text: `relay-orca: pilot-1066-segment/${markerOutcome}`, parsed: state === undefined ? {} : { state } }],
+      tasks: tasks || [{ outcome_id: "a", relay_ids: { run: null } }],
+      outcomes: outcomes || [],
+      programId,
+      programSegment,
+    }, diagnostics);
+    return { candidates, diagnostics };
+  };
+
+  const superseded = discover({
+    state: "closed",
+    tasks: [{ outcome_id: "a", relay_ids: { run: "run-superseding" } }],
+    outcomes: [{ outcome_id: "a", state: "complete_with_evidence" }],
+  });
+  assert.deepEqual(superseded.candidates, []);
+  assert.equal(superseded.diagnostics[0].code, "SUPERSEDED_MARKED_RUN");
+  assert.deepEqual(superseded.diagnostics[0].ids, {
+    superseded_run_id: "run-closed",
+    superseding_run_id: "run-superseding",
+  });
+
+  const closedWithoutComplete = discover({ state: "closed" });
+  assert.equal(closedWithoutComplete.candidates[0].kind, "adopt_relay_run");
+  assert.deepEqual(closedWithoutComplete.diagnostics, []);
+
+  const differentOutcome = discover({
+    state: "closed",
+    markerOutcome: "b",
+    tasks: [
+      { outcome_id: "a", relay_ids: { run: "run-complete-a" } },
+      { outcome_id: "b", relay_ids: { run: null } },
+    ],
+    outcomes: [{ outcome_id: "a", state: "complete_with_evidence" }],
+  });
+  assert.equal(differentOutcome.candidates[0].kind, "adopt_relay_run");
+
+  for (const state of ["draft", "dispatched", "review_pending", "changes_requested", "ready_to_merge", "escalated", "merged", "unparseable", undefined]) {
+    const result = discover({ state: state === "unparseable" ? "[invalid" : state });
+    assert.equal(result.candidates.length, 1, `state ${String(state)} remains blocking`);
+    assert.deepEqual(result.diagnostics, [], `state ${String(state)} is not classified as superseded`);
+  }
 });
 
 // ---------------------------------------------------------------------------

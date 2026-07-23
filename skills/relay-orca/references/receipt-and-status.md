@@ -346,6 +346,7 @@ Each diagnostic is `{ code, outcome_id | null, message, ids }` with `code` one o
 | `PR_CHANGED` | the PR head moved or its state regressed relative to durable evidence |
 | `ISSUE_REOPENED` | the issue is open though the outcome's evidence contract requires closure |
 | `STALE_WORKER_DONE` | an Orca task reports done but durable evidence is incomplete |
+| `SUPERSEDED_MARKED_RUN` | a closed marked relay run is residue for the same outcome whose mapped relay run is currently `complete_with_evidence`; `ids` carries `superseded_run_id` and `superseding_run_id` |
 
 Diagnostics carry stable IDs (task/dispatch/run/PR numbers) and remediation hints but NEVER
 terminal output, secrets, or env values. **Every** subprocess-derived value that reaches a

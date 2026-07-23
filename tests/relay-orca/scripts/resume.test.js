@@ -1100,6 +1100,81 @@ test("D3: an absent outcome is NOT re-dispatched while unmapped relay work refer
   }
 });
 
+test("#1066: a closed marked run superseded by the same mapped complete outcome does not block wave advancement", () => {
+  const programId = "epic-resume-superseded-marked-run";
+  const segment = programSegment(programId);
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "run-superseded", state: "closed", body: `relay-orca: ${segment}/wave-one` },
+      { run_id: "run-superseding", state: "merged", pr_number: 401, issue_number: 4401 },
+    ],
+    orcaScenario: {
+      tasks: [
+        orcaTask(programId, "wave-one", { status: "completed", worker_done: true }),
+        orcaTask(programId, "wave-two", { status: "pending" }),
+      ],
+      dispatch: absentDispatch("wave-two"),
+    },
+    ghScenario: {
+      prs: { 401: { state: "MERGED", mergedAt: "2026-07-22T00:00:00Z" } },
+      issues: { 4401: { state: "CLOSED" } },
+    },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: "wave-one", wave: 1, run: "run-superseding" },
+      { outcome_id: "wave-two", wave: 2, dispatch_id: null, assignee: null },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const beforeStatus = world.receiptOnDisk();
+  try {
+    const status = runStatus(world, programId);
+    assert.ok(status.diagnostics.some((diagnostic) => diagnostic.code === "SUPERSEDED_MARKED_RUN"));
+    assert.ok(!status.repair_candidates.some((candidate) => candidate.kind === "adopt_relay_run"));
+    assert.deepEqual(runStatus(world, programId), status, "repeating status is deterministic and read-only");
+    assert.deepEqual(world.receiptOnDisk(), beforeStatus, "status remains read-only");
+
+    const resumed = world.run(["--operator-handle", "h-wave-2"]);
+    assert.equal(resumed.status, 0);
+    assert.equal(actionFor(resumed.body, "wave-two").action, "redispatched");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1066: a closed marked run without same-outcome complete evidence still blocks resume", () => {
+  const programId = "epic-resume-closed-marked-blocking";
+  const segment = programSegment(programId);
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-closed-unmapped", state: "closed", body: `relay-orca: ${segment}/wave-one` }],
+    orcaScenario: { tasks: [orcaTask(programId, "wave-one")], dispatch: absentDispatch("wave-one") },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [{ outcome_id: "wave-one", dispatch_id: null, assignee: null }],
+  });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  try {
+    const resumed = world.run();
+    assert.equal(resumed.status, 0);
+    assert.equal(actionFor(resumed.body, "wave-one").action, "skipped");
+    assert.match(actionFor(resumed.body, "wave-one").reason, /unmapped relay work references this program/);
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
 // A2 (#946 R2, owner amendment A2): an unmapped FLEET manifest under the SEPARATE fleets
 // root blocks re-dispatch of an absent relay_fleet outcome — re-injecting would duplicate
 // the whole fleet (forbidden by the drain invariant), the same no-duplicate-work semantics
