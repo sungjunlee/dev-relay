@@ -8,7 +8,7 @@
 // (run/resume never fabricate one automatically).
 const { buildDecisionRecord, buildAuthorizationRecord } = require("./decision-records");
 
-const CARRY_FORWARD_KEYS = Object.freeze(["follow_ups", "decisions", "authorizations", "counters"]);
+const CARRY_FORWARD_KEYS = Object.freeze(["follow_ups", "decisions", "authorizations", "counters", "events"]);
 
 // Upsert a record into an array field by `id` (replace same-id, else append). Preserves
 // order for a stable, reproducible serialization.

@@ -97,6 +97,25 @@ function orcaTask(programId, outcome, extra = {}) {
   };
 }
 
+// Real mid-2026 fingerprint row used by #1063: exact task_title marker plus the
+// materialized JSON spec identity. Dispatch provenance remains nested under
+// result.dispatch in the fake CLI, with assignee_handle and no coordinator field.
+function fingerprintedOrcaTask(programId, outcome, extra = {}) {
+  return {
+    ...orcaTask(programId, outcome),
+    spec: JSON.stringify({
+      marker: "relay-orca",
+      program_id: programId,
+      program_segment: programSegment(programId),
+      outcome_id: outcome,
+      task_kind: "relay_run",
+      wave: 1,
+      depends_on: [],
+    }),
+    ...extra,
+  };
+}
+
 // A relay-fleet manifest fixture matching the real shape (#945 A3): `fleet_id`,
 // `fleet_state`, and a single-line JSON `children` array of { leaf_ref, run_id, ... }.
 // Detected by buildWorld via the presence of `fleet_state`.
@@ -503,6 +522,46 @@ test("D10.8: runtime restart → runtime mismatch, Orca facts degrade, durable-c
     assert.equal(outcomeById(r.body, "live").state, "stale_missing", "Orca facts degrade to stale_missing");
     // foreign tasks are never attributed to this program's outcomes.
     assert.deepEqual(r.body.outcomes.map((o) => o.outcome_id).sort(), ["done", "live"]);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("#1063 status: complete proof is a read-only runtime rebind repair candidate", () => {
+  const programId = "epic-status-runtime-rebind";
+  const oldRuntime = DEFAULT_RUNTIME_ID;
+  const newRuntime = "99999999-9999-4999-8999-999999999999";
+  const world = buildWorld({
+    programId,
+    runtimeId: oldRuntime,
+    orcaScenario: {
+      runtimeId: newRuntime,
+      tasks: [fingerprintedOrcaTask(programId, "a")],
+    },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    runtimeId: oldRuntime,
+    tasks: [{ outcome_id: "a" }],
+  });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  const before = fs.readFileSync(world.receiptPath, "utf-8");
+  try {
+    const result = world.run();
+    assert.equal(result.status, 0);
+    assert.equal(result.body.runtime, "mismatch");
+    const candidate = result.body.repair_candidates.find((entry) => entry.kind === "runtime_rebind");
+    assert.deepEqual(candidate, {
+      kind: "runtime_rebind",
+      old_runtime_id: oldRuntime,
+      new_runtime_id: newRuntime,
+      verified_rows: [{ orca_task_id: "orca-live-a", outcome_id: "a" }],
+      proposal: `receipt runtime ${oldRuntime} can be rebound to live runtime ${newRuntime} from a complete task fingerprint proof; status performed no mutation`,
+    });
+    assert.equal(fs.readFileSync(world.receiptPath, "utf-8"), before, "status never writes the receipt");
+    assert.equal(world.orca.readPoison(), null);
   } finally {
     world.cleanup();
   }

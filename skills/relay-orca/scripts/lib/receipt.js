@@ -61,7 +61,8 @@ const STOP_REASON_MAX = 256;
 //   - decisions      : decision records, written ONLY via the run/resume --resolve-decision flag
 //   - authorizations : authorization records, written ONLY via the run/resume --record-authorization flag
 //   - counters       : optional explicit budget counters (otherwise derived from the mapping)
-const ADDITIVE_RECORD_KEYS = Object.freeze(["follow_ups", "decisions", "authorizations", "counters"]);
+//   - events         : bounded coordination events, including runtime_rebound
+const ADDITIVE_RECORD_KEYS = Object.freeze(["follow_ups", "decisions", "authorizations", "counters", "events"]);
 
 // An additive record field is "present" (worth serializing) when it is a non-empty array
 // or a non-empty object. Absent/empty → skipped, preserving byte-identity with a receipt

@@ -17,6 +17,7 @@ const { classifyOutcome, deriveProgramState, requiredEvidenceFor } = require("./
 const { isTerminalManifestState, isEscalatedManifestState } = require("./manifest-parse");
 const { orderReport } = require("./status-report");
 const { canonicalIntegrationQuestion, inspectCanonicalGates } = require("./integration-lifecycle");
+const { proveRuntimeRebind } = require("./runtime-rebind-proof");
 
 // A17: two runtime ids attribute to the SAME runtime only when both are non-empty
 // strings AND identical. Used to prove every adopted read (task-list, gate-list, and
@@ -64,7 +65,7 @@ function taskDisplayString(task) {
 
 // Attribute the live runtime (D6). Orca facts are trusted ONLY when the live runtime
 // id matches the receipt AND every live orchestration task is marked for this program.
-function attributeRuntime({ receipt, programId, orca, programSegment }) {
+function attributeRuntime({ receipt, programId, orca, programSegment, acceptCompleteRuntimeRebind = false, runtimeRebindProofSink }) {
   const unreachable = { runtime: "unreachable", orcaTrusted: false, tasks: [], gates: [], diagnostic: null };
   if (!orca) return unreachable;
   const status = orcaStatus(orca, null, {});
@@ -82,25 +83,59 @@ function attributeRuntime({ receipt, programId, orca, programSegment }) {
   // MISSING_TASK against a receipt whose task simply could not be listed. On unreachable,
   // Orca-derived facts are withheld and each outcome's Orca facts degrade per D5/D6.
   const taskList = orcaTaskList(orca, null, {});
-  if (!taskList.ok) return unreachable;
+  const liveRuntime = boundedExcerpt(status.runtimeId);
+  const runtimeMismatch = Boolean(receipt.runtime_id && status.runtimeId && status.runtimeId !== receipt.runtime_id);
+  const mismatchResult = (rebindProof) => ({
+    runtime: "mismatch",
+    orcaTrusted: false,
+    tasks: [],
+    gates: [],
+    rebindProof,
+    diagnostic: diag("RUNTIME_MISMATCH", null, "live Orca runtime id does not match the receipt; runtime signals are not adopted", { receipt_runtime: receipt.runtime_id, live_runtime: liveRuntime }),
+  });
+  if (!taskList.ok) {
+    if (runtimeMismatch) return mismatchResult({ complete: false, reason: "live task-list is unreachable", verified_rows: [] });
+    return unreachable;
+  }
   const gateList = orcaGateList(orca, null, {});
-  if (!gateList.ok) return unreachable;
+  if (!gateList.ok) {
+    if (runtimeMismatch) return mismatchResult({ complete: false, reason: "live gate-list is unreachable", verified_rows: [] });
+    return unreachable;
+  }
   const tasks = taskList.tasks;
   const gates = gateList.gates;
+  if (runtimeMismatch) {
+    let rebindProof = { complete: false, reason: "live reads are not attributable", verified_rows: [] };
+    if (
+      taskList.wellFormed === true
+      && gateList.wellFormed === true
+      && runtimeIdMatches(taskList.runtimeId, status.runtimeId)
+      && runtimeIdMatches(gateList.runtimeId, status.runtimeId)
+    ) {
+      rebindProof = proveRuntimeRebind({
+        receipt,
+        programId,
+        liveRuntimeId: status.runtimeId,
+        tasks,
+        programSegment,
+      });
+    }
+    if (runtimeRebindProofSink && typeof runtimeRebindProofSink === "object") runtimeRebindProofSink.proof = rebindProof;
+    if (acceptCompleteRuntimeRebind && rebindProof.complete) {
+      return {
+        runtime: "ok",
+        orcaTrusted: true,
+        tasks,
+        gates,
+        runtimeId: status.runtimeId,
+        diagnostic: null,
+        rebindProof,
+      };
+    }
+    return mismatchResult(rebindProof);
+  }
   const marker = programMarker(programId, programSegment);
   const foreignTasks = tasks.filter((task) => !taskDisplayString(task).includes(marker));
-  // The live runtime id is subprocess-derived, so it is bounded (≤256 chars, marker
-  // included) before it enters a diagnostic — the same rule the probe uses (D7).
-  const liveRuntime = boundedExcerpt(status.runtimeId);
-  if (receipt.runtime_id && status.runtimeId && status.runtimeId !== receipt.runtime_id) {
-    return {
-      runtime: "mismatch",
-      orcaTrusted: false,
-      tasks: [],
-      gates: [],
-      diagnostic: diag("RUNTIME_MISMATCH", null, "live Orca runtime id does not match the receipt; runtime signals are not adopted", { receipt_runtime: receipt.runtime_id, live_runtime: liveRuntime }),
-    };
-  }
   if (foreignTasks.length > 0) {
     return {
       runtime: "foreign_state",
@@ -382,11 +417,11 @@ function summarizeLiveDispatch(runtime, facts) {
 // from the SEPARATE fleets root (#945 A8), keyed by fleet id. `liveDispatchSink` is an
 // OPTIONAL Map that, when provided (only `resume` passes it), is populated per outcome
 // with the reconciliation's live dispatch fact — it never changes the returned report.
-function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetManifests = [], orca, gh, urlFor, programSegment, liveDispatchSink, strictIntegration = false }) {
+function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetManifests = [], orca, gh, urlFor, programSegment, liveDispatchSink, strictIntegration = false, acceptCompleteRuntimeRebind = false, runtimeRebindProofSink }) {
   const resolvedUrlFor = typeof urlFor === "function" ? urlFor : () => null;
   const manifestByRunId = new Map(manifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
   const fleetManifestById = new Map(fleetManifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
-  const runtime = attributeRuntime({ receipt, programId, orca, programSegment });
+  const runtime = attributeRuntime({ receipt, programId, orca, programSegment, acceptCompleteRuntimeRebind, runtimeRebindProofSink });
   const { diagnostics: duplicateDiagnostics, duplicateOutcomeIds } = detectDuplicateMappings(receipt.tasks);
 
   const entries = receipt.tasks.map((task) => {
@@ -403,6 +438,15 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
   duplicateDiagnostics.forEach((duplicateDiag) => diagnostics.push(duplicateDiag));
 
   const repairCandidates = [];
+  if (runtime.rebindProof && runtime.rebindProof.complete) {
+    repairCandidates.push({
+      kind: "runtime_rebind",
+      old_runtime_id: runtime.rebindProof.old_runtime_id,
+      new_runtime_id: runtime.rebindProof.new_runtime_id,
+      verified_rows: runtime.rebindProof.verified_rows,
+      proposal: boundedExcerpt(`receipt runtime ${runtime.rebindProof.old_runtime_id} can be rebound to live runtime ${runtime.rebindProof.new_runtime_id} from a complete task fingerprint proof; status performed no mutation`),
+    });
+  }
   entries.forEach((entry) => repairForOutcome(entry).forEach((repair) => repairCandidates.push(repair)));
   discoverBackPointers({ manifests, tasks: receipt.tasks, programId, programSegment }).forEach((candidate) => repairCandidates.push(candidate));
   discoverFleetBackPointers({ fleetManifests, tasks: receipt.tasks, programId, programSegment }).forEach((candidate) => repairCandidates.push(candidate));

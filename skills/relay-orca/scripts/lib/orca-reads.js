@@ -37,8 +37,9 @@ function orcaTaskList(run, orcaBin, options = {}) {
   const { ok, value } = envelope(proc);
   if (!ok) return { ok: false, reachable: false, tasks: [], runtimeId: null, proc };
   const result = value.result || {};
-  const tasks = Array.isArray(result.tasks) ? result.tasks : [];
-  return { ok: true, reachable: true, tasks, runtimeId: metaRuntimeId(value), proc };
+  const wellFormed = Array.isArray(result.tasks);
+  const tasks = wellFormed ? result.tasks : [];
+  return { ok: true, reachable: true, wellFormed, tasks, runtimeId: metaRuntimeId(value), proc };
 }
 
 function orcaGateList(run, orcaBin, options = {}) {
@@ -46,10 +47,11 @@ function orcaGateList(run, orcaBin, options = {}) {
   const { ok, value } = envelope(proc);
   if (!ok) return { ok: false, reachable: false, gates: [], runtimeId: null, proc };
   const result = value.result || {};
-  const gates = Array.isArray(result.gates) ? result.gates : [];
+  const wellFormed = Array.isArray(result.gates);
+  const gates = wellFormed ? result.gates : [];
   // A17: expose the read's `_meta.runtimeId` so the caller can prove this whole-runtime
   // read came from the SAME runtime the status read established before adopting its data.
-  return { ok: true, reachable: true, gates, runtimeId: metaRuntimeId(value), proc };
+  return { ok: true, reachable: true, wellFormed, gates, runtimeId: metaRuntimeId(value), proc };
 }
 
 // First non-empty string among the candidates, else null. Candidates are drawn from a

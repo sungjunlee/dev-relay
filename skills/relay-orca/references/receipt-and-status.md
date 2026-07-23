@@ -88,7 +88,7 @@ when it rewrites the receipt.
 
 ### Optional additive record fields (#947)
 
-Four more top-level keys MAY be appended — each written ONLY at a pinned write point, each
+Five more top-level keys MAY be appended — each written ONLY at a pinned write point, each
 **not** part of the canonical `RECEIPT_KEYS`, so a receipt that never carried them serializes
 **byte-identically** to a pre-#947 receipt and still loads for `status`/`resume` (validation
 ignores extra keys):
@@ -105,6 +105,9 @@ ignores extra keys):
   `tasks_created` / `dispatches_performed` / `waves_dispatched` from the receipt mapping
   itself (a recorded `orca_task_id` = created, a recorded `dispatch_id` = dispatched), so no
   new write point is required. These are the counters the #944/#946 write points already imply.
+- `events` — append-only coordination audit events. A proof-based runtime rebind appends exactly
+  one `runtime_rebound` event with the old/new runtime ids and every verified task row; it never
+  records lifecycle completion or fabricates dispatch/terminal state.
 
 `run` carries these forward across its receipt rewrite; the additive fields are coordination
 metadata, not a second lifecycle state machine. See [gates-and-completion.md](gates-and-completion.md).
