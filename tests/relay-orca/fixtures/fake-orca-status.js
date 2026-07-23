@@ -60,9 +60,22 @@ function appendLog(line) { if (logPath) fs.appendFileSync(logPath, line + "\\n",
 appendLog(args.join(" "));
 // The real dispatch-show payload nests provenance under result.dispatch (D4.3/D5.2).
 function nestDispatch(flat) {
-  const dispatch = { id: flat.dispatch_id, task_id: flat.task_id, assignee_handle: flat.assignee, status: flat.status || "dispatched" };
+  const dispatch = {
+    id: flat.dispatch_id,
+    task_id: flat.task_id,
+    assignee_handle: flat.assignee,
+    status: flat.status || "dispatched",
+    failure_count: flat.failure_count || 0,
+    last_failure: flat.last_failure || null,
+    dispatched_at: flat.dispatched_at || null,
+    completed_at: flat.completed_at || null,
+    created_at: flat.created_at || null,
+    last_heartbeat_at: flat.last_heartbeat_at || null,
+    assignee_pane_key: flat.assignee_pane_key || flat.assignee,
+  };
   const result = { dispatch: dispatch };
   if (flat.terminal_present !== undefined) result.terminal_present = flat.terminal_present;
+  result.preamble = "Coordinator: " + flat.assignee;
   return result;
 }
 function loadScenario() { return JSON.parse(fs.readFileSync(scenarioPath, "utf-8")); }

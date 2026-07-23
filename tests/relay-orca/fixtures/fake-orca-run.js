@@ -48,6 +48,14 @@ function defaultRunScenario(overrides = {}) {
     injectNonAgentHandles: Array.isArray(overrides.injectNonAgentHandles) ? overrides.injectNonAgentHandles : [],
     provenanceOverride: overrides.provenanceOverride || null, // merged over dispatch-show result
     provenanceOverrideFor: overrides.provenanceOverrideFor || null, // limit override to one orca task id
+    coordinator: overrides.coordinator,
+    liveTerminals: overrides.liveTerminals !== undefined
+      ? overrides.liveTerminals
+      : (overrides.coordinator !== undefined ? [overrides.coordinator] : []),
+    terminalListOk: overrides.terminalListOk !== undefined ? overrides.terminalListOk : true,
+    terminalListMalformed: overrides.terminalListMalformed === true,
+    structuredCoordinator: overrides.structuredCoordinator,
+    preamble: overrides.preamble,
     terminalCreateOkFalse: overrides.terminalCreateOkFalse || false,
     terminalCreateEmptyHandle: overrides.terminalCreateEmptyHandle || false,
     terminalSendOkFalse: overrides.terminalSendOkFalse || false,
@@ -69,10 +77,24 @@ const sendsPath = ${JSON.stringify(sendsPath)};
 function appendLog(line) { if (logPath) fs.appendFileSync(logPath, line + "\\n", "utf-8"); }
 appendLog(args.join(" "));
 // The real dispatch-show payload nests provenance under result.dispatch (D2/D5.2).
-function nestDispatch(flat) {
-  const dispatch = { id: flat.dispatch_id, task_id: flat.task_id, assignee_handle: flat.assignee, status: flat.status || "dispatched" };
+function nestDispatch(flat, scenario) {
+  const dispatch = {
+    id: flat.dispatch_id,
+    task_id: flat.task_id,
+    assignee_handle: flat.assignee,
+    status: flat.status || "dispatched",
+    failure_count: flat.failure_count || 0,
+    last_failure: flat.last_failure || null,
+    dispatched_at: flat.dispatched_at || null,
+    completed_at: flat.completed_at || null,
+    created_at: flat.created_at || null,
+    last_heartbeat_at: flat.last_heartbeat_at || null,
+    assignee_pane_key: flat.assignee_pane_key || flat.assignee,
+  };
   const result = { dispatch: dispatch };
   if (flat.terminal_present !== undefined) result.terminal_present = flat.terminal_present;
+  result.preamble = scenario.preamble !== undefined ? String(scenario.preamble) : "Coordinator: " + flat.assignee;
+  if (scenario.structuredCoordinator !== undefined) result.coordinator_handle = scenario.structuredCoordinator;
   return result;
 }
 
@@ -101,9 +123,22 @@ if (args.includes("worktree")) {
 
 const scenario = loadScenario();
 
-if (args[0] === "status") emit(scenario.status, scenario.statusExit, scenario.statusStdout);
+if (args[0] === "status") {
+  const status = scenario.status && typeof scenario.status === "object" ? JSON.parse(JSON.stringify(scenario.status)) : scenario.status;
+  if (scenario.structuredCoordinator !== undefined && status && status.result) status.result.coordinator_handle = scenario.structuredCoordinator;
+  emit(status, scenario.statusExit, scenario.statusStdout);
+}
 if (args[0] === "orchestration" && args[1] === "task-list") emit(scenario.taskList, scenario.taskListExit);
 if (args[0] === "orchestration" && args[1] === "gate-list") emit(scenario.gateList, scenario.gateListExit);
+
+if (args[0] === "terminal" && args[1] === "list") {
+  if (!scenario.terminalListOk) emit({ ok: false, error: "terminal list failed", _meta: { runtimeId: scenario.runtimeId } }, 1);
+  if (scenario.terminalListMalformed) emit({ ok: true, result: { count: 0 }, _meta: { runtimeId: scenario.runtimeId } }, 0);
+  const terminals = (Array.isArray(scenario.liveTerminals) ? scenario.liveTerminals : []).map((terminal) => (
+    typeof terminal === "string" ? { handle: terminal, id: terminal, status: "running" } : terminal
+  ));
+  emit({ ok: true, result: { terminals, count: terminals.length }, _meta: { runtimeId: scenario.runtimeId } }, 0);
+}
 
 if (args[0] === "orchestration" && args[1] === "task-create") {
   const title = argValue("--task-title") || "";
@@ -142,7 +177,7 @@ if (args[0] === "orchestration" && args[1] === "dispatch-show") {
   if (scenario.provenanceOverride && (!scenario.provenanceOverrideFor || scenario.provenanceOverrideFor === task)) {
     Object.assign(base, scenario.provenanceOverride);
   }
-  emit({ id: "ds-" + task, ok: true, result: nestDispatch(base), _meta: { runtimeId: scenario.runtimeId } }, 0);
+  emit({ id: "ds-" + task, ok: true, result: nestDispatch(base, scenario), _meta: { runtimeId: scenario.runtimeId } }, 0);
 }
 
 if (args[0] === "terminal" && args[1] === "create") {
