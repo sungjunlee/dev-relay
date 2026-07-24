@@ -2,6 +2,8 @@
 
 Orchestrator-agnostic relay system for plan → dispatch → review workflows with explicit merge. Any supported agent can serve as orchestrator, worker, or reviewer — roles are bound per-run via the relay manifest, not hardcoded.
 
+> ⛔ **`relay-orca` is FROZEN / SUPERSEDED as of 2026-07-24.** Do not use, invoke, or extend it. It was a learning spike (program-altitude coordinator, epic #941) retired in favor of a lighter *decompose-deep/execute-flat* successor still in design. See [skills/relay-orca/SUPERSEDED.md](skills/relay-orca/SUPERSEDED.md) and [skills/SUPERSEDED.md](skills/SUPERSEDED.md). The active relay skillset is unaffected.
+
 ## Architecture
 
 Relay runs are stateful, manifest-backed lifecycle contracts stored in `~/.relay/runs/<repo-slug>/<run-id>.md`. Each manifest records immutable role bindings (`roles.orchestrator`, `roles.executor`, `roles.reviewer`), policy fields, and review anchors. Review-time overrides are tracked separately under `review.last_reviewer` and review events rather than mutating those bindings. The state machine governs all transitions:

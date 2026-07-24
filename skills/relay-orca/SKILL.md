@@ -1,6 +1,6 @@
 ---
 name: relay-orca
-description: EXPERIMENTAL, explicit-only program-altitude coordinator. On explicit operator request, compile an already-accepted program/epic contract into bounded, read-only Orca wave plans supervising relay and relay-fleet operators. NOT for ordinary relay, relay-fleet, delegation, implementation, or planning requests.
+description: SUPERSEDED — FROZEN 2026-07-24, DO NOT USE OR INVOKE (see SUPERSEDED.md). Learning-spike program-altitude coordinator; retired in favor of a lighter decompose-deep/execute-flat successor. Not maintained; kept only as a reference tombstone.
 compatibility: Requires Node.js 18+. Runtime modes (run/status/resume/stop) additionally require the experimental Orca orchestration surface and are gated on the capability probe.
 argument-hint: plan --program-file <accepted-program.json>
 metadata:
@@ -19,7 +19,7 @@ metadata:
 
 # relay-orca
 
-> EXPERIMENTAL and opt-in. relay-orca is a supervised program controller pilot, not an autonomous software factory, and not an implicit dependency of ordinary relay use. See [references/experimental-status.md](references/experimental-status.md) and the opt-in install + operator guide [references/install-and-operate.md](references/install-and-operate.md).
+> ⛔ **SUPERSEDED — FROZEN 2026-07-24. DO NOT USE.** relay-orca was a learning spike that proved what program-altitude orchestration costs; it is retired in favor of a lighter decompose-deep/execute-flat successor. It is no longer maintained and must not be invoked. Rationale, salvaged principles, and successor pointer: [SUPERSEDED.md](SUPERSEDED.md). Everything below is preserved as-is for reference only.
 
 ## Use when
 

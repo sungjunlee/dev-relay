@@ -261,12 +261,14 @@ test("D5: agents/openai.yaml disables implicit invocation", () => {
   assert.match(yaml, /allow_implicit_invocation:\s*false/, "relay-orca must be explicit-only from the OpenAI agent surface");
 });
 
-test("D5: SKILL.md routing text is explicit-only and disclaims ordinary relay triggers", () => {
+test("D5: SKILL.md is FROZEN and warns against use/invocation (supersedes the old explicit-only disclaimer)", () => {
   const skill = fs.readFileSync(path.join(SKILL_DIR, "SKILL.md"), "utf-8");
   const front = skill.split(/\n---\n/)[0];
-  assert.match(front, /explicit-only/i, "description must declare explicit-only routing");
-  assert.match(front, /NOT for ordinary relay, relay-fleet, delegation, implementation, or planning/i);
-  // keywords must be relay-orca-specific, never bare generic triggers.
+  // relay-orca is superseded/frozen (2026-07-24). A do-not-invoke description is a strictly
+  // stronger guard against auto-triggering on ordinary relay work than the old explicit-only prose.
+  assert.match(front, /SUPERSEDED|FROZEN/i, "frozen skill description must mark it superseded/frozen");
+  assert.match(front, /DO NOT USE|DO NOT INVOKE/i, "frozen skill description must warn against use/invocation");
+  // keywords must still be relay-orca-specific, never bare generic triggers.
   const keywords = (front.match(/keywords:\s*(.*)/) || [])[1] || "";
   for (const bare of ["dispatch", "implement", "delegate", "review"]) {
     assert.ok(!keywords.split(/[\s,]+/).includes(bare), `keyword "${bare}" would auto-trigger on ordinary requests`);
