@@ -26,6 +26,7 @@ const SURFACE_TIERS = {
   "public operator surface": ["relay-config", "relay", "relay-merge"],
   "internal phase surface": ["relay-ready", "relay-plan", "relay-dispatch", "relay-review"],
   "optional/advanced surface": ["relay-fleet"],
+  "superseded / frozen": ["relay-orca"],
 };
 
 function splitLines(text) {
