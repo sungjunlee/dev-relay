@@ -27,6 +27,7 @@ jobs:
             tests/relay-config/scripts/*.test.js
             tests/relay-fleet/scripts/*.test.js
             tests/relay-orca/scripts/*.test.js
+            tests/braid/scripts/*.test.js
             tests/skills-lint/scripts/*.test.js
           )
           count=${#files[@]}
@@ -47,4 +48,5 @@ jobs:
           tests/relay-config/scripts/*.test.js
           tests/relay-fleet/scripts/*.test.js
           tests/relay-orca/scripts/*.test.js
+          tests/braid/scripts/*.test.js
           tests/skills-lint/scripts/*.test.js

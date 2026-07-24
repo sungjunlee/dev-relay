@@ -109,7 +109,7 @@ node skills/relay-merge/scripts/finalize-run.js --run-id <id> --merge-method squ
 node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-nonready --reason "..." --json
 
 # Final gate for broad changes (serialize; fleet condition waits can flake under parallel file execution)
-node --test --test-concurrency=1 tests/relay-ready/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js tests/relay/scripts/*.test.js tests/relay-config/scripts/*.test.js tests/relay-fleet/scripts/*.test.js tests/relay-orca/scripts/*.test.js tests/skills-lint/scripts/*.test.js
+node --test --test-concurrency=1 tests/relay-ready/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js tests/relay/scripts/*.test.js tests/relay-config/scripts/*.test.js tests/relay-fleet/scripts/*.test.js tests/relay-orca/scripts/*.test.js tests/braid/scripts/*.test.js tests/skills-lint/scripts/*.test.js
 ```
 
 ## Key Design Decisions
