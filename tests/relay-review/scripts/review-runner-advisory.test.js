@@ -623,6 +623,24 @@ function waitForFileText(filePath, expectedText, { timeoutMs = 2000 } = {}) {
   return false;
 }
 
+function waitForFile(filePath, { timeoutMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) return true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  return false;
+}
+
+function waitForAbsent(filePath, { timeoutMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!fs.existsSync(filePath)) return true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  return false;
+}
+
 test("executeAdvisoryRequest forwards advisory profile to reviewer argv", () => {
   const { logPath, result } = executeProfileRequest({
     profile: "adversarial",
@@ -638,57 +656,84 @@ test("advisory worker does not publish success while its audit event waits on th
   const { repoRoot, manifestPath, runDir, runId } = setupRepo();
   const manifest = readManifest(manifestPath).data;
   const logPath = path.join(runDir, "blocked-advisory-writer.log");
+  const rawResponsePath = path.join(runDir, "review-round-1-advisory-opencode-raw-response.txt");
   const reviewerScript = writeFakeOpencode(repoRoot, { logPath });
-  const lock = acquireManifestLock(manifestPath);
-  let advisoryRun;
+
+  // The audited append blocks on the manifest lock we hold below. Keep the
+  // worker patient so it waits for the release and then publishes, instead of
+  // timing out its lock acquisition under host load (the default is 5000ms and
+  // a contended host can hold the lock longer). Test-local override only; no
+  // production default changes.
+  const previousLockTimeout = process.env.RELAY_MANIFEST_LOCK_TIMEOUT_MS;
+  process.env.RELAY_MANIFEST_LOCK_TIMEOUT_MS = "60000";
 
   try {
-    advisoryRun = startAdvisoryReview({
-      headSha: manifest.git.head_sha,
-      laneIndex: 1,
-      profile: "blindspot",
-      promptText: "Wait for the audit event before publishing the result.",
-      reviewerModel: "example/opencode-model-fast",
-      reviewerName: "opencode",
-      reviewerScript,
-      reviewRepoPath: repoRoot,
-      round: 1,
-      runDir,
+    const lock = acquireManifestLock(manifestPath);
+    let advisoryRun;
+    try {
+      advisoryRun = startAdvisoryReview({
+        headSha: manifest.git.head_sha,
+        laneIndex: 1,
+        profile: "blindspot",
+        promptText: "Wait for the audit event before publishing the result.",
+        reviewerModel: "example/opencode-model-fast",
+        reviewerName: "opencode",
+        reviewerScript,
+        reviewRepoPath: repoRoot,
+        round: 1,
+        runDir,
+        runId,
+        runRepoPath: repoRoot,
+        state: STATES.REVIEW_PENDING,
+        // Generous reviewer budget so the fake reviewer cannot time out under
+        // host load — a timeout would intentionally leave the lane lease and
+        // publish a timeout-status event, both of which the assertions below
+        // reject. The reviewer completes near-instantly at rest.
+        timeoutSeconds: 120,
+        trigger: "every_round",
+      });
+
+      // Synchronize on observable state, not a fixed sleep: the worker writes
+      // its raw-response artifact right before entering the audited publish
+      // path, so once it exists the worker is committed to the lock-guarded
+      // append. Because we still hold the lock and the worker cannot steal it
+      // (this owner process is alive), reading the result now must observe a
+      // deferral regardless of host load.
+      assert.equal(waitForFile(rawResponsePath, { timeoutMs: 10000 }), true);
+      const consumedBeforeEvent = await finishAdvisoryReview({
+        advisoryRun,
+        waitMs: 0,
+      });
+      assert.equal(consumedBeforeEvent.status, "deferred");
+      assert.equal(
+        readRunEvents(repoRoot, runId).some((record) => record.event === EVENTS.ADVISORY_REVIEW),
+        false,
+      );
+    } finally {
+      releaseManifestLock(lock);
+    }
+
+    // After release the worker acquires the lock, appends the audit event, and
+    // republishes the result. Post-release publish + advisory worktree cleanup
+    // can be slow under load, so these observation windows are generous.
+    const event = waitForEvent(
+      repoRoot,
       runId,
-      runRepoPath: repoRoot,
-      state: STATES.REVIEW_PENDING,
-      timeoutSeconds: 5,
-      trigger: "every_round",
-    });
-
-    assert.equal(waitForFileText(logPath, "advisory-end", { timeoutMs: 3000 }), true);
-    // The old writer publishes resultPath before trying to acquire this lock.
-    // Give it time to reach the blocked append, then exercise the real reader.
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
-    const consumedBeforeEvent = await finishAdvisoryReview({
-      advisoryRun,
-      waitMs: 0,
-    });
-    assert.equal(consumedBeforeEvent.status, "deferred");
-    assert.equal(
-      readRunEvents(repoRoot, runId).some((record) => record.event === EVENTS.ADVISORY_REVIEW),
-      false,
+      (record) => record.event === EVENTS.ADVISORY_REVIEW,
+      { timeoutMs: 15000 },
     );
+    assert.ok(event);
+    assert.equal(event.status, "success");
+    assert.equal(waitForFileText(advisoryRun.resultPath, '"status": "success"', { timeoutMs: 10000 }), true);
+    assert.equal(JSON.parse(fs.readFileSync(advisoryRun.resultPath, "utf-8")).status, "success");
+    // The worker clears its lane lease only after appending the audit event and
+    // returning from executeAdvisoryRequest, so the cleanup lags the event we
+    // waited on above. Wait for the lease to disappear rather than racing it.
+    assert.equal(waitForAbsent(advisoryRun.laneLeasePath, { timeoutMs: 10000 }), true);
   } finally {
-    releaseManifestLock(lock);
+    if (previousLockTimeout === undefined) delete process.env.RELAY_MANIFEST_LOCK_TIMEOUT_MS;
+    else process.env.RELAY_MANIFEST_LOCK_TIMEOUT_MS = previousLockTimeout;
   }
-
-  const event = waitForEvent(
-    repoRoot,
-    runId,
-    (record) => record.event === EVENTS.ADVISORY_REVIEW,
-    { timeoutMs: 5000 },
-  );
-  assert.ok(event);
-  assert.equal(event.status, "success");
-  assert.equal(waitForFileText(advisoryRun.resultPath, '"status": "success"', { timeoutMs: 2000 }), true);
-  assert.equal(JSON.parse(fs.readFileSync(advisoryRun.resultPath, "utf-8")).status, "success");
-  assert.equal(fs.existsSync(advisoryRun.laneLeasePath), false);
 });
 
 test("executeAdvisoryRequest publishes a failed result when the advisory event append fails", () => {
