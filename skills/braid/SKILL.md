@@ -15,7 +15,7 @@ metadata:
 
 # braid
 
-> **v0 — experimental, read-only.** braid decomposes work deep and executes it flat. It does **not** dispatch, supervise, or couple to any runtime; ordinary `relay` runs do the work at the leaves and braid folds their durable evidence back up. Design and rationale: [references/design.md](references/design.md).
+> **v0 — experimental, read-only.** braid decomposes work deep and executes it flat. It does **not** dispatch, supervise, or couple to any runtime; ordinary `relay` runs do the work at the leaves and braid folds their durable evidence back up. Resuming braid in a new session? Start with [references/roadmap.md](references/roadmap.md); full rationale in [references/design.md](references/design.md).
 
 ## The idea
 
