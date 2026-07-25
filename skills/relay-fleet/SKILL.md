@@ -78,7 +78,7 @@ Omit `--fleet-id` to list every fleet for the current repository without modifyi
 node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" --repo . --status
 ```
 
-Deprecated primary entry points, to be sunset within one release: `relay-fleet.js --resume` is accepted as an alias for re-running the default drive; `relay-fleet.js --review` and `merge-queue.js` remain internal re-entry/debug paths but should not be the operator loop.
+The operator-entry sunset is complete: `relay-fleet.js --resume` is removed and hard-errors with guidance to rerun the idempotent default drive, which resumes in place. `relay-fleet.js --review` and `merge-queue.js` are internal/debug-only re-entry paths, not documented operator entry points.
 
 Dry-run validates the leaf file and invokes child `dispatch.js --dry-run` for each leaf without writing a fleet manifest:
 
