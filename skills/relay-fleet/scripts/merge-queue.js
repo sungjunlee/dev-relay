@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 "use strict";
 
+// Internal/debug-only re-entry script; relay-fleet.js default drive is the operator entry point.
+
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");

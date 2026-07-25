@@ -1183,7 +1183,6 @@ test("relay-fleet rejects child manifest ownership drift without rewriting it", 
   const result = runFleet([
     "--repo", repoRoot,
     "--fleet-id", fleetId,
-    "--resume",
     "--json",
   ], { relayHome });
 
@@ -1220,7 +1219,6 @@ test("relay-fleet keeps terminal missing-owner legacy inspection allowed without
   const result = runFleet([
     "--repo", repoRoot,
     "--fleet-id", fleetId,
-    "--resume",
     "--json",
   ], { relayHome });
 
@@ -1254,7 +1252,6 @@ test("relay-fleet rejects terminal existing-owner drift against the persisted le
   const result = runFleet([
     "--repo", repoRoot,
     "--fleet-id", fleetId,
-    "--resume",
     "--json",
   ], { relayHome });
 
@@ -1295,7 +1292,6 @@ test("relay-fleet requires explicit ownership to migrate an active legacy child,
   const blocked = runFleet([
     "--repo", repoRoot,
     "--fleet-id", fleetId,
-    "--resume",
     "--json",
   ], { relayHome });
 
@@ -2665,35 +2661,31 @@ test("relay-fleet with only fleet-id and no manifest fails closed with nothing t
   assert.match(result.stderr, /nothing to continue/);
 });
 
-test("relay-fleet --resume is accepted as a deprecated alias of the default drive", () => {
-  const { relayHome, repoRoot } = setupRepo("relay-fleet-drive-resume-alias-");
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-drive-resume-alias-fake-"));
-  const finalizeScript = writeFakeFinalizeScript(tmpDir);
-  const runId = writeChildRun(repoRoot, {
-    runId: "issue-567-20260516010101000-a1b2c3d4",
-    branch: "issue-567-leaf-a",
-    issueNumber: 567,
-    leafId: "leaf-a",
-    fleetId: "fleet-resume-alias",
-    state: RUN_STATES.READY_TO_MERGE,
-  });
-  createFleetManifest(repoRoot, {
-    fleetId: "fleet-resume-alias",
-    children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
-  });
-  advanceFleetManifestState(repoRoot, "fleet-resume-alias", FLEET_STATES.REVIEWING);
-
+test("relay-fleet --resume is removed with migration guidance", () => {
   const result = runFleet([
-    "--repo", repoRoot,
-    "--fleet-id", "fleet-resume-alias",
+    "--repo", ".",
+    "--fleet-id", "fleet-resume-removed",
     "--resume",
-    "--finalize-script", finalizeScript,
     "--json",
-  ], { relayHome });
+  ], { relayHome: fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")) });
 
-  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
-  assert.equal(JSON.parse(result.stdout).summary.fleet_state, FLEET_STATES.CLOSED);
-  assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.MERGED);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /--resume is no longer supported/);
+  assert.match(result.stderr, /default drive command without --resume/);
+  assert.match(result.stderr, /idempotent and resumes in place/);
+  assert.doesNotMatch(result.stderr, /unknown flags/);
+});
+
+test("relay-fleet help omits removed and debug-only entry flags", () => {
+  const result = runFleet(["--help"], {
+    relayHome: fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.doesNotMatch(result.stdout, /(?:^|\s)--resume(?=\s|$)/m);
+  assert.doesNotMatch(result.stdout, /(?:^|\s)--review(?=\s|$)/m);
 });
 
 test("relay-fleet closes with nonzero attention when one child escalates and the rest merge", () => {
@@ -2941,7 +2933,6 @@ test("relay-fleet records and resumes a child dispatch that fails before manifes
   const resumed = runFleet([
     "--repo", repoRoot,
     "--fleet-id", "fleet-premanifest",
-    "--resume",
     "--dispatch-script", dispatchScript,
     "--review-script", reviewScript,
     "--finalize-script", finalizeScript,
@@ -3253,7 +3244,6 @@ test("relay-fleet never row-4 reconciles a live unexpired lease, including at po
   const result = runFleet([
     "--repo", repoRoot,
     "--fleet-id", fleetId,
-    "--resume",
     "--json",
   ], {
     relayHome,
@@ -3323,7 +3313,7 @@ test("relay-fleet treats detached terminal child states as failed dispatch outco
   ]);
 });
 
-test("relay-fleet --resume polls existing dispatching detached child runs before returning ok", () => {
+test("relay-fleet default drive polls existing dispatching detached child runs before returning ok", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-resume-detached-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-resume-detached-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
@@ -3355,7 +3345,6 @@ test("relay-fleet --resume polls existing dispatching detached child runs before
   const result = runFleet([
     "--repo", repoRoot,
     "--fleet-id", fleetId,
-    "--resume",
     "--dispatch-script", dispatchScript,
     "--review-script", reviewScript,
     "--finalize-script", finalizeScript,
@@ -3478,7 +3467,7 @@ test("relay-fleet continues ready siblings after an initial partial fan-out fail
   );
 });
 
-test("relay-fleet resume re-adopts orphan child via fleet_id back-pointer", () => {
+test("relay-fleet default drive re-adopts orphan child via fleet_id back-pointer", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-orphan-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
@@ -3500,7 +3489,6 @@ test("relay-fleet resume re-adopts orphan child via fleet_id back-pointer", () =
   const result = runFleet([
     "--repo", repoRoot,
     "--fleet-id", "fleet-orphan",
-    "--resume",
     "--dispatch-script", dispatchScript,
     "--finalize-script", finalizeScript,
     "--json",
@@ -3636,7 +3624,6 @@ test("SIGINT during fan-out leaves a consistent fleet manifest and resume recove
   const resumed = runFleet([
     "--repo", repoRoot,
     "--fleet-id", "fleet-sigint",
-    "--resume",
     "--dispatch-script", dispatchScript,
     "--review-script", reviewScript,
     "--finalize-script", finalizeScript,
@@ -3691,7 +3678,6 @@ test("resume while a child subprocess is still running does not double-dispatch"
   const resumed = runFleet([
     "--repo", repoRoot,
     "--fleet-id", "fleet-running",
-    "--resume",
     "--dispatch-script", dispatchScript,
     "--review-script", reviewScript,
     "--finalize-script", finalizeScript,
@@ -3958,7 +3944,7 @@ test("relay-fleet --review redispatches a child absent from persisted leaves wit
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
 });
 
-test("relay-fleet --resume re-enters the review loop for changes_requested children", () => {
+test("relay-fleet default drive re-enters the review loop for changes_requested children", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-review-resume-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-review-resume-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
@@ -3991,7 +3977,6 @@ test("relay-fleet --resume re-enters the review loop for changes_requested child
   const result = runFleet([
     "--repo", repoRoot,
     "--fleet-id", "fleet-review-resume",
-    "--resume",
     "--dispatch-script", dispatchScript,
     "--review-script", reviewScript,
     "--finalize-script", finalizeScript,
@@ -4117,7 +4102,7 @@ test("relay-fleet redispatch pairs immutable ownership with fleet ID for real di
   assert.equal(fs.existsSync(path.join(initialPayload.worktree, "resume.txt")), true);
 });
 
-test("relay-fleet --resume keeps pre-manifest dispatch failures visible during review resume", () => {
+test("relay-fleet default drive keeps pre-manifest dispatch failures visible during review resume", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-review-resume-failure-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-review-resume-failure-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
@@ -4147,7 +4132,6 @@ test("relay-fleet --resume keeps pre-manifest dispatch failures visible during r
   const result = runFleet([
     "--repo", repoRoot,
     "--fleet-id", "fleet-review-resume-failure",
-    "--resume",
     "--dispatch-script", dispatchScript,
     "--review-script", reviewScript,
     "--json",
@@ -4162,7 +4146,7 @@ test("relay-fleet --resume keeps pre-manifest dispatch failures visible during r
   assert.equal(payload.operator_attention.some((item) => item.leaf_ref === "leaf-b"), true);
 });
 
-test("relay-fleet --resume skips a still-running review subprocess", async () => {
+test("relay-fleet default drive skips a still-running review subprocess", async () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-review-running-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-review-running-fake-"));
   const reviewScript = writeFakeReviewScript(tmpDir);
@@ -4227,7 +4211,6 @@ test("relay-fleet --resume skips a still-running review subprocess", async () =>
   const resumed = runFleet([
     "--repo", repoRoot,
     "--fleet-id", "fleet-review-running",
-    "--resume",
     "--review-script", reviewScript,
     "--json",
   ], {
@@ -4621,7 +4604,7 @@ test("relay-fleet --status without --fleet-id returns clean empty text and JSON 
 
 test("relay-fleet non-status modes without --fleet-id preserve the missing-argument error", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-list-required-");
-  for (const modeArgs of [[], ["--resume"], ["--review"], ["--dry-run"]]) {
+  for (const modeArgs of [[], ["--review"], ["--dry-run"]]) {
     const result = runFleet(["--repo", repoRoot, ...modeArgs], { relayHome });
     assert.equal(result.status, 1, `mode ${modeArgs.join(" ")} unexpectedly succeeded`);
     assert.equal(result.stdout, "");

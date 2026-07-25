@@ -70,7 +70,7 @@ const DEFAULT_PUBLISH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch"
 const DEFAULT_REVIEW_SCRIPT = path.join(__dirname, "..", "..", "relay-review", "scripts", "review-runner.js");
 const DEFAULT_FINALIZE_SCRIPT = path.join(__dirname, "..", "..", "relay-merge", "scripts", "finalize-run.js");
 const KNOWN_FLAGS = [
-  "--repo", "--fleet-id", "--leaves-file", "--resume", "--status", "--review", "--parallel",
+  "--repo", "--fleet-id", "--leaves-file", "--status", "--review", "--parallel",
   "--dispatch-script", "--publish-script", "--review-script", "--executor", "--model", "--model-hints", "--sandbox",
   "--network-access", "--timeout", "--reasoning", "--copy", "--test-command", "--publish-policy",
   "--register", "--reviewer", "--reviewer-model", "--finalize-script", "--merge-method",
@@ -113,7 +113,6 @@ function dispatchFailureLastError({ error = null, stderr = null, fallback = null
 function usage() {
   return [
     "Usage: relay-fleet.js --repo <path> --fleet-id <id> [--leaves-file <path>] [options]",
-    "       relay-fleet.js --repo <path> --fleet-id <id> --review [options]",
     "       relay-fleet.js --repo <path> --fleet-id <id> --status [--json]",
     "       relay-fleet.js --repo <path> --status [--json]",
     "",
@@ -121,8 +120,6 @@ function usage() {
     `  --repo <path>          ${modeLabel("--repo")} Repository root (default: current directory)`,
     `  --fleet-id <id>       ${modeLabel("--fleet-id")} Fleet manifest id (required except repo-wide --status)`,
     `  --leaves-file <path>  ${MODE_VERBATIM_LABEL} JSON file with already-planned leaf contracts`,
-    `  --resume             ${MODE_PARSED_LABEL} Deprecated alias for the default drive command`,
-    `  --review             ${MODE_PARSED_LABEL} Deprecated review-only re-entry point`,
     `  --status             ${MODE_PARSED_LABEL} Print derived fleet summary without writing`,
     `  --parallel <n>       ${MODE_PARSED_LABEL} Maximum concurrent child dispatches (default: ${DEFAULT_PARALLEL})`,
     `  --dispatch-script <path>  ${MODE_VERBATIM_LABEL} Dispatch entrypoint (default: relay-dispatch/scripts/dispatch.js)`,
@@ -150,6 +147,12 @@ function usage() {
 }
 
 function parseArgs(argv) {
+  if (argv.includes("--resume")) {
+    throw new FleetInputError(
+      "--resume is no longer supported; use the default drive command without --resume. " +
+      "The default drive is idempotent and resumes in place."
+    );
+  }
   const unknown = findUnknownFlags(argv, KNOWN_FLAGS);
   if (unknown.length) {
     throw new FleetInputError(`unknown flags: ${unknown.join(", ")}`);
@@ -168,7 +171,6 @@ function parseArgs(argv) {
     repo,
     fleetId: getArg("--fleet-id"),
     leavesFile: getArg("--leaves-file"),
-    resume: hasFlag("--resume"),
     review: hasFlag("--review"),
     status: hasFlag("--status"),
     parallel,
@@ -3031,7 +3033,6 @@ function buildDriveResult({
   dispatchResult = null,
   reviewResult = null,
   mergeResult = null,
-  deprecatedAliases = [],
   replacedChildren = [],
 }) {
   closeFleetIfTerminal(repoRoot, fleetId);
@@ -3046,7 +3047,6 @@ function buildDriveResult({
     interrupted,
     fleet_id: fleetId,
     fleetManifestPath,
-    deprecated_aliases: deprecatedAliases,
     replaced_children: replacedChildren,
     children: dispatchResult?.children || [],
     dispatch_children: dispatchResult?.children || [],
@@ -3151,7 +3151,6 @@ async function runFleet(options) {
   }
 
   try {
-    const deprecatedAliases = options.resume ? ["--resume"] : [];
     const dispatchResult = await dispatchFleetPhase({
       repoRoot,
       fleetId,
@@ -3167,7 +3166,6 @@ async function runFleet(options) {
         ok: false,
         interrupted,
         fleetManifestPath: manifestPath,
-        deprecated_aliases: deprecatedAliases,
         replaced_children: replacedChildren,
       };
     }
@@ -3191,7 +3189,6 @@ async function runFleet(options) {
           interrupted,
           dispatchResult,
           reviewResult,
-          deprecatedAliases,
           replacedChildren,
         });
       }
@@ -3206,7 +3203,6 @@ async function runFleet(options) {
       dispatchResult,
       reviewResult,
       mergeResult,
-      deprecatedAliases,
       replacedChildren,
     });
   } finally {
@@ -3228,11 +3224,11 @@ async function main(argv = process.argv.slice(2)) {
     if (!options.fleetId && !options.status) {
       throw new FleetInputError("--fleet-id is required");
     }
-    if (options.status && (options.resume || options.leavesFile || options.dryRun)) {
-      throw new FleetInputError("--status is read-only and cannot be combined with --resume, --leaves-file, or --dry-run");
+    if (options.status && (options.leavesFile || options.dryRun)) {
+      throw new FleetInputError("--status is read-only and cannot be combined with --leaves-file or --dry-run");
     }
-    if (options.review && (options.resume || options.leavesFile || options.dryRun || options.status)) {
-      throw new FleetInputError("--review cannot be combined with --resume, --leaves-file, --dry-run, or --status");
+    if (options.review && (options.leavesFile || options.dryRun || options.status)) {
+      throw new FleetInputError("--review cannot be combined with --leaves-file, --dry-run, or --status");
     }
     const result = await runFleet({ ...options, installSignalHandlers: true });
     writeReplacementNotes(result);
