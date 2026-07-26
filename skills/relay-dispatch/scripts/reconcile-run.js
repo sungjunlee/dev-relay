@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
-const { execGit } = require("./exec");
+const { execGit, resolveBranchRemote } = require("./exec");
 const {
   buildExecutionEvidence,
   EXECUTION_EVIDENCE_FILENAME,
@@ -385,7 +385,7 @@ function inspectSalvageWorktree(worktreePath, branch, data) {
 // the lease guards against overwriting a remote that moved past our known point.
 function pushSalvageForceWithLease(worktreePath, branch) {
   try {
-    execGit(worktreePath, ["push", "--force-with-lease", "origin", branch]);
+    execGit(worktreePath, ["push", "--force-with-lease", resolveBranchRemote(worktreePath, branch), branch]);
     return { ok: true };
   } catch (error) {
     const detail = [error.stderr, error.stdout, error.message]

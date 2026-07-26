@@ -6,7 +6,9 @@ const os = require("os");
 const path = require("path");
 const test = require("node:test");
 
-const { execGit, execGh } = require("../../../skills/relay-dispatch/scripts/exec");
+const { execFileSync } = require("child_process");
+
+const { execGit, execGh, resolveBranchRemote } = require("../../../skills/relay-dispatch/scripts/exec");
 
 function withEnv(name, value, fn) {
   const previous = process.env[name];
@@ -52,4 +54,33 @@ test("execGh honors RELAY_GH_BIN override", () => {
   const output = withEnv("RELAY_GH_BIN", stub, () => execGh(dir, ["status"]));
 
   assert.strictEqual(output, "gh-sentinel");
+});
+
+// #1083: recovery and correction scripts used to hardcode "origin", so a repo whose
+// branch tracks a differently named remote had dispatch publish correctly while every
+// recovery path targeted the wrong remote.
+function initRepoOnBranch(dir, branch) {
+  const git = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf-8", stdio: "pipe" });
+  git("init", "-b", branch);
+  git("config", "user.name", "Relay Exec Test");
+  git("config", "user.email", "relay-exec@example.com");
+  return git;
+}
+
+test("resolveBranchRemote returns the branch's configured remote", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-exec-remote-"));
+  const git = initRepoOnBranch(dir, "feature");
+  git("config", "branch.feature.remote", "upstream");
+
+  assert.strictEqual(resolveBranchRemote(dir, "feature"), "upstream");
+});
+
+test("resolveBranchRemote falls back to origin when unset, unknown, or branchless", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-exec-remote-default-"));
+  initRepoOnBranch(dir, "feature");
+
+  assert.strictEqual(resolveBranchRemote(dir, "feature"), "origin");
+  assert.strictEqual(resolveBranchRemote(dir, "never-configured"), "origin");
+  assert.strictEqual(resolveBranchRemote(dir, ""), "origin");
+  assert.strictEqual(resolveBranchRemote(dir, null), "origin");
 });

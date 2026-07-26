@@ -28,7 +28,7 @@ const {
   readArg,
   schemaHasFlag,
 } = require("./cli-args");
-const { execGit, execGh } = require("./exec");
+const { execGit, execGh, resolveBranchRemote } = require("./exec");
 const {
   classifyRepositoryDirt,
   formatRuntimeMetadataDirt,
@@ -294,15 +294,15 @@ function countRange(worktreePath, range) {
   return Number.isInteger(count) && count > 0 ? count : 0;
 }
 
-function countUnpushedCommits(worktreePath, branch, baseBranch) {
+function countUnpushedCommits(worktreePath, branch, baseBranch, remoteName = "origin") {
   try {
     const upstream = execGit(worktreePath, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
     if (upstream) return countRange(worktreePath, `${upstream}..HEAD`);
   } catch {}
 
   for (const ref of [
-    `refs/remotes/origin/${branch}`,
-    ...(baseBranch ? [`refs/remotes/origin/${baseBranch}`, baseBranch] : []),
+    `refs/remotes/${remoteName}/${branch}`,
+    ...(baseBranch ? [`refs/remotes/${remoteName}/${baseBranch}`, baseBranch] : []),
   ]) {
     try {
       execGit(worktreePath, ["rev-parse", "--verify", ref]);
@@ -474,7 +474,9 @@ function main() {
   const statusText = execGit(worktreePath, ["status", "--porcelain"]);
   const dirt = classifyRepositoryDirt(statusText);
   const hasUncommittedChanges = dirt.hasReviewableDirt;
-  const unpushedCommits = countUnpushedCommits(worktreePath, branch, data.git?.base_branch);
+  const baseBranch = data.git?.base_branch || "main";
+  const remoteName = resolveBranchRemote(worktreePath, branch);
+  const unpushedCommits = countUnpushedCommits(worktreePath, branch, data.git?.base_branch, remoteName);
   const prBody = readPrBodyFile(prBodyFile) || buildPrBody({
     runId: data.run_id,
     reason,
@@ -524,8 +526,14 @@ function main() {
       plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "commit", "-m", commitTitle, "-m", commitBody]));
     }
     if (!internalReview) {
-      plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "push", "-u", "origin", branch]));
-      plannedCommands.push(commandRecord(worktreePath, ["gh", "pr", "create", "--title", prTitleResolution.title, "--body", prBody]));
+      plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "push", "-u", remoteName, branch]));
+      plannedCommands.push(commandRecord(worktreePath, [
+        "gh", "pr", "create",
+        "--base", baseBranch,
+        "--head", branch,
+        "--title", prTitleResolution.title,
+        "--body", prBody,
+      ]));
     }
 
     const result = {
@@ -661,7 +669,7 @@ function main() {
   const shouldPush = prNumber === null || hasUncommittedChanges || unpushedCommits > 0;
   if (shouldPush) {
     try {
-      execGit(worktreePath, ["push", "-u", "origin", branch]);
+      execGit(worktreePath, ["push", "-u", remoteName, branch]);
     } catch (error) {
       const detail = formatExecError(error);
       appendFailureEvent(validatedPaths.repoRoot, data, "push_failed", detail, commitSha, branch);
@@ -686,7 +694,16 @@ function main() {
           runId: data.run_id,
           data,
         });
-        const raw = execGh(worktreePath, ["pr", "create", "--title", prTitleResolution.title, "--body", prBody]);
+        // --base/--head are explicit: without --base, gh falls back to the repository
+      // default branch and silently opens the recovery PR against the wrong target
+      // whenever manifest git.base_branch differs (#1083).
+      const raw = execGh(worktreePath, [
+        "pr", "create",
+        "--base", baseBranch,
+        "--head", branch,
+        "--title", prTitleResolution.title,
+        "--body", prBody,
+      ]);
         prNumber = parsePrNumber(raw);
       } catch (error) {
         const detail = formatExecError(error);
