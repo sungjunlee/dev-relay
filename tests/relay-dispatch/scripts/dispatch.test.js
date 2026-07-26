@@ -835,6 +835,12 @@ childProcess.execFileSync = function patchedExecFileSync(command, args, options)
     error.stderr = Buffer.from("simulated recover-commit failure\\n");
     throw error;
   }
+  const isGitCommit = command === "git" && argv.includes("commit");
+  if (process.env.RELAY_TEST_FAIL_GIT_COMMIT === "1" && isGitCommit) {
+    const error = new Error("simulated git commit failure");
+    error.stderr = Buffer.from("simulated git commit failure\\n");
+    throw error;
+  }
   if (logPath && (isPush || isGh)) {
     fs.appendFileSync(logPath, JSON.stringify({ command, args: argv }) + "\\n");
   }
@@ -6845,7 +6851,7 @@ test("dispatch marks verified no-op runs as completed-no-op and skips orchestrat
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 
-test("dispatch auto-recovers uncommitted codex runs by default", () => {
+test("dispatch orchestrator-commits uncommitted codex runs by default", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   process.env.RELAY_HOME = relayHome;
   const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
@@ -6862,11 +6868,14 @@ test("dispatch auto-recovers uncommitted codex runs by default", () => {
     "--json",
   ], env));
 
-  assert.equal(result.status, "completed-uncommitted");
-  assert.equal(result.commitMode, "auto-recovered");
+  // Issue B: the orchestrator commits the executor's reviewable work inline before
+  // evidence is written, so the run reads as a normal completed commit — no
+  // recover-commit subprocess and no evidence rebrand.
+  assert.equal(result.status, "completed");
+  assert.equal(result.commitMode, "orchestrator-committed");
   assert.equal(result.runState, STATES.REVIEW_PENDING);
   assert.equal(result.prNumber, 508);
-  assert.match(result.commits, /Recover relay run/);
+  assert.match(result.commits, /Relay run/);
   assert.equal(result.uncommitted, null);
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
@@ -6875,14 +6884,19 @@ test("dispatch auto-recovers uncommitted codex runs by default", () => {
   const ghCalls = readJsonLines(ghLogPath);
   assert(ghCalls.some((args) => args[0] === "pr" && args[1] === "create"));
   assert(readJsonLines(execLogPath).some(({ command, args }) => command === "git" && args.includes("push")));
-  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 1);
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
-  const recoveryEvent = events.find((event) => event.event === "recover_commit");
-  assert(recoveryEvent, JSON.stringify(events, null, 2));
-  assert.match(recoveryEvent.reason, /auto-recover-commit enabled/);
+  assert.ok(
+    !events.some((event) => event.event === "recover_commit"),
+    "orchestrator-owned commit must not invoke recover_commit",
+  );
+  assert.ok(
+    !events.some((event) => event.event === "execution_evidence_rebranded"),
+    "evidence binds once to the orchestrator commit — no rebrand",
+  );
 });
 
-test("dispatch Claude resume auto-recovers completed-uncommitted work by default", () => {
+test("dispatch Claude resume orchestrator-commits completed-uncommitted work by default", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   process.env.RELAY_HOME = relayHome;
   const { env, ghLogPath, execLogPath, pushPrCountPath, binDir } = createPushPrTestEnv({
@@ -6917,11 +6931,11 @@ test("dispatch Claude resume auto-recovers completed-uncommitted work by default
   ], env));
 
   assert.equal(result.mode, "resume");
-  assert.equal(result.status, "completed-uncommitted");
-  assert.equal(result.commitMode, "auto-recovered");
+  assert.equal(result.status, "completed");
+  assert.equal(result.commitMode, "orchestrator-committed");
   assert.equal(result.runState, STATES.REVIEW_PENDING);
   assert.equal(result.prNumber, 509);
-  assert.match(result.commits, /Recover relay run/);
+  assert.match(result.commits, /Relay run/);
   assert.equal(result.uncommitted, null);
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
@@ -6930,16 +6944,16 @@ test("dispatch Claude resume auto-recovers completed-uncommitted work by default
   const ghCalls = readJsonLines(ghLogPath);
   assert(ghCalls.some((args) => args[0] === "pr" && args[1] === "create"));
   assert(readJsonLines(execLogPath).some(({ command, args }) => command === "git" && args.includes("push")));
-  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 1);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 2);
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
-  const recoveryIndex = events.findIndex((event) => event.event === "recover_commit");
-  const finalDispatchResultIndex = events.reduce(
-    (index, event, eventIndex) => event.event === "dispatch_result" ? eventIndex : index,
-    -1,
+  assert.ok(
+    !events.some((event) => event.event === "recover_commit"),
+    "orchestrator-owned commit must not invoke recover_commit on resume",
   );
-  assert.ok(recoveryIndex >= 0, JSON.stringify(events, null, 2));
-  assert.ok(recoveryIndex < finalDispatchResultIndex, "recovery must be journaled before dispatch result/review handoff");
-  assert.match(events[recoveryIndex].reason, /auto-recover-commit enabled/);
+  assert.ok(
+    !events.some((event) => event.event === "execution_evidence_rebranded"),
+    "resume evidence binds once to the orchestrator commit — no rebrand",
+  );
 });
 
 test("dispatch --no-auto-recover-commit disables Claude default recovery", () => {
@@ -7058,7 +7072,7 @@ test("dispatch blocks delayed publication internal review when timed-out work is
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 
-test("dispatch escalates delayed internal review when auto recover-commit fails", () => {
+test("dispatch escalates delayed internal review when orchestrator commit and recover-commit both fail", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   const { env, ghLogPath, pushPrCountPath } = createPushPrTestEnv({
     relayHome,
@@ -7068,6 +7082,10 @@ test("dispatch escalates delayed internal review when auto recover-commit fails"
     codexMode: "uncommitted",
   });
 
+  // Force the primary orchestrator-owned commit to fail so the run falls back to
+  // recover-commit, which is also forced to fail — exercising the escalation
+  // invariant: uncommitted work that cannot be committed by any path must escalate,
+  // never silently proceed to review.
   const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
     "-b", "issue-512-delayed-auto-recover-fails",
     "--prompt", "work without commit",
@@ -7078,6 +7096,7 @@ test("dispatch escalates delayed internal review when auto recover-commit fails"
     encoding: "utf-8",
     env: {
       ...env,
+      RELAY_TEST_FAIL_GIT_COMMIT: "1",
       RELAY_TEST_FAIL_RECOVER_COMMIT: "1",
     },
   });
@@ -7178,7 +7197,7 @@ test("dispatch preserves Antigravity completed-uncommitted for non-runtime repos
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 
-test("dispatch --auto-recover-commit enables recovery for non-codex completed-uncommitted runs (#393)", () => {
+test("dispatch --auto-recover-commit orchestrator-commits non-codex completed-uncommitted runs (#393)", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   process.env.RELAY_HOME = relayHome;
   const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
@@ -7198,11 +7217,11 @@ test("dispatch --auto-recover-commit enables recovery for non-codex completed-un
     "--json",
   ], env));
 
-  assert.equal(result.status, "completed-uncommitted");
-  assert.equal(result.commitMode, "auto-recovered");
+  assert.equal(result.status, "completed");
+  assert.equal(result.commitMode, "orchestrator-committed");
   assert.equal(result.runState, STATES.REVIEW_PENDING);
   assert.equal(result.prNumber, 393);
-  assert.match(result.commits, /Recover relay run/);
+  assert.match(result.commits, /Relay run/);
   assert.equal(result.uncommitted, null);
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
@@ -7211,11 +7230,16 @@ test("dispatch --auto-recover-commit enables recovery for non-codex completed-un
   const ghCalls = readJsonLines(ghLogPath);
   assert(ghCalls.some((args) => args[0] === "pr" && args[1] === "create"));
   assert(readJsonLines(execLogPath).some(({ command, args }) => command === "git" && args.includes("push")));
-  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 1);
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
-  const recoveryEvent = events.find((event) => event.event === "recover_commit");
-  assert(recoveryEvent, JSON.stringify(events, null, 2));
-  assert.match(recoveryEvent.reason, /auto-recover-commit enabled/);
+  assert.ok(
+    !events.some((event) => event.event === "recover_commit"),
+    "--auto-recover-commit now commits inline via the orchestrator, not recover_commit",
+  );
+  assert.ok(
+    !events.some((event) => event.event === "execution_evidence_rebranded"),
+    "evidence binds once to the orchestrator commit — no rebrand",
+  );
 });
 
 test("dispatch --no-auto-recover-commit disables codex default recovery", () => {

@@ -171,7 +171,7 @@ const {
 } = require("./route-failure-hints");
 const { loadRelayPolicy } = require("./relay-policy");
 const { loadProjectRoutes, resolveRouteIntent, resolveRoutingDecision } = require("./relay-routing");
-const { classifyRepositoryDirt, formatRuntimeMetadataDirt } = require("./runtime-dirt");
+const { classifyRepositoryDirt, formatRuntimeMetadataDirt, gitAddReviewableArgs } = require("./runtime-dirt");
 const {
   dispatchManifestPathFields,
   getRunArtifactPaths,
@@ -3281,7 +3281,39 @@ async function main() {
   } else {
     status = exitCode === 0 ? "completed" : "failed";
   }
+
+  // Issue B (orchestrator-owned commit): when the executor exits cleanly but left
+  // reviewable work uncommitted, commit it now — before execution evidence is
+  // written — so evidence binds once to the committed SHA and no post-hoc
+  // recover-commit or evidence rebrand is needed. Gated identically to
+  // auto-recover-commit (default-on for codex/claude) so other executors keep
+  // their existing path. On failure, fall through with the original
+  // completed-uncommitted status so the downstream recover-commit path still runs.
+  let orchestratorCommitted = false;
+  if (!DRY_RUN && AUTO_RECOVER_COMMIT && status === "completed-uncommitted") {
+    try {
+      execGit(wtPath, gitAddReviewableArgs(rawUncommitted));
+      execGit(wtPath, [
+        "commit",
+        "-m", `Relay run ${runId}`,
+        "-m", `Executor reviewable changes committed by the relay orchestrator (run ${runId}).`,
+      ]);
+      currentHead = execGit(wtPath, ["rev-parse", "HEAD"]);
+      if (startHead && currentHead !== startHead) {
+        gitLog = execGit(wtPath, ["log", "--oneline", `${startHead}..HEAD`]);
+      }
+      uncommitted = classifyRepositoryDirt(execGit(wtPath, ["status", "--porcelain"])).reviewableStatus;
+      if (!uncommitted) uncommittedDiff = "";
+      status = "completed";
+      orchestratorCommitted = true;
+    } catch {
+      // Leave status as completed-uncommitted; the auto-recover-commit fallback runs below.
+      orchestratorCommitted = false;
+    }
+  }
+
   let commitMode = summarizeCommitMode({ status, gitLog, uncommitted });
+  if (orchestratorCommitted) commitMode = "orchestrator-committed";
   const delayedReviewHasUncommittedWork = PUBLISH_POLICY === "after-internal-review" && (
     status === "completed-uncommitted" || (status === "completed-with-warning" && uncommitted)
   );

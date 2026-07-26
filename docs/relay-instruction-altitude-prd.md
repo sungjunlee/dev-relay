@@ -14,6 +14,12 @@ As models improve, the right direction is fewer detailed instructions and more f
 
 The proposal: finish the same subtraction #1025 started, on the reliability axis. Eliminate the executor-misbehavior failure mode **structurally** (extend orchestrator ownership from push+PR to the commit step), instrument what the recovery machinery actually catches, and retire the machinery on evidence — the same "delete legacy only after comparative evidence" discipline #1025 used.
 
+## Delivery status (2026-07-26, branch `relay/unreliability-tax`)
+
+- **Issue A — DONE.** `reliability-report --by-recovery` ships the per-executor/model tax breakdown. Real baseline: ~39% of dev-relay runs carry the misbehavior tax (claude 0.69 / cursor 0.54 / codex 0.36), infrastructure recovery kept separate.
+- **Issue B — DONE.** Orchestrator-owned commit now lands *before* evidence for `completed-uncommitted` runs, gated to auto-recover-on executors (codex/claude, or explicit `--auto-recover-commit`), so evidence binds once to the commit and no rebrand runs. `recover-commit` stays as a fallback (orchestrator-commit failure → auto-recover → escalate), so the change is non-breaking. Extending orchestrator-owned commit to all executors / always-on is a follow-up (the "unmanaged executors" open question). Verified: full dispatch suite 201/201, recover/reconcile/docs 90/90.
+- **Issue C / D — pending.** C (retire `recover-commit`/`rebrand-evidence` on evidence) is gated on a post-B observation window that shows the tax invocation rate trending to zero; D (spine thinning) is optional.
+
 ## Problem
 
 ### The prescription-tax half is done; this is the reliability half
