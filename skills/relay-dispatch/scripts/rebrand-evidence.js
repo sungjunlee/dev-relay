@@ -25,7 +25,7 @@ const {
   readArg,
   schemaHasFlag,
 } = require("./cli-args");
-const { execGit } = require("./exec");
+const { execGit, resolveBranchRemote } = require("./exec");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "rebrand-evidence", reservedFlags: ["-h"] };
@@ -183,7 +183,7 @@ function rebaseOntoBaseAndPush({ worktreePath, baseBranch, branch }) {
   }
 
   const newHeadSha = execGit(worktreePath, ["rev-parse", "HEAD"]);
-  execGit(worktreePath, ["push", "--force-with-lease", "origin", branch]);
+  execGit(worktreePath, ["push", "--force-with-lease", resolveBranchRemote(worktreePath, branch), branch]);
   return { oldHeadSha, newHeadSha, base: originBase };
 }
 

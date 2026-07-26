@@ -380,6 +380,13 @@ test("happy path commits dirty worktree, pushes, opens PR, stamps manifest, and 
   assert.equal(events.filter((entry) => entry.event === "execution_evidence_rebranded").length, 0);
   assert.ok(readJsonLines(fixture.eventLogPath).some((entry) => entry.eventData.event === "recover_commit"));
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 1);
+
+  // #1083: without an explicit --base, gh falls back to the repository default
+  // branch and silently opens the recovery PR against the wrong target whenever
+  // the manifest's base_branch differs.
+  const prCreateCall = findGhCall(fixture, "pr", "create");
+  assert.equal(ghArg(prCreateCall, "--base"), manifest.git.base_branch);
+  assert.equal(ghArg(prCreateCall, "--head"), fixture.branch);
 });
 
 test("internal_review_pending recovery commits locally without pushing or opening a PR", () => {
