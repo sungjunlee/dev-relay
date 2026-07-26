@@ -2143,7 +2143,7 @@ async function main() {
       if (existingMarker !== COORDINATION_MARKER) {
         console.error(
           "Error: same-run resume cannot add or replace a coordination marker; " +
-          "use the supported relay-orca attach-marker recovery command"
+          "close this run with close-run.js, then start a fresh dispatch with the desired --coordination-marker value"
         );
         process.exit(1);
       }
@@ -2177,7 +2177,7 @@ async function main() {
     if (markerDurabilityRecoveryPending) {
       console.error(
         "Error: coordination marker durability recovery is incomplete; " +
-        "attach the exact marker with relay-orca attach-marker.js before resuming",
+        "close this run with close-run.js, then start a fresh dispatch with the exact --coordination-marker value",
       );
       process.exit(1);
     }

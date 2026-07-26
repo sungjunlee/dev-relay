@@ -138,7 +138,6 @@ For the full architecture, see [references/architecture.md](references/architect
 - Nested Codex executor runs may need `--network-access enabled` for networked quality gates or PR/API calls.
 - Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli`; Antigravity primary and advisory review remain fail-safe experimental until healthy live reviewer canaries pass. Fake-bin tests alone do not prove live executor or reviewer success. See [docs/relay-operator-guide.md#antigravity-live-canary](docs/relay-operator-guide.md#antigravity-live-canary).
 - Sprint-file automation works, but some sprint status updates can still require manual intervention.
-- `relay-orca` is EXPERIMENTAL and opt-in. It is a supervised program-controller pilot, explicit-only, and not an implicit dependency of ordinary relay use; only its read-only `plan` mode is implemented today. See [skills/relay-orca/references/experimental-status.md](skills/relay-orca/references/experimental-status.md).
 
 ## Contributing
 
