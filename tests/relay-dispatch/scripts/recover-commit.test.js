@@ -1118,3 +1118,35 @@ test("idempotent re-run reuses existing PR without restamping or creating a seco
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 1);
   assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, 281);
 });
+
+test("re-run that commits new work refreshes git.head_sha even when pr_number is already stamped", () => {
+  // #1084: the run is already review_pending with pr_number set, so neither stamping
+  // branch used to fire and no manifest write happened at all — leaving git.head_sha
+  // at the pre-commit SHA while the evidence artifact was rebound to the new commit.
+  const fixture = setupRepo({ dirty: true });
+  const first = runRecover(fixture, ["--reason", "first recovery", "--json"]);
+  assert.equal(first.status, 0, first.stderr);
+  const firstManifest = readManifest(fixture.manifestPath).data;
+  assert.equal(firstManifest.state, STATES.REVIEW_PENDING);
+  assert.equal(firstManifest.git.pr_number, 281);
+
+  fs.writeFileSync(path.join(fixture.worktreePath, "late.txt"), "more uncommitted work\n", "utf-8");
+  const second = runRecover(fixture, ["--reason", "second recovery with new work", "--json"]);
+  assert.equal(second.status, 0, second.stderr);
+
+  const secondParsed = JSON.parse(second.stdout);
+  assert.equal(secondParsed.commitCreated, true);
+  assert.notEqual(secondParsed.commitSha, firstManifest.git.head_sha);
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.git.head_sha, secondParsed.commitSha);
+  assert.equal(manifest.git.pr_number, 281, "pr_number must not be restamped");
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+
+  const worktreeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  assert.equal(manifest.git.head_sha, worktreeHead, "manifest head must track the worktree HEAD");
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.filter((entry) => entry.event === "pr_number_stamped").length, 1);
+  assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 1);
+});

@@ -719,11 +719,19 @@ function main() {
     }
   }
 
+  // git.head_sha must follow any commit we just created, independent of whether a
+  // pr_number stamp is also due (#1084). Previously a run that was already
+  // review_pending with pr_number set took neither stamping branch, so no manifest
+  // write happened at all and head_sha stayed at the pre-commit SHA while the
+  // evidence artifact had already been rebound to the new commit.
+  const prNumberUnset = data.git?.pr_number === undefined || data.git?.pr_number === null;
   let stampedRecord = manifestRecord;
-  if (recoveringFromDispatched) {
+  if (recoveringFromDispatched || prNumberUnset || commitCreated) {
     stampedRecord = stampPrNumberUnderLock(manifestRecord, prNumber, {
       expectedRepoRoot: validatedPaths.repoRoot,
-      caller: "recover-commit dispatched PR stamping",
+      caller: recoveringFromDispatched
+        ? "recover-commit dispatched PR stamping"
+        : "recover-commit PR stamping",
       reason: `Stamped git.pr_number=${prNumber} during recover-commit`,
       updateFreshData(freshData) {
         let updatedData = freshData;
@@ -733,7 +741,7 @@ function main() {
           updatedData = updateManifestState(updatedData, target.state, target.nextAction);
           shouldUpdateHead = true;
         } else if ([STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(updatedData.state)) {
-          shouldUpdateHead = true;
+          shouldUpdateHead = recoveringFromDispatched || commitCreated;
         }
         if (!shouldUpdateHead) {
           return updatedData;
@@ -746,12 +754,6 @@ function main() {
           },
         };
       },
-    });
-  } else if (data.git?.pr_number === undefined || data.git?.pr_number === null) {
-    stampedRecord = stampPrNumberUnderLock(manifestRecord, prNumber, {
-      expectedRepoRoot: validatedPaths.repoRoot,
-      caller: "recover-commit PR stamping",
-      reason: `Stamped git.pr_number=${prNumber} during recover-commit`,
     });
   }
 
