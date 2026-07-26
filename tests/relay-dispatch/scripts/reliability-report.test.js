@@ -2473,3 +2473,148 @@ test("reliability-report publishes path-aware calibration and class decisions", 
   );
   assert.match(text, /documentation=continue_calibration/);
 });
+
+test("reliability-report --by-recovery attributes the misbehavior tax per executor and separates infra", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-tax-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  function writeExecutorRun({ runId, executor, model, state }) {
+    initGitRepo(repoRoot);
+    const layout = ensureRunLayout(repoRoot, runId);
+    let manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch: `issue-${runId}`,
+      baseBranch: "main",
+      issueNumber: 42,
+      worktreePath: path.join(repoRoot, "wt", runId),
+      orchestrator: "codex",
+      executor,
+      reviewer: "codex",
+    });
+    manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+    if (state !== STATES.DISPATCHED) {
+      manifest.anchor.rubric_path = "rubric.yaml";
+      fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: reliability-report\n", "utf-8");
+      manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+    }
+    if (state === STATES.READY_TO_MERGE || state === STATES.MERGED) {
+      manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
+    }
+    if (state === STATES.MERGED) {
+      manifest = updateManifestState(manifest, STATES.MERGED, "merge");
+    }
+    manifest.dispatch = { ...(manifest.dispatch || {}), last_executor: executor, last_model: model };
+    manifest.roles = { ...(manifest.roles || {}), executor };
+    manifest.timestamps = { ...(manifest.timestamps || {}), created_at: recentTs, updated_at: recentTs };
+    writeManifest(layout.manifestPath, manifest);
+  }
+
+  const codexTax = createRunId({ branch: "codex-tax", timestamp: new Date("2026-05-01T00:00:01.000Z") });
+  const codexClean = createRunId({ branch: "codex-clean", timestamp: new Date("2026-05-01T00:00:02.000Z") });
+  const claudeTax = createRunId({ branch: "claude-tax", timestamp: new Date("2026-05-01T00:00:03.000Z") });
+  const cursorInfra = createRunId({ branch: "cursor-infra", timestamp: new Date("2026-05-01T00:00:04.000Z") });
+  const orphan = createRunId({ branch: "orphan", timestamp: new Date("2026-05-01T00:00:05.000Z") });
+
+  writeExecutorRun({ runId: codexTax, executor: "codex", model: "gpt-5.3-codex", state: STATES.MERGED });
+  writeExecutorRun({ runId: codexClean, executor: "codex", model: "gpt-5.3-codex", state: STATES.READY_TO_MERGE });
+  writeExecutorRun({ runId: claudeTax, executor: "claude", model: "claude-opus", state: STATES.REVIEW_PENDING });
+  writeExecutorRun({ runId: cursorInfra, executor: "cursor", model: "grok", state: STATES.DISPATCHED });
+
+  // codex run: recover_commit + execution_evidence_rebranded (both tax).
+  appendRunEvent(repoRoot, codexTax, {
+    event: "recover_commit",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.REVIEW_PENDING,
+    round: 1,
+    reason: "completed-uncommitted",
+  });
+  appendRunEvent(repoRoot, codexTax, {
+    event: "execution_evidence_rebranded",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.REVIEW_PENDING,
+    round: 1,
+    reason: "evidence rebound to recovery commit",
+  });
+  // claude run: recover_commit only.
+  appendRunEvent(repoRoot, claudeTax, {
+    event: "recover_commit",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.REVIEW_PENDING,
+    round: 1,
+    reason: "completed-uncommitted",
+  });
+  // cursor run: infrastructure + operator evidence only, must NOT be counted as tax.
+  appendRunEvent(repoRoot, cursorInfra, {
+    event: "dispatch_interrupted",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.DISPATCHED,
+    reason: "supervisor died",
+  });
+  appendRunEvent(repoRoot, cursorInfra, {
+    event: "state_recovery",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.REVIEW_PENDING,
+    reason: "reconcile dead-work recovery",
+  });
+  appendRunEvent(repoRoot, cursorInfra, {
+    event: "operator_execution_evidence",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.DISPATCHED,
+    reason: "operator supplied salvage evidence",
+  });
+  // orphan tax event: run dir exists but no manifest -> unattributed.
+  ensureRunLayout(repoRoot, orphan);
+  appendRunEvent(repoRoot, orphan, {
+    event: "recover_commit",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.REVIEW_PENDING,
+    reason: "no manifest",
+  });
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--by-recovery", "--json"], { encoding: "utf-8" }));
+  const tax = report.by_recovery;
+
+  // Per-executor attribution.
+  assert.deepEqual(tax.by_executor.codex, {
+    total_runs: 2,
+    recover_commit_runs: 1,
+    recover_commit_events: 1,
+    evidence_rebrand_runs: 1,
+    evidence_rebrand_events: 1,
+    misbehavior_recovery_runs: 1,
+    misbehavior_recovery_rate: 0.5,
+  });
+  assert.equal(tax.by_executor.claude.misbehavior_recovery_runs, 1);
+  assert.equal(tax.by_executor.claude.misbehavior_recovery_rate, 1);
+  assert.equal(tax.by_executor.cursor.misbehavior_recovery_runs, 0);
+  assert.equal(tax.by_executor.cursor.misbehavior_recovery_rate, 0);
+
+  // Per-model attribution.
+  assert.equal(tax.by_model["gpt-5.3-codex"].misbehavior_recovery_runs, 1);
+  assert.equal(tax.by_model["claude-opus"].misbehavior_recovery_runs, 1);
+  assert.equal(tax.by_model.grok.misbehavior_recovery_runs, 0);
+
+  // Totals: 2 attributed tax runs out of 4 manifests; orphan event is unattributed.
+  assert.equal(tax.totals.misbehavior_recovery_runs, 2);
+  assert.equal(tax.totals.total_runs, 4);
+  assert.equal(tax.totals.recover_commit_runs, 2);
+  assert.equal(tax.totals.evidence_rebrand_runs, 1);
+  assert.equal(tax.totals.misbehavior_recovery_rate, 0.5);
+  assert.equal(tax.totals.unattributed_tax_events, 1);
+
+  // Infrastructure and operator evidence are separated, never taxed.
+  assert.equal(tax.infrastructure_recovery.dispatch_interrupted_runs, 1);
+  assert.equal(tax.infrastructure_recovery.state_recovery_runs, 1);
+  assert.equal(tax.related_signals.operator_execution_evidence_runs, 1);
+
+  // Classification is explicit (no silent truncation of mixed-origin events).
+  assert.deepEqual(tax.classification.tax_events, ["recover_commit", "execution_evidence_rebranded"]);
+  assert.deepEqual(tax.classification.mixed_or_operator_events, ["state_recovery"]);
+
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--by-recovery"], { encoding: "utf-8" });
+  assert.match(text, /by_recovery \(unreliability tax\):/);
+  assert.match(text, /executor\.codex: misbehavior_recovery_rate=0\.5/);
+  assert.match(text, /infrastructure_recovery \(excluded from tax\): dispatch_interrupted_runs=1 state_recovery_runs=1/);
+});
