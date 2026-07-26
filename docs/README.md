@@ -34,6 +34,7 @@ Specialized ledgers (not ADRs): [rubric-fail-closed-history.md](./rubric-fail-cl
 | [relay-ready-routing-and-handoff-design.md](./relay-ready-routing-and-handoff-design.md) | relay-ready intake routing (#127–#132) |
 | [relay-scenario-tests.md](./relay-scenario-tests.md) | Scenario-test matrix for lifecycle and reporting |
 | [agentic-patterns-adoption.md](./agentic-patterns-adoption.md) | Willison-pattern adoption roadmap (Phase 0 complete) |
+| [relay-instruction-altitude-prd.md](./relay-instruction-altitude-prd.md) | Retiring the unreliability tax (recovery machinery) via orchestrator-owned commit — the reliability-axis sequel to #1025 (proposal) |
 
 ## Analysis And Validation
 

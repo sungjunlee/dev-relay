@@ -171,7 +171,7 @@ const {
 } = require("./route-failure-hints");
 const { loadRelayPolicy } = require("./relay-policy");
 const { loadProjectRoutes, resolveRouteIntent, resolveRoutingDecision } = require("./relay-routing");
-const { classifyRepositoryDirt, formatRuntimeMetadataDirt } = require("./runtime-dirt");
+const { classifyRepositoryDirt, formatRuntimeMetadataDirt, gitAddReviewableArgs } = require("./runtime-dirt");
 const {
   dispatchManifestPathFields,
   getRunArtifactPaths,
@@ -3281,7 +3281,55 @@ async function main() {
   } else {
     status = exitCode === 0 ? "completed" : "failed";
   }
+
+  // Issue B (orchestrator-owned commit): when the executor exits cleanly but left
+  // reviewable work uncommitted, commit it now — before execution evidence is
+  // written — so evidence binds once to the committed SHA and no post-hoc
+  // recover-commit or evidence rebrand is needed. Gated identically to
+  // auto-recover-commit (default-on for codex/claude) so other executors keep
+  // their existing path. On failure, fall through with the original
+  // completed-uncommitted status so the downstream recover-commit path still runs.
+  //
+  // Skip when another orchestrator has already superseded this run (manifest
+  // advanced off DISPATCHED). Committing here would promote the run to `completed`
+  // and trip the immediate-publish push below, which runs BEFORE the supervisor
+  // supersede check (~line 3400) and would open a duplicate/conflicting PR for a
+  // run this orchestrator no longer owns. Leaving it completed-uncommitted keeps
+  // the prior behavior: the downstream recover-commit path is itself
+  // supersede-guarded and correctly no-ops.
+  let orchestratorCommitted = false;
+  const supersededBeforeCommit = readManifest(manifestPath).data.state !== STATES.DISPATCHED;
+  if (!DRY_RUN && AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !supersededBeforeCommit) {
+    try {
+      execGit(wtPath, gitAddReviewableArgs(rawUncommitted));
+      execGit(wtPath, [
+        "commit",
+        "-m", `Relay run ${runId}`,
+        "-m", `Executor reviewable changes committed by the relay orchestrator (run ${runId}).`,
+      ]);
+      currentHead = execGit(wtPath, ["rev-parse", "HEAD"]);
+      if (startHead && currentHead !== startHead) {
+        gitLog = execGit(wtPath, ["log", "--oneline", `${startHead}..HEAD`]);
+      }
+      uncommitted = classifyRepositoryDirt(execGit(wtPath, ["status", "--porcelain"])).reviewableStatus;
+      if (!uncommitted) uncommittedDiff = "";
+      status = "completed";
+      orchestratorCommitted = true;
+    } catch (orchestratorCommitError) {
+      // Leave status as completed-uncommitted; the auto-recover-commit fallback runs
+      // below. Surface the git failure reason — this is now the primary commit path,
+      // so a silent no-op would hide why the unreliability tax persists (a
+      // gitAddReviewableArgs bug, a pre-commit hook, or a missing git identity).
+      orchestratorCommitted = false;
+      console.error(
+        `orchestrator_commit_failed (run ${runId}), falling back to recover-commit: ` +
+        `${String(orchestratorCommitError.message || orchestratorCommitError).split("\n")[0]}`
+      );
+    }
+  }
+
   let commitMode = summarizeCommitMode({ status, gitLog, uncommitted });
+  if (orchestratorCommitted) commitMode = "orchestrator-committed";
   const delayedReviewHasUncommittedWork = PUBLISH_POLICY === "after-internal-review" && (
     status === "completed-uncommitted" || (status === "completed-with-warning" && uncommitted)
   );

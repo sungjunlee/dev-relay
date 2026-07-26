@@ -26,10 +26,19 @@ const HANDOFF_RECOVERY_EVENTS = new Set([
   EVENTS.STATE_RECOVERY,
 ]);
 
+// Executor-misbehavior "unreliability tax": recovery that only exists because the
+// executor said "done" without a clean committed/pushed/evidenced result. Kept
+// strictly separate from infrastructure recovery (dead/timed-out supervisor) and
+// from mixed-origin state_recovery. See buildUnreliabilityTax.
+const MISBEHAVIOR_TAX_EVENTS = new Set([
+  EVENTS.RECOVER_COMMIT,
+  EVENTS.EXECUTION_EVIDENCE_REBRANDED,
+]);
+
 if (hasCliFlag(["--help", "-h"])) {
   console.log(
     "Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] " +
-    "[--json] [--by-actor] [--by-role] [--by-acting-reviewer] [--by-dispatch] [--by-lane]"
+    "[--json] [--by-actor] [--by-role] [--by-acting-reviewer] [--by-dispatch] [--by-lane] [--by-recovery]"
   );
   console.log("\nOptions:");
   console.log(`  --repo <path>           ${modeLabel("--repo")} Repository root (default: .)`);
@@ -40,6 +49,7 @@ if (hasCliFlag(["--help", "-h"])) {
   console.log(`  --by-acting-reviewer    ${modeLabel("--by-acting-reviewer")} Include acting reviewer breakdown`);
   console.log(`  --by-dispatch           ${modeLabel("--by-dispatch")} Include executor/model/provider breakdown`);
   console.log(`  --by-lane               ${modeLabel("--by-lane")} Include advisory lane reviewer/model/profile breakdown`);
+  console.log(`  --by-recovery           ${modeLabel("--by-recovery")} Include unreliability-tax breakdown (misbehavior recovery per executor/model, infra recovery separated)`);
   process.exit(0);
 }
 
@@ -1290,6 +1300,173 @@ function buildLaneReports(events) {
   return Object.fromEntries([...buckets.entries()].sort(([left], [right]) => left.localeCompare(right)));
 }
 
+function buildRunDispatchIndex(manifests) {
+  const index = new Map();
+  for (const manifest of manifests) {
+    const data = manifest?.data;
+    const runId = data?.run_id;
+    if (!runId) continue;
+    index.set(runId, {
+      executor: normalizeDispatchKey(data?.dispatch?.last_executor || data?.roles?.executor),
+      model: normalizeDispatchKey(data?.dispatch?.last_model),
+    });
+  }
+  return index;
+}
+
+function newTaxCell() {
+  return {
+    recoverCommitRuns: new Set(),
+    recoverCommitEvents: 0,
+    evidenceRebrandRuns: new Set(),
+    evidenceRebrandEvents: 0,
+    misbehaviorRuns: new Set(),
+  };
+}
+
+function recordTaxEvent(cell, eventName, runId) {
+  if (eventName === EVENTS.RECOVER_COMMIT) {
+    cell.recoverCommitEvents += 1;
+    if (runId) cell.recoverCommitRuns.add(runId);
+  } else {
+    cell.evidenceRebrandEvents += 1;
+    if (runId) cell.evidenceRebrandRuns.add(runId);
+  }
+  if (runId) cell.misbehaviorRuns.add(runId);
+}
+
+function finalizeTaxCell(cell, denomRuns) {
+  const misbehaviorRuns = cell.misbehaviorRuns.size;
+  return {
+    total_runs: denomRuns,
+    recover_commit_runs: cell.recoverCommitRuns.size,
+    recover_commit_events: cell.recoverCommitEvents,
+    evidence_rebrand_runs: cell.evidenceRebrandRuns.size,
+    evidence_rebrand_events: cell.evidenceRebrandEvents,
+    misbehavior_recovery_runs: misbehaviorRuns,
+    misbehavior_recovery_rate: ratio(misbehaviorRuns, denomRuns),
+  };
+}
+
+// Issue A instrumentation: how often the misbehavior-recovery paths fire per
+// executor/model, kept read-only and strictly separated from infrastructure
+// recovery. Denominators are all runs assigned to an executor/model; numerators
+// are distinct runs (and raw event counts) touched by recover_commit /
+// execution_evidence_rebranded. reconcile-run row-6 salvage rides on
+// execution_evidence_rebranded and operator_execution_evidence, so it is counted
+// via those tallies rather than as a separately named row. Tax events whose
+// run_id has no loaded manifest are surfaced as `unattributed_tax_events` (no
+// silent truncation).
+function buildUnreliabilityTax({ manifests, events }) {
+  const dispatchIndex = buildRunDispatchIndex(manifests);
+
+  const runsByExecutor = new Map();
+  const runsByModel = new Map();
+  for (const info of dispatchIndex.values()) {
+    runsByExecutor.set(info.executor, (runsByExecutor.get(info.executor) || 0) + 1);
+    runsByModel.set(info.model, (runsByModel.get(info.model) || 0) + 1);
+  }
+
+  const overall = newTaxCell();
+  const byExecutor = new Map();
+  const byModel = new Map();
+  const infra = {
+    dispatchInterruptedRuns: new Set(),
+    dispatchInterruptedEvents: 0,
+    stateRecoveryRuns: new Set(),
+    stateRecoveryEvents: 0,
+  };
+  const operatorEvidenceRuns = new Set();
+  let operatorEvidenceEvents = 0;
+  let unattributedTaxEvents = 0;
+
+  function cellFor(map, key) {
+    if (!map.has(key)) map.set(key, newTaxCell());
+    return map.get(key);
+  }
+
+  for (const event of events) {
+    const name = event?.event;
+    const runId = event?.run_id || null;
+
+    if (name === EVENTS.DISPATCH_INTERRUPTED) {
+      infra.dispatchInterruptedEvents += 1;
+      if (runId) infra.dispatchInterruptedRuns.add(runId);
+      continue;
+    }
+    if (name === EVENTS.STATE_RECOVERY) {
+      infra.stateRecoveryEvents += 1;
+      if (runId) infra.stateRecoveryRuns.add(runId);
+      continue;
+    }
+    if (name === EVENTS.OPERATOR_EXECUTION_EVIDENCE) {
+      operatorEvidenceEvents += 1;
+      if (runId) operatorEvidenceRuns.add(runId);
+      continue;
+    }
+    if (!MISBEHAVIOR_TAX_EVENTS.has(name)) continue;
+
+    // Attribute only tax events that map to a loaded manifest so totals stay
+    // reconcilable with the per-executor/model breakdown. Events whose run_id has
+    // no manifest are surfaced as `unattributed_tax_events`, never folded into a
+    // bucket or the headline rate.
+    const info = runId ? dispatchIndex.get(runId) : null;
+    if (!info) {
+      unattributedTaxEvents += 1;
+      continue;
+    }
+    recordTaxEvent(overall, name, runId);
+    recordTaxEvent(cellFor(byExecutor, info.executor), name, runId);
+    recordTaxEvent(cellFor(byModel, info.model), name, runId);
+  }
+
+  function finalizeGroup(runsByKey, cellByKey) {
+    const out = {};
+    for (const key of [...runsByKey.keys()].sort((a, b) => a.localeCompare(b))) {
+      out[key] = finalizeTaxCell(cellByKey.get(key) || newTaxCell(), runsByKey.get(key));
+    }
+    return out;
+  }
+
+  return {
+    classification: {
+      tax_events: ["recover_commit", "execution_evidence_rebranded"],
+      infrastructure_events: ["dispatch_interrupted"],
+      mixed_or_operator_events: ["state_recovery"],
+      note:
+        "recover_commit and execution_evidence_rebranded are counted as the executor "
+        + "misbehavior tax. dispatch_interrupted is infrastructure recovery. state_recovery is "
+        + "mixed-origin (reconcile dead-work = infrastructure; recover-state = operator "
+        + "correction) and is reported under infrastructure_recovery, never attributed to an "
+        + "executor tax bucket. reconcile-run row-6 salvage rides on execution_evidence_rebranded "
+        + "and operator_execution_evidence, so it is counted via those tallies, not as a "
+        + "separately named row.",
+    },
+    totals: {
+      ...finalizeTaxCell(overall, manifests.length),
+      unattributed_tax_events: unattributedTaxEvents,
+    },
+    by_executor: finalizeGroup(runsByExecutor, byExecutor),
+    by_model: finalizeGroup(runsByModel, byModel),
+    infrastructure_recovery: {
+      dispatch_interrupted_runs: infra.dispatchInterruptedRuns.size,
+      dispatch_interrupted_events: infra.dispatchInterruptedEvents,
+      state_recovery_runs: infra.stateRecoveryRuns.size,
+      state_recovery_events: infra.stateRecoveryEvents,
+      note: "Infrastructure/operator recovery — excluded from the executor misbehavior tax.",
+    },
+    related_signals: {
+      operator_execution_evidence_runs: operatorEvidenceRuns.size,
+      operator_execution_evidence_events: operatorEvidenceEvents,
+      note:
+        "Operator-supplied execution evidence (reconcile-run row-6 salvage and recover-commit "
+        + "operator-evidence path). Overlaps with runs already counted under recover_commit / "
+        + "execution_evidence_rebranded; reported for visibility, not added to "
+        + "misbehavior_recovery_rate.",
+    },
+  };
+}
+
 function resolveManifestRubricPath(manifest) {
   const rubricPath = manifest?.data?.anchor?.rubric_path;
   const runId = manifest?.data?.run_id;
@@ -1752,6 +1929,9 @@ function main() {
   if (hasCliFlag("--by-lane")) {
     report.by_lane = buildLaneReports(events);
   }
+  if (hasCliFlag("--by-recovery")) {
+    report.by_recovery = buildUnreliabilityTax({ manifests, events });
+  }
 
   if (hasCliFlag("--json")) {
     console.log(JSON.stringify(report, null, 2));
@@ -1961,6 +2141,37 @@ function main() {
         `required_findings=${laneReport.required_findings} ` +
         `advisory_findings=${laneReport.advisory_findings} ` +
         `demotions_caused=${laneReport.demotions_caused}`
+      );
+    }
+  }
+  if (hasCliFlag("--by-recovery")) {
+    const tax = report.by_recovery;
+    console.log("  by_recovery (unreliability tax):");
+    if (!tax) {
+      console.log("    n/a");
+    } else {
+      console.log(
+        `    totals: misbehavior_recovery_rate=${tax.totals.misbehavior_recovery_rate ?? "n/a"} ` +
+        `runs=${tax.totals.misbehavior_recovery_runs}/${tax.totals.total_runs} ` +
+        `recover_commit_runs=${tax.totals.recover_commit_runs} ` +
+        `evidence_rebrand_runs=${tax.totals.evidence_rebrand_runs} ` +
+        `unattributed_tax_events=${tax.totals.unattributed_tax_events}`
+      );
+      for (const [executor, cell] of Object.entries(tax.by_executor || {})) {
+        console.log(
+          `    executor.${executor}: misbehavior_recovery_rate=${cell.misbehavior_recovery_rate ?? "n/a"} ` +
+          `runs=${cell.misbehavior_recovery_runs}/${cell.total_runs} ` +
+          `recover_commit_runs=${cell.recover_commit_runs} ` +
+          `evidence_rebrand_runs=${cell.evidence_rebrand_runs}`
+        );
+      }
+      console.log(
+        `    infrastructure_recovery (excluded from tax): ` +
+        `dispatch_interrupted_runs=${tax.infrastructure_recovery.dispatch_interrupted_runs} ` +
+        `state_recovery_runs=${tax.infrastructure_recovery.state_recovery_runs}`
+      );
+      console.log(
+        `    related: operator_execution_evidence_runs=${tax.related_signals.operator_execution_evidence_runs}`
       );
     }
   }
