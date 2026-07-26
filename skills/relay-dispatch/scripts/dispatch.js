@@ -3028,7 +3028,7 @@ async function main() {
         {
           error_code: "coordination_marker_not_persisted",
           interruption_audit: "dispatch_interrupted",
-          recovery: "attach the exact marker, then resume the interrupted run",
+          recovery: "close this run with close-run.js, then start a fresh dispatch with the exact --coordination-marker value",
         },
       );
     }

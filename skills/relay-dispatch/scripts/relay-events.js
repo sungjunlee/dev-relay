@@ -471,7 +471,7 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
 }
 
 // Manifest and journal writers share the same per-run transaction lock. Callers
-// already inside a transaction (notably attach-marker's manifest+audit pair) set
+// already inside a transaction (notably extend-review-policy's manifest+audit pair) set
 // lockHeld and may target an explicitly resolved events path.
 function appendRunEvent(repoRoot, runId, eventData, { eventsPath = null, lockHeld = false } = {}) {
   if (lockHeld) return appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath });
