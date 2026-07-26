@@ -3289,8 +3289,17 @@ async function main() {
   // auto-recover-commit (default-on for codex/claude) so other executors keep
   // their existing path. On failure, fall through with the original
   // completed-uncommitted status so the downstream recover-commit path still runs.
+  //
+  // Skip when another orchestrator has already superseded this run (manifest
+  // advanced off DISPATCHED). Committing here would promote the run to `completed`
+  // and trip the immediate-publish push below, which runs BEFORE the supervisor
+  // supersede check (~line 3400) and would open a duplicate/conflicting PR for a
+  // run this orchestrator no longer owns. Leaving it completed-uncommitted keeps
+  // the prior behavior: the downstream recover-commit path is itself
+  // supersede-guarded and correctly no-ops.
   let orchestratorCommitted = false;
-  if (!DRY_RUN && AUTO_RECOVER_COMMIT && status === "completed-uncommitted") {
+  const supersededBeforeCommit = readManifest(manifestPath).data.state !== STATES.DISPATCHED;
+  if (!DRY_RUN && AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !supersededBeforeCommit) {
     try {
       execGit(wtPath, gitAddReviewableArgs(rawUncommitted));
       execGit(wtPath, [
@@ -3306,9 +3315,16 @@ async function main() {
       if (!uncommitted) uncommittedDiff = "";
       status = "completed";
       orchestratorCommitted = true;
-    } catch {
-      // Leave status as completed-uncommitted; the auto-recover-commit fallback runs below.
+    } catch (orchestratorCommitError) {
+      // Leave status as completed-uncommitted; the auto-recover-commit fallback runs
+      // below. Surface the git failure reason — this is now the primary commit path,
+      // so a silent no-op would hide why the unreliability tax persists (a
+      // gitAddReviewableArgs bug, a pre-commit hook, or a missing git identity).
       orchestratorCommitted = false;
+      console.error(
+        `orchestrator_commit_failed (run ${runId}), falling back to recover-commit: ` +
+        `${String(orchestratorCommitError.message || orchestratorCommitError).split("\n")[0]}`
+      );
     }
   }
 
