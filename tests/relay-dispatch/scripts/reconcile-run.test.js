@@ -972,16 +972,47 @@ test("reconcile dry-run prints the salvage plan without mutating", () => {
   assert.equal(result.forceWithLease, true);
   assert.equal(result.targetState, STATES.REVIEW_PENDING);
   assert.equal(result.evidenceVerified, false);
+  // Order mirrors actual execution: the lease is released LAST, only after the
+  // manifest and journal are durable (#1085).
   assert.deepEqual(result.plannedActions, [
     `push_force_with_lease:origin/${fixture.branch}`,
-    "remove_lease_if_present",
     "write_replaceable_placeholder_evidence",
     "force_transition_escalated_to_review_pending",
+    "remove_lease_if_present",
   ]);
   // No push, no state change, no evidence write.
   assert.equal(remoteBranchSha(fixture), null);
   assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
   assert.equal(fs.readFileSync(evidencePath, "utf-8"), evidenceBefore);
+});
+
+test("reconcile row 6 salvage preserves delayed-publication policy", () => {
+  // #1085: row-6 salvage used to hardcode review_pending, so a delayed-publication
+  // run was force-pushed AND advanced to public review — bypassing the internal
+  // review gate that publish-run.js exists to enforce. Row 4 already respects the
+  // policy; row 6 must match.
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    publishPolicy: "after-internal-review",
+    dispatchResultFailureClass: "total_timeout",
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 6);
+  assert.equal(result.status, "salvaged");
+  assert.equal(result.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(result.nextAction, "run_internal_review");
+  assert.equal(result.published, false);
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_internal_review");
+  assert.equal(manifest.git.pr_number, null);
+
+  // The defining assertion: the branch must NOT have been published.
+  assert.equal(remoteBranchSha(fixture), null, "delayed-publication salvage must not push");
 });
 
 test("reconcile surfaces an escalated-timeout salvage when the remote moved beyond the lease", () => {

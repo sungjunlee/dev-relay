@@ -557,15 +557,22 @@ async function trySalvageEscalatedTimeout(
 
   const runDir = getRunDir(repoRoot, runId);
   const executor = data.roles?.executor || "executor";
-  const pushTarget = `origin/${branch}`;
+  const pushTarget = `${resolveBranchRemote(worktreePath, branch)}/${branch}`;
   const evidencePlan = planSalvageEvidence(runDir, testResultFile);
   const reason = salvageAuditReason(runId);
 
-  // Validate escalated→review_pending invariants before any side effect (push,
+  // Salvage must respect the run's publish policy, exactly as row 4 does (#1085).
+  // A delayed-publication run has not had its internal review yet, so salvage may
+  // not force-push it or advance it to public review — publication stays owned by
+  // publish-run.js after the internal review passes.
+  const salvageTarget = dispatchCompletionTarget(data);
+  const shouldPublish = salvageTarget.state === STATES.REVIEW_PENDING;
+
+  // Validate the target transition's invariants before any side effect (push,
   // lease removal, evidence stamp). Mirrors reviewer-swap.js validate-first
   // ordering so a max-1-swap rejection cannot leave a pushed-but-stuck run.
   try {
-    validateTransitionInvariants(data, data.state, STATES.REVIEW_PENDING);
+    validateTransitionInvariants(data, data.state, salvageTarget.state);
   } catch (err) {
     outputResult(salvageResult({
       status: "invariant_blocked",
@@ -597,14 +604,14 @@ async function trySalvageEscalatedTimeout(
         forceWithLease: true,
         evidenceAction: evidencePlan.action,
         evidenceVerified: evidencePlan.verified,
-        targetState: STATES.REVIEW_PENDING,
+        targetState: salvageTarget.state,
         plannedActions: [
-          `push_force_with_lease:${pushTarget}`,
-          "remove_lease_if_present",
+          ...(shouldPublish ? [`push_force_with_lease:${pushTarget}`] : []),
           evidencePlan.verified
             ? "stamp_operator_execution_evidence"
             : "write_replaceable_placeholder_evidence",
-          "force_transition_escalated_to_review_pending",
+          `force_transition_${data.state}_to_${salvageTarget.state}`,
+          "remove_lease_if_present",
         ],
       },
     }), jsonOut);
@@ -612,27 +619,28 @@ async function trySalvageEscalatedTimeout(
   }
 
   // Push before any state mutation: a rejected lease leaves the run untouched.
-  const pushResult = pushSalvageForceWithLease(worktreePath, branch);
-  if (!pushResult.ok) {
-    outputResult(salvageResult({
-      status: "push_rejected",
-      manifestPath,
-      runId,
-      data,
-      dryRun,
-      nextAction: "manual_reconcile_remote",
-      extra: {
-        branch,
-        pushTarget,
-        unpushedCommits: inspection.unpushedCommits,
-        forceWithLeaseRejected: true,
-        pushError: pushResult.detail,
-      },
-    }), jsonOut);
-    return true;
+  // Delayed-publication runs are not pushed here at all — see shouldPublish above.
+  if (shouldPublish) {
+    const pushResult = pushSalvageForceWithLease(worktreePath, branch);
+    if (!pushResult.ok) {
+      outputResult(salvageResult({
+        status: "push_rejected",
+        manifestPath,
+        runId,
+        data,
+        dryRun,
+        nextAction: "manual_reconcile_remote",
+        extra: {
+          branch,
+          pushTarget,
+          unpushedCommits: inspection.unpushedCommits,
+          forceWithLeaseRejected: true,
+          pushError: pushResult.detail,
+        },
+      }), jsonOut);
+      return true;
+    }
   }
-
-  removeRunLease(repoRoot, runId);
 
   const salvageHead = inspection.currentHead || data.git?.head_sha || null;
   const executionEvidence = stampSalvageEvidence({
@@ -649,7 +657,7 @@ async function trySalvageEscalatedTimeout(
   }
 
   const updated = {
-    ...forceUpdateManifestState(data, STATES.REVIEW_PENDING, "run_review", { reason }),
+    ...forceUpdateManifestState(data, salvageTarget.state, salvageTarget.nextAction, { reason }),
     git: {
       ...(data.git || {}),
       head_sha: salvageHead || data.git?.head_sha || null,
@@ -657,6 +665,12 @@ async function trySalvageEscalatedTimeout(
   };
   writeManifest(manifestPath, updated, body);
   appendStateRecovery(repoRoot, data, updated, reason);
+
+  // Release the lease only after the manifest and journal are durable (#1085).
+  // Dropping it earlier advertises the run as unowned while it is still
+  // mid-finalization, so a concurrent reconcile or recover-commit — whose
+  // dispatched guard consults lease liveness — can act on a half-finalized run.
+  removeRunLease(repoRoot, runId);
 
   outputResult(salvageResult({
     status: "salvaged",
@@ -668,9 +682,8 @@ async function trySalvageEscalatedTimeout(
     extra: {
       state: updated.state,
       branch,
-      pushTarget,
+      ...(shouldPublish ? { pushTarget, forceWithLease: true } : { published: false }),
       unpushedCommits: inspection.unpushedCommits,
-      forceWithLease: true,
       executionEvidence,
     },
   }), jsonOut);
