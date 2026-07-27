@@ -11,7 +11,13 @@ const gh = (repoPath, ...ghArgs) => {
   return execGh(repoPath, ghArgs, options);
 };
 
-const git = (repoPath, ...gitArgs) => execGit(repoPath, gitArgs);
+const git = (repoPath, ...gitArgs) => {
+  const lastArg = gitArgs.at(-1);
+  const options = lastArg && typeof lastArg === "object" && !Array.isArray(lastArg)
+    ? gitArgs.pop()
+    : {};
+  return execGit(repoPath, gitArgs, options);
+};
 
 function readText(filePath) {
   return fs.readFileSync(filePath, "utf-8");

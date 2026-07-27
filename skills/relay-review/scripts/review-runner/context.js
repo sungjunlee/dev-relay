@@ -10,7 +10,15 @@ const {
 } = require("../../../relay-dispatch/scripts/manifest/paths");
 const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
 const { resolveManifestRecord } = require("../../../relay-dispatch/scripts/relay-resolver");
+const {
+  DEFAULT_EXEC_MAX_BUFFER_BYTES,
+} = require("../../../relay-dispatch/scripts/exec");
 const { gh, git, readText } = require("./common");
+
+// Keep the generated-diff guard strictly below the subprocess read ceiling by
+// deriving it from that ceiling. This leaves enough headroom to read a large
+// diff before replacing it with a bounded review representation.
+const GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES = DEFAULT_EXEC_MAX_BUFFER_BYTES / 32;
 
 // DNS hostname validation — conservative label allowlist. Rejects leading
 // dashes (which could be interpreted as flags by some CLI tools), whitespace,
@@ -453,15 +461,130 @@ function loadRetainedWorktreeDiff(reviewRepoPath, manifestData) {
   );
 }
 
+function isMaxBufferError(error) {
+  return error?.code === "ENOBUFS" || /\bENOBUFS\b/.test(String(error?.message || error));
+}
+
+function observedOutputBytes(error) {
+  const output = error?.stdout ?? error?.output?.[1] ?? "";
+  if (Buffer.isBuffer(output)) return output.length;
+  return Buffer.byteLength(String(output), "utf-8");
+}
+
+function wrapGeneratedDiffReadError(error, source) {
+  if (!isMaxBufferError(error)) throw error;
+  const observedBytes = Math.max(
+    observedOutputBytes(error),
+    DEFAULT_EXEC_MAX_BUFFER_BYTES + 1
+  );
+  const wrapped = new Error(
+    `Generated review diff read failed for ${source}: ` +
+    `observed_size>=${observedBytes} bytes, ` +
+    `maxBuffer_limit=${DEFAULT_EXEC_MAX_BUFFER_BYTES} bytes. ` +
+    "Provide a curated --diff-file to review this change."
+  );
+  wrapped.cause = error;
+  return wrapped;
+}
+
+function parseNumstatPaths(numstat) {
+  return String(numstat)
+    .split("\0")
+    .filter(Boolean)
+    .map((record) => record.split("\t").at(-1))
+    .filter(Boolean);
+}
+
+function fallbackPatchSummary(diffText) {
+  const sections = String(diffText).split(/(?=^diff --git )/m).filter(Boolean);
+  const rows = [];
+  const paths = [];
+  for (const section of sections) {
+    const pathMatch = section.match(/^diff --git .* b\/(.+)$/m);
+    if (!pathMatch) continue;
+    const filePath = pathMatch[1];
+    let additions = 0;
+    let deletions = 0;
+    let inHunk = false;
+    for (const line of section.split("\n")) {
+      if (line.startsWith("@@")) {
+        inHunk = true;
+      } else if (inHunk && line.startsWith("+") && !line.startsWith("+++")) {
+        additions += 1;
+      } else if (inHunk && line.startsWith("-") && !line.startsWith("---")) {
+        deletions += 1;
+      }
+    }
+    rows.push(` ${filePath} | ${additions + deletions} (+${additions} -${deletions})`);
+    paths.push(filePath);
+  }
+  return {
+    paths,
+    stat: rows.length
+      ? `${rows.join("\n")}\n ${rows.length} file${rows.length === 1 ? "" : "s"} changed`
+      : " (unable to parse per-file statistics from generated diff)",
+  };
+}
+
+function buildDegradedDiff(repoPath, diffText, source) {
+  const observedBytes = Buffer.byteLength(diffText, "utf-8");
+  let stat;
+  let paths;
+  try {
+    stat = git(repoPath, "apply", "--stat", "-", {
+      input: diffText,
+    }).trim();
+    const numstat = git(repoPath, "apply", "--numstat", "-z", "-", {
+      input: diffText,
+      raw: true,
+    });
+    paths = parseNumstatPaths(numstat);
+  } catch {
+    ({ stat, paths } = fallbackPatchSummary(diffText));
+  }
+  const uniquePaths = [...new Set(paths)];
+  const omittedFiles = uniquePaths.length
+    ? uniquePaths.map((filePath) => `- ${filePath}`).join("\n")
+    : "- (file names unavailable)";
+
+  return [
+    `# ...generated diff degraded: observed ${observedBytes} bytes; ` +
+      `threshold ${GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES} bytes; source ${source}`,
+    "",
+    "# --stat summary (full patches omitted)",
+    stat,
+    "",
+    "# Files with omitted patches",
+    omittedFiles,
+  ].join("\n");
+}
+
+function guardGeneratedDiff(repoPath, diffText, source) {
+  if (Buffer.byteLength(diffText, "utf-8") <= GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES) {
+    return diffText;
+  }
+  return buildDegradedDiff(repoPath, diffText, source);
+}
+
 function loadDiff(repoPath, prNumber, diffFile, options = {}) {
   if (diffFile) return readText(diffFile).trim();
   if (options.internalReview) {
-    return loadRetainedWorktreeDiff(options.reviewRepoPath, options.manifestData);
+    try {
+      const diffText = loadRetainedWorktreeDiff(options.reviewRepoPath, options.manifestData);
+      return guardGeneratedDiff(options.reviewRepoPath, diffText, "internal git diff");
+    } catch (error) {
+      throw wrapGeneratedDiffReadError(error, "internal git diff");
+    }
   }
   if (!prNumber) {
     throw new Error("PR number is required to fetch a diff. Provide --diff-file for fixture-based runs.");
   }
-  return gh(repoPath, "pr", "diff", String(prNumber)).trim();
+  try {
+    const diffText = gh(repoPath, "pr", "diff", String(prNumber)).trim();
+    return guardGeneratedDiff(repoPath, diffText, `gh pr diff #${prNumber}`);
+  } catch (error) {
+    throw wrapGeneratedDiffReadError(error, `gh pr diff #${prNumber}`);
+  }
 }
 
 function summarizeStatusCheck(check) {
@@ -636,6 +759,7 @@ function formatPriorRoundContext(runDir, round) {
 }
 
 module.exports = {
+  GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES,
   applyReviewerIdentity,
   formatPriorRoundContext,
   getExpectedManifestRepoRoot,
