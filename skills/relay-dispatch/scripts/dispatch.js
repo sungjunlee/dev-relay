@@ -28,7 +28,6 @@
  *   --reasoning <level>    Codex reasoning effort override (default by rubric size: S=medium, M=high, L/XL=xhigh)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
- *   --coordination-marker <marker>  Persist one safe single-line marker in the raw manifest
  *   --publish-policy <mode> immediate | after-internal-review (default: immediate)
  *   --review-assurance <level> compact | standard | hardened (default: standard)
  *   --tags <csv>          Explicit routing tags; override inferred routing tags
@@ -87,11 +86,6 @@ const {
   readManifest,
   writeManifest,
 } = require("./manifest/store");
-const {
-  coordinationMarkerFromManifest,
-  validateCoordinationMarker,
-  withCoordinationMarker,
-} = require("./manifest/coordination");
 const { parseModelHints } = require("./model-hints");
 const { resolveExecutorDefaultModel } = require("./executor-model-config");
 const {
@@ -191,13 +185,32 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--coordination-marker", "--rubric-grandfathered",
+  "--model", "-m", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--fleet-id", "--ownership-json", "--done-criteria-file", "--publish-policy", "--review-assurance", "--tags",
   "--register", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const JSON_OUT_REQUESTED = hasCliFlag("--json");
+
+function failEarly(message, extra = {}) {
+  if (JSON_OUT_REQUESTED) {
+    console.log(JSON.stringify({
+      status: "failed",
+      error: message,
+      ...extra,
+    }, null, 2));
+  } else {
+    console.error(`Error: ${message}`);
+  }
+  process.exit(1);
+}
+
+if (args.some((arg) => arg === "--coordination-marker" || arg.startsWith("--coordination-marker="))) {
+  failEarly(
+    "--coordination-marker is no longer supported; the coordination-marker seam was removed and nothing replaces it."
+  );
+}
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: dispatch.js <repo-path> --branch <name> --prompt <task> [options]");
@@ -222,7 +235,6 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --reasoning        ${modeLabel("--reasoning")} Codex reasoning effort (default by rubric size: S=medium, M=high, L/XL=xhigh)`);
   console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
   console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
-  console.log(`  --coordination-marker ${modeLabel("--coordination-marker")} Persist one safe single-line marker in the raw manifest before executor spawn`);
   console.log(`  --publish-policy   ${modeLabel("--publish-policy")} PR publication policy: immediate | after-internal-review (default: immediate)`);
   console.log(`  --review-assurance ${modeLabel("--review-assurance")} Review assurance: compact | standard | hardened (default: standard)`);
   console.log(`  --tags             ${modeLabel("--tags")} Explicit routing tags; override inferred routing tags`);
@@ -261,33 +273,6 @@ const MODEL = readArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
 const ROUTE_INTENT_FILE = readArg(args, "--route-intent-file", undefined, CLI_ARG_OPTIONS);
 const ROUTE_PRESET = readArg(args, "--route-preset", undefined, CLI_ARG_OPTIONS);
 const RELAY_HOME_FOR_ROUTES = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
-
-function failEarly(message, extra = {}) {
-  if (JSON_OUT_REQUESTED) {
-    console.log(JSON.stringify({
-      status: "failed",
-      error: message,
-      ...extra,
-    }, null, 2));
-  } else {
-    console.error(`Error: ${message}`);
-  }
-  process.exit(1);
-}
-
-// Validate this optional integration value before route resolution, worktree creation,
-// run-dir claims, or executor probing. An absent flag preserves ordinary dispatch.
-const COORDINATION_MARKER_FLAG = hasCliFlag("--coordination-marker");
-let COORDINATION_MARKER;
-try {
-  COORDINATION_MARKER = readArg(args, "--coordination-marker", undefined, CLI_ARG_OPTIONS);
-  if (COORDINATION_MARKER_FLAG && COORDINATION_MARKER === undefined) {
-    failEarly("--coordination-marker requires a value", { error_code: "missing_coordination_marker" });
-  }
-  if (COORDINATION_MARKER !== undefined) validateCoordinationMarker(COORDINATION_MARKER);
-} catch (error) {
-  failEarly(error.message, { error_code: "invalid_coordination_marker" });
-}
 
 function readRouteIntentFile(filePath) {
   if (!filePath) return {};
@@ -1934,7 +1919,6 @@ async function main() {
   let handlingSignal = false;
   let runtime = null;
   let runDirClaimPath = null;
-  let provisionalMarkerSetup = false;
 
   function releaseRunDirClaim() {
     if (!runDirClaimPath) return;
@@ -1952,52 +1936,10 @@ async function main() {
     fleetIssueLock = null;
   }
 
-  function cleanupProvisionalMarkerSetup() {
-    const errors = [];
-    const runDir = runId ? getRunDir(repoRoot, runId) : null;
-
-    try { releaseRunDirClaim(); } catch (error) { errors.push(`run-dir claim release failed: ${error.message}`); }
-    try { releaseFleetIssueLock(); } catch (error) { errors.push(`issue lock release failed: ${error.message}`); }
-
-    if (wtPath && fs.existsSync(wtPath)) {
-      try {
-        removeWorktree({ repoRoot, worktreePath: wtPath });
-        if (fs.existsSync(wtPath)) {
-          const relative = path.relative(path.resolve(wtBase), path.resolve(wtPath));
-          if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
-            fs.rmSync(wtPath, { recursive: true, force: true });
-          }
-        }
-      } catch (error) {
-        errors.push(`worktree cleanup failed: ${error.message}`);
-      }
-    }
-    if (wtPath) {
-      try {
-        const worktreeShell = path.dirname(wtPath);
-        if (fs.existsSync(worktreeShell) && fs.readdirSync(worktreeShell).length === 0) {
-          fs.rmdirSync(worktreeShell);
-        }
-      } catch (error) {
-        errors.push(`worktree shell cleanup failed: ${error.message}`);
-      }
-    }
-
-    try {
-      if (manifestPath) fs.rmSync(manifestPath, { force: true });
-      if (runDir) fs.rmSync(runDir, { recursive: true, force: true });
-    } catch (error) {
-      errors.push(`provisional run cleanup failed: ${error.message}`);
-    }
-    return errors;
-  }
-
   function failBeforeAdmission(message, extra = {}) {
-    const cleanupErrors = provisionalMarkerSetup ? cleanupProvisionalMarkerSetup() : [];
     failEarly(message, {
       ...extra,
-      recoverable: cleanupErrors.length === 0,
-      ...(cleanupErrors.length ? { cleanup_error: cleanupErrors.join("; ") } : {}),
+      recoverable: true,
     });
   }
 
@@ -2027,7 +1969,7 @@ async function main() {
     }
   }
 
-  function journalDispatchInterrupted(signal, executorTerminated, { reason = "signal", coordinationMarker = undefined } = {}) {
+  function journalDispatchInterrupted(signal, executorTerminated, { reason = "signal" } = {}) {
     if (!manifest || !runId) return false;
     let runDir;
     try {
@@ -2046,7 +1988,6 @@ async function main() {
         timeout_s: TIMEOUT,
         executor_terminated: executorTerminated,
         worktree: wtPath || null,
-        ...(coordinationMarker !== undefined ? { coordination_marker: coordinationMarker } : {}),
       });
       return true;
     } catch { return false; }
@@ -2138,16 +2079,6 @@ async function main() {
         worktree: validatedPaths.worktree,
       },
     };
-    if (COORDINATION_MARKER !== undefined) {
-      const existingMarker = coordinationMarkerFromManifest(manifest);
-      if (existingMarker !== COORDINATION_MARKER) {
-        console.error(
-          "Error: same-run resume cannot add or replace a coordination marker; " +
-          "close this run with close-run.js, then start a fresh dispatch with the desired --coordination-marker value"
-        );
-        process.exit(1);
-      }
-    }
     const manifestPublishPolicy = manifest.dispatch?.publish_policy || "immediate";
     if (PUBLISH_POLICY_ARG && PUBLISH_POLICY_ARG !== manifestPublishPolicy) {
       console.error(
@@ -2171,16 +2102,6 @@ async function main() {
     const interruptibleResumeState = manifest.state === STATES.DISPATCHED || manifest.state === STATES.DRAFT;
     const latestEvent = interruptibleResumeState ? latestRunEvent(repoRoot, runId) : null;
     const resumesInterruptedDispatch = interruptibleResumeState && latestEvent?.event === EVENTS.DISPATCH_INTERRUPTED;
-    const markerDurabilityRecoveryPending = resumesInterruptedDispatch
-      && latestEvent?.reason === "coordination_marker_not_persisted_before_executor_spawn"
-      && coordinationMarkerFromManifest(manifest) === undefined;
-    if (markerDurabilityRecoveryPending) {
-      console.error(
-        "Error: coordination marker durability recovery is incomplete; " +
-        "close this run with close-run.js, then start a fresh dispatch with the exact --coordination-marker value",
-      );
-      process.exit(1);
-    }
     if (resumesInterruptedDispatch && isProcessGroupAlive(latestEvent.executor_pgid)) {
       console.error(
         `Error: interrupted executor process group is still alive for run '${runId}' ` +
@@ -2678,9 +2599,6 @@ async function main() {
       fleetId: FLEET_ID,
       ownership: OWNERSHIP || undefined,
     });
-    if (COORDINATION_MARKER !== undefined) {
-      manifest = withCoordinationMarker(manifest, COORDINATION_MARKER);
-    }
     ensureRunLayout(repoRoot, runId);
     manifest = persistDoneCriteria(manifest, manifestRunDir, resolvedDoneCriteriaPath, doneCriteriaSource);
     manifest = {
@@ -2704,29 +2622,6 @@ async function main() {
         summary: summarizeRoutePlan(routePlan),
       },
     };
-    // A coordination marker is an admission invariant. Publish and verify the
-    // manifest before creating a relay-owned worktree so a persistence failure
-    // cannot reach any worktree or executor mutation. The later write refreshes
-    // environment/path metadata after worktree creation and preserves the marker
-    // through the shared manifest writer boundary.
-    if (COORDINATION_MARKER !== undefined) {
-      provisionalMarkerSetup = true;
-      try {
-        writeManifest(manifestPath, manifest);
-        const persistedManifest = readManifest(manifestPath).data;
-        if (coordinationMarkerFromManifest(persistedManifest) !== COORDINATION_MARKER) {
-          failEarly(
-            "coordination marker was not durably persisted before worktree creation",
-            { error_code: "coordination_marker_not_persisted" },
-          );
-        }
-      } catch (error) {
-        failBeforeAdmission(
-          `coordination marker persistence failed before worktree creation: ${error.message}`,
-          { error_code: "coordination_marker_persistence_failed" },
-        );
-      }
-    }
     try {
       const created = createWorktree({
         repoRoot,
@@ -2749,7 +2644,7 @@ async function main() {
       });
       copiedFiles = created.copiedFiles;
     } catch (error) {
-      failBeforeAdmission(`worktree creation failed after coordination marker persistence: ${error.message}`, {
+      failBeforeAdmission(`worktree creation failed: ${error.message}`, {
         error_code: "worktree_creation_failed",
       });
     }
@@ -3002,37 +2897,6 @@ async function main() {
     },
   };
   writeManifest(manifestPath, manifest);
-  if (COORDINATION_MARKER !== undefined) {
-    const persistedManifest = readManifest(manifestPath).data;
-    const markerPersisted = process.env.RELAY_TEST_FAIL_FINAL_COORDINATION_MARKER_VERIFY === "1"
-      ? false
-      : coordinationMarkerFromManifest(persistedManifest) === COORDINATION_MARKER;
-    if (!markerPersisted) {
-      const audited = journalDispatchInterrupted(null, false, {
-        reason: "coordination_marker_not_persisted_before_executor_spawn",
-        coordinationMarker: COORDINATION_MARKER,
-      });
-      if (!audited) {
-        failBeforeAdmission(
-          "coordination marker was not durably persisted before executor spawn and interruption audit failed",
-          {
-            error_code: "coordination_marker_not_persisted",
-            interruption_audit: "failed",
-          },
-        );
-      }
-      releaseRunDirClaim();
-      releaseFleetIssueLock();
-      failEarly(
-        "coordination marker was not durably persisted before executor spawn; dispatch was interrupted for recovery",
-        {
-          error_code: "coordination_marker_not_persisted",
-          interruption_audit: "dispatch_interrupted",
-          recovery: "close this run with close-run.js, then start a fresh dispatch with the exact --coordination-marker value",
-        },
-      );
-    }
-  }
   appendRunEvent(repoRoot, runId, {
     event: EVENTS.DISPATCH_START,
     state_from: dispatchFromState,
@@ -3046,7 +2910,6 @@ async function main() {
     executor_policy: executorPolicy,
     policy_decision: policyDecision,
   });
-  provisionalMarkerSetup = false;
   writeDetachReceiptIfRequested({
     repoRoot,
     runId,
