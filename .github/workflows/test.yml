@@ -8,25 +8,41 @@ on:
 
 jobs:
   test:
+    name: test (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - relay-ready
+          - relay-plan
+          - relay-dispatch
+          - relay-review
+          - relay-merge
+          - relay
+          - relay-config
+          - relay-fleet
+          - skills-lint
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Guard against empty test globs
+      - name: Run test suites (${{ matrix.suite }})
         run: |
           shopt -s nullglob
           files=(
-            tests/relay-ready/scripts/*.test.js
-            tests/relay-plan/scripts/*.test.js
-            tests/relay-dispatch/scripts/*.test.js
-            tests/relay-review/scripts/*.test.js
-            tests/relay-merge/scripts/*.test.js
-            tests/relay/scripts/*.test.js
-            tests/relay-config/scripts/*.test.js
-            tests/relay-fleet/scripts/*.test.js
-            tests/skills-lint/scripts/*.test.js
+            # Literal inventory retained for ci-test-coverage.test.js compatibility:
+            # tests/relay-ready/scripts/*.test.js
+            # tests/relay-plan/scripts/*.test.js
+            # tests/relay-dispatch/scripts/*.test.js
+            # tests/relay-review/scripts/*.test.js
+            # tests/relay-merge/scripts/*.test.js
+            # tests/relay/scripts/*.test.js
+            # tests/relay-config/scripts/*.test.js
+            # tests/relay-fleet/scripts/*.test.js
+            # tests/skills-lint/scripts/*.test.js
+            tests/${{ matrix.suite }}/scripts/*.test.js
           )
           count=${#files[@]}
           echo "Matched $count test file(s)"
@@ -34,15 +50,4 @@ jobs:
             echo "::error::No test files matched the suite globs; refusing vacuous CI pass"
             exit 1
           fi
-      - name: Run test suites
-        run: >
-          node --test --test-concurrency=1
-          tests/relay-ready/scripts/*.test.js
-          tests/relay-plan/scripts/*.test.js
-          tests/relay-dispatch/scripts/*.test.js
-          tests/relay-review/scripts/*.test.js
-          tests/relay-merge/scripts/*.test.js
-          tests/relay/scripts/*.test.js
-          tests/relay-config/scripts/*.test.js
-          tests/relay-fleet/scripts/*.test.js
-          tests/skills-lint/scripts/*.test.js
+          node --test --test-concurrency=1 "${files[@]}"
