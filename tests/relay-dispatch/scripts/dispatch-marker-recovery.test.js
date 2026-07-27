@@ -10,7 +10,6 @@ const path = require("node:path");
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const DISPATCH_JS = path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "dispatch.js");
 const { getRepoSlug } = require(path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "manifest", "paths.js"));
-const { readManifest } = require(path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "manifest", "store.js"));
 
 function setupRepo() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-marker-recovery-dispatch-"));
@@ -70,7 +69,7 @@ function runDispatch(fixture, extraArgs, envOverrides = {}) {
   return { ...result, body };
 }
 
-function dispatchArgs(fixture, runId) {
+function normalDispatchArgs(fixture, runId) {
   return [
     "--run-id", runId,
     "--branch", "issue-1016-marker-recovery",
@@ -78,40 +77,36 @@ function dispatchArgs(fixture, runId) {
     "--executor", "codex",
     "--rubric-file", fixture.rubricPath,
     "--publish-policy", "after-internal-review",
-    "--coordination-marker", "relay-orca: marker-test/outcome-a",
     "--json",
   ];
 }
 
-function assertNoOwningRun(fixture, runId) {
+function assertNoOwningManifestOrWorktree(fixture, runId) {
   const runRoot = path.join(fixture.relayHome, "runs", getRepoSlug(fixture.repoRoot));
   const manifestPath = path.join(runRoot, `${runId}.md`);
-  assert.equal(fs.existsSync(manifestPath), false, "provisional failure must leave no owning manifest");
-  const runDir = path.join(runRoot, runId);
-  assert.equal(fs.existsSync(runDir), false, "provisional failure must remove the run directory");
+  assert.equal(fs.existsSync(manifestPath), false, "pre-admission failure must leave no owning manifest");
   const worktrees = path.join(fixture.relayHome, "worktrees");
-  assert.equal(fs.existsSync(worktrees) ? fs.readdirSync(worktrees).length : 0, 0, "provisional failure must remove relay worktrees");
+  const retainedCheckouts = fs.existsSync(worktrees)
+    ? fs.readdirSync(worktrees).flatMap((entry) => fs.readdirSync(path.join(worktrees, entry)))
+    : [];
+  assert.deepEqual(retainedCheckouts, [], "pre-admission failure must remove relay worktree checkouts");
 }
 
-function readFixtureEvents(fixture, runId) {
-  const eventsPath = path.join(fixture.relayHome, "runs", getRepoSlug(fixture.repoRoot), runId, "events.jsonl");
-  return fs.readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-}
-
-for (const [label, failureEnv] of [
-  ["worktree creation", { RELAY_TEST_FAIL_CREATE_WORKTREE: "1" }],
-  ["base-branch merge", { RELAY_TEST_FAIL_BASE_MERGE: "1" }],
+for (const [label, failureEnv, errorCode] of [
+  ["worktree creation", { RELAY_TEST_FAIL_CREATE_WORKTREE: "1" }, "worktree_creation_failed"],
+  ["base-branch merge", { RELAY_TEST_FAIL_BASE_MERGE: "1" }, "base_branch_merge_failed"],
 ]) {
-  test(`marker ${label} failure rolls back provisional ownership and permits same-run retry`, () => {
+  test(`${label} failure without a coordination flag remains recoverable and permits same-run retry`, () => {
     const fixture = setupRepo();
     const runId = `issue-1016-marker-${label === "worktree creation" ? "create" : "merge"}-20260720120000000-aabbccdd`;
     try {
-      const failed = runDispatch(fixture, dispatchArgs(fixture, runId), failureEnv);
+      const failed = runDispatch(fixture, normalDispatchArgs(fixture, runId), failureEnv);
       assert.notEqual(failed.status, 0, failed.stderr);
+      assert.equal(failed.body.error_code, errorCode);
       assert.equal(failed.body.recoverable, true, JSON.stringify(failed.body));
-      assertNoOwningRun(fixture, runId);
+      assertNoOwningManifestOrWorktree(fixture, runId);
 
-      const retried = runDispatch(fixture, dispatchArgs(fixture, runId));
+      const retried = runDispatch(fixture, normalDispatchArgs(fixture, runId));
       assert.equal(retried.status, 0, `${retried.stderr}\n${retried.stdout}`);
       assert.equal(retried.body.runId, runId);
       assert.equal(retried.body.runState, "internal_review_pending");
@@ -122,38 +117,39 @@ for (const [label, failureEnv] of [
   });
 }
 
-test("final marker durability failure records an interrupted recovery event before executor spawn", () => {
+test("normal dispatch without a coordination flag is unaffected", () => {
   const fixture = setupRepo();
-  const runId = "issue-1016-marker-final-20260720120000000-aabbccdd";
+  const runId = "issue-1016-no-marker-20260720120000000-aabbccdd";
   try {
-    const failed = runDispatch(fixture, dispatchArgs(fixture, runId), {
-      RELAY_TEST_FAIL_FINAL_COORDINATION_MARKER_VERIFY: "1",
-    });
-    assert.notEqual(failed.status, 0, failed.stderr);
-    assert.equal(failed.body.error_code, "coordination_marker_not_persisted");
-    assert.equal(failed.body.interruption_audit, "dispatch_interrupted");
-    assert.equal(fs.existsSync(fixture.env.RELAY_TEST_EXECUTOR_MARKER), false, "durability failure must precede executor spawn");
-
-    const manifestPath = path.join(fixture.relayHome, "runs", getRepoSlug(fixture.repoRoot), `${runId}.md`);
-    const manifest = readManifest(manifestPath).data;
-    assert.equal(manifest.state, "dispatched");
-    assert.equal(fs.existsSync(manifest.paths.worktree), true, "interrupted recovery retains the clean worktree");
-    const interrupted = readFixtureEvents(fixture, runId).at(-1);
-    assert.equal(interrupted.event, "dispatch_interrupted");
-    assert.equal(interrupted.reason, "coordination_marker_not_persisted_before_executor_spawn");
-    assert.equal(interrupted.state_from, "dispatched");
-    assert.equal(interrupted.state_to, "dispatched");
-    assert.equal(interrupted.coordination_marker, "relay-orca: marker-test/outcome-a");
-
-    const resumed = runDispatch(fixture, [
-      "--manifest", manifestPath,
-      "--prompt", "resume after marker durability recovery",
-      "--json",
-    ]);
-    assert.equal(resumed.status, 0, `${resumed.stderr}\n${resumed.stdout}`);
-    assert.equal(resumed.body.runState, "internal_review_pending");
+    const result = runDispatch(fixture, normalDispatchArgs(fixture, runId));
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+    assert.equal(result.body.runId, runId);
+    assert.equal(result.body.runState, "internal_review_pending");
     assert.equal(fs.existsSync(fixture.env.RELAY_TEST_EXECUTOR_MARKER), true);
   } finally {
     fs.rmSync(fixture.base, { recursive: true, force: true });
   }
 });
+
+for (const [label, retiredArgs] of [
+  ["with a value", ["--coordination-marker", "relay-orca: retired"]],
+  ["with an equals value", ["--coordination-marker=relay-orca: retired"]],
+  ["without a value", ["--coordination-marker"]],
+]) {
+  test(`--coordination-marker ${label} reports the specific sunset error`, () => {
+    const fixture = setupRepo();
+    try {
+      const result = runDispatch(fixture, [...retiredArgs, "--json"]);
+      assert.notEqual(result.status, 0);
+      assert.equal(
+        result.body.error,
+        "--coordination-marker is no longer supported; the coordination-marker seam was removed and nothing replaces it."
+      );
+      assert.doesNotMatch(result.stdout, /unknown flags/);
+      assert.doesNotMatch(result.stdout, /missing_coordination_marker|invalid_coordination_marker/);
+      assert.equal(fs.existsSync(fixture.env.RELAY_TEST_EXECUTOR_MARKER), false);
+    } finally {
+      fs.rmSync(fixture.base, { recursive: true, force: true });
+    }
+  });
+}

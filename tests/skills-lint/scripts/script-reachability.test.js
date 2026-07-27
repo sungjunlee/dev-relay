@@ -9,7 +9,8 @@ const SKILLS_DIR = path.join(REPO_ROOT, "skills");
 const ADAPTER_INDEX_PATH = path.join(SKILLS_DIR, "relay-dispatch", "scripts", "agent-adapters", "index.js");
 
 const PACKAGED_SCRIPT_ALLOWLIST = [
-  // Keep empty when possible. Each entry must include a justification comment.
+  // #1090 leaf 1 removes every importer; leaf 2 owns deletion of the safety-critical write path.
+  "skills/relay-dispatch/scripts/manifest/coordination.js",
 ];
 
 function toRepoRelative(filePath, repoRoot) {

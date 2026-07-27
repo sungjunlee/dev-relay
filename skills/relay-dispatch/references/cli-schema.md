@@ -37,6 +37,8 @@ Pick `parsed` when the value is a structured selector, enum, number, or generate
 
 Defaults belong at the call site, not in the global schema, because the same flag can have different defaults in different tools.
 
+Retired dispatch flag: `--coordination-marker` is no longer supported. The coordination-marker seam was removed and nothing replaces it; passing the flag produces a dedicated sunset error.
+
 ## Current Flag Audit
 
 Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same table is mirrored in the PR body when the schema changes — see PR #276 for the audit snapshot convention.
@@ -52,7 +54,6 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--by-role` | `parsed` | Presence flag; no value is consumed. |
 | `--contract-file` | `verbatim` | Operator-supplied artifact path; keep the literal argv token. |
 | `--copy` | `verbatim` | Operator-supplied file list; keep the literal argv token. |
-| `--coordination-marker` | `verbatim` | Opaque single-line coordination marker persisted in the relay manifest; keep the literal argv token. |
 | `--diff-file` | `verbatim` | Operator-supplied fixture path; keep the literal argv token. |
 | `--done-criteria-file` | `verbatim` | Operator-supplied anchor path; keep the literal argv token. |
 | `--dry-run` | `parsed` | Presence flag; no value is consumed. |
@@ -127,7 +128,6 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--by-role` | `parsed` | Presence flag; no value is consumed. |
 | `--contract-file` | `verbatim` | Operator-supplied artifact path; keep the literal argv token. |
 | `--copy` | `verbatim` | Operator-supplied file list; keep the literal argv token. |
-| `--coordination-marker` | `verbatim` | Opaque single-line coordination marker persisted in the relay manifest; keep the literal argv token. |
 | `--diff-file` | `verbatim` | Operator-supplied fixture path; keep the literal argv token. |
 | `--done-criteria-file` | `verbatim` | Operator-supplied anchor path; keep the literal argv token. |
 | `--dry-run` | `parsed` | Presence flag; no value is consumed. |
