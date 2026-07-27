@@ -504,6 +504,11 @@ test("readRunEvents tolerates historical-only event names", () => {
   const historicalEvents = [
     { event: "manual_state_override", run_id: runId },
     {
+      event: "coordination_marker_attached",
+      run_id: runId,
+      coordination_marker: "relay-orca: closure-941-20260722-ceef8c2e/finalize-draft-pr-1057",
+    },
+    {
       event: "score_divergence",
       run_id: runId,
       divergences: [{ factor: "Coverage", delta: 3 }],

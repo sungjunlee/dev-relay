@@ -12,6 +12,15 @@ const {
   writeManifest,
 } = require("../../../../skills/relay-dispatch/scripts/manifest/store");
 
+const HISTORICAL_COORDINATION_MANIFEST = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  "fixtures",
+  "manifest",
+  "historical-coordination-marker.md",
+);
+
 function initGitRepo(repoRoot) {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Store Test"], { cwd: repoRoot, stdio: "pipe" });
@@ -56,6 +65,30 @@ test("manifest/store writeManifest and readManifest round-trip direct imports", 
   const parsed = readManifest(manifestPath);
   assert.equal(parsed.data.run_id, runId);
   assert.equal(parsed.data.git.base_branch, "main");
+});
+
+test("manifest/store reads and rewrites a historical manifest with a retired coordination block", () => {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-store-historical-coordination-"));
+  const manifestPath = path.join(fixtureDir, "issue-1057-20260722085934229-6776d21c.md");
+  fs.copyFileSync(HISTORICAL_COORDINATION_MANIFEST, manifestPath);
+
+  let parsed;
+  assert.doesNotThrow(() => {
+    parsed = readManifest(manifestPath);
+  });
+  assert.equal(parsed.data.state, "merged");
+  assert.equal(parsed.data.issue.number, 1057);
+  assert.equal(parsed.data.git.pr_number, 1062);
+  assert.equal(
+    parsed.data.coordination.marker,
+    "relay-orca: closure-941-20260722-ceef8c2e/finalize-draft-pr-1057",
+  );
+
+  // This pins generic read/write compatibility, not marker ownership: a caller
+  // that omits the retired block may drop it, and no preservation is promised.
+  assert.doesNotThrow(() => {
+    writeManifest(manifestPath, parsed.data, parsed.body);
+  });
 });
 
 test("manifest/store preserves byte-identical frontmatter when model_hints is absent", () => {

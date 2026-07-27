@@ -26,8 +26,6 @@ const EVENTS = Object.freeze({
   CLEANUP_RESULT: "cleanup_result",
   CLOSE: "close",
   CONFLICTING_RUN_OVERRIDE: "conflicting_run_override",
-  // Generic integrations may record event: EVENTS.COORDINATION_MARKER_ATTACHED for audit trails.
-  COORDINATION_MARKER_ATTACHED: "coordination_marker_attached",
   // Consumer: dispatch resume gate and Phase 2 reconciler use this to resume or reconcile interrupted dispatches.
   DISPATCH_INTERRUPTED: "dispatch_interrupted",
   DISPATCH_RESULT: "dispatch_result",
