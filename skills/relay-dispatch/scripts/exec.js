@@ -2,6 +2,8 @@
 
 const { execFileSync } = require("child_process");
 
+const DEFAULT_EXEC_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+
 function outputOrRaw(output, raw) {
   return raw ? output : output.trim();
 }
@@ -10,6 +12,7 @@ function execGit(repoPath, args, opts = {}) {
   const { raw = false, cwd, encoding, stdio, ...execOpts } = opts;
   const gitBin = process.env.RELAY_GIT_BIN || "git";
   const output = execFileSync(gitBin, ["-C", repoPath, ...args], {
+    maxBuffer: DEFAULT_EXEC_MAX_BUFFER_BYTES,
     ...execOpts,
     encoding: "utf-8",
     stdio: "pipe",
@@ -21,6 +24,7 @@ function execGh(repoPath, args, opts = {}) {
   const { raw = false, cwd, encoding, stdio, ...execOpts } = opts;
   const ghBin = process.env.RELAY_GH_BIN || "gh";
   const options = {
+    maxBuffer: DEFAULT_EXEC_MAX_BUFFER_BYTES,
     ...execOpts,
     encoding: "utf-8",
     stdio: "pipe",
@@ -47,6 +51,7 @@ function resolveBranchRemote(worktreePath, branch) {
 }
 
 module.exports = {
+  DEFAULT_EXEC_MAX_BUFFER_BYTES,
   execGit,
   execGh,
   resolveBranchRemote,

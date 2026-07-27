@@ -8,7 +8,12 @@ const test = require("node:test");
 
 const { execFileSync } = require("child_process");
 
-const { execGit, execGh, resolveBranchRemote } = require("../../../skills/relay-dispatch/scripts/exec");
+const {
+  DEFAULT_EXEC_MAX_BUFFER_BYTES,
+  execGit,
+  execGh,
+  resolveBranchRemote,
+} = require("../../../skills/relay-dispatch/scripts/exec");
 
 function withEnv(name, value, fn) {
   const previous = process.env[name];
@@ -38,6 +43,20 @@ function writeStub(dir, sentinel) {
   return stubPath;
 }
 
+function writeSizedStub(dir, size) {
+  const stubPath = path.join(dir, `sized-${size}-stub.js`);
+  fs.writeFileSync(
+    stubPath,
+    [
+      "#!/usr/bin/env node",
+      `process.stdout.write("x".repeat(${size}));`,
+    ].join("\n"),
+    "utf-8"
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
 test("execGit honors RELAY_GIT_BIN override", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-exec-git-"));
   const stub = writeStub(dir, "git-sentinel");
@@ -54,6 +73,31 @@ test("execGh honors RELAY_GH_BIN override", () => {
   const output = withEnv("RELAY_GH_BIN", stub, () => execGh(dir, ["status"]));
 
   assert.strictEqual(output, "gh-sentinel");
+});
+
+test("execGit and execGh use the shared maxBuffer default and preserve caller overrides", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-exec-buffer-"));
+  const payloadBytes = 1024 * 1024 + 1024;
+  const stub = writeSizedStub(dir, payloadBytes);
+  assert.ok(DEFAULT_EXEC_MAX_BUFFER_BYTES > payloadBytes);
+
+  for (const [label, envName, run] of [
+    ["git", "RELAY_GIT_BIN", () => execGit(dir, ["status"], { raw: true })],
+    ["gh", "RELAY_GH_BIN", () => execGh(dir, ["status"], { raw: true })],
+  ]) {
+    await t.test(label, () => {
+      const output = withEnv(envName, stub, run);
+      assert.equal(Buffer.byteLength(output, "utf-8"), payloadBytes);
+      assert.throws(
+        () => withEnv(envName, stub, () => (
+          label === "git"
+            ? execGit(dir, ["status"], { maxBuffer: 1024 })
+            : execGh(dir, ["status"], { maxBuffer: 1024 })
+        )),
+        (error) => error?.code === "ENOBUFS"
+      );
+    });
+  }
 });
 
 // #1083: recovery and correction scripts used to hardcode "origin", so a repo whose

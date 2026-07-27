@@ -33,6 +33,15 @@ Prepared or invoked rounds write artifacts under `~/.relay/runs/<repo-slug>/<run
 - `review-round-N-policy-violation.txt` if the reviewer changed files
 - `review-round-N-redispatch.md` when changes are requested
 
+Generated internal and post-publication diffs are read with the shared 16 MiB
+`DEFAULT_EXEC_MAX_BUFFER_BYTES` ceiling. The review degradation threshold is
+derived from that ceiling (`GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES`, currently
+512 KiB), so the subprocess can always return a diff before the guard runs.
+Generated diffs above the threshold are replaced by a `--stat` summary and the
+list of files whose patches were omitted. The marker, observed byte size, and
+threshold are persisted in `review-round-N-diff.patch`. Operator-supplied
+`--diff-file` content remains an unguarded, verbatim escape hatch.
+
 The runner reviews the retained checkout recorded in `paths.worktree`, not the repo root. It records `review.last_reviewed_sha` and enforces `review.max_rounds`: compact defaults to `1`, standard to `2`, and hardened to `3`. A still-higher persisted value is an explicit experimental policy; repeated-issue and flip-flop escalation still apply within that budget.
 
 ## Audit Trail

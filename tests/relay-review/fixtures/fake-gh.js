@@ -138,6 +138,19 @@ function writeJson(value) {
   process.stdout.write(JSON.stringify(value));
 }
 
+function writeAllStdout(value) {
+  const buffer = Buffer.from(String(value));
+  let offset = 0;
+  while (offset < buffer.length) {
+    try {
+      offset += fs.writeSync(process.stdout.fd, buffer, offset, buffer.length - offset);
+    } catch (error) {
+      if (error.code !== "EAGAIN") throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+    }
+  }
+}
+
 function loadState() {
   if (statePath && fs.existsSync(statePath)) {
     return JSON.parse(fs.readFileSync(statePath, "utf-8"));
@@ -209,6 +222,11 @@ if (args[0] === "pr" && args[1] === "view") {
 
   // Some tests only need gh pr view to succeed; unsupported data stays empty.
   writeJson({});
+  process.exit(0);
+}
+
+if (args[0] === "pr" && args[1] === "diff") {
+  writeAllStdout(fixture.diff || "");
   process.exit(0);
 }
 

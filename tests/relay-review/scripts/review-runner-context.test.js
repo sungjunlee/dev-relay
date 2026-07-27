@@ -11,6 +11,8 @@ const {
   DEFAULT_ENFORCEMENT_RUBRIC,
 } = require("../../relay-dispatch/scripts/test-support");
 const {
+  GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES,
+  loadDiff,
   loadPrReviewSignals,
   loadProjectConventions,
   loadRetainedWorktreeDiff,
@@ -18,9 +20,15 @@ const {
   resolveIssueNumber,
 } = require("../../../skills/relay-review/scripts/review-runner/context");
 const {
+  DEFAULT_EXEC_MAX_BUFFER_BYTES,
+} = require("../../../skills/relay-dispatch/scripts/exec");
+const {
   loadRubricFromRunDir,
 } = require("../../../skills/relay-dispatch/scripts/manifest/rubric");
 const { buildPrompt } = require("../../../skills/relay-review/scripts/review-runner/prompt");
+const {
+  writeRoundArtifacts,
+} = require("../../../skills/relay-review/scripts/review-runner/round-artifacts");
 const { withFakeGh } = require("../fixtures/fake-gh");
 
 function createRunFixture() {
@@ -35,6 +43,74 @@ function createRunFixture() {
   const runId = "issue-189-20260418010101010";
   const { runDir } = ensureRunLayout(repoRoot, runId);
   return { repoRoot, runDir, runId };
+}
+
+function buildLargePatch(filePath, minimumBytes) {
+  const header = [
+    `diff --git a/${filePath} b/${filePath}`,
+    "new file mode 100644",
+    "index 0000000..1111111",
+    "--- /dev/null",
+    `+++ b/${filePath}`,
+  ];
+  const line = `+${"x".repeat(79)}\n`;
+  const lineCount = Math.ceil((minimumBytes - header.join("\n").length - 64) / line.length);
+  return [
+    ...header,
+    `@@ -0,0 +1,${lineCount} @@`,
+    line.repeat(lineCount).trimEnd(),
+  ].join("\n");
+}
+
+function withEnv(name, value, fn) {
+  const previous = process.env[name];
+  process.env[name] = value;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = previous;
+    }
+  }
+}
+
+function writeOverflowStub(dir, name, gitAware = false) {
+  const stubPath = path.join(dir, name);
+  fs.writeFileSync(
+    stubPath,
+    [
+      "#!/usr/bin/env node",
+      gitAware
+        ? 'if (process.argv.includes("merge-base")) process.stdout.write("a".repeat(40));'
+        : "",
+      gitAware
+        ? 'else process.stdout.write("x".repeat(' + (DEFAULT_EXEC_MAX_BUFFER_BYTES + 1024) + "));"
+        : 'process.stdout.write("x".repeat(' + (DEFAULT_EXEC_MAX_BUFFER_BYTES + 1024) + "));",
+    ].filter(Boolean).join("\n"),
+    "utf-8"
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+function initLargeDiffRepo() {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-large-diff-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Review"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-review@example.com"], { cwd: repoRoot, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["checkout", "-b", "issue-1091"], { cwd: repoRoot, stdio: "pipe" });
+  const largeText = `${"generated review diff payload\n".repeat(
+    Math.ceil((GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES + 4096) / 30)
+  )}`;
+  fs.writeFileSync(path.join(repoRoot, "large.txt"), largeText, "utf-8");
+  execFileSync("git", ["add", "large.txt"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "large change"], { cwd: repoRoot, stdio: "pipe" });
+  return repoRoot;
 }
 
 test("context/resolveIssueNumber prefers manifest issue before GitHub fallbacks", () => {
@@ -352,6 +428,112 @@ test("context/loadRetainedWorktreeDiff builds an internal diff from retained wor
 
   const diff = loadRetainedWorktreeDiff(repoRoot, { git: { base_branch: "main" } });
   assert.match(diff, /\+changed/);
+});
+
+test("context/generated diff threshold stays strictly below the shared read ceiling", () => {
+  assert.ok(DEFAULT_EXEC_MAX_BUFFER_BYTES > GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES);
+});
+
+test("context/loadDiff persists a degraded internal git diff as the round diff artifact", () => {
+  const repoRoot = initLargeDiffRepo();
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-large-round-"));
+  const doneCriteriaFile = path.join(runDir, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Review the large change.\n", "utf-8");
+
+  const artifacts = writeRoundArtifacts({
+    branch: "issue-1091",
+    data: {
+      git: { base_branch: "main" },
+      run_id: "issue-1091-large-diff",
+    },
+    diffFile: null,
+    doneCriteriaFile,
+    internalReview: true,
+    issueNumber: 1091,
+    prNumber: null,
+    reviewRepoPath: repoRoot,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  });
+
+  assert.match(artifacts.diffText, /generated diff degraded: observed \d+ bytes/);
+  assert.match(artifacts.diffText, new RegExp(`threshold ${GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES} bytes`));
+  assert.match(artifacts.diffText, /# --stat summary \(full patches omitted\)/);
+  assert.match(artifacts.diffText, /large\.txt/);
+  assert.match(artifacts.diffText, /# Files with omitted patches\n- large\.txt/);
+  assert.doesNotMatch(artifacts.diffText, /generated review diff payload/);
+  assert.equal(
+    fs.readFileSync(artifacts.diffPath, "utf-8"),
+    `${artifacts.diffText}\n`
+  );
+});
+
+test("context/loadDiff degrades an oversized gh pr diff", () => {
+  const largePatch = buildLargePatch(
+    "public-large.txt",
+    GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES + 1
+  );
+  assert.ok(Buffer.byteLength(largePatch, "utf-8") > GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES);
+
+  withFakeGh({ diff: largePatch }, (repoRoot) => {
+    const diff = loadDiff(repoRoot, 1091, null);
+    assert.match(diff, /generated diff degraded: observed \d+ bytes/);
+    assert.match(diff, /source gh pr diff #1091/);
+    assert.match(diff, /public-large\.txt/);
+    assert.match(diff, /# Files with omitted patches\n- public-large\.txt/);
+    assert.doesNotMatch(diff, new RegExp(`\\+${"x".repeat(79)}`));
+  });
+});
+
+test("context/loadDiff passes a generated diff just under the threshold byte-identical", () => {
+  const expected = "x".repeat(GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES - 1);
+  withFakeGh({ diff: expected }, (repoRoot) => {
+    assert.equal(loadDiff(repoRoot, 1091, null), expected);
+  });
+});
+
+test("context/loadDiff leaves an oversized --diff-file unguarded", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-diff-file-"));
+  const diffPath = path.join(repoRoot, "curated.patch");
+  const expected = "z".repeat(GENERATED_DIFF_DEGRADE_THRESHOLD_BYTES + 1);
+  fs.writeFileSync(diffPath, expected, "utf-8");
+
+  assert.equal(
+    loadDiff(repoRoot, null, diffPath, {
+      internalReview: true,
+      manifestData: {},
+      reviewRepoPath: null,
+    }),
+    expected
+  );
+});
+
+test("context/loadDiff replaces generated ENOBUFS errors with actionable size context", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-overflow-"));
+  const ghStub = writeOverflowStub(dir, "gh-overflow.js");
+  const gitStub = writeOverflowStub(dir, "git-overflow.js", true);
+  const expectedMessage = new RegExp(
+    `observed_size>=\\d+ bytes, maxBuffer_limit=${DEFAULT_EXEC_MAX_BUFFER_BYTES} bytes\\..*--diff-file`
+  );
+
+  await t.test("gh pr diff", () => {
+    assert.throws(
+      () => withEnv("RELAY_GH_BIN", ghStub, () => loadDiff(dir, 1091, null)),
+      (error) => expectedMessage.test(error.message) && !/^Error: spawnSync gh ENOBUFS$/.test(error.message)
+    );
+  });
+
+  await t.test("internal git diff", () => {
+    assert.throws(
+      () => withEnv("RELAY_GIT_BIN", gitStub, () => loadDiff(dir, null, null, {
+        internalReview: true,
+        manifestData: { git: { base_branch: "main" } },
+        reviewRepoPath: dir,
+      })),
+      (error) => expectedMessage.test(error.message) && !/^Error: spawnSync git ENOBUFS$/.test(error.message)
+    );
+  });
 });
 
 test("context/parseRemoteHost preserves the origin parsing matrix", async (t) => {
