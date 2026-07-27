@@ -287,41 +287,11 @@ function toFrontmatter(data, indent = 0) {
     .join("\n");
 }
 
-function preserveCoordinationMarker(manifestPath, data) {
-  if (!fs.existsSync(manifestPath)) return data;
-  let current;
-  try {
-    current = readManifest(manifestPath).data;
-  } catch {
-    return data;
-  }
-  const currentMarker = current?.coordination?.marker;
-  if (currentMarker === undefined) return data;
-  const incomingMarker = data?.coordination?.marker;
-  if (incomingMarker === undefined) {
-    return {
-      ...data,
-      coordination: {
-        ...(data.coordination || {}),
-        marker: currentMarker,
-      },
-    };
-  }
-  if (incomingMarker !== currentMarker) {
-    const error = new Error(
-      `coordination marker conflict while writing ${manifestPath}; refusing to replace the persisted marker`,
-    );
-    error.code = "COORDINATION_MARKER_CONFLICT";
-    throw error;
-  }
-  return data;
-}
-
-function writeManifestUnlocked(manifestPath, data, body = NOTES_TEMPLATE, { preserveMarker = true } = {}) {
+function writeManifestUnlocked(manifestPath, data, body = NOTES_TEMPLATE) {
   const dir = path.dirname(manifestPath);
   fs.mkdirSync(dir, { recursive: true });
   const tmpPath = `${manifestPath}.tmp.${process.pid}`;
-  const nextData = preserveMarker ? preserveCoordinationMarker(manifestPath, data) : data;
+  const nextData = data;
   const content = `---\n${toFrontmatter(nextData)}\n---\n${body.endsWith("\n") ? body : `${body}\n`}`;
   try {
     fs.writeFileSync(tmpPath, content, "utf-8");
