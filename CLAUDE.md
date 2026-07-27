@@ -2,7 +2,7 @@
 
 Orchestrator-agnostic relay system for plan → dispatch → review workflows with explicit merge. Any supported agent can serve as orchestrator, worker, or reviewer — roles are bound per-run via the relay manifest, not hardcoded.
 
-> ⛔ **`relay-orca` is FROZEN / SUPERSEDED as of 2026-07-24.** Do not use, invoke, or extend it. It was a learning spike (program-altitude coordinator, epic #941) retired in favor of a lighter *decompose-deep/execute-flat* successor still in design. See [skills/relay-orca/SUPERSEDED.md](skills/relay-orca/SUPERSEDED.md) and [skills/SUPERSEDED.md](skills/SUPERSEDED.md). The active relay skillset is unaffected.
+> **`relay-orca` was removed after being frozen and superseded.** The last commit containing the skill is `11f79c6dddc6f053ae149d3b664a58fd47645f77`; see [skills/SUPERSEDED.md](skills/SUPERSEDED.md) for the historical record.
 
 ## Architecture
 
@@ -109,7 +109,7 @@ node skills/relay-merge/scripts/finalize-run.js --run-id <id> --merge-method squ
 node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-nonready --reason "..." --json
 
 # Final gate for broad changes (serialize; fleet condition waits can flake under parallel file execution)
-node --test --test-concurrency=1 tests/relay-ready/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js tests/relay/scripts/*.test.js tests/relay-config/scripts/*.test.js tests/relay-fleet/scripts/*.test.js tests/relay-orca/scripts/*.test.js tests/skills-lint/scripts/*.test.js
+node --test --test-concurrency=1 tests/relay-ready/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js tests/relay/scripts/*.test.js tests/relay-config/scripts/*.test.js tests/relay-fleet/scripts/*.test.js tests/skills-lint/scripts/*.test.js
 ```
 
 ## Key Design Decisions

@@ -1,8 +1,0 @@
-interface:
-  display_name: "relay-orca"
-  short_description: "EXPERIMENTAL, opt-in program-altitude coordinator. Explicit-only: supervises accepted programs as bounded Orca waves over relay/relay-fleet operators. Does NOT auto-trigger on ordinary relay, relay-fleet, delegation, implementation, or planning requests."
-  default_prompt: "Invoke relay-orca ONLY when the operator explicitly asks for relay-orca plan, run, status, resume, or stop on an already-accepted program contract."
-policy:
-  # Explicit-only routing (D5): relay-orca must never be selected implicitly.
-  # An engine may only enter it when the operator names a relay-orca intent.
-  allow_implicit_invocation: false

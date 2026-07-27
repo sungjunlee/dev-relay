@@ -26,7 +26,7 @@ const EVENTS = Object.freeze({
   CLEANUP_RESULT: "cleanup_result",
   CLOSE: "close",
   CONFLICTING_RUN_OVERRIDE: "conflicting_run_override",
-  // Consumer: relay-orca attach-marker audits supervised correlation-marker recovery.
+  // Generic integrations may record event: EVENTS.COORDINATION_MARKER_ATTACHED for audit trails.
   COORDINATION_MARKER_ATTACHED: "coordination_marker_attached",
   // Consumer: dispatch resume gate and Phase 2 reconciler use this to resume or reconcile interrupted dispatches.
   DISPATCH_INTERRUPTED: "dispatch_interrupted",
@@ -471,7 +471,7 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
 }
 
 // Manifest and journal writers share the same per-run transaction lock. Callers
-// already inside a transaction (notably attach-marker's manifest+audit pair) set
+// already inside a transaction (notably extend-review-policy's manifest+audit pair) set
 // lockHeld and may target an explicitly resolved events path.
 function appendRunEvent(repoRoot, runId, eventData, { eventsPath = null, lockHeld = false } = {}) {
   if (lockHeld) return appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath });
