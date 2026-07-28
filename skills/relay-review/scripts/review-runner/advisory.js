@@ -18,6 +18,10 @@ const { reapPriorAdvisoryLaneAttempts } = require("./advisory-lane-reap");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
 const { writeJson, writeText } = require("./common");
+const {
+  PROMPT_TRANSPORT_EVIDENCE_ENV,
+  promptTransportPolicy,
+} = require("../reviewer-prompt-transport");
 
 const DEFAULT_ADVISORY_TIMEOUT_SECONDS = 900;
 const DEFAULT_ADVISORY_GRACE_SECONDS = 10;
@@ -100,7 +104,7 @@ function buildAdvisoryReviewerPolicy(reviewerName) {
   } catch {
     return null;
   }
-  return assertPolicyRepresentable(buildAgentPolicyAudit({
+  const audit = assertPolicyRepresentable(buildAgentPolicyAudit({
     descriptor,
     phase: ADAPTER_PHASES.ADVISORY_REVIEW,
     requested: {
@@ -109,6 +113,10 @@ function buildAdvisoryReviewerPolicy(reviewerName) {
       readOnly: true,
     },
   }));
+  return {
+    ...audit,
+    prompt_transport: promptTransportPolicy(reviewerName),
+  };
 }
 
 function readJsonIfExists(filePath) {
@@ -512,6 +520,7 @@ function executeAdvisoryRequest(request) {
   let failureReason = null;
   let rawResponsePath = null;
   let rawResponsePaths = [];
+  const promptTransportEvidencePaths = [];
   let attemptCount = 0;
   let status = "success";
   let counts = { required_count: 0, advisory_count: 0, duplicate_low_confidence_count: 0 };
@@ -543,6 +552,13 @@ function executeAdvisoryRequest(request) {
       let stdout = "";
       let stderr = "";
       let outcome = { code: 0 };
+      const transportPolicy = promptTransportPolicy(request.reviewerName);
+      const promptTransportEvidencePath = transportPolicy.compatibility_fallback
+        ? path.join(
+          request.runDir,
+          `review-round-${request.round}-advisory-${artifactName}-prompt-transport-attempt-${attemptCount}.json`
+        )
+        : null;
       try {
         const execOptions = {
           cwd: advisoryRepoPath,
@@ -552,9 +568,17 @@ function executeAdvisoryRequest(request) {
           timeout: timeoutMs,
         };
         if (request.reviewerName === "cline") {
-          execOptions.env = buildAdvisoryAdapterEnv(request, {
-            timeoutSeconds: Math.max(1, Math.ceil(timeoutMs / 1000)),
-          });
+          execOptions.env = {
+            ...buildAdvisoryAdapterEnv(request, {
+              timeoutSeconds: Math.max(1, Math.ceil(timeoutMs / 1000)),
+            }),
+          };
+        }
+        if (promptTransportEvidencePath) {
+          execOptions.env = {
+            ...(execOptions.env || process.env),
+            [PROMPT_TRANSPORT_EVIDENCE_ENV]: promptTransportEvidencePath,
+          };
         }
         stdout = execFileSync(process.execPath, execArgs, execOptions).trim();
       } catch (error) {
@@ -566,6 +590,12 @@ function executeAdvisoryRequest(request) {
           signal: error.signal,
           timeout: error.code === "ETIMEDOUT" || error.signal === "SIGTERM",
         };
+      }
+      if (
+        promptTransportEvidencePath &&
+        fs.existsSync(promptTransportEvidencePath)
+      ) {
+        promptTransportEvidencePaths.push(promptTransportEvidencePath);
       }
       const attemptRawPath = writeRawResponse(
         request.runDir,
@@ -742,7 +772,14 @@ function executeAdvisoryRequest(request) {
       lane_index: request.laneIndex || 1,
       reviewer: request.reviewerName,
       model: request.reviewerModel,
-      reviewer_policy: request.reviewerPolicy,
+      reviewer_policy: {
+        ...request.reviewerPolicy,
+        prompt_transport: {
+          ...(request.reviewerPolicy?.prompt_transport
+            || promptTransportPolicy(request.reviewerName)),
+          evidence_paths: promptTransportEvidencePaths.slice(),
+        },
+      },
       policy_decision: request.policyDecision,
       profile: request.profile,
       trigger: request.trigger || "every_round",

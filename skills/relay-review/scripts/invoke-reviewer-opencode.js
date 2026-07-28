@@ -3,7 +3,6 @@
  * Invoke OpenCode as a structured primary or advisory reviewer.
  */
 
-const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -17,6 +16,9 @@ const {
 } = require("./reviewer-helpers");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
+const {
+  execFileSyncWithStdinPrompt,
+} = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help", "-h"];
@@ -156,11 +158,14 @@ function main() {
 
   const execArgs = ["run"];
   if (model) execArgs.push("-m", model);
-  execArgs.push(fullPrompt);
+  execArgs.push("-");
 
   let result;
   try {
-    result = execFileSync(opencodeBin, execArgs, {
+    result = execFileSyncWithStdinPrompt(opencodeBin, execArgs, {
+      adapter: "opencode",
+      prompt: fullPrompt,
+      promptFile,
       cwd: repoPath,
       encoding: "utf-8",
       stdio: "pipe",

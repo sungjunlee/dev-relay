@@ -16,6 +16,9 @@ const {
   recoverExecStdout,
   summarizeFailure,
 } = require("./reviewer-helpers");
+const {
+  execFileSyncWithStdinPrompt,
+} = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--json", "--help", "-h"];
@@ -177,11 +180,13 @@ function main() {
     "--output-format", "json",
   ];
   if (model) execArgs.push("--model", model);
-  execArgs.push(fullPrompt);
 
   let rawOutput;
   try {
-    rawOutput = execFileSync(agentBin, execArgs, {
+    rawOutput = execFileSyncWithStdinPrompt(agentBin, execArgs, {
+      adapter: "cursor",
+      prompt: fullPrompt,
+      promptFile,
       cwd: repoPath,
       encoding: "utf-8",
       stdio: "pipe",

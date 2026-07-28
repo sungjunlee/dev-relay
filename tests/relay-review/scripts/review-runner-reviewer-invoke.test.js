@@ -550,10 +550,12 @@ test("reviewer-invoke route-plan review model wins over manifest model hint", (t
   assert.equal(reviewInvokeEvent.route_source, "route_plan");
 });
 
-test("reviewer-invoke/loadReviewText records adapter-managed primary reviewer read-only policy", (t) => {
+test("reviewer-invoke/loadReviewText completes a managed Codex round with a raw NUL in the reviewed diff", (t) => {
   const originalRelayHome = process.env.RELAY_HOME;
   const originalCodexBin = process.env.RELAY_CODEX_BIN;
-  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, runId } = setupReviewRun();
+  const diffPath = path.join(runDir, "review-round-1-diff.patch");
+  const promptPath = path.join(runDir, "review-round-1-prompt.md");
   t.after(() => {
     if (originalRelayHome === undefined) {
       delete process.env.RELAY_HOME;
@@ -567,26 +569,47 @@ test("reviewer-invoke/loadReviewText records adapter-managed primary reviewer re
     }
   });
   process.env.RELAY_HOME = relayHome;
+  const nulDiff = Buffer.concat([
+    Buffer.from("+before", "utf-8"),
+    Buffer.from([0]),
+    Buffer.from("after\n", "utf-8"),
+  ]);
+  fs.writeFileSync(diffPath, nulDiff);
+  fs.writeFileSync(
+    promptPath,
+    Buffer.concat([
+      Buffer.from("Review bundle\n\n## Diff\n", "utf-8"),
+      nulDiff,
+    ])
+  );
 
   const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const stdinCapturePath = path.join(helperDir, "codex-stdin.bin");
+  const argvCapturePath = path.join(helperDir, "codex-argv.json");
   process.env.RELAY_CODEX_BIN = writeExecutable(helperDir, "fake-codex.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(argvCapturePath)}, JSON.stringify(args), "utf-8");
 const outputIndex = args.indexOf("-o");
 if (outputIndex === -1 || !args[outputIndex + 1]) {
   process.stderr.write("missing -o result path\\n");
   process.exit(2);
 }
-fs.writeFileSync(args[outputIndex + 1], JSON.stringify({
-  verdict: "pass",
-  summary: "ok",
-  contract_status: "pass",
-  quality_review_status: "pass",
-  next_action: "ready_to_merge",
-  issues: [],
-  rubric_scores: [],
-  scope_drift: { creep: [], missing: [] }
-}) + "\\n", "utf-8");
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(stdinCapturePath)}, Buffer.concat(chunks));
+  fs.writeFileSync(args[outputIndex + 1], JSON.stringify({
+    verdict: "pass",
+    summary: "ok",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] }
+  }) + "\\n", "utf-8");
+});
 `);
 
   const reviewerScript = resolveReviewerScript("codex");
@@ -608,6 +631,14 @@ fs.writeFileSync(args[outputIndex + 1], JSON.stringify({
   });
 
   assert.equal(JSON.parse(reviewText).verdict, "pass");
+  const reviewerArgv = JSON.parse(fs.readFileSync(argvCapturePath, "utf-8"));
+  assert.equal(reviewerArgv.at(-1), "-");
+  assert.equal(reviewerArgv.some((entry) => entry.includes("\0")), false);
+  assert.notEqual(
+    fs.readFileSync(stdinCapturePath).indexOf(0),
+    -1,
+    "raw NUL from the embedded diff must reach the reviewer through stdin"
+  );
   const eventLines = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8").trim().split("\n").filter(Boolean);
   const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
   assert.equal(reviewInvokeEvent.event, "review_invoke");
@@ -616,6 +647,14 @@ fs.writeFileSync(args[outputIndex + 1], JSON.stringify({
   assert.equal(reviewInvokeEvent.reviewer_policy.read_only.enforcement_level, "native");
   assert.deepEqual(reviewInvokeEvent.reviewer_policy.read_only.flags, ["--sandbox read-only"]);
   assert.equal(reviewInvokeEvent.reviewer_policy.safe, true);
+  assert.equal(reviewInvokeEvent.reviewer_policy.prompt_transport.mode, "stdin");
+  assert.equal(reviewInvokeEvent.reviewer_policy.prompt_transport.prompt_text_in_argv, false);
+  const transportEvidencePath = reviewInvokeEvent.reviewer_policy.prompt_transport.evidence_path;
+  const transportEvidence = JSON.parse(fs.readFileSync(transportEvidencePath, "utf-8"));
+  assert.equal(transportEvidence.mode, "stdin");
+  assert.equal(transportEvidence.prompt_contains_nul, true);
+  assert.equal(transportEvidence.prompt_text_in_argv, false);
+  assert.equal(transportEvidence.source_diff_path, diffPath);
 });
 
 test("reviewer-invoke/loadReviewText denies disallowed reviewer model before adapter invocation", (t) => {
