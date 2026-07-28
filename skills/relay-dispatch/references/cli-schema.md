@@ -39,6 +39,23 @@ Defaults belong at the call site, not in the global schema, because the same fla
 
 Retired dispatch flag: `--coordination-marker` is no longer supported. The coordination-marker seam was removed and nothing replaces it; passing the flag produces a dedicated sunset error.
 
+## Review Assurance Resolution
+
+This is the authoritative statement of how dispatch resolves a run's review assurance level (#1098). `--review-assurance` is a default, not an override.
+
+1. The rubric's `task_profile.review_assurance` (inside the artifact passed via `--rubric-file`) is authoritative when present. An invalid value fails the dispatch early with `rubric_review_assurance_invalid`; an empty value counts as omitted.
+2. `--review-assurance <level>` — or the `standard` default when the flag is absent — applies only when the rubric omits the field.
+3. A `task_profile` embedded in the dispatch **prompt** never sets the level; it is recorded as advisory guidance metadata (`advisory.guidance.task_profile_summary`) only.
+
+When an explicitly passed flag disagrees with the rubric, the rubric wins and the disagreement is recorded loudly. Resolution happens before the manifest is created and before the first review round is spent:
+
+- Run manifest: `policy.review_assurance` (resolved level: `compact` | `standard` | `hardened`), `policy.review_assurance_source` (`rubric` | `flag`), and `policy.review_assurance_overridden` (present only when an explicit flag lost to the rubric; holds the overridden flag value). `review.max_rounds` derives from the resolved level (compact 1, standard 2, hardened 3).
+- Dispatch output: the dry-run plan, the detached receipt, and the final result all carry `reviewAssurance`, `reviewAssuranceSource`, and `reviewAssuranceOverridden`; human output prints `Assurance: <level> (source=rubric|flag)[; overridden flag=<level>]`.
+
+On same-run resume the resolved level is immutable: a rubric value that disagrees with the persisted `policy.review_assurance` fails closed, and when the rubric omits the field an explicit flag that disagrees with the persisted level is refused.
+
+Other references (relay-dispatch SKILL.md, relay-plan `task-profile.md`, relay-plan `risk-assurance.md`) point here instead of restating the rule.
+
 ## Current Flag Audit
 
 Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same table is mirrored in the PR body when the schema changes — see PR #276 for the audit snapshot convention.

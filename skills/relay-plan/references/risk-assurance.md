@@ -44,7 +44,7 @@ task_profile:
   review_assurance: compact
 ```
 
-`review_assurance` may be omitted when the four properties are present; dispatch derives it. If supplied, it must be at least the derived floor. Partial or unknown risk properties fail closed. Legacy profiles without the four properties remain readable during calibration.
+`review_assurance` may be omitted when the four properties are present; dispatch derives the floor into guidance metadata. If supplied, it must be at least the derived floor. Partial or unknown risk properties fail closed. Legacy profiles without the four properties remain readable during calibration. The run's effective level is resolved from the rubric's `task_profile.review_assurance` and the `--review-assurance` flag — the rubric wins and a disagreement is recorded; see relay-dispatch `references/cli-schema.md` § Review Assurance Resolution.
 
 For high risk, return a handoff command that includes:
 
