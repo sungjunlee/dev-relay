@@ -387,6 +387,139 @@ test("rebrandEvidence removes stale verification_runs and strict preflight names
   assert.match(preflight.reason, /re-verify at the new HEAD or record audited operator evidence/);
 });
 
+test("rebrandEvidence safely audits malformed verification_runs and strict preflight names the rebrand", () => {
+  const malformedValues = [{
+    name: "object",
+    value: { command: "node --test required.test.js" },
+    reason: /must be an array when present; found object/,
+  }, {
+    name: "null",
+    value: null,
+    reason: /must be an array when present; found null/,
+  }, {
+    name: "array with invalid entry",
+    value: [null],
+    reason: /verification_runs\[0\] must be a JSON object/,
+  }];
+
+  for (const entry of malformedValues) {
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-rebrand-malformed-"));
+    fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+      "evaluation:",
+      "  verification:",
+      "    checks:",
+      "      - name: required after malformed rebrand",
+      "        type: command",
+      "        command: node --test required.test.js",
+    ].join("\n"), "utf-8");
+    const evidencePath = writeExecutionEvidence(runDir, {
+      schema_version: 1,
+      head_sha: "a".repeat(40),
+      test_command: "unspecified",
+      test_result_hash: "unspecified",
+      test_result_summary: "malformed verification evidence",
+      verification_runs: entry.value,
+      recorded_at: "2026-04-22T00:00:00.000Z",
+      recorded_by: "dispatch-orchestrator-v1",
+    });
+
+    const rebrand = rebrandEvidence(runDir, {
+      newHeadSha: "b".repeat(40),
+      reason: `recover malformed ${entry.name}`,
+    });
+    const written = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+    const preflight = buildExecutionEvidencePreflight({
+      runDir,
+      reviewedHead: "b".repeat(40),
+      strict: true,
+    });
+
+    assert.equal(rebrand.rewritten, true, entry.name);
+    assert.equal(rebrand.verificationRunsPolicy, "removed_malformed_after_rebrand", entry.name);
+    assert.match(rebrand.verificationRunsMalformation, entry.reason, entry.name);
+    assert.equal(written.verification_runs, undefined, entry.name);
+    assert.equal(
+      written.rebrand.verification_runs.policy,
+      "removed_malformed_after_rebrand",
+      entry.name
+    );
+    assert.deepEqual(written.rebrand.verification_runs.removed_value, entry.value, entry.name);
+    assert.match(written.rebrand.verification_runs.malformation_reason, entry.reason, entry.name);
+    assert.equal(preflight.status, "blocked", entry.name);
+    assert.equal(preflight.qualityExecutionStatus, "fail", entry.name);
+    assert.match(preflight.reason, /rebrand removed malformed verification_runs/, entry.name);
+    assert.match(preflight.reason, entry.reason, entry.name);
+    assert.match(
+      preflight.reason,
+      /Re-verify at the new HEAD or record audited operator evidence/,
+      entry.name
+    );
+  }
+});
+
+test("rebrandEvidence retains verification removal provenance across repeated rebrands", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-double-rebrand-"));
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "evaluation:",
+    "  verification:",
+    "    checks:",
+    "      - name: required after repeated rebrand",
+    "        type: command",
+    "        command: node --test required.test.js",
+  ].join("\n"), "utf-8");
+  const evidencePath = writeExecutionEvidence(runDir, {
+    schema_version: 1,
+    head_sha: "a".repeat(40),
+    test_command: "unspecified",
+    test_result_hash: "unspecified",
+    test_result_summary: "verified before repeated rebrand",
+    verification_runs: [{
+      name: "required after repeated rebrand",
+      command: "node --test required.test.js",
+      cwd: "/repo",
+      head_sha: "a".repeat(40),
+      exit_code: 0,
+      output_hash: "c".repeat(64),
+      recorded_by: "codex-confirmed-verification-v1",
+      recorded_at: "2026-04-22T00:00:00.000Z",
+    }],
+    recorded_at: "2026-04-22T00:00:00.000Z",
+    recorded_by: "dispatch-orchestrator-v1",
+  });
+
+  rebrandEvidence(runDir, {
+    newHeadSha: "b".repeat(40),
+    reason: "first recovery commit",
+  });
+  rebrandEvidence(runDir, {
+    newHeadSha: "c".repeat(40),
+    reason: "second recovery commit",
+  });
+
+  const written = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  const preflight = buildExecutionEvidencePreflight({
+    runDir,
+    reviewedHead: "c".repeat(40),
+    strict: true,
+  });
+
+  assert.equal(written.rebrand.previous_head_sha, "b".repeat(40));
+  assert.equal(written.rebrand.new_head_sha, "c".repeat(40));
+  assert.equal(written.rebrand.verification_runs, undefined);
+  assert.equal(written.rebrand_history.length, 1);
+  assert.equal(written.rebrand_history[0].previous_head_sha, "a".repeat(40));
+  assert.equal(written.rebrand_history[0].new_head_sha, "b".repeat(40));
+  assert.equal(
+    written.rebrand_history[0].verification_runs.policy,
+    "removed_stale_after_rebrand"
+  );
+  assert.equal(preflight.status, "blocked");
+  assert.equal(preflight.qualityExecutionStatus, "fail");
+  assert.match(preflight.reason, /rebrand removed 1 stale verification_run/);
+  assert.match(preflight.reason, /from a{40} to b{40}; evidence is now at c{40}/);
+  assert.match(preflight.reason, /re-verify at the new HEAD or record audited operator evidence/);
+});
+
 test("rebrandEvidence skips when execution evidence is absent", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-execution-no-evidence-"));
 

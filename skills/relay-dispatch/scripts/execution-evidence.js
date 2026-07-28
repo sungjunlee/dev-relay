@@ -10,6 +10,79 @@ const VERIFICATION_REQUEST_END = "RELAY_VERIFICATION_REQUEST_END";
 const VERIFICATION_RESULT_BEGIN = "RELAY_VERIFICATION_RESULT_BEGIN";
 const VERIFICATION_RESULT_END = "RELAY_VERIFICATION_RESULT_END";
 const MAX_VERIFICATION_OUTPUT_BYTES = 1024 * 1024;
+const SHA40_PATTERN = /^[0-9a-f]{40}$/i;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
+const VERIFICATION_HASH_FIELDS = ["output_hash", "stdout_hash", "stderr_hash"];
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function verificationRunsMalformation(verificationRuns) {
+  if (!Array.isArray(verificationRuns)) {
+    const valueType = verificationRuns === null ? "null" : typeof verificationRuns;
+    return `verification_runs must be an array when present; found ${valueType}`;
+  }
+  if (verificationRuns.length === 0) {
+    return "verification_runs must not be empty when present";
+  }
+
+  for (let index = 0; index < verificationRuns.length; index += 1) {
+    const run = verificationRuns[index];
+    if (!run || typeof run !== "object" || Array.isArray(run)) {
+      return `verification_runs[${index}] must be a JSON object`;
+    }
+    if (!isNonEmptyString(run.command)) {
+      return `verification_runs[${index}].command must be a non-empty string`;
+    }
+    if (!isNonEmptyString(run.cwd)) {
+      return `verification_runs[${index}].cwd must be a non-empty string`;
+    }
+    if (!isNonEmptyString(run.head_sha) || !SHA40_PATTERN.test(run.head_sha)) {
+      return `verification_runs[${index}].head_sha must be a 40-character hex SHA`;
+    }
+    if (!Number.isInteger(run.exit_code) || run.exit_code < 0) {
+      return `verification_runs[${index}].exit_code must be a non-negative integer`;
+    }
+    if (!isNonEmptyString(run.recorded_by)) {
+      return `verification_runs[${index}].recorded_by must be a non-empty string`;
+    }
+    if (!isNonEmptyString(run.recorded_at) || Number.isNaN(Date.parse(run.recorded_at))) {
+      return `verification_runs[${index}].recorded_at must be a valid ISO timestamp`;
+    }
+    for (const fieldName of VERIFICATION_HASH_FIELDS) {
+      const value = run[fieldName];
+      if (value !== undefined && (!isNonEmptyString(value) || !SHA256_PATTERN.test(value))) {
+        return `verification_runs[${index}].${fieldName} must be a sha256 hex digest when present`;
+      }
+    }
+    if (run.output_path !== undefined && !isNonEmptyString(run.output_path)) {
+      return `verification_runs[${index}].output_path must be a non-empty string when present`;
+    }
+    if (!VERIFICATION_HASH_FIELDS.some((fieldName) => isNonEmptyString(run[fieldName]))) {
+      return (
+        `verification_runs[${index}] requires at least one of ` +
+        VERIFICATION_HASH_FIELDS.join(", ")
+      );
+    }
+  }
+
+  return null;
+}
+
+function verificationRunsValueType(verificationRuns) {
+  if (verificationRuns === null) return "null";
+  if (Array.isArray(verificationRuns)) return "array";
+  return typeof verificationRuns;
+}
+
+function verificationRunHeadShas(verificationRuns) {
+  if (!Array.isArray(verificationRuns)) return [];
+  return [...new Set(verificationRuns
+    .filter((run) => run && typeof run === "object" && !Array.isArray(run))
+    .map((run) => run.head_sha)
+    .filter(isNonEmptyString))];
+}
 
 function yamlKeyMatch(line) {
   return String(line || "").match(/^(\s*)(?:-\s*)?([A-Za-z_][\w.-]*):\s*(.*?)\s*$/);
@@ -360,35 +433,62 @@ function rebrandEvidence(runDir, { newHeadSha, recordedBy = "recover-commit-rebr
   }
 
   const previousSha = existing.head_sha;
-  const previousVerificationRuns = Array.isArray(existing.verification_runs)
-    ? existing.verification_runs
+  const verificationRunsPresent = Object.prototype.hasOwnProperty.call(existing, "verification_runs");
+  const previousVerificationRuns = existing.verification_runs;
+  const verificationRunsMalformed = verificationRunsPresent
+    ? verificationRunsMalformation(previousVerificationRuns)
     : null;
   const {
     verification_runs: _staleVerificationRuns,
     ...rebrandedEvidence
   } = existing;
-  const verificationRunsAudit = previousVerificationRuns
+  const verificationRunsAudit = !verificationRunsPresent
+    ? {}
+    : verificationRunsMalformed
       ? {
           verification_runs: {
-            policy: "removed_stale_after_rebrand",
-            removed_count: previousVerificationRuns.length,
-            previous_head_shas: [...new Set(previousVerificationRuns.map((run) => run.head_sha))],
-            removed_runs: previousVerificationRuns,
+            policy: "removed_malformed_after_rebrand",
+            removed_value_type: verificationRunsValueType(previousVerificationRuns),
+            malformation_reason: verificationRunsMalformed,
+            removed_value: previousVerificationRuns,
+            previous_head_shas: verificationRunHeadShas(previousVerificationRuns),
             next_action: "re-verify at the new HEAD or record audited operator evidence",
           },
         }
-      : {};
+      : {
+          verification_runs: {
+            policy: "removed_stale_after_rebrand",
+            removed_count: previousVerificationRuns.length,
+            previous_head_shas: verificationRunHeadShas(previousVerificationRuns),
+            removed_runs: previousVerificationRuns,
+            next_action: "re-verify at the new HEAD or record audited operator evidence",
+          },
+        };
+  const previousRebrandHistory = Array.isArray(existing.rebrand_history)
+    ? existing.rebrand_history
+    : [];
+  const previousRebrand = existing.rebrand
+    && typeof existing.rebrand === "object"
+    && !Array.isArray(existing.rebrand)
+    ? existing.rebrand
+    : null;
+  const rebrandHistory = previousRebrand
+    ? [...previousRebrandHistory, previousRebrand]
+    : previousRebrandHistory;
+  const rebrand = {
+    previous_head_sha: previousSha,
+    new_head_sha: newHeadSha,
+    previous_recorded_by: existing.recorded_by,
+    reason,
+    recorded_at: new Date().toISOString(),
+    ...verificationRunsAudit,
+  };
   writeExecutionEvidence(runDir, {
     ...rebrandedEvidence,
     head_sha: newHeadSha,
     recorded_by: recordedBy,
-    rebrand: {
-      previous_head_sha: previousSha,
-      previous_recorded_by: existing.recorded_by,
-      reason,
-      recorded_at: new Date().toISOString(),
-      ...verificationRunsAudit,
-    },
+    ...(rebrandHistory.length ? { rebrand_history: rebrandHistory } : {}),
+    rebrand,
   });
 
   return {
@@ -397,10 +497,17 @@ function rebrandEvidence(runDir, { newHeadSha, recordedBy = "recover-commit-rebr
     newHeadSha,
     evidencePath,
     evidenceHash: hashFileSha256(evidencePath),
-    ...(previousVerificationRuns
+    ...(verificationRunsPresent
       ? {
-          verificationRunsPolicy: "removed_stale_after_rebrand",
-          removedVerificationRuns: previousVerificationRuns.length,
+          verificationRunsPolicy: verificationRunsMalformed
+            ? "removed_malformed_after_rebrand"
+            : "removed_stale_after_rebrand",
+          ...(Array.isArray(previousVerificationRuns)
+            ? { removedVerificationRuns: previousVerificationRuns.length }
+            : {}),
+          ...(verificationRunsMalformed
+            ? { verificationRunsMalformation: verificationRunsMalformed }
+            : {}),
         }
       : {}),
   };
