@@ -958,6 +958,32 @@ function runDispatch(repoRoot, args, env) {
   });
 }
 
+function writeAssuranceRubric(reviewAssurance = null) {
+  const rubricFile = path.join(
+    os.tmpdir(),
+    `relay-dispatch-assurance-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.yaml`
+  );
+  fs.writeFileSync(rubricFile, [
+    "evaluation:",
+    "  schema_version: 2",
+    "  outcome_contract:",
+    "    source: done_criteria",
+    "    path: done-criteria.md",
+    "  verification:",
+    "    checks:",
+    "      - name: focused test",
+    "        type: command",
+    "        command: node --test tests/focused.test.js",
+    "        target: exit 0",
+    "  earned_rubric:",
+    "    factors: []",
+    "  task_profile:",
+    "    size: M",
+    ...(reviewAssurance ? [`    review_assurance: ${reviewAssurance}`] : []),
+  ].join("\n"), "utf-8");
+  return rubricFile;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1322,6 +1348,9 @@ test("dispatch --detach returns a launch receipt while detached supervisor compl
   assert.equal(receipt.status, "detached");
   assert.match(receipt.runId, /^issue-802-/);
   assert.equal(receipt.manifestPath, getManifestPath(repoRoot, receipt.runId));
+  assert.equal(receipt.reviewAssurance, "standard");
+  assert.equal(receipt.reviewAssuranceSource, "flag");
+  assert.equal(receipt.reviewAssuranceOverridden, null);
   assert.equal(Number.isInteger(receipt.supervisorPid), true);
   assert.ok(receipt.supervisorPid > 0);
   assert.equal(receipt.stdoutLog, path.join(getRunDir(repoRoot, receipt.runId), "dispatch-stdout.log"));
@@ -6050,6 +6079,91 @@ test("dispatch derives review assurance from task_profile when CLI policy is uns
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.policy.review_assurance, "hardened");
   assert.equal(manifest.advisory.guidance.task_profile_summary.review_assurance, "hardened");
+});
+
+test("dispatch uses rubric-only review assurance and persists its resolved cap and source", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-rubric-assurance-bin-"));
+  writeFakeCodex(binDir);
+  const rubricFile = writeAssuranceRubric("hardened");
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-rubric-assurance-only",
+    "--prompt", "honour the fixed rubric assurance",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], env));
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(result.reviewAssurance, "hardened");
+  assert.equal(result.reviewAssuranceSource, "rubric");
+  assert.equal(result.reviewAssuranceOverridden, null);
+  assert.equal(manifest.policy.review_assurance, "hardened");
+  assert.equal(manifest.policy.review_assurance_source, "rubric");
+  assert.equal(manifest.policy.review_assurance_overridden, undefined);
+  assert.equal(manifest.review.max_rounds, 3);
+});
+
+test("dispatch uses the review assurance flag when the rubric omits the field", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-flag-assurance-bin-"));
+  writeFakeCodex(binDir);
+  const rubricFile = writeAssuranceRubric();
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-flag-assurance-only",
+    "--prompt", "use the dispatch assurance flag",
+    "--rubric-file", rubricFile,
+    "--review-assurance", "hardened",
+    "--json",
+  ], env));
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(result.reviewAssurance, "hardened");
+  assert.equal(result.reviewAssuranceSource, "flag");
+  assert.equal(result.reviewAssuranceOverridden, null);
+  assert.equal(manifest.policy.review_assurance, "hardened");
+  assert.equal(manifest.policy.review_assurance_source, "flag");
+  assert.equal(manifest.review.max_rounds, 3);
+});
+
+test("dispatch records a disagreeing assurance flag while the rubric wins", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-assurance-conflict-bin-"));
+  writeFakeCodex(binDir);
+  const rubricFile = writeAssuranceRubric("hardened");
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-assurance-conflict",
+    "--prompt", "record the assurance conflict",
+    "--rubric-file", rubricFile,
+    "--review-assurance", "standard",
+    "--json",
+  ], env));
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(result.reviewAssurance, "hardened");
+  assert.equal(result.reviewAssuranceSource, "rubric");
+  assert.equal(result.reviewAssuranceOverridden, "standard");
+  assert.equal(manifest.policy.review_assurance, "hardened");
+  assert.equal(manifest.policy.review_assurance_source, "rubric");
+  assert.equal(manifest.policy.review_assurance_overridden, "standard");
+  assert.equal(manifest.review.max_rounds, 3);
 });
 
 test("dispatch resume preserves guidance metadata without injecting stale Working Guidance blocks", () => {

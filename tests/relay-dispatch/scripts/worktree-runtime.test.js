@@ -72,6 +72,7 @@ test("formatDispatchDryRun matches the frozen dispatch text fixture", () => {
     timeout: 2400,
     rubricFile: "/tmp/issue187-fixtures/rubric.yaml",
     reviewAssurance: "standard",
+    reviewAssuranceSource: "flag",
     policyDecision: frozenJson.policy_decision,
     routingDecision: frozenJson.routing_decision,
     worktreePlan: {

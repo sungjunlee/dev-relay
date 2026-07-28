@@ -90,7 +90,9 @@ const { parseModelHints } = require("./model-hints");
 const { resolveExecutorDefaultModel } = require("./executor-model-config");
 const {
   REVIEW_ASSURANCE: REVIEW_ASSURANCE_LEVEL,
+  extractReviewAssuranceFromRubric,
   normalizeReviewAssurance,
+  resolveReviewAssurance,
   reviewAssuranceRank,
 } = require("./manifest/review-assurance");
 const {
@@ -323,9 +325,9 @@ function loadInitialRoutePlan(repoRoot) {
     executor: EXECUTOR_ARG,
     model: MODEL,
   });
-  // An explicit CLI --review-assurance wins when it meets the task-derived risk
-  // floor. Seed it before preset expansion so a preset cannot record itself as
-  // having filled a field the CLI overrode (keeps attribution honest).
+  // Seed an explicit CLI --review-assurance before preset expansion so the
+  // preset cannot claim it filled the value. The persisted rubric is resolved
+  // later and remains authoritative over this dispatch default.
   if (REVIEW_ASSURANCE_RAW && !nonEmptyString(routeIntent.review_assurance)) {
     routeIntent.review_assurance = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW);
   }
@@ -375,6 +377,7 @@ const REVIEW_ASSURANCE_RAW = readArg(args, "--review-assurance", undefined, CLI_
 const ROUTING_TAGS = readArg(args, "--tags", "", CLI_ARG_OPTIONS);
 let REVIEW_ASSURANCE;
 let REVIEW_ASSURANCE_SOURCE = REVIEW_ASSURANCE_RAW ? "cli" : null;
+let REVIEW_ASSURANCE_RESOLUTION = null;
 try {
   REVIEW_ASSURANCE = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW || "standard");
 } catch (error) {
@@ -811,7 +814,15 @@ function ensureEmptyFile(filePath) {
   fs.closeSync(fd);
 }
 
-function writeDetachReceiptIfRequested({ repoRoot, runId, manifestPath, runDir, stdoutLog, stderrLog }) {
+function writeDetachReceiptIfRequested({
+  repoRoot,
+  runId,
+  manifestPath,
+  runDir,
+  stdoutLog,
+  stderrLog,
+  reviewAssuranceResolution = null,
+}) {
   if (detachReceiptWritten) return;
   const receiptPath = process.env[DETACH_RECEIPT_ENV];
   if (!receiptPath) return;
@@ -825,6 +836,13 @@ function writeDetachReceiptIfRequested({ repoRoot, runId, manifestPath, runDir, 
     stdoutLog,
     stderrLog,
     reconcileCommand: reconcileCommandForReceipt(repoRoot, runId),
+    ...(reviewAssuranceResolution
+      ? {
+          reviewAssurance: reviewAssuranceResolution.level,
+          reviewAssuranceSource: reviewAssuranceResolution.source,
+          reviewAssuranceOverridden: reviewAssuranceResolution.overridden,
+        }
+      : {}),
   });
   detachReceiptWritten = true;
   delete process.env[DETACH_RECEIPT_ENV];
@@ -974,6 +992,15 @@ async function launchDetachedAndExit() {
     console.log(`  Stdout log: ${output.stdoutLog}`);
     console.log(`  Stderr log: ${output.stderrLog}`);
     console.log(`  Reconcile:  ${output.reconcileCommand}`);
+    if (output.reviewAssurance) {
+      const assuranceOverride = output.reviewAssuranceOverridden
+        ? `; overridden flag=${output.reviewAssuranceOverridden}`
+        : "";
+      console.log(
+        `  Assurance: ${output.reviewAssurance} ` +
+        `(source=${output.reviewAssuranceSource})${assuranceOverride}`
+      );
+    }
     if (output.note) console.log(`  Note:       ${output.note}`);
   }
 }
@@ -2264,11 +2291,6 @@ async function main() {
         fleetId: FLEET_ID,
         doneCriteriaPath: resumeDoneCriteriaPath,
       });
-      if (REVIEW_ASSURANCE_RAW !== undefined) {
-        validateResumeReviewAssurance(manifest, REVIEW_ASSURANCE);
-      } else {
-        REVIEW_ASSURANCE = normalizeReviewAssurance(manifest?.policy?.review_assurance);
-      }
     } catch (error) {
       console.error(`Error: ${error.message}`);
       process.exit(1);
@@ -2277,6 +2299,75 @@ async function main() {
 
   const manifestRunDir = getRunDir(repoRoot, runId);
   enforceRubricPersistence(manifest, manifestRunDir);
+  const rubricText = resolveRoutingRubricText({
+    rubricFile: RUBRIC_FILE,
+    manifest,
+    runDir: manifestRunDir,
+  });
+  let rubricReviewAssurance = null;
+  try {
+    rubricReviewAssurance = extractReviewAssuranceFromRubric(rubricText);
+  } catch (error) {
+    failEarly(`Invalid task_profile.review_assurance in rubric: ${error.message}`, {
+      error_code: "rubric_review_assurance_invalid",
+      rubric_file: RUBRIC_FILE || manifest?.anchor?.rubric_path || null,
+    });
+  }
+
+  if (RESUME_MODE) {
+    try {
+      const existingReviewAssurance = normalizeReviewAssurance(manifest?.policy?.review_assurance);
+      if (rubricReviewAssurance) {
+        if (existingReviewAssurance !== rubricReviewAssurance) {
+          throw new Error(
+            "same-run resume found policy.review_assurance inconsistent with the fixed rubric " +
+            `(existing: ${existingReviewAssurance}, rubric: ${rubricReviewAssurance})`
+          );
+        }
+        REVIEW_ASSURANCE_RESOLUTION = resolveReviewAssurance({
+          rubricReviewAssurance,
+          flagReviewAssurance: REVIEW_ASSURANCE,
+          flagWasExplicit: REVIEW_ASSURANCE_RAW !== undefined,
+        });
+        REVIEW_ASSURANCE_RESOLUTION.overridden = REVIEW_ASSURANCE_RESOLUTION.overridden
+          || manifest?.policy?.review_assurance_overridden
+          || null;
+      } else {
+        if (REVIEW_ASSURANCE_RAW !== undefined) {
+          validateResumeReviewAssurance(manifest, REVIEW_ASSURANCE);
+        }
+        REVIEW_ASSURANCE_RESOLUTION = {
+          level: existingReviewAssurance,
+          source: manifest?.policy?.review_assurance_source || "flag",
+          overridden: manifest?.policy?.review_assurance_overridden || null,
+        };
+      }
+      REVIEW_ASSURANCE = REVIEW_ASSURANCE_RESOLUTION.level;
+      REVIEW_ASSURANCE_SOURCE = REVIEW_ASSURANCE_RESOLUTION.source;
+      manifest = {
+        ...manifest,
+        policy: {
+          ...(manifest.policy || {}),
+          review_assurance: REVIEW_ASSURANCE_RESOLUTION.level,
+          review_assurance_source: REVIEW_ASSURANCE_RESOLUTION.source,
+          ...(REVIEW_ASSURANCE_RESOLUTION.overridden
+            ? { review_assurance_overridden: REVIEW_ASSURANCE_RESOLUTION.overridden }
+            : {}),
+        },
+      };
+    } catch (error) {
+      console.error(`Error: ${error.message}`);
+      process.exit(1);
+    }
+  } else if (rubricReviewAssurance) {
+    REVIEW_ASSURANCE_RESOLUTION = resolveReviewAssurance({
+      rubricReviewAssurance,
+      flagReviewAssurance: REVIEW_ASSURANCE,
+      flagWasExplicit: REVIEW_ASSURANCE_RAW !== undefined,
+    });
+    REVIEW_ASSURANCE = REVIEW_ASSURANCE_RESOLUTION.level;
+    REVIEW_ASSURANCE_SOURCE = REVIEW_ASSURANCE_RESOLUTION.source;
+  }
   let routePlanSnapshot = null;
 
   // A resumed run may carry a Done Criteria amendment: the operator edits the
@@ -2309,12 +2400,14 @@ async function main() {
       const promptReviewAssurance = promptTaskProfile?.review_assurance || null;
       if (
         promptReviewAssurance
+        && REVIEW_ASSURANCE_SOURCE !== "rubric"
         && REVIEW_ASSURANCE_RAW === undefined
         && REVIEW_ASSURANCE_SOURCE === null
       ) {
         REVIEW_ASSURANCE = promptReviewAssurance;
       } else if (
         promptReviewAssurance
+        && REVIEW_ASSURANCE_SOURCE !== "rubric"
         && reviewAssuranceRank(REVIEW_ASSURANCE)
           < reviewAssuranceRank(promptReviewAssurance)
       ) {
@@ -2350,6 +2443,12 @@ async function main() {
         error_code: "task_profile_parse_failed",
       });
     }
+  }
+  if (!REVIEW_ASSURANCE_RESOLUTION) {
+    REVIEW_ASSURANCE_RESOLUTION = resolveReviewAssurance({
+      flagReviewAssurance: REVIEW_ASSURANCE,
+      flagWasExplicit: REVIEW_ASSURANCE_RAW !== undefined,
+    });
   }
   if (taskPromptResult.source === "auto-discovered-redispatch" && !JSON_OUT) {
     console.log(`Auto-discovered redispatch prompt (round ${taskPromptResult.round}): ${taskPromptResult.path}`);
@@ -2503,6 +2602,8 @@ async function main() {
       leafId: LEAF_ID || manifest?.source?.leaf_id || null,
       doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
       reviewAssurance: REVIEW_ASSURANCE,
+      reviewAssuranceSource: REVIEW_ASSURANCE_RESOLUTION.source,
+      reviewAssuranceOverridden: REVIEW_ASSURANCE_RESOLUTION.overridden,
       publishPolicy: PUBLISH_POLICY,
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
       runState: manifest?.state || null,
@@ -2557,6 +2658,8 @@ async function main() {
         fleetId: planFleetId,
         doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
         reviewAssurance: REVIEW_ASSURANCE,
+        reviewAssuranceSource: REVIEW_ASSURANCE_RESOLUTION.source,
+        reviewAssuranceOverridden: REVIEW_ASSURANCE_RESOLUTION.overridden,
         policyDecision,
         routingDecision,
         worktreePlan,
@@ -2595,6 +2698,8 @@ async function main() {
       doneCriteriaPath: resolvedDoneCriteriaPath,
       doneCriteriaSource,
       reviewAssurance: REVIEW_ASSURANCE,
+      reviewAssuranceSource: REVIEW_ASSURANCE_RESOLUTION.source,
+      reviewAssuranceOverridden: REVIEW_ASSURANCE_RESOLUTION.overridden,
       modelHints: MODEL_HINTS,
       fleetId: FLEET_ID,
       ownership: OWNERSHIP || undefined,
@@ -2917,6 +3022,7 @@ async function main() {
     runDir: runArtifactPaths.runDir,
     stdoutLog,
     stderrLog,
+    reviewAssuranceResolution: REVIEW_ASSURANCE_RESOLUTION,
   });
   await maybePauseBeforeExecutorSpawnForTest();
 
@@ -2955,6 +3061,7 @@ async function main() {
       runDir: runArtifactPaths.runDir,
       stdoutLog,
       stderrLog,
+      reviewAssuranceResolution: REVIEW_ASSURANCE_RESOLUTION,
     });
   }
 
@@ -3425,6 +3532,9 @@ async function main() {
     executorNetwork: executorNetworkPolicy,
     executorPolicy,
     publishPolicy: PUBLISH_POLICY,
+    reviewAssurance: manifest.policy.review_assurance,
+    reviewAssuranceSource: manifest.policy.review_assurance_source,
+    reviewAssuranceOverridden: manifest.policy.review_assurance_overridden || null,
     policyDecision,
     routePlanPath: routePlanSnapshot?.path || null,
     routePlan: routePlanSnapshot?.snapshot || null,
@@ -3466,6 +3576,13 @@ async function main() {
     if (error) console.log(`  Error: ${error}`);
     console.log(`  Run state: ${result.runState}`);
     console.log(`  Commit mode: ${result.commitMode}`);
+    const assuranceOverride = result.reviewAssuranceOverridden
+      ? `; overridden flag=${result.reviewAssuranceOverridden}`
+      : "";
+    console.log(
+      `  Assurance: ${result.reviewAssurance} ` +
+      `(source=${result.reviewAssuranceSource})${assuranceOverride}`
+    );
     if (prNumber !== null) {
       console.log(`  PR:        #${prNumber}${prCreatedByUs === true ? " (created by orchestrator)" : prCreatedByUs === false ? " (existing)" : ""}`);
     }

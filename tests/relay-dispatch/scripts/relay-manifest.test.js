@@ -33,6 +33,10 @@ const {
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const {
+  extractReviewAssuranceFromRubric,
+  resolveReviewAssurance,
+} = require("../../../skills/relay-dispatch/scripts/manifest/review-assurance");
+const {
   createGrandfatheredRubricAnchor,
 } = require("./test-support");
 
@@ -132,6 +136,8 @@ test("createManifestSkeleton defaults and validates review assurance policy", ()
     worktreePath: path.join(repoRoot, "wt"),
   });
   assert.equal(standard.policy.review_assurance, DEFAULT_REVIEW_ASSURANCE);
+  assert.equal(standard.policy.review_assurance_source, "flag");
+  assert.equal(standard.policy.review_assurance_overridden, undefined);
   assert.equal(standard.review.max_rounds, 2);
 
   const compact = createManifestSkeleton({
@@ -174,6 +180,36 @@ test("createManifestSkeleton defaults and validates review assurance policy", ()
     }),
     /invalid review assurance/
   );
+});
+
+test("rubric review assurance extraction and resolution preserve authoritative provenance", () => {
+  const nestedRubric = [
+    "evaluation:",
+    "  schema_version: 2",
+    "  task_profile:",
+    "    size: L",
+    "    review_assurance: 'hardened' # fixed review anchor",
+  ].join("\n");
+  assert.equal(extractReviewAssuranceFromRubric(nestedRubric), "hardened");
+  assert.equal(extractReviewAssuranceFromRubric("rubric:\n  factors: []\n"), null);
+
+  assert.deepEqual(resolveReviewAssurance({
+    rubricReviewAssurance: "hardened",
+    flagReviewAssurance: "standard",
+    flagWasExplicit: true,
+  }), {
+    level: "hardened",
+    source: "rubric",
+    overridden: "standard",
+  });
+  assert.deepEqual(resolveReviewAssurance({
+    flagReviewAssurance: "compact",
+    flagWasExplicit: true,
+  }), {
+    level: "compact",
+    source: "flag",
+    overridden: null,
+  });
 });
 
 test("createRunId is branch-stable and filesystem-safe", () => {
