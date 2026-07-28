@@ -3,7 +3,6 @@
  * Invoke Pi as an isolated structured primary or advisory reviewer.
  */
 
-const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
@@ -17,6 +16,9 @@ const {
   summarizeFailure,
 } = require("./reviewer-helpers");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
+const {
+  execFileSyncWithStdinPrompt,
+} = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help", "-h"];
@@ -172,11 +174,14 @@ function main() {
     "--tools", "read,grep,find,ls",
   ];
   if (model) execArgs.push("--model", model);
-  execArgs.push("--print", fullPrompt);
+  execArgs.push("--print");
 
   let result;
   try {
-    result = execFileSync(piBin, execArgs, {
+    result = execFileSyncWithStdinPrompt(piBin, execArgs, {
+      adapter: "pi",
+      prompt: fullPrompt,
+      promptFile,
       cwd: repoPath,
       encoding: "utf-8",
       stdio: "pipe",

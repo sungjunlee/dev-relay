@@ -389,6 +389,7 @@ function writeFakeOpencode(repoRoot, { delayMs = 0, logPath = null, invalidJson 
 const fs = require("fs");
 const path = require("path");
 const logPath = ${JSON.stringify(logPath)};
+process.stdin.resume();
 if (logPath) fs.appendFileSync(logPath, "advisory-start " + Date.now() + "\\n");
 if (${mutate ? "true" : "false"}) fs.writeFileSync(path.join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
 setTimeout(() => {
@@ -448,6 +449,7 @@ function writeFakeAdvisoryCli(repoRoot, name, {
 const fs = require("fs");
 const path = require("path");
 const logPath = ${JSON.stringify(logPath)};
+process.stdin.resume();
 if (logPath) fs.appendFileSync(logPath, "advisory-start " + Date.now() + "\\n");
 if (${mutate ? "true" : "false"}) fs.writeFileSync(path.join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
 setTimeout(() => {
@@ -1923,6 +1925,18 @@ test("review-runner accepts antigravity advisory review when route policy allows
   assert.equal(event.reviewer_policy.adapter, "antigravity");
   assert.equal(event.reviewer_policy.phase, "advisory_review");
   assert.equal(event.reviewer_policy.safe, true);
+  assert.equal(event.reviewer_policy.prompt_transport.mode, "prompt_file_reference");
+  assert.equal(event.reviewer_policy.prompt_transport.automatic, true);
+  assert.equal(event.reviewer_policy.prompt_transport.compatibility_fallback, true);
+  assert.equal(event.reviewer_policy.prompt_transport.evidence_paths.length, 1);
+  const transportEvidence = JSON.parse(fs.readFileSync(
+    event.reviewer_policy.prompt_transport.evidence_paths[0],
+    "utf-8"
+  ));
+  assert.equal(transportEvidence.adapter, "antigravity");
+  assert.equal(transportEvidence.mode, "prompt_file_reference");
+  assert.equal(transportEvidence.prompt_text_in_argv, false);
+  assert.equal(transportEvidence.compatibility_fallback, true);
 });
 
 test("review-runner accepts cline advisory review when route policy allows the reviewer model", () => {
@@ -2172,7 +2186,7 @@ test("on_pass advisory lane gets its own settlement deadline after a slow primar
       },
     },
   }, record.body);
-  // Primary takes longer than the whole advisory timeout+grace budget, so a
+  // Primary takes longer than the whole advisory settlement grace, so a
   // deadline computed at round start is already exhausted when the on_pass
   // lane spawns. The lane must still be settled from its own fresh deadline.
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict(), { delayMs: 3000 });

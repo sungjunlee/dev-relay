@@ -12,6 +12,9 @@ const PI_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review
 const ANTIGRAVITY_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-antigravity.js");
 const CURSOR_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-cursor.js");
 const CLINE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-cline.js");
+const {
+  assertControlSafeArgv,
+} = require("../../../skills/relay-review/scripts/reviewer-prompt-transport");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-adapter-"));
@@ -156,10 +159,31 @@ process.stdout.write(${JSON.stringify(stdoutText)});
   });
 }
 
+test("prompt transport guard names the reviewed diff and stdin-or-file remedy", () => {
+  const promptPath = path.join(
+    os.tmpdir(),
+    "relay-review-guard",
+    "review-round-3-prompt.md"
+  );
+  assert.throws(
+    () => assertControlSafeArgv(["run", "unsafe\0prompt"], {
+      adapter: "example",
+      promptFile: promptPath,
+    }),
+    (error) => {
+      assert.match(error.message, /review-round-3-diff\.patch/);
+      assert.match(error.message, /Remedy: keep the complete review prompt on stdin or in a prompt file/);
+      assert.doesNotMatch(error.message, /args\[\d+\] must be a string without null bytes/);
+      return true;
+    }
+  );
+});
+
 test("codex adapter uses result file output and forwards isolation flags", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-codex-"));
   const logPath = path.join(fakeDir, "codex-args.log");
+  const stdinPath = path.join(fakeDir, "codex-stdin.txt");
   const schemaCapturePath = path.join(fakeDir, "review-schema.json");
   const fakeCodex = writeExecutable(fakeDir, "fake-codex.js", `#!/usr/bin/env node
 const fs = require("fs");
@@ -173,16 +197,21 @@ if (schemaPath) {
 const outIndex = args.indexOf("-o");
 const resultPath = outIndex !== -1 ? args[outIndex + 1] : null;
 if (!resultPath) process.exit(2);
-fs.writeFileSync(resultPath, JSON.stringify({
-  verdict: "pass",
-  summary: "Looks good.",
-  contract_status: "pass",
-  quality_review_status: "pass",
-  next_action: "ready_to_merge",
-  issues: [],
-  rubric_scores: [],
-  scope_drift: { creep: [], missing: [] },
-}) + "\\n", "utf-8");
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(stdinPath)}, Buffer.concat(chunks));
+  fs.writeFileSync(resultPath, JSON.stringify({
+    verdict: "pass",
+    summary: "Looks good.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  }) + "\\n", "utf-8");
+});
 `);
 
   const stdout = execFileSync("node", [
@@ -204,6 +233,9 @@ fs.writeFileSync(resultPath, JSON.stringify({
   assert.match(loggedArgs, /--ephemeral/);
   assert.match(loggedArgs, /--sandbox\nread-only/);
   assert.match(loggedArgs, /--output-schema/);
+  assert.match(loggedArgs, /\n-\n$/);
+  assert.doesNotMatch(loggedArgs, /Return a passing review\./);
+  assert.match(fs.readFileSync(stdinPath, "utf-8"), /Return a passing review\./);
   assert.equal(schema.properties.quality_execution_status, undefined);
   assert.equal(schema.required.includes("quality_execution_status"), false);
   assert.deepEqual(
@@ -519,24 +551,30 @@ process.exit(1);
   assert.match(stderr, /review verdict must be valid JSON/);
 });
 
-test("claude adapter keeps the prompt separate from allowed tools", () => {
+test("claude adapter keeps the stdin prompt separate from allowed tools and argv", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-claude-"));
   const logPath = path.join(fakeDir, "claude-args.log");
+  const stdinPath = path.join(fakeDir, "claude-stdin.txt");
   const fakeClaude = writeExecutable(fakeDir, "fake-claude.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
-process.stdout.write(JSON.stringify({
-  verdict: "pass",
-  summary: "Looks good.",
-  contract_status: "pass",
-  quality_review_status: "pass",
-  next_action: "ready_to_merge",
-  issues: [],
-  rubric_scores: [],
-  scope_drift: { creep: [], missing: [] },
-}));
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(stdinPath)}, Buffer.concat(chunks));
+  process.stdout.write(JSON.stringify({
+    verdict: "pass",
+    summary: "Looks good.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  }));
+});
 `);
 
   const stdout = execFileSync("node", [
@@ -557,7 +595,8 @@ process.stdout.write(JSON.stringify({
   assert.match(loggedArgs, /--bare/);
   assert.match(loggedArgs, /--no-session-persistence/);
   assert.match(loggedArgs, /--allowedTools=Read/);
-  assert.match(loggedArgs, /Return a passing review\./);
+  assert.doesNotMatch(loggedArgs, /Return a passing review\./);
+  assert.match(fs.readFileSync(stdinPath, "utf-8"), /Return a passing review\./);
 });
 
 test("claude adapter fails fast with an auth setup error before JSON parsing", () => {
@@ -594,21 +633,27 @@ process.exit(1);
   assert.doesNotMatch(stderr, /did not return valid JSON/);
 });
 
-test("opencode adapter forwards model and preserves advisory prompt as one run argument", () => {
+test("opencode adapter forwards model and preserves advisory prompt on stdin", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-"));
   const logPath = path.join(fakeDir, "opencode-args.log");
+  const stdinPath = path.join(fakeDir, "opencode-stdin.txt");
   const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
-process.stdout.write(JSON.stringify({
-  profile: "blindspot",
-  summary: "No blocking blind spots.",
-  required_findings: [],
-  advisory_findings: [],
-  duplicate_or_low_confidence: [],
-}));
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(stdinPath)}, Buffer.concat(chunks));
+  process.stdout.write(JSON.stringify({
+    profile: "blindspot",
+    summary: "No blocking blind spots.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }));
+});
 `);
 
   const stdout = execFileSync("node", [
@@ -627,9 +672,10 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.profile, "blindspot");
-  assert.match(loggedArgs, /^run\n-m\nexample\/opencode-model-fast\n/);
-  assert.match(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
-  assert.match(loggedArgs, /Return a passing review\./);
+  assert.equal(loggedArgs, "run\n-m\nexample/opencode-model-fast\n");
+  const stdin = fs.readFileSync(stdinPath, "utf-8");
+  assert.match(stdin, /NON-INTERACTIVE ADVISORY REVIEW/);
+  assert.match(stdin, /Return a passing review\./);
 });
 
 test("opencode adapter accepts live-style json fenced advisory output", () => {
@@ -846,20 +892,26 @@ test("opencode adapter supports primary review verdict parsing when phase is pri
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-primary-"));
   const logPath = path.join(fakeDir, "opencode-args.log");
+  const stdinPath = path.join(fakeDir, "opencode-stdin.txt");
   const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
-process.stdout.write(JSON.stringify({
-  verdict: "pass",
-  summary: "Looks good.",
-  contract_status: "pass",
-  quality_review_status: "pass",
-  next_action: "ready_to_merge",
-  issues: [],
-  rubric_scores: [],
-  scope_drift: { creep: [], missing: [] },
-}));
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(stdinPath)}, Buffer.concat(chunks));
+  process.stdout.write(JSON.stringify({
+    verdict: "pass",
+    summary: "Looks good.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  }));
+});
 `);
 
   const stdout = execFileSync("node", [
@@ -879,9 +931,10 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.verdict, "pass");
-  assert.match(loggedArgs, /^run\n-m\nexample\/opencode-model-fast\n/);
-  assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
-  assert.doesNotMatch(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
+  assert.equal(loggedArgs, "run\n-m\nexample/opencode-model-fast\n");
+  const stdin = fs.readFileSync(stdinPath, "utf-8");
+  assert.match(stdin, /NON-INTERACTIVE REVIEW/);
+  assert.doesNotMatch(stdin, /NON-INTERACTIVE ADVISORY REVIEW/);
 });
 
 test("opencode primary review rejects advisory-shaped JSON", () => {
@@ -919,24 +972,30 @@ process.stdout.write(JSON.stringify({
   );
 });
 
-test("pi adapter forwards read-only tools, model, and preserves primary review prompt", () => {
+test("pi adapter forwards read-only tools and model while preserving the primary review prompt on stdin", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-"));
   const logPath = path.join(fakeDir, "pi-args.log");
+  const stdinPath = path.join(fakeDir, "pi-stdin.txt");
   const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
-process.stdout.write(JSON.stringify({
-  verdict: "pass",
-  summary: "Looks good.",
-  contract_status: "pass",
-  quality_review_status: "pass",
-  next_action: "ready_to_merge",
-  issues: [],
-  rubric_scores: [],
-  scope_drift: { creep: [], missing: [] },
-}));
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(stdinPath)}, Buffer.concat(chunks));
+  process.stdout.write(JSON.stringify({
+    verdict: "pass",
+    summary: "Looks good.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  }));
+});
 `);
 
   const stdout = execFileSync("node", [
@@ -955,26 +1014,33 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.verdict, "pass");
-  assert.match(loggedArgs, /^--no-session\n--no-context-files\n--no-extensions\n--no-skills\n--no-prompt-templates\n--no-themes\n--tools\nread,grep,find,ls\n--model\nopenai\/gpt-5\n--print\n/);
-  assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
-  assert.match(loggedArgs, /Return a passing review\./);
+  assert.equal(loggedArgs, "--no-session\n--no-context-files\n--no-extensions\n--no-skills\n--no-prompt-templates\n--no-themes\n--tools\nread,grep,find,ls\n--model\nopenai/gpt-5\n--print\n");
+  const stdin = fs.readFileSync(stdinPath, "utf-8");
+  assert.match(stdin, /NON-INTERACTIVE REVIEW/);
+  assert.match(stdin, /Return a passing review\./);
 });
 
 test("pi adapter supports advisory review JSON when phase is advisory_review", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-advisory-"));
   const logPath = path.join(fakeDir, "pi-args.log");
+  const stdinPath = path.join(fakeDir, "pi-stdin.txt");
   const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
-process.stdout.write(JSON.stringify({
-  profile: "blindspot",
-  summary: "No blocking blind spots.",
-  required_findings: [],
-  advisory_findings: [],
-  duplicate_or_low_confidence: [],
-}));
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(stdinPath)}, Buffer.concat(chunks));
+  process.stdout.write(JSON.stringify({
+    profile: "blindspot",
+    summary: "No blocking blind spots.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }));
+});
 `);
 
   const stdout = execFileSync("node", [
@@ -994,8 +1060,8 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.profile, "blindspot");
-  assert.match(loggedArgs, /^--no-session\n--no-context-files\n--no-extensions\n--no-skills\n--no-prompt-templates\n--no-themes\n--tools\nread,grep,find,ls\n--model\nopenai\/gpt-5\n--print\n/);
-  assert.match(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
+  assert.equal(loggedArgs, "--no-session\n--no-context-files\n--no-extensions\n--no-skills\n--no-prompt-templates\n--no-themes\n--tools\nread,grep,find,ls\n--model\nopenai/gpt-5\n--print\n");
+  assert.match(fs.readFileSync(stdinPath, "utf-8"), /NON-INTERACTIVE ADVISORY REVIEW/);
 });
 
 test("pi adapter reports adapter and phase when stdout is invalid JSON", () => {
@@ -1195,14 +1261,19 @@ process.exit(1);
   assert.equal(result.summary, "Recovered stdout.");
 });
 
-test("antigravity adapter forwards prompt, print timeout, sandbox, and preserves primary review prompt", () => {
+test("antigravity adapter automatically uses an evidence-recorded prompt-file reference fallback", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-"));
   const logPath = path.join(fakeDir, "agy-args.log");
+  const promptCapturePath = path.join(fakeDir, "agy-prompt.txt");
+  const transportEvidencePath = path.join(fakeDir, "prompt-transport.json");
   const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
 const fs = require("fs");
+const path = require("path");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
+const addDirIndex = args.indexOf("--add-dir");
+fs.copyFileSync(path.join(args[addDirIndex + 1], "review-prompt.md"), ${JSON.stringify(promptCapturePath)});
 process.stdout.write(JSON.stringify({
   verdict: "pass",
   summary: "Looks good.",
@@ -1225,27 +1296,45 @@ process.stdout.write(JSON.stringify({
     cwd: repoRoot,
     encoding: "utf-8",
     stdio: "pipe",
-    env: { ...process.env, RELAY_ANTIGRAVITY_BIN: fakeAgy, RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: "45s" },
+    env: {
+      ...process.env,
+      RELAY_ANTIGRAVITY_BIN: fakeAgy,
+      RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: "45s",
+      RELAY_REVIEW_PROMPT_TRANSPORT_EVIDENCE_PATH: transportEvidencePath,
+    },
   });
 
   const result = JSON.parse(stdout);
   const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
   assert.equal(result.verdict, "pass");
-  assert.equal(loggedArgs[0], "--prompt");
-  assert.deepEqual(loggedArgs.slice(2), ["--print-timeout", "45s", "--sandbox"]);
-  assert.match(loggedArgs[1], /NON-INTERACTIVE REVIEW/);
-  assert.match(loggedArgs[1], /Return a passing review\./);
+  assert.equal(loggedArgs[0], "--add-dir");
+  assert.equal(loggedArgs[2], "--prompt");
+  assert.deepEqual(loggedArgs.slice(4), ["--print-timeout", "45s", "--sandbox"]);
+  assert.match(loggedArgs[3], /review-prompt\.md/);
+  assert.doesNotMatch(loggedArgs[3], /Return a passing review\./);
+  const capturedPrompt = fs.readFileSync(promptCapturePath, "utf-8");
+  assert.match(capturedPrompt, /NON-INTERACTIVE REVIEW/);
+  assert.match(capturedPrompt, /Return a passing review\./);
   assert.equal(loggedArgs.includes("--print"), false);
+  const transportEvidence = JSON.parse(fs.readFileSync(transportEvidencePath, "utf-8"));
+  assert.equal(transportEvidence.mode, "prompt_file_reference");
+  assert.equal(transportEvidence.compatibility_fallback, true);
+  assert.equal(transportEvidence.automatic, true);
+  assert.equal(transportEvidence.prompt_text_in_argv, false);
 });
 
 test("antigravity adapter supports advisory review JSON when phase is advisory_review", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-advisory-"));
   const logPath = path.join(fakeDir, "agy-args.log");
+  const promptCapturePath = path.join(fakeDir, "agy-prompt.txt");
   const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
 const fs = require("fs");
+const path = require("path");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
+const addDirIndex = args.indexOf("--add-dir");
+fs.copyFileSync(path.join(args[addDirIndex + 1], "review-prompt.md"), ${JSON.stringify(promptCapturePath)});
 process.stdout.write(JSON.stringify({
   profile: "blindspot",
   summary: "No blocking blind spots.",
@@ -1272,9 +1361,10 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
   assert.equal(result.profile, "blindspot");
-  assert.equal(loggedArgs[0], "--prompt");
-  assert.deepEqual(loggedArgs.slice(2), ["--print-timeout", "45s", "--sandbox"]);
-  assert.match(loggedArgs[1], /NON-INTERACTIVE ADVISORY REVIEW/);
+  assert.equal(loggedArgs[0], "--add-dir");
+  assert.equal(loggedArgs[2], "--prompt");
+  assert.deepEqual(loggedArgs.slice(4), ["--print-timeout", "45s", "--sandbox"]);
+  assert.match(fs.readFileSync(promptCapturePath, "utf-8"), /NON-INTERACTIVE ADVISORY REVIEW/);
   assert.equal(loggedArgs.includes("--print"), false);
 });
 
@@ -1468,10 +1558,11 @@ process.stdout.write("not-json\\n");
   assert.match(stderr, /review verdict must be valid JSON/);
 });
 
-test("cursor adapter forwards ask mode, workspace, json wrapper parsing, and preserves primary review prompt", () => {
+test("cursor adapter forwards ask mode and workspace while preserving the primary review prompt on stdin", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cursor-"));
   const logPath = path.join(fakeDir, "agent-args.log");
+  const stdinPath = path.join(fakeDir, "agent-stdin.txt");
   const verdict = reviewerVerdict();
   const fakeAgent = writeExecutable(fakeDir, "fake-agent.js", `#!/usr/bin/env node
 const fs = require("fs");
@@ -1481,9 +1572,14 @@ if (args[0] === "status") {
   process.exit(0);
 }
 fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
-process.stdout.write(JSON.stringify({
-  result: JSON.stringify(${JSON.stringify(verdict)}),
-}));
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(stdinPath)}, Buffer.concat(chunks));
+  process.stdout.write(JSON.stringify({
+    result: JSON.stringify(${JSON.stringify(verdict)}),
+  }));
+});
 `);
 
   const stdout = execFileSync("node", [
@@ -1517,8 +1613,10 @@ process.stdout.write(JSON.stringify({
   ]);
   assert.equal(loggedArgs[9], "--model");
   assert.equal(loggedArgs[10], "composer-2.5");
-  assert.match(loggedArgs[11], /NON-INTERACTIVE REVIEW/);
-  assert.match(loggedArgs[11], /Return a passing review\./);
+  assert.equal(loggedArgs.length, 11);
+  const stdin = fs.readFileSync(stdinPath, "utf-8");
+  assert.match(stdin, /NON-INTERACTIVE REVIEW/);
+  assert.match(stdin, /Return a passing review\./);
 });
 
 test("cursor adapter accepts an internal-review PASS with next_action=publish_pending", () => {
@@ -1580,26 +1678,32 @@ test("cursor adapter rejects advisory review phase", () => {
   assert.match(String(error.stderr || ""), /primary_review only/);
 });
 
-test("cline adapter forwards json provider, cwd, timeout, model, and parses run_result.text advisory JSON", () => {
+test("cline adapter forwards options and parses run_result.text with the advisory prompt on stdin", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-"));
   const logPath = path.join(fakeDir, "cline-args.log");
+  const stdinPath = path.join(fakeDir, "cline-stdin.txt");
   const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
-process.stdout.write(JSON.stringify({ type: "agent_event", event: { type: "content_start", text: "ignored" } }) + "\\n");
-process.stdout.write(JSON.stringify({
-  type: "run_result",
-  finishReason: "completed",
-  text: JSON.stringify({
-    profile: "blindspot",
-    summary: "No blocking blind spots.",
-    required_findings: [],
-    advisory_findings: [],
-    duplicate_or_low_confidence: [],
-  }),
-}) + "\\n");
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(stdinPath)}, Buffer.concat(chunks));
+  process.stdout.write(JSON.stringify({ type: "agent_event", event: { type: "content_start", text: "ignored" } }) + "\\n");
+  process.stdout.write(JSON.stringify({
+    type: "run_result",
+    finishReason: "completed",
+    text: JSON.stringify({
+      profile: "blindspot",
+      summary: "No blocking blind spots.",
+      required_findings: [],
+      advisory_findings: [],
+      duplicate_or_low_confidence: [],
+    }),
+  }) + "\\n");
+});
 `);
 
   const stdout = execFileSync("node", [
@@ -1631,9 +1735,11 @@ process.stdout.write(JSON.stringify({
     "--cwd", repoRoot,
     "--timeout", "60",
   ]);
-  assert.match(loggedArgs[10], /NON-INTERACTIVE ADVISORY REVIEW/);
-  assert.match(loggedArgs[10], /Return a passing review\./);
-  assert.match(loggedArgs[10], /Do not use cline --worktree; relay already selected the review checkout with --cwd\./);
+  assert.equal(loggedArgs.length, 10);
+  const stdin = fs.readFileSync(stdinPath, "utf-8");
+  assert.match(stdin, /NON-INTERACTIVE ADVISORY REVIEW/);
+  assert.match(stdin, /Return a passing review\./);
+  assert.match(stdin, /Do not use cline --worktree; relay already selected the review checkout with --cwd\./);
   assert.equal(loggedArgs.includes("--worktree"), false);
 });
 

@@ -17,6 +17,10 @@ const {
   summarizeFailure,
 } = require("./reviewer-helpers");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
+const {
+  assertControlSafeArgv,
+  createPromptFileReference,
+} = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help", "-h"];
@@ -164,12 +168,19 @@ function main() {
   const promptText = fs.readFileSync(promptFile, "utf-8").trim();
   const fullPrompt = buildPrompt(promptText, phase);
   const beforeStatus = readWorktreeStatus(repoPath);
+  const promptTransport = createPromptFileReference({
+    adapter: "antigravity",
+    prompt: fullPrompt,
+    promptFile,
+  });
 
   const execArgs = [
-    "--prompt", fullPrompt,
+    "--add-dir", promptTransport.directory,
+    "--prompt", promptTransport.argvReference,
     "--print-timeout", printTimeout,
     "--sandbox",
   ];
+  assertControlSafeArgv(execArgs, { adapter: "antigravity", promptFile });
 
   let result;
   try {
@@ -198,6 +209,8 @@ function main() {
       throw new Error(`Antigravity reviewer failed: ${summarizeFailure(error)}`);
     }
     result = recovered;
+  } finally {
+    promptTransport.cleanup();
   }
 
   if (!result) {

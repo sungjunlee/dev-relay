@@ -20,6 +20,10 @@ const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS } = require("..
 const { assertRelayPolicyGate } = require("../../../relay-dispatch/scripts/relay-policy-gate");
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
 const { git, readText, writeText } = require("./common");
+const {
+  PROMPT_TRANSPORT_EVIDENCE_ENV,
+  promptTransportPolicy,
+} = require("../reviewer-prompt-transport");
 
 function loadRunRoutePlan(repoRoot, runId) {
   if (!repoRoot || !runId) return { path: null, plan: null, status: "missing" };
@@ -155,6 +159,7 @@ function resolveReviewerScript(reviewerName, reviewerScriptArg, { phase = ADAPTE
 function invokeReviewer({
   phase = ADAPTER_PHASES.PRIMARY_REVIEW,
   passPhase = false,
+  promptTransportEvidencePath = null,
   repoPath,
   promptPath,
   reviewerName,
@@ -177,6 +182,14 @@ function invokeReviewer({
   const rawText = execFileSync("node", execArgs, {
     cwd: repoPath,
     encoding: "utf-8",
+    ...(promptTransportEvidencePath
+      ? {
+        env: {
+          ...process.env,
+          [PROMPT_TRANSPORT_EVIDENCE_ENV]: promptTransportEvidencePath,
+        },
+      }
+      : {}),
     stdio: "pipe",
     maxBuffer: 10 * 1024 * 1024,
   }).trim();
@@ -223,7 +236,10 @@ function buildPrimaryReviewerPolicy(reviewerName) {
     },
   }));
   if (reviewerName !== "antigravity") {
-    return audit;
+    return {
+      ...audit,
+      prompt_transport: promptTransportPolicy(reviewerName),
+    };
   }
 
   const cliBinary = process.env.RELAY_ANTIGRAVITY_BIN || descriptor.executor?.cliBinary || "agy";
@@ -236,6 +252,7 @@ function buildPrimaryReviewerPolicy(reviewerName) {
   }
   return {
     ...audit,
+    prompt_transport: promptTransportPolicy(reviewerName),
     cli: {
       binary: cliBinary,
       version,
@@ -347,6 +364,23 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     runRepoPath,
     routePlan,
   });
+  const adapterManaged = isAdapterManagedReviewerScript(
+    reviewerName,
+    reviewerScript,
+    { phase: ADAPTER_PHASES.PRIMARY_REVIEW }
+  );
+  const promptTransportEvidencePath = adapterManaged
+    ? path.join(runDir, `review-round-${round}-prompt-transport.json`)
+    : null;
+  const invocationReviewerPolicy = promptTransportEvidencePath
+    ? {
+      ...reviewerPolicy,
+      prompt_transport: {
+        ...(reviewerPolicy?.prompt_transport || promptTransportPolicy(reviewerName)),
+        evidence_path: promptTransportEvidencePath,
+      },
+    }
+    : reviewerPolicy;
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_INVOKE,
     state_from: data.state,
@@ -357,7 +391,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     model: effectiveReviewerModel,
     policy_decision: policyDecision,
     route_source: routeSource,
-    reviewer_policy: reviewerPolicy,
+    reviewer_policy: invocationReviewerPolicy,
   });
   appendUnregisteredRouteUsedEvent(runRepoPath, data.run_id, {
     state: data.state,
@@ -370,7 +404,8 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
   const statusBeforeReviewer = captureGitStatus(reviewRepoPath);
   const invoked = invokeReviewer({
     phase: ADAPTER_PHASES.PRIMARY_REVIEW,
-    passPhase: isAdapterManagedReviewerScript(reviewerName, reviewerScript, { phase: ADAPTER_PHASES.PRIMARY_REVIEW }),
+    passPhase: adapterManaged,
+    promptTransportEvidencePath,
     repoPath: reviewRepoPath,
     promptPath,
     reviewerModel: effectiveReviewerModel,

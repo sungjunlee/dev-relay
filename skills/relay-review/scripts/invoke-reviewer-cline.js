@@ -3,7 +3,6 @@
  * Invoke Cline CLI as a structured advisory reviewer.
  */
 
-const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -17,6 +16,9 @@ const {
   summarizeFailure,
 } = require("./reviewer-helpers");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
+const {
+  spawnSyncWithStdinPrompt,
+} = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help", "-h"];
@@ -176,11 +178,13 @@ function main() {
   if (model) execArgs.push("-m", model);
   execArgs.push(
     "--cwd", repoPath,
-    "--timeout", clineTimeoutSecondsFromParentMs(parentTimeoutMs),
-    fullPrompt
+    "--timeout", clineTimeoutSecondsFromParentMs(parentTimeoutMs)
   );
 
-  const execResult = spawnSync(clineBin, execArgs, {
+  const execResult = spawnSyncWithStdinPrompt(clineBin, execArgs, {
+    adapter: "cline",
+    prompt: fullPrompt,
+    promptFile,
     cwd: repoPath,
     encoding: "utf-8",
     stdio: "pipe",

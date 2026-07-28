@@ -3,7 +3,6 @@
  * Invoke Codex as an isolated structured reviewer.
  */
 
-const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -13,6 +12,9 @@ const {
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const { parseReviewerJsonObject, summarizeFailure } = require("./reviewer-helpers");
+const {
+  execFileSyncWithStdinPrompt,
+} = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
@@ -122,10 +124,13 @@ function main() {
       "-o", resultPath,
     ];
     if (model) execArgs.push("-m", model);
-    execArgs.push(fullPrompt);
+    execArgs.push("-");
 
     try {
-      execFileSync(codexBin, execArgs, {
+      execFileSyncWithStdinPrompt(codexBin, execArgs, {
+        adapter: "codex",
+        prompt: fullPrompt,
+        promptFile,
         cwd: repoPath,
         encoding: "utf-8",
         stdio: "pipe",
