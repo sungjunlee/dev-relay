@@ -21,7 +21,11 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { getFleetIssueLockPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const { buildPrBody, pushAndOpenPR, resolveBranchRemote } = require("../../../skills/relay-dispatch/scripts/dispatch-publish");
-const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
+const {
+  EXECUTION_EVIDENCE_FILENAME,
+  VERIFICATION_OUTPUT_FILENAME,
+  hashFileSha256,
+} = require("../../../skills/relay-dispatch/scripts/execution-evidence");
 const { parseModelHints } = require("../../../skills/relay-dispatch/scripts/model-hints");
 const {
   extractRubricSize,
@@ -977,7 +981,7 @@ function writeAssuranceRubric(reviewAssurance = null) {
     "    checks:",
     "      - name: focused test",
     "        type: command",
-    "        command: node --test tests/focused.test.js",
+    "        command: node --version",
     "        target: exit 0",
     "  earned_rubric:",
     "    factors: []",
@@ -7661,10 +7665,63 @@ test("dispatch seeds execution evidence test_command from structured verificatio
   assert.equal(result.status, "completed");
   assert.equal(
     evidence.test_command,
-    "node --test tests/focused.test.js"
+    "node --version"
   );
   assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
   assert.equal(evidence.test_exit_code, 0);
+  assert.equal(evidence.verification_runs.length, 1);
+  assert.equal(evidence.verification_runs[0].command, "node --version");
+  assert.equal(evidence.verification_runs[0].head_sha, result.headSha);
+  assert.equal(evidence.verification_runs[0].exit_code, 0);
+  assert.equal(
+    evidence.verification_runs[0].output_hash,
+    hashFileSha256(path.join(result.runDir, evidence.verification_runs[0].output_path))
+  );
+  assert.equal(
+    evidence.test_result_hash,
+    hashFileSha256(path.join(result.runDir, VERIFICATION_OUTPUT_FILENAME))
+  );
+  assert.notEqual(evidence.test_result_hash, hashFileSha256(result.resultFile));
+});
+
+test("dispatch fails closed when a structured verification gate does not pass", () => {
+  const fixture = setupRepoWithOrigin();
+  const env = createPushPrTestEnv({
+    relayHome: fixture.relayHome,
+    codexMode: "noop",
+  });
+  const rubricFile = writeAssuranceRubric("hardened");
+  fs.writeFileSync(
+    rubricFile,
+    fs.readFileSync(rubricFile, "utf-8").replace(
+      "command: node --version",
+      "command: false"
+    ),
+    "utf-8"
+  );
+
+  const dispatched = spawnSync(process.execPath, [
+    SCRIPT,
+    fixture.repoRoot,
+    "-b", "issue-1099-failing-verification-gate",
+    "--prompt", "fail closed when the verification gate fails",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    env: env.env,
+  });
+  const result = JSON.parse(dispatched.stdout);
+  const evidence = readExecutionEvidence(result.runDir);
+
+  assert.equal(dispatched.status, 1, dispatched.stderr);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /verification_gate_failed: 'focused test' exited 1/);
+  assert.equal(evidence.test_exit_code, 1);
+  assert.equal(evidence.verification_runs.length, 1);
+  assert.equal(evidence.verification_runs[0].exit_code, 1);
 });
 
 test("dispatch writes execution evidence for no-op runs with the stable start head", () => {

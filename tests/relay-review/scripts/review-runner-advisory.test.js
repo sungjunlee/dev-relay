@@ -1831,7 +1831,7 @@ test("preset-only dispatch starts advisory review through manifest routing selec
 
 test("dispatch verification gates seed evidence that passes hardened review end to end", () => {
   const { repoRoot, relayHome, rubricFile, doneCriteriaPath, diffPath } = setupDispatchRepoForPresetAdvisory();
-  const testCommand = "node --test tests/relay-review/scripts/review-runner-advisory.test.js";
+  const testCommand = "node --version";
   fs.writeFileSync(rubricFile, [
     "evaluation:",
     "  schema_version: 2",
@@ -1882,6 +1882,14 @@ test("dispatch verification gates seed evidence that passes hardened review end 
   assert.notEqual(evidence.test_command, "unspecified");
   assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
   assert.equal(evidence.test_exit_code, 0);
+  assert.equal(evidence.verification_runs.length, 1);
+  assert.equal(evidence.verification_runs[0].command, testCommand);
+  assert.equal(evidence.verification_runs[0].head_sha, dispatchOutput.headSha);
+  assert.equal(evidence.verification_runs[0].exit_code, 0);
+  assert.equal(
+    evidence.verification_runs[0].output_hash,
+    hashFile(path.join(dispatchOutput.runDir, evidence.verification_runs[0].output_path))
+  );
 
   const primaryScript = writePrimaryReviewer(repoRoot, {
     ...passVerdict(),

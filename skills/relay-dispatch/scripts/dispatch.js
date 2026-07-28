@@ -68,8 +68,10 @@ const os = require("os");
 const { pushAndOpenPR } = require("./dispatch-publish");
 const {
   buildExecutionEvidence,
+  extractVerificationGates,
   hashFileSha256,
   resolveExecutionEvidenceTestCommand,
+  runVerificationGates,
   writeExecutionEvidence,
 } = require("./execution-evidence");
 const {
@@ -2508,7 +2510,9 @@ async function main() {
     runDir: manifestRunDir,
   });
   let evidenceTestCommand;
+  let verificationGates;
   try {
+    verificationGates = extractVerificationGates(routingRubricText);
     evidenceTestCommand = resolveExecutionEvidenceTestCommand({
       explicitTestCommand: TEST_COMMAND,
       rubricYaml: routingRubricText,
@@ -3268,6 +3272,40 @@ async function main() {
     delayedReviewRequiresRecover = true;
   }
 
+  let verificationEvidence = { runs: [], outputPath: null, exitCode: undefined };
+  const canRunVerificationGates = (
+    !DRY_RUN
+    && verificationGates.length > 0
+    && exitCode === 0
+    && (status === "completed" || status === "completed-no-op")
+  );
+  if (canRunVerificationGates) {
+    try {
+      verificationEvidence = runVerificationGates({
+        gates: verificationGates,
+        cwd: wtPath,
+        headSha: currentHead || startHead,
+        runDir: getRunDir(repoRoot, runId),
+        timeoutMs: TIMEOUT * 1000,
+      });
+      const failedVerification = verificationEvidence.runs.find((run) => run.exit_code !== 0);
+      if (failedVerification) {
+        status = "failed";
+        exitCode = failedVerification.exit_code || 1;
+        error = (
+          `verification_gate_failed: '${failedVerification.name}' exited ` +
+          `${failedVerification.exit_code}; output=${failedVerification.output_path}`
+        );
+      }
+    } catch (verificationError) {
+      status = "failed";
+      exitCode = exitCode || 1;
+      error = `verification_gate_execution_failed: ${String(
+        verificationError.message || verificationError
+      ).split("\n")[0]}`;
+    }
+  }
+
   let prNumber = manifest.git?.pr_number ?? null;
   let prCreatedByUs = null;
   const shouldPublishImmediately = PUBLISH_POLICY === "immediate";
@@ -3312,9 +3350,13 @@ async function main() {
     executionEvidencePath = writeExecutionEvidence(runDir, buildExecutionEvidence({
       headSha: currentHead || startHead || null,
       testCommand: evidenceTestCommand,
-      resultFilePath: fs.existsSync(resultFile) ? resultFile : null,
-      executor: EXECUTOR,
-      testExitCode: exitCode,
+      resultFilePath: verificationEvidence.outputPath
+        || (fs.existsSync(resultFile) ? resultFile : null),
+      executor: verificationEvidence.outputPath ? "dispatch verification gates" : EXECUTOR,
+      testExitCode: verificationEvidence.exitCode ?? exitCode,
+      ...(verificationEvidence.runs.length
+        ? { verificationRuns: verificationEvidence.runs }
+        : {}),
     }));
   } catch (executionEvidenceError) {
     status = "failed";

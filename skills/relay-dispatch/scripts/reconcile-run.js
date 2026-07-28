@@ -12,7 +12,6 @@ const {
   EXECUTION_EVIDENCE_FILENAME,
   hashFileSha256,
   rebrandEvidence,
-  resolveExecutionEvidenceTestCommand,
   writeExecutionEvidence,
 } = require("./execution-evidence");
 const {
@@ -22,7 +21,6 @@ const {
   validateTransitionInvariants,
 } = require("./manifest/lifecycle");
 const { getRunDir, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
-const { getRubricAnchorStatus } = require("./manifest/rubric");
 const { readManifest, writeManifest } = require("./manifest/store");
 const { classifyRepositoryDirt } = require("./runtime-dirt");
 const { resolveManifestRecord } = require("./relay-resolver");
@@ -254,12 +252,6 @@ function runRecoverCommit({ repoRoot, runId, dryRun }) {
   return JSON.parse(stdout);
 }
 
-function verificationGateTestCommand(data, runDir) {
-  const rubric = getRubricAnchorStatus(data, { runDir, includeContent: true });
-  if (!rubric.satisfied) return undefined;
-  return resolveExecutionEvidenceTestCommand({ rubricYaml: rubric.content });
-}
-
 /**
  * Stamp execution-evidence.json from the executor result file after row-4 recovery,
  * matching the normal dispatch-completion builder/shape. Leaves evidence already
@@ -271,7 +263,6 @@ function stampExecutionEvidenceFromResult({
   resultFile,
   recoveredHead,
   executor,
-  manifest,
 }) {
   if (!resultFile || !recoveredHead) {
     return { skipped: "missing_result_or_head" };
@@ -292,7 +283,7 @@ function stampExecutionEvidenceFromResult({
     runDir,
     buildExecutionEvidence({
       headSha: recoveredHead,
-      testCommand: verificationGateTestCommand(manifest, runDir),
+      testCommand: undefined,
       resultFilePath: resultFile,
       executor: executor || "executor",
       testExitCode: 0,
@@ -423,23 +414,13 @@ function planSalvageEvidence(runDir, testResultFile) {
 // Evidence never silently claims verification: an operator --test-result-file is
 // hashed and bound to the salvaged HEAD; otherwise existing timeout-placeholder
 // evidence is rebranded (or a fresh placeholder written) with "unspecified" hashes.
-function stampSalvageEvidence({
-  repoRoot,
-  runId,
-  runDir,
-  salvageHead,
-  executor,
-  manifest,
-  testResultFile,
-  reason,
-}) {
+function stampSalvageEvidence({ repoRoot, runId, runDir, salvageHead, executor, testResultFile, reason }) {
   const plan = planSalvageEvidence(runDir, testResultFile);
-  const testCommand = verificationGateTestCommand(manifest, runDir);
   if (plan.action === "operator_result_file") {
     const writtenPath = writeExecutionEvidence(runDir, {
       ...buildExecutionEvidence({
         headSha: salvageHead,
-        testCommand,
+        testCommand: undefined,
         resultFilePath: testResultFile,
         executor: executor || "executor",
         testExitCode: 0,
@@ -464,7 +445,6 @@ function stampSalvageEvidence({
       newHeadSha: salvageHead,
       recordedBy: "reconcile-salvage-rebrand",
       reason,
-      testCommand,
     });
     if (rebrand.rewritten) {
       appendRunEvent(repoRoot, runId, {
@@ -491,7 +471,7 @@ function stampSalvageEvidence({
   }
   const writtenPath = writeExecutionEvidence(runDir, buildExecutionEvidence({
     headSha: salvageHead,
-    testCommand,
+    testCommand: undefined,
     resultFilePath: null,
     executor: executor || "executor",
   }));
@@ -669,7 +649,6 @@ async function trySalvageEscalatedTimeout(
     runDir,
     salvageHead,
     executor,
-    manifest: data,
     testResultFile,
     reason,
   });
@@ -978,7 +957,6 @@ async function main() {
         resultFile,
         recoveredHead,
         executor: data.roles?.executor || updated.roles?.executor,
-        manifest: updated,
       });
     }
     outputResult({

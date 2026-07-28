@@ -86,9 +86,7 @@ function setupRepo({
   publishPolicy = "immediate",
   ghState = {},
   executionEvidence = true,
-  executionEvidenceTestCommand = "node --test tests/relay-dispatch/scripts/*.test.js",
   dispatchResultFailureClass = undefined,
-  rubricContent = "rubric:\n  factors:\n    - name: reconcile-run\n",
 } = {}) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-reconcile-run-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
@@ -143,7 +141,7 @@ function setupRepo({
   manifest.dispatch = { publish_policy: publishPolicy };
   manifest.anchor.rubric_path = "rubric.yaml";
   manifest.git.head_sha = dispatchHead;
-  fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), rubricContent, "utf-8");
+  fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: reconcile-run\n", "utf-8");
   if (manifestState === STATES.REVIEW_PENDING) {
     manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   } else if (manifestState === STATES.ESCALATED) {
@@ -165,7 +163,7 @@ function setupRepo({
     fs.writeFileSync(path.join(layout.runDir, EXECUTION_EVIDENCE_FILENAME), JSON.stringify({
       schema_version: 1,
       head_sha: dispatchHead,
-      test_command: executionEvidenceTestCommand,
+      test_command: "node --test tests/relay-dispatch/scripts/*.test.js",
       test_result_hash: "unspecified",
       test_result_summary: "unspecified",
       recorded_at: "2026-05-01T01:00:00.000Z",
@@ -634,24 +632,10 @@ test("reconcile row 4 preserves delayed-publication internal review policy", () 
 });
 
 test("reconcile row 4 with result file stamps execution evidence and passes preflight", () => {
-  const testCommand = "node --test tests/relay-dispatch/scripts/reconcile-run.test.js";
   const fixture = setupRepo({
     committedWork: true,
     resultFile: true,
     executionEvidence: false,
-    rubricContent: [
-      "evaluation:",
-      "  schema_version: 2",
-      "  outcome_contract:",
-      "    source: done_criteria",
-      "  verification:",
-      "    checks:",
-      "      - name: reconcile suite",
-      "        type: command",
-      `        command: "${testCommand}"`,
-      "  earned_rubric:",
-      "    factors: []",
-    ].join("\n"),
   });
   const resultFile = path.join(fixture.runDir, "dispatch-result.txt");
   const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
@@ -668,7 +652,7 @@ test("reconcile row 4 with result file stamps execution evidence and passes pref
   const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
   const expected = buildExecutionEvidence({
     headSha: recoveredHead,
-    testCommand,
+    testCommand: undefined,
     resultFilePath: resultFile,
     executor: "codex",
     recordedAt: evidence.recorded_at,
@@ -676,7 +660,7 @@ test("reconcile row 4 with result file stamps execution evidence and passes pref
   });
   assert.deepEqual(evidence, expected);
   assert.equal(evidence.recorded_by, "dispatch-orchestrator-v1");
-  assert.equal(evidence.test_command, testCommand);
+  assert.equal(evidence.test_command, "unspecified");
   assert.equal(evidence.test_result_hash, hashFileSha256(resultFile));
   assert.equal(evidence.test_result_summary, "codex result.txt hashed");
   assert.equal(evidence.test_exit_code, 0);
@@ -849,27 +833,12 @@ function forcePushDivergentToOrigin(fixture) {
 }
 
 test("reconcile salvages an escalated-timeout run with committed-but-unpushed work", () => {
-  const testCommand = "node --test tests/relay-dispatch/scripts/reconcile-run.test.js";
   const fixture = setupRepo({
     manifestState: STATES.ESCALATED,
     committedWork: true,
     resultFile: true,
     resultFileContent: "", // 0-byte dispatch result must not block the salvage
-    executionEvidenceTestCommand: "unspecified",
     dispatchResultFailureClass: "total_timeout",
-    rubricContent: [
-      "evaluation:",
-      "  schema_version: 2",
-      "  outcome_contract:",
-      "    source: done_criteria",
-      "  verification:",
-      "    checks:",
-      "      - name: reconcile salvage suite",
-      "        type: command",
-      `        command: "${testCommand}"`,
-      "  earned_rubric:",
-      "    factors: []",
-    ].join("\n"),
   });
   const leasePath = writeLease(fixture, {
     pid: 999999,
@@ -906,9 +875,7 @@ test("reconcile salvages an escalated-timeout run with committed-but-unpushed wo
   // Evidence rebound to the salvaged HEAD (existing placeholder rebranded).
   const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
   assert.equal(evidence.head_sha, fixture.committedHead);
-  assert.equal(evidence.test_command, testCommand);
   assert.equal(evidence.recorded_by, "reconcile-salvage-rebrand");
-  assert.equal(evidence.rebrand.test_command_seeded_from_verification_gates, true);
 
   const events = readRunEvents(fixture.repoRoot, fixture.runId);
   const recovery = events.find((event) => event.event === EVENTS.STATE_RECOVERY);

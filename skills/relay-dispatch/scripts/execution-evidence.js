@@ -1,9 +1,11 @@
 const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
 const EXECUTION_EVIDENCE_FILENAME = "execution-evidence.json";
 const EXECUTION_EVIDENCE_SCHEMA_VERSION = 1;
+const VERIFICATION_OUTPUT_FILENAME = "verification-gates.log";
 
 function yamlKeyMatch(line) {
   return String(line || "").match(/^(\s*)(?:-\s*)?([A-Za-z_][\w.-]*):\s*(.*?)\s*$/);
@@ -144,6 +146,76 @@ function hashFileSha256(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
+function runVerificationGates({
+  gates,
+  cwd,
+  headSha,
+  runDir,
+  timeoutMs,
+  execFile = execFileSync,
+} = {}) {
+  if (!Array.isArray(gates) || gates.length === 0) {
+    return { runs: [], outputPath: null, exitCode: undefined };
+  }
+  if (!cwd || !headSha || !runDir) {
+    throw new Error("verification gate execution requires cwd, headSha, and runDir");
+  }
+
+  const aggregateOutputPath = path.join(runDir, VERIFICATION_OUTPUT_FILENAME);
+  const aggregateChunks = [];
+  const runs = gates.map((gate, index) => {
+    const outputName = `verification-gate-${index + 1}.log`;
+    const outputPath = path.join(runDir, outputName);
+    const outputFd = fs.openSync(outputPath, "w");
+    let exitCode = 0;
+    let executionError = null;
+    try {
+      execFile("/bin/sh", ["-c", gate.command], {
+        cwd,
+        env: process.env,
+        stdio: ["ignore", outputFd, outputFd],
+        ...(Number.isInteger(timeoutMs) && timeoutMs > 0 ? { timeout: timeoutMs } : {}),
+      });
+    } catch (error) {
+      exitCode = Number.isInteger(error.status) && error.status >= 0 ? error.status : 1;
+      executionError = String(error.message || error).split("\n")[0];
+    } finally {
+      fs.closeSync(outputFd);
+    }
+
+    const output = fs.readFileSync(outputPath);
+    aggregateChunks.push(Buffer.from(
+      `${index ? "\n" : ""}$ ${gate.command}\n`,
+      "utf-8"
+    ));
+    aggregateChunks.push(output);
+    if (output.length && output[output.length - 1] !== 0x0a) {
+      aggregateChunks.push(Buffer.from("\n", "utf-8"));
+    }
+
+    return {
+      name: gate.name,
+      command: gate.command,
+      cwd,
+      head_sha: headSha,
+      exit_code: exitCode,
+      output_path: outputName,
+      output_hash: hashFileSha256(outputPath),
+      recorded_by: "dispatch-verification-gate-v1",
+      recorded_at: new Date().toISOString(),
+      ...(executionError ? { execution_error: executionError } : {}),
+    };
+  });
+  fs.writeFileSync(aggregateOutputPath, Buffer.concat(aggregateChunks));
+
+  const failedRun = runs.find((run) => run.exit_code !== 0);
+  return {
+    runs,
+    outputPath: aggregateOutputPath,
+    exitCode: failedRun ? failedRun.exit_code : 0,
+  };
+}
+
 function buildExecutionEvidence({
   headSha,
   testCommand,
@@ -189,10 +261,7 @@ function writeExecutionEvidence(runDir, evidence, options = {}) {
   return finalPath;
 }
 
-function rebrandEvidence(
-  runDir,
-  { newHeadSha, recordedBy = "recover-commit-rebrand", reason, testCommand } = {}
-) {
+function rebrandEvidence(runDir, { newHeadSha, recordedBy = "recover-commit-rebrand", reason } = {}) {
   const evidencePath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
   if (!fs.existsSync(evidencePath)) {
     return { skipped: "no_existing_evidence" };
@@ -202,12 +271,7 @@ function rebrandEvidence(
   }
 
   const existing = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
-  const shouldSeedTestCommand = (
-    (existing.test_command === undefined || existing.test_command === null || existing.test_command === "unspecified")
-    && typeof testCommand === "string"
-    && testCommand.trim() !== ""
-  );
-  if (existing.head_sha === newHeadSha && !shouldSeedTestCommand) {
+  if (existing.head_sha === newHeadSha) {
     return { skipped: "sha_unchanged" };
   }
 
@@ -215,14 +279,12 @@ function rebrandEvidence(
   writeExecutionEvidence(runDir, {
     ...existing,
     head_sha: newHeadSha,
-    ...(shouldSeedTestCommand ? { test_command: testCommand } : {}),
     recorded_by: recordedBy,
     rebrand: {
       previous_head_sha: previousSha,
       previous_recorded_by: existing.recorded_by,
       reason,
       recorded_at: new Date().toISOString(),
-      ...(shouldSeedTestCommand ? { test_command_seeded_from_verification_gates: true } : {}),
     },
   });
 
@@ -230,7 +292,6 @@ function rebrandEvidence(
     rewritten: true,
     previousSha,
     newHeadSha,
-    testCommandSeeded: shouldSeedTestCommand,
     evidencePath,
     evidenceHash: hashFileSha256(evidencePath),
   };
@@ -239,10 +300,12 @@ function rebrandEvidence(
 module.exports = {
   EXECUTION_EVIDENCE_FILENAME,
   EXECUTION_EVIDENCE_SCHEMA_VERSION,
+  VERIFICATION_OUTPUT_FILENAME,
   buildExecutionEvidence,
   extractVerificationGates,
   hashFileSha256,
   rebrandEvidence,
   resolveExecutionEvidenceTestCommand,
+  runVerificationGates,
   writeExecutionEvidence,
 };
