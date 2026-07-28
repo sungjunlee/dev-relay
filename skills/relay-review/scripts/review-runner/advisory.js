@@ -425,7 +425,9 @@ function buildUnboundSuccessResult(advisoryRun, result, failureReason, {
     criticalPathWaitMs,
     elapsedMs: Date.now() - advisoryRun.startedAt,
     failureReason,
+    outcome: "failed",
     phaseDecisionWaited: criticalPathWaitMs > 0,
+    ran: false,
     status: "failed",
   };
 }

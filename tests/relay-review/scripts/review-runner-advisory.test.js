@@ -2666,6 +2666,8 @@ test("hardened advisory finish does not expose success before event provenance i
     rawResponsePath: null,
     required_count: 0,
     reviewer: "opencode",
+    outcome: "findings",
+    ran: true,
     status: "success",
   };
   fs.writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf-8");
@@ -2687,6 +2689,8 @@ test("hardened advisory finish does not expose success before event provenance i
   });
 
   assert.equal(unbound.status, "failed");
+  assert.equal(unbound.outcome, "failed");
+  assert.equal(unbound.ran, false);
   assert.match(unbound.failureReason, /not bound to a successful advisory_review event/);
 
   appendRunEvent(repoRoot, runId, {
@@ -2713,6 +2717,8 @@ test("hardened advisory finish does not expose success before event provenance i
   });
 
   assert.equal(bound.status, "success");
+  assert.equal(bound.outcome, "findings");
+  assert.equal(bound.ran, true);
 });
 
 test("hardened advisory finish binds cached success when result rewrite lands after deadline", async () => {
