@@ -1,5 +1,8 @@
 const fs = require("fs");
 const path = require("path");
+const {
+  extractVerificationGates,
+} = require("../../../relay-dispatch/scripts/execution-evidence");
 
 const EXECUTION_EVIDENCE_FILENAME = "execution-evidence.json";
 const REQUIRED_EXECUTION_EVIDENCE_FIELDS = [
@@ -26,6 +29,26 @@ function isObject(value) {
 
 function buildMissingExecutionEvidenceReason() {
   return `execution-evidence.json missing; if this is a pre-261 run, use ${FORCE_FINALIZE_GUIDANCE}`;
+}
+
+function strictMissingTestCommandReason(runDir) {
+  try {
+    const rubricPath = path.join(runDir, "rubric.yaml");
+    if (!fs.existsSync(rubricPath)) {
+      return "strict execution evidence requires a non-empty test_command";
+    }
+    const gates = extractVerificationGates(fs.readFileSync(rubricPath, "utf-8"));
+    if (!gates.length) {
+      return "strict execution evidence requires a non-empty test_command";
+    }
+    return (
+      "strict execution evidence requires a non-empty test_command; " +
+      `verification ${gates.length === 1 ? "gate" : "gates"} went unrecorded: ` +
+      gates.map((gate) => `'${gate.name}'`).join(", ")
+    );
+  } catch (error) {
+    return `strict execution evidence requires a non-empty test_command; ${error.message}`;
+  }
 }
 
 function validateVerificationHash(value, fieldName) {
@@ -332,7 +355,7 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false })
     if (!isNonEmptyString(artifactLoad.artifact.test_command) || artifactLoad.artifact.test_command === "unspecified") {
       return {
         status: "fail",
-        reason: "strict execution evidence requires a non-empty test_command",
+        reason: strictMissingTestCommandReason(runDir),
       };
     }
     if (artifactLoad.artifact.test_result_hash === "unspecified") {

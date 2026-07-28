@@ -7639,6 +7639,34 @@ test("dispatch writes execution evidence with the post-dispatch HEAD and the cal
   assert.equal(evidence.recorded_by, "dispatch-orchestrator-v1");
 });
 
+test("dispatch seeds execution evidence test_command from structured verification gates", () => {
+  const fixture = setupRepoWithOrigin();
+  const env = createPushPrTestEnv({
+    relayHome: fixture.relayHome,
+    codexMode: "commit",
+    ghState: {
+      prCreateUrl: "https://example.test/acme/dev-relay/pull/1099",
+    },
+  });
+  const rubricFile = writeAssuranceRubric("hardened");
+
+  const result = JSON.parse(runDispatch(fixture.repoRoot, [
+    "-b", "issue-1099-gate-seeded-evidence",
+    "--prompt", "seed execution evidence from verification gates",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], env.env));
+  const evidence = readExecutionEvidence(result.runDir);
+
+  assert.equal(result.status, "completed");
+  assert.equal(
+    evidence.test_command,
+    "node --test tests/focused.test.js"
+  );
+  assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
+  assert.equal(evidence.test_exit_code, 0);
+});
+
 test("dispatch writes execution evidence for no-op runs with the stable start head", () => {
   const fixture = setupRepoWithOrigin();
   const env = createPushPrTestEnv({

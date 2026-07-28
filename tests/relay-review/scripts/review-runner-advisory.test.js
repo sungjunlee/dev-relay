@@ -1829,6 +1829,83 @@ test("preset-only dispatch starts advisory review through manifest routing selec
   assert.equal(result.advisoryReview.source, "routing");
 });
 
+test("dispatch verification gates seed evidence that passes hardened review end to end", () => {
+  const { repoRoot, relayHome, rubricFile, doneCriteriaPath, diffPath } = setupDispatchRepoForPresetAdvisory();
+  const testCommand = "node --test tests/relay-review/scripts/review-runner-advisory.test.js";
+  fs.writeFileSync(rubricFile, [
+    "evaluation:",
+    "  schema_version: 2",
+    "  outcome_contract:",
+    "    source: done_criteria",
+    "    path: done-criteria.md",
+    "  verification:",
+    "    checks:",
+    "      - name: hardened review suite",
+    "        type: command",
+    `        command: "${testCommand}"`,
+    "        target: exit code 0",
+    "  earned_rubric:",
+    "    factors: []",
+    "  task_profile:",
+    "    review_assurance: hardened",
+  ].join("\n"), "utf-8");
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gate-seed-bin-"));
+  writeNoOpCodex(binDir);
+
+  const dispatch = spawnSync(process.execPath, [
+    DISPATCH_SCRIPT,
+    repoRoot,
+    "-b",
+    "issue-1099-gate-seeded-hardened",
+    "-p",
+    "dispatch verification gates into hardened execution evidence",
+    "--rubric-file",
+    rubricFile,
+    "--route-preset",
+    "diverse",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_HOME: relayHome,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+    },
+  });
+  assert.equal(dispatch.status, 0, dispatch.stderr);
+  const dispatchOutput = JSON.parse(dispatch.stdout);
+  const evidencePath = path.join(dispatchOutput.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+
+  assert.equal(evidence.test_command, testCommand);
+  assert.notEqual(evidence.test_command, "unspecified");
+  assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
+  assert.equal(evidence.test_exit_code, 0);
+
+  const primaryScript = writePrimaryReviewer(repoRoot, {
+    ...passVerdict(),
+    rubric_scores: [],
+  });
+  const opencodeScript = writeFakeOpencode(repoRoot, { clean: true });
+  const result = runReview({
+    repoRoot,
+    runId: dispatchOutput.runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-timeout", "30"],
+  });
+
+  assert.equal(result.reviewAssurance, "hardened");
+  assert.equal(result.executionEvidencePreflight.status, "pass");
+  assert.equal(result.executionEvidencePreflight.qualityExecutionStatus, "pass");
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(readManifest(dispatchOutput.manifestPath).data.state, STATES.READY_TO_MERGE);
+});
+
 test("review-runner denies disallowed advisory model before spawning advisory reviewer", () => {
   const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "strict-routes" });
   const logPath = path.join(repoRoot, "advisory-policy.log");

@@ -7,10 +7,59 @@ const path = require("path");
 const {
   EXECUTION_EVIDENCE_FILENAME,
   buildExecutionEvidence,
+  extractVerificationGates,
   hashFileSha256,
   rebrandEvidence,
+  resolveExecutionEvidenceTestCommand,
   writeExecutionEvidence,
 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
+
+test("verification gates seed the evidence command and identify malformed command gates", () => {
+  const rubric = [
+    "evaluation:",
+    "  schema_version: 2",
+    "  outcome_contract:",
+    "    source: done_criteria",
+    "  verification:",
+    "    checks:",
+    "      - name: dispatch suite",
+    "        type: command",
+    "        command: \"node --test tests/relay-dispatch/scripts/*.test.js\"",
+    "      - name: review suite",
+    "        type: command",
+    "        command: 'node --test tests/relay-review/scripts/*.test.js'",
+    "  earned_rubric:",
+    "    factors: []",
+  ].join("\n");
+
+  assert.deepEqual(extractVerificationGates(rubric), [{
+    name: "dispatch suite",
+    type: "command",
+    command: "node --test tests/relay-dispatch/scripts/*.test.js",
+  }, {
+    name: "review suite",
+    type: "command",
+    command: "node --test tests/relay-review/scripts/*.test.js",
+  }]);
+  assert.equal(
+    resolveExecutionEvidenceTestCommand({ rubricYaml: rubric }),
+    "node --test tests/relay-dispatch/scripts/*.test.js && node --test tests/relay-review/scripts/*.test.js"
+  );
+  assert.equal(
+    resolveExecutionEvidenceTestCommand({ explicitTestCommand: "node --test focused.test.js", rubricYaml: rubric }),
+    "node --test focused.test.js"
+  );
+
+  assert.throws(
+    () => resolveExecutionEvidenceTestCommand({
+      rubricYaml: rubric.replace(
+        "command: 'node --test tests/relay-review/scripts/*.test.js'",
+        "target: exit code 0"
+      ),
+    }),
+    /verification gate 'review suite' did not record a command/
+  );
+});
 
 test("dispatch execution evidence records all fields and uses an atomic rename in the run dir", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-execution-"));
@@ -178,6 +227,30 @@ test("rebrandEvidence rewrites existing evidence to the new head and preserves a
   assert.equal(written.rebrand.previous_recorded_by, "dispatch-orchestrator-v1");
   assert.equal(written.rebrand.reason, "recover-commit added new commit");
   assert.match(written.rebrand.recorded_at, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("rebrandEvidence seeds an unspecified placeholder command from verification gates", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-execution-seed-rebrand-"));
+  const evidencePath = writeExecutionEvidence(runDir, {
+    schema_version: 1,
+    head_sha: "a".repeat(40),
+    test_command: "unspecified",
+    test_result_hash: "unspecified",
+    test_result_summary: "unspecified",
+    recorded_at: "2026-04-22T00:00:00.000Z",
+    recorded_by: "dispatch-orchestrator-v1",
+  });
+
+  const result = rebrandEvidence(runDir, {
+    newHeadSha: "b".repeat(40),
+    reason: "salvage committed work",
+    testCommand: "node --test seeded.test.js",
+  });
+  const written = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+
+  assert.equal(result.testCommandSeeded, true);
+  assert.equal(written.test_command, "node --test seeded.test.js");
+  assert.equal(written.rebrand.test_command_seeded_from_verification_gates, true);
 });
 
 test("rebrandEvidence skips when execution evidence is absent", () => {

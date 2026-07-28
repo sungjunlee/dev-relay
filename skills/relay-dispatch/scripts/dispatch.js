@@ -69,6 +69,7 @@ const { pushAndOpenPR } = require("./dispatch-publish");
 const {
   buildExecutionEvidence,
   hashFileSha256,
+  resolveExecutionEvidenceTestCommand,
   writeExecutionEvidence,
 } = require("./execution-evidence");
 const {
@@ -2501,18 +2502,31 @@ async function main() {
       },
     },
   };
+  const routingRubricText = resolveRoutingRubricText({
+    rubricFile: RUBRIC_FILE,
+    manifest,
+    runDir: manifestRunDir,
+  });
+  let evidenceTestCommand;
+  try {
+    evidenceTestCommand = resolveExecutionEvidenceTestCommand({
+      explicitTestCommand: TEST_COMMAND,
+      rubricYaml: routingRubricText,
+    });
+  } catch (error) {
+    failEarly(`Failed to seed execution evidence from verification gates: ${error.message}`, {
+      error_code: "verification_gate_evidence_seed_failed",
+      rubric_file: RUBRIC_FILE || manifest?.anchor?.rubric_path || null,
+    });
+  }
   let routingDecision = resolveRoutingDecision({
     policy: effectivePolicy.policy || {},
     cliTags: ROUTING_TAGS,
     taskProfile: manifest?.advisory?.guidance?.task_profile_summary || null,
     promptText: taskPrompt,
-    rubricText: resolveRoutingRubricText({
-      rubricFile: RUBRIC_FILE,
-      manifest,
-      runDir: manifestRunDir,
-    }),
+    rubricText: routingRubricText,
     changedFiles: collectChangedFilesForRouting(RESUME_MODE ? wtPath : repoRoot, baseBranch),
-    testCommands: TEST_COMMAND ? [TEST_COMMAND] : [],
+    testCommands: evidenceTestCommand ? [evidenceTestCommand] : [],
   });
   routingDecision = applyPresetAdvisoryToRoutingDecision(routingDecision, routePlan);
 
@@ -3297,7 +3311,7 @@ async function main() {
   try {
     executionEvidencePath = writeExecutionEvidence(runDir, buildExecutionEvidence({
       headSha: currentHead || startHead || null,
-      testCommand: TEST_COMMAND,
+      testCommand: evidenceTestCommand,
       resultFilePath: fs.existsSync(resultFile) ? resultFile : null,
       executor: EXECUTOR,
       testExitCode: exitCode,
