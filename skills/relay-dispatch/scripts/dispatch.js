@@ -165,7 +165,12 @@ const {
 } = require("./route-failure-hints");
 const { loadRelayPolicy } = require("./relay-policy");
 const { loadProjectRoutes, resolveRouteIntent, resolveRoutingDecision } = require("./relay-routing");
-const { classifyRepositoryDirt, formatRuntimeMetadataDirt, gitAddReviewableArgs } = require("./runtime-dirt");
+const {
+  classifyRepositoryDirt,
+  formatEmptyReviewableIndexError,
+  formatRuntimeMetadataDirt,
+  gitAddReviewableArgs,
+} = require("./runtime-dirt");
 const {
   dispatchManifestPathFields,
   getRunArtifactPaths,
@@ -3207,6 +3212,9 @@ async function main() {
   if (!DRY_RUN && AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !supersededBeforeCommit) {
     try {
       execGit(wtPath, gitAddReviewableArgs(rawUncommitted));
+      if (dirt.hasReviewableDirt && !execGit(wtPath, ["diff", "--cached", "--name-only"])) {
+        throw new Error(formatEmptyReviewableIndexError(rawUncommitted));
+      }
       execGit(wtPath, [
         "commit",
         "-m", `Relay run ${runId}`,

@@ -838,10 +838,14 @@ childProcess.execFileSync = function patchedExecFileSync(command, args, options)
   const isPush = command === "git" && argv.includes("push");
   const isGh = command === "gh";
   const isRecoverCommit = command === process.execPath && String(argv[0] || "").endsWith("recover-commit.js");
+  const isGitAdd = command === "git" && argv[0] === "-C" && argv[2] === "add";
   if (process.env.RELAY_TEST_FAIL_RECOVER_COMMIT === "1" && isRecoverCommit) {
     const error = new Error("simulated recover-commit failure");
     error.stderr = Buffer.from("simulated recover-commit failure\\n");
     throw error;
+  }
+  if (process.env.RELAY_TEST_SKIP_GIT_ADD === "1" && isGitAdd) {
+    return "";
   }
   // Fail only the orchestrator-owned commit (message "Relay run <id>"), not
   // recover-commit's own commit (message "Recover relay run <id>"), so a test can
@@ -7266,6 +7270,36 @@ test("dispatch escalates delayed internal review when orchestrator commit and re
   assert.equal(manifest.git.pr_number, null);
   assert.deepEqual(readJsonLines(ghLogPath), []);
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch names reviewable paths when staging leaves an empty index", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    codexMode: "uncommitted",
+  });
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-1082-empty-index-diagnosis",
+    "--prompt", "leave a tracked reviewable change uncommitted",
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...env,
+      RELAY_TEST_SKIP_GIT_ADD: "1",
+    },
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /reviewable staging contradiction/);
+  assert.match(result.error, /README\.md/);
+  assert.match(proc.stderr, /reviewable paths that failed to stage: "README\.md"/);
 });
 
 test("dispatch skips orchestrator commit and publish when the run is superseded mid-dispatch", () => {
