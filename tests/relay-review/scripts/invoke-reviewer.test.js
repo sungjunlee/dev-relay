@@ -672,7 +672,7 @@ process.stdin.on("end", () => {
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.profile, "blindspot");
-  assert.equal(loggedArgs, "run\n-m\nexample/opencode-model-fast\n-\n");
+  assert.equal(loggedArgs, "run\n-m\nexample/opencode-model-fast\n");
   const stdin = fs.readFileSync(stdinPath, "utf-8");
   assert.match(stdin, /NON-INTERACTIVE ADVISORY REVIEW/);
   assert.match(stdin, /Return a passing review\./);
@@ -931,7 +931,7 @@ process.stdin.on("end", () => {
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.verdict, "pass");
-  assert.equal(loggedArgs, "run\n-m\nexample/opencode-model-fast\n-\n");
+  assert.equal(loggedArgs, "run\n-m\nexample/opencode-model-fast\n");
   const stdin = fs.readFileSync(stdinPath, "utf-8");
   assert.match(stdin, /NON-INTERACTIVE REVIEW/);
   assert.doesNotMatch(stdin, /NON-INTERACTIVE ADVISORY REVIEW/);

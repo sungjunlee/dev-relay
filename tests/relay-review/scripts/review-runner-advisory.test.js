@@ -2200,7 +2200,7 @@ test("on_pass advisory lane gets its own settlement deadline after a slow primar
     primaryScript,
     opencodeScript,
     advisoryReviewer: null,
-    extraArgs: ["--advisory-timeout", "1", "--advisory-grace", "2"],
+    extraArgs: ["--advisory-timeout", "1", "--advisory-grace", "1"],
   });
 
   assert.equal(result.nextState, STATES.READY_TO_MERGE);

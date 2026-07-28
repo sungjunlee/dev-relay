@@ -158,7 +158,6 @@ function main() {
 
   const execArgs = ["run"];
   if (model) execArgs.push("-m", model);
-  execArgs.push("-");
 
   let result;
   try {
