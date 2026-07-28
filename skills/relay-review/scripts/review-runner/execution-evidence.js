@@ -4,6 +4,9 @@ const {
   extractVerificationGates,
   hashFileSha256,
 } = require("../../../relay-dispatch/scripts/execution-evidence");
+const {
+  getRubricAnchorStatus,
+} = require("../../../relay-dispatch/scripts/manifest/rubric");
 
 const EXECUTION_EVIDENCE_FILENAME = "execution-evidence.json";
 const REQUIRED_EXECUTION_EVIDENCE_FIELDS = [
@@ -32,13 +35,36 @@ function buildMissingExecutionEvidenceReason() {
   return `execution-evidence.json missing; if this is a pre-261 run, use ${FORCE_FINALIZE_GUIDANCE}`;
 }
 
-function strictMissingTestCommandReason(runDir) {
+function resolveVerificationRubricContent(runDir, manifestData) {
+  const rubricPath = typeof manifestData?.anchor?.rubric_path === "string"
+    ? manifestData.anchor.rubric_path.trim()
+    : "";
+  if (!rubricPath) {
+    const fallbackPath = path.join(runDir, "rubric.yaml");
+    return fs.existsSync(fallbackPath)
+      ? fs.readFileSync(fallbackPath, "utf-8")
+      : null;
+  }
+
+  const rubricAnchor = getRubricAnchorStatus(manifestData, {
+    runDir,
+    includeContent: true,
+  });
+  if (!rubricAnchor.satisfied) {
+    throw new Error(
+      `rubric anchor ${rubricAnchor.status}: ${rubricAnchor.error || "anchor validation failed"}`
+    );
+  }
+  return rubricAnchor.content;
+}
+
+function strictMissingTestCommandReason(runDir, manifestData) {
   try {
-    const rubricPath = path.join(runDir, "rubric.yaml");
-    if (!fs.existsSync(rubricPath)) {
+    const rubricContent = resolveVerificationRubricContent(runDir, manifestData);
+    if (rubricContent === null) {
       return "strict execution evidence requires a non-empty test_command";
     }
-    const gates = extractVerificationGates(fs.readFileSync(rubricPath, "utf-8"));
+    const gates = extractVerificationGates(rubricContent);
     if (!gates.length) {
       return "strict execution evidence requires a non-empty test_command";
     }
@@ -52,16 +78,55 @@ function strictMissingTestCommandReason(runDir) {
   }
 }
 
-function expectedVerificationGates(runDir) {
-  const rubricPath = path.join(runDir, "rubric.yaml");
-  if (!fs.existsSync(rubricPath)) return [];
-  return extractVerificationGates(fs.readFileSync(rubricPath, "utf-8"));
+function expectedVerificationGates(runDir, manifestData) {
+  const rubricContent = resolveVerificationRubricContent(runDir, manifestData);
+  return rubricContent === null ? [] : extractVerificationGates(rubricContent);
 }
 
 function missingVerificationGateReason(gates) {
   return (
     `strict execution evidence verification ${gates.length === 1 ? "gate" : "gates"} ` +
     `went unrecorded: ${gates.map((gate) => `'${gate.name}'`).join(", ")}`
+  );
+}
+
+function rebrandVerificationGateReason(artifact, gates) {
+  const rebrands = [
+    artifact.rebrand,
+    ...(Array.isArray(artifact.rebrand_history)
+      ? [...artifact.rebrand_history].reverse()
+      : []),
+  ].filter(isObject);
+  const rebrand = rebrands.find((entry) => (
+    entry.verification_runs?.policy === "removed_stale_after_rebrand"
+    || entry.verification_runs?.policy === "removed_malformed_after_rebrand"
+  ));
+  if (!rebrand) return null;
+
+  const audit = rebrand.verification_runs;
+  const rebrandHead = rebrand.new_head_sha || artifact.head_sha;
+  const laterRebrand = rebrandHead !== artifact.head_sha
+    ? `; evidence is now at ${artifact.head_sha}`
+    : "";
+  const requiredGates = (
+    `Required verification ${gates.length === 1 ? "gate" : "gates"}: ` +
+    gates.map((gate) => `'${gate.name}'`).join(", ")
+  );
+  if (audit.policy === "removed_malformed_after_rebrand") {
+    return (
+      "strict execution evidence rebrand removed malformed verification_runs after HEAD changed " +
+      `from ${rebrand.previous_head_sha} to ${rebrandHead}${laterRebrand}; ` +
+      `${audit.malformation_reason}. ` +
+      "Re-verify at the new HEAD or record audited operator evidence. " +
+      requiredGates
+    );
+  }
+  return (
+    `strict execution evidence rebrand removed ${audit.removed_count} stale ` +
+    `${audit.removed_count === 1 ? "verification_run" : "verification_runs"} after HEAD changed ` +
+    `from ${rebrand.previous_head_sha} to ${rebrandHead}${laterRebrand}; ` +
+    "re-verify at the new HEAD or record audited operator evidence. " +
+    requiredGates
   );
 }
 
@@ -356,7 +421,7 @@ function readExecutionEvidenceArtifact(runDir) {
   }
 }
 
-function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false }) {
+function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false, manifestData = null }) {
   const artifactLoad = readExecutionEvidenceArtifact(runDir);
   if (artifactLoad.state === "missing") {
     return {
@@ -385,7 +450,7 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false })
   if (strict) {
     let verificationGates;
     try {
-      verificationGates = expectedVerificationGates(runDir);
+      verificationGates = expectedVerificationGates(runDir, manifestData);
     } catch (error) {
       return {
         status: "fail",
@@ -396,7 +461,8 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false })
       if (artifactLoad.artifact.verification_runs === undefined) {
         return {
           status: "fail",
-          reason: missingVerificationGateReason(verificationGates),
+          reason: rebrandVerificationGateReason(artifactLoad.artifact, verificationGates)
+            || missingVerificationGateReason(verificationGates),
         };
       }
       const missingGates = findMissingVerificationGates(
@@ -433,7 +499,7 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false })
     if (!isNonEmptyString(artifactLoad.artifact.test_command) || artifactLoad.artifact.test_command === "unspecified") {
       return {
         status: "fail",
-        reason: strictMissingTestCommandReason(runDir),
+        reason: strictMissingTestCommandReason(runDir, manifestData),
       };
     }
     if (artifactLoad.artifact.test_result_hash === "unspecified") {
@@ -461,9 +527,14 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false })
   };
 }
 
-function buildExecutionEvidencePreflight({ runDir, reviewedHead, strict = false }) {
+function buildExecutionEvidencePreflight({ runDir, reviewedHead, strict = false, manifestData = null }) {
   const artifactLoad = readExecutionEvidenceArtifact(runDir);
-  const executionStatus = computeQualityExecutionStatus({ runDir, reviewedHead, strict });
+  const executionStatus = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead,
+    strict,
+    manifestData,
+  });
   const status = executionStatus.status === "pass" ? "pass" : "blocked";
   return {
     status,

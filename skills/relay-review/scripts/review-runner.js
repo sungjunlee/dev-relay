@@ -207,7 +207,12 @@ async function run() {
   if (rubricLoad.state === "loaded") {
     validateReviewerScoresForArtifact(rubricLoad, verdict.rubric_scores);
   }
-  const executionStatus = computeQualityExecutionStatus({ runDir, reviewedHead: reviewedHeadSha, strict: hardenedAssurance });
+  const executionStatus = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead: reviewedHeadSha,
+    strict: hardenedAssurance,
+    manifestData: data,
+  });
   verdict = applyQualityExecutionStatus(verdict, executionStatus);
   const gateSettlement = await settleAdvisoryGatesForRound({
     advisoryConfig,

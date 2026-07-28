@@ -106,6 +106,7 @@ function maybeBlockForExecutionEvidencePreflight({
     runDir,
     reviewedHead: reviewedHeadSha,
     strict,
+    manifestData: data,
   });
   if (reviewFile || result.executionEvidencePreflight.status === "pass") {
     return false;
