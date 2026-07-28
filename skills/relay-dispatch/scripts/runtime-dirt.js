@@ -147,7 +147,8 @@ function statusPathspecs(repoPath, line) {
 
 function isRuntimeMetadataStatusLine(line) {
   if (typeof line !== "string" || line.slice(0, 2) !== "??") return false;
-  const filePath = statusPath(line).replace(/\/+$/, "");
+  const [statusFilePath = ""] = statusPaths(line);
+  const filePath = statusFilePath.replace(/\/+$/, "");
   return RUNTIME_METADATA_ROOTS.some((root) => filePath === root || filePath.startsWith(`${root}/`));
 }
 
@@ -220,7 +221,10 @@ function gitAddReviewableArgs(statusText, repoPath = process.cwd()) {
 
   /*
    * Invariant: anything classifyRepositoryDirt reports reviewable is stageable
-   * by the argv returned here for the same status text.
+   * by the argv returned here for the same status text. Runtime classification
+   * and allowlist generation both compare the decoded paths returned by
+   * statusPaths, so a quoted porcelain path cannot be classified under one
+   * representation and staged under another.
    *
    * A reviewable-path allowlist preserves tracked changes beneath runtime roots
    * while excluding untracked runtime metadata. It also deliberately excludes
@@ -231,7 +235,7 @@ function gitAddReviewableArgs(statusText, repoPath = process.cwd()) {
    */
   const reviewablePaths = reviewableStatusPathspecs(statusText, repoPath);
   if (reviewablePaths.length > 0) {
-    return ["add", "-A", "--", ...reviewablePaths];
+    return ["add", "-A", "--", ...reviewablePaths.map((filePath) => `:(literal)${filePath}`)];
   }
   return ["add", "-A", "--", ".", ...runtimeMetadataRootExclusions()];
 }
