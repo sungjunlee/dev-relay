@@ -220,7 +220,7 @@ test("dispatch unknown route preset fails before creating run side effects inclu
   assert.equal(fs.existsSync(sprintStateLog), false);
 });
 
-test("dispatch route preset review_assurance maps to existing review assurance path", () => {
+test("dispatch route preset review_assurance does not replace the rubric-omission default", () => {
   const { repoRoot, relayHome, rubricFile } = setupRepo();
   writeJson(path.join(relayHome, "routes.json"), {
     version: 2,
@@ -251,10 +251,11 @@ test("dispatch route preset review_assurance maps to existing review assurance p
 
   assert.equal(proc.status, 0, proc.stderr);
   const output = JSON.parse(proc.stdout);
-  assert.equal(output.reviewAssurance, "hardened");
+  assert.equal(output.reviewAssurance, "standard");
+  assert.equal(output.reviewAssuranceSource, "flag");
 });
 
-test("dispatch persists review assurance route preset source metadata in route-plan snapshot", () => {
+test("dispatch records route preset assurance metadata without changing the fixed assurance cap", () => {
   const { repoRoot, relayHome, rubricFile } = setupRepo();
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-preset-hardened-bin-"));
   writeFakeCodex(binDir);
@@ -293,7 +294,8 @@ test("dispatch persists review assurance route preset source metadata in route-p
   assert.equal(snapshot.route_preset.review_assurance, "hardened");
   assert.deepEqual(snapshot.route_preset.filled, [{ field: "review_assurance" }]);
   const manifest = readManifest(output.manifestPath).data;
-  assert.equal(manifest.policy.review_assurance, "hardened");
+  assert.equal(manifest.policy.review_assurance, "standard");
+  assert.equal(manifest.policy.review_assurance_source, "flag");
 });
 
 test("dispatch keeps explicit --review-assurance over a preset in the route-plan snapshot", () => {

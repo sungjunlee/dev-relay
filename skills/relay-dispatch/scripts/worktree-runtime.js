@@ -55,6 +55,8 @@ function formatDispatchDryRun({
   fleetId = null,
   doneCriteriaFile = null,
   reviewAssurance = null,
+  reviewAssuranceSource = null,
+  reviewAssuranceOverridden = null,
   policyDecision = null,
   routingDecision = null,
   worktreePlan,
@@ -93,7 +95,11 @@ function formatDispatchDryRun({
     lines.push(`  Done AC:  ${doneCriteriaFile}`);
   }
   if (reviewAssurance) {
-    lines.push(`  Assurance: ${reviewAssurance}`);
+    const source = reviewAssuranceSource ? ` (source=${reviewAssuranceSource})` : "";
+    const overridden = reviewAssuranceOverridden
+      ? `; overridden flag=${reviewAssuranceOverridden}`
+      : "";
+    lines.push(`  Assurance: ${reviewAssurance}${source}${overridden}`);
   }
   if (policyDecision) {
     const actorField = policyDecision.actor_field || "actor";

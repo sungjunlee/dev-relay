@@ -13,6 +13,7 @@ const {
 } = require("./paths");
 const {
   normalizeReviewAssurance,
+  normalizeReviewAssuranceSource,
   reviewRoundLimitForAssurance,
 } = require("./review-assurance");
 const { normalizeOwnership } = require("../ownership");
@@ -341,6 +342,8 @@ function createManifestSkeleton({
   cleanupPolicy = "on_close",
   reviewerWritePolicy = "forbid",
   reviewAssurance = "standard",
+  reviewAssuranceSource = "flag",
+  reviewAssuranceOverridden = null,
   environment = null,
   requestId = null,
   leafId = null,
@@ -356,6 +359,10 @@ function createManifestSkeleton({
   const createdAt = nowIso();
   const normalizedRunId = requireValidRunId(runId);
   const normalizedReviewAssurance = normalizeReviewAssurance(reviewAssurance);
+  const normalizedReviewAssuranceSource = normalizeReviewAssuranceSource(reviewAssuranceSource);
+  const normalizedReviewAssuranceOverridden = reviewAssuranceOverridden
+    ? normalizeReviewAssurance(reviewAssuranceOverridden)
+    : null;
 
   const manifest = {
     relay_version: RELAY_VERSION,
@@ -389,6 +396,10 @@ function createManifestSkeleton({
       cleanup: cleanupPolicy,
       reviewer_write: reviewerWritePolicy,
       review_assurance: normalizedReviewAssurance,
+      review_assurance_source: normalizedReviewAssuranceSource,
+      ...(normalizedReviewAssuranceOverridden
+        ? { review_assurance_overridden: normalizedReviewAssuranceOverridden }
+        : {}),
     },
     anchor: {
       done_criteria_source: doneCriteriaSource || (issueNumber ? "issue" : "unknown"),
