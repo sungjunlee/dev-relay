@@ -106,6 +106,23 @@ function statusPaths(line) {
   ];
 }
 
+function statusPathspecs(line) {
+  const paths = statusPaths(line);
+  /*
+   * A staged rename/copy has R/C in the index column. A rename source is
+   * already absent from the index, so passing it to git add as an allowlist
+   * pathspec aborts the entire add. The destination alone is sufficient for
+   * both shapes to retain the staged index entry (and to pick up any later
+   * destination edits).
+   *
+   * line[2] distinguishes an intact "R  old -> new" / "RM old -> new" entry
+   * from an unstaged first entry whose leading space execGit trimmed to
+   * "R old -> new". The latter must keep both paths.
+   */
+  const hasStagedRenameOrCopy = line[2] === " " && /[RC]/.test(line[0]);
+  return hasStagedRenameOrCopy && paths.length > 1 ? paths.slice(-1) : paths;
+}
+
 function isRuntimeMetadataStatusLine(line) {
   if (typeof line !== "string" || line.slice(0, 2) !== "??") return false;
   const filePath = statusPath(line).replace(/\/+$/, "");
@@ -147,6 +164,13 @@ function reviewableStatusPaths(statusText) {
   )];
 }
 
+function reviewableStatusPathspecs(statusText) {
+  const classified = classifyRepositoryDirt(statusText);
+  return [...new Set(
+    splitStatusLines(classified.reviewableStatus).flatMap((line) => statusPathspecs(line))
+  )];
+}
+
 function formatEmptyReviewableIndexError(statusText) {
   const paths = reviewableStatusPaths(statusText);
   const detail = paths.length
@@ -183,7 +207,7 @@ function gitAddReviewableArgs(statusText) {
    * Both the allowlist and runtime classification derive from
    * RUNTIME_METADATA_ROOTS through classifyRepositoryDirt.
    */
-  const reviewablePaths = reviewableStatusPaths(statusText);
+  const reviewablePaths = reviewableStatusPathspecs(statusText);
   if (reviewablePaths.length > 0) {
     return ["add", "-A", "--", ...reviewablePaths];
   }

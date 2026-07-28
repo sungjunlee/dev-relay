@@ -150,3 +150,72 @@ test("keeps runtime metadata roots as the only source of the runtime root litera
   const source = fs.readFileSync(sourcePath, "utf-8");
   assert.equal(source.match(/\.antigravitycli/g)?.length, 1);
 });
+
+test("stages a staged rename with runtime dirt and preserves it as a rename", (t) => {
+  const repoPath = createRepository(t);
+  const destination = "RENAMED.md";
+  git(repoPath, ["mv", "README.md", destination]);
+  writeFile(repoPath, `${RUNTIME_DIR}/runtime-file`, "runtime metadata\n");
+
+  const statusText = execGit(repoPath, ["status", "--porcelain"]);
+  const addArgs = gitAddReviewableArgs(statusText);
+  assert.deepEqual(addArgs, ["add", "-A", "--", destination]);
+
+  git(repoPath, addArgs);
+
+  assert.equal(
+    git(repoPath, ["diff", "--cached", "--name-status"]),
+    `R100\tREADME.md\t${destination}`,
+  );
+  git(repoPath, ["commit", "-m", "staged rename"]);
+  assert.equal(
+    git(repoPath, ["show", "--format=", "--name-status", "HEAD"]),
+    `R100\tREADME.md\t${destination}`,
+  );
+  assert.match(git(repoPath, ["status", "--porcelain"]), /runtime-file/);
+});
+
+test("stages an unstaged rename with runtime dirt", (t) => {
+  const repoPath = createRepository(t);
+  const destination = "RENAMED.md";
+  fs.renameSync(path.join(repoPath, "README.md"), path.join(repoPath, destination));
+  writeFile(repoPath, `${RUNTIME_DIR}/runtime-file`, "runtime metadata\n");
+
+  const statusText = execGit(repoPath, ["status", "--porcelain"]);
+  const addArgs = gitAddReviewableArgs(statusText);
+  assert.deepEqual(
+    new Set(addArgs.slice(3)),
+    new Set(["README.md", destination]),
+  );
+
+  git(repoPath, addArgs);
+
+  assert.equal(
+    git(repoPath, ["diff", "--cached", "--name-status"]),
+    `R100\tREADME.md\t${destination}`,
+  );
+  git(repoPath, ["commit", "-m", "unstaged rename"]);
+  assert.equal(
+    git(repoPath, ["show", "--format=", "--name-status", "HEAD"]),
+    `R100\tREADME.md\t${destination}`,
+  );
+  assert.match(git(repoPath, ["status", "--porcelain"]), /runtime-file/);
+});
+
+test("stages a plain deletion with runtime dirt", (t) => {
+  const repoPath = createRepository(t);
+  fs.unlinkSync(path.join(repoPath, "README.md"));
+  writeFile(repoPath, `${RUNTIME_DIR}/runtime-file`, "runtime metadata\n");
+
+  const statusText = execGit(repoPath, ["status", "--porcelain"]);
+  const addArgs = gitAddReviewableArgs(statusText);
+  assert.deepEqual(addArgs, ["add", "-A", "--", "README.md"]);
+
+  git(repoPath, addArgs);
+
+  assert.equal(
+    git(repoPath, ["diff", "--cached", "--name-status"]),
+    "D\tREADME.md",
+  );
+  assert.match(git(repoPath, ["status", "--porcelain"]), /runtime-file/);
+});
