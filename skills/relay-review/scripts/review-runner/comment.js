@@ -1,4 +1,5 @@
 const { gh } = require("./common");
+const { formatAdvisoryRoundSummary } = require("../advisory-review-schema");
 const { isLowConfidenceAdvisoryPass } = require("./verdict");
 
 const REVIEW_MARKER = "<!-- relay-review -->";
@@ -18,6 +19,15 @@ function appendCommentWarnings(commentBody, warnings = []) {
     "",
     "Advisory review warnings:",
     ...warnings.map((warning) => `- ${warning}`),
+  ].join("\n");
+}
+
+function appendAdvisorySummary(commentBody, advisorySummary) {
+  return [
+    commentBody,
+    "",
+    "Advisory review:",
+    ...formatAdvisoryRoundSummary(advisorySummary),
   ].join("\n");
 }
 
@@ -42,9 +52,9 @@ function formatStatus(value) {
   return String(value || "unknown").toUpperCase();
 }
 
-function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } = {}) {
+function buildCommentBody(verdict, round, { warnings = [], gateFailure = null, advisorySummary = null } = {}) {
   if (gateFailure) {
-    return appendCommentWarnings([
+    return appendCommentWarnings(appendAdvisorySummary([
       REVIEW_ROUND_MARKER,
       `## Relay Review Round ${round}`,
       "Verdict: CHANGES_REQUESTED",
@@ -59,11 +69,11 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
       `Recovery command: ${gateFailure.recoveryCommand}`,
       "Issues:",
       `- Rubric gate failed closed: ${gateFailure.reason}. ${gateFailure.recovery}`,
-    ].join("\n"), warnings);
+    ].join("\n"), advisorySummary), warnings);
   }
 
   if (verdict.verdict === "pass") {
-    return appendCommentWarnings([
+    return appendCommentWarnings(appendAdvisorySummary([
       REVIEW_MARKER,
       "## Relay Review",
       "Verdict: LGTM",
@@ -72,11 +82,11 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
       `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
       `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
       `Rounds: ${round}`,
-    ].join("\n"), warnings);
+    ].join("\n"), advisorySummary), warnings);
   }
 
   if (isLowConfidenceAdvisoryPass(verdict)) {
-    return appendCommentWarnings([
+    return appendCommentWarnings(appendAdvisorySummary([
       REVIEW_MARKER,
       "## Relay Review",
       "Verdict: LGTM",
@@ -87,11 +97,11 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
       `Rounds: ${round}`,
       "Low-confidence findings (non-blocking):",
       formatIssueList(verdict.issues, { includeConfidence: true }),
-    ].join("\n"), warnings);
+    ].join("\n"), advisorySummary), warnings);
   }
 
   if (verdict.verdict === "changes_requested") {
-    return appendCommentWarnings([
+    return appendCommentWarnings(appendAdvisorySummary([
       REVIEW_ROUND_MARKER,
       `## Relay Review Round ${round}`,
       "Verdict: CHANGES_REQUESTED",
@@ -101,10 +111,10 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
       `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
       "Issues:",
       formatIssueList(verdict.issues),
-    ].join("\n"), warnings);
+    ].join("\n"), advisorySummary), warnings);
   }
 
-  return appendCommentWarnings([
+  return appendCommentWarnings(appendAdvisorySummary([
     REVIEW_MARKER,
     "## Relay Review",
     "Verdict: ESCALATED",
@@ -115,7 +125,7 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
     `Rounds: ${round}`,
     "Issues:",
     formatIssueList(verdict.issues),
-  ].join("\n"), warnings);
+  ].join("\n"), advisorySummary), warnings);
 }
 
 function postComment(repoPath, prNumber, commentBody) {
@@ -127,6 +137,7 @@ function postComment(repoPath, prNumber, commentBody) {
 
 module.exports = {
   appendCommentWarnings,
+  appendAdvisorySummary,
   buildCommentBody,
   formatStatus,
   formatIssueList,

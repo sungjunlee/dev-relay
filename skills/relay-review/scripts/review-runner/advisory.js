@@ -12,10 +12,22 @@ const {
 } = require("../../../relay-dispatch/scripts/agent-adapters/policy");
 const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
 const { hashFileSha256 } = require("../../../relay-dispatch/scripts/execution-evidence");
+const { getManifestPath } = require("../../../relay-dispatch/scripts/manifest/paths");
+const {
+  readManifest,
+  withManifestTransaction,
+  writeManifestUnlocked,
+} = require("../../../relay-dispatch/scripts/manifest/store");
 const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS, readRunEvents } = require("../../../relay-dispatch/scripts/relay-events");
 const { writeAdvisoryLaneLease } = require("../../../relay-dispatch/scripts/run-runtime-state");
 const { reapPriorAdvisoryLaneAttempts } = require("./advisory-lane-reap");
-const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
+const {
+  buildAdvisoryRoundEvidence,
+  mergeAdvisoryRoundEvidence,
+  parseAdvisoryReview,
+  toAdvisoryLaneEvidence,
+  validateAdvisoryProfile,
+} = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
 const { writeJson, writeText } = require("./common");
 const {
@@ -245,6 +257,8 @@ function startAdvisoryReview({
       reviewer: request.reviewerName,
       source: request.source || null,
       status: "failed",
+      outcome: "failed",
+      ran: false,
       trigger: request.trigger || "every_round",
       advisory_count: 0,
       duplicate_low_confidence_count: 0,
@@ -353,6 +367,8 @@ function buildDeferredResult(advisoryRun, { criticalPathWaitMs = 0, consumedByPh
     reviewer: advisoryRun.reviewerName,
     source: advisoryRun.source || null,
     status: "deferred",
+    outcome: "deferred",
+    ran: false,
     trigger: advisoryRun.trigger || "every_round",
   };
 }
@@ -752,6 +768,9 @@ function executeAdvisoryRequest(request) {
     trigger: request.trigger || "every_round",
     ...counts,
   };
+  const laneEvidence = toAdvisoryLaneEvidence(result);
+  result.outcome = laneEvidence.outcome;
+  result.ran = laneEvidence.ran;
   const timingFields = waitForDecisionTiming(request);
   Object.assign(result, {
     consumedByPhase: timingFields.consumed_by_phase,
@@ -763,7 +782,7 @@ function executeAdvisoryRequest(request) {
   // required audit event has been durably appended under the shared manifest
   // transaction lock, so settlement cannot consume success without provenance.
   try {
-    appendRunEvent(request.runRepoPath, request.runId, {
+    const advisoryEvent = {
       event: EVENTS.ADVISORY_REVIEW,
       state_from: request.state,
       state_to: request.state,
@@ -797,8 +816,35 @@ function executeAdvisoryRequest(request) {
       raw_response_paths: rawResponsePaths.slice(),
       attempt_count: attemptCount,
       failure_reason: failureReason,
+      advisory_outcome: result.outcome,
       ...counts,
       ...timingFields,
+    };
+    const manifestPath = getManifestPath(request.runRepoPath, request.runId);
+    withManifestTransaction(manifestPath, () => {
+      appendRunEvent(request.runRepoPath, request.runId, advisoryEvent, { lockHeld: true });
+      const current = readManifest(manifestPath);
+      const incomingEvidence = buildAdvisoryRoundEvidence({
+        configuredCount: request.advisoryConfigSnapshot?.lanes?.length || 1,
+        headSha: request.headSha,
+        outcomes: [result],
+        round: request.round,
+      });
+      const lastAdvisory = mergeAdvisoryRoundEvidence(
+        current.data.review?.last_advisory || null,
+        incomingEvidence,
+      );
+      writeManifestUnlocked(manifestPath, {
+        ...current.data,
+        review: {
+          ...(current.data.review || {}),
+          last_advisory: lastAdvisory,
+        },
+        timestamps: {
+          ...(current.data.timestamps || {}),
+          updated_at: new Date().toISOString(),
+        },
+      }, current.body);
     });
     appendUnregisteredRouteUsedEvent(request.runRepoPath, request.runId, {
       state: request.state,
@@ -811,6 +857,8 @@ function executeAdvisoryRequest(request) {
     status = "failed";
     result.status = "failed";
     result.failureReason = `advisory event write failed: ${error.message}`;
+    result.outcome = "failed";
+    result.ran = false;
   } finally {
     if (advisoryRepoPath) {
       cleanupAdvisoryWorktree(request.reviewRepoPath, advisoryRepoPath);

@@ -6,6 +6,7 @@ const {
 } = require("./reviewer-helpers");
 
 const ADVISORY_PROFILES = Object.freeze(["blindspot", "adversarial"]);
+const ADVISORY_TERMINAL_STATUSES = new Set(["failed", "policy_violation", "success", "timeout"]);
 const ADVISORY_SEVERITIES = new Set(["P1", "P2", "P3"]);
 const ADVISORY_CATEGORIES = new Set([
   "test-gap",
@@ -127,9 +128,186 @@ function parseAdvisoryReview(text, {
   }
 }
 
+function nonNegativeCount(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : 0;
+}
+
+function advisoryLaneKey(value) {
+  return [
+    Number(value?.lane_index || value?.laneIndex || 0),
+    value?.reviewer || "unknown-reviewer",
+    value?.trigger || "every_round",
+  ].join(":");
+}
+
+function advisoryOutcomeForStatus(status, counts) {
+  if (status === "success") {
+    return counts.required_count + counts.advisory_count + counts.duplicate_low_confidence_count > 0
+      ? "findings"
+      : "clean";
+  }
+  if (status === "timeout") return "timed_out";
+  if (status === "failed") return "failed";
+  if (status === "policy_violation") return "policy_violation";
+  if (status === "deferred") return "deferred";
+  if (status === "running") return "running";
+  return "not_run";
+}
+
+function toAdvisoryLaneEvidence(value = {}) {
+  const counts = {
+    required_count: nonNegativeCount(value.required_count),
+    advisory_count: nonNegativeCount(value.advisory_count),
+    duplicate_low_confidence_count: nonNegativeCount(value.duplicate_low_confidence_count),
+  };
+  const status = typeof value.status === "string" && value.status.trim()
+    ? value.status.trim()
+    : "not_run";
+  return {
+    lane_index: nonNegativeCount(value.lane_index || value.laneIndex) || 1,
+    reviewer: typeof value.reviewer === "string" && value.reviewer.trim()
+      ? value.reviewer.trim()
+      : "unknown",
+    model: typeof value.model === "string" && value.model.trim() ? value.model.trim() : null,
+    profile: typeof value.profile === "string" && value.profile.trim()
+      ? value.profile.trim()
+      : "blindspot",
+    trigger: typeof value.trigger === "string" && value.trigger.trim()
+      ? value.trigger.trim()
+      : "every_round",
+    gating: value.gating === true,
+    status,
+    outcome: advisoryOutcomeForStatus(status, counts),
+    ran: status === "success",
+    failure_reason: typeof value.failureReason === "string" && value.failureReason.trim()
+      ? value.failureReason.trim()
+      : typeof value.failure_reason === "string" && value.failure_reason.trim()
+        ? value.failure_reason.trim()
+        : null,
+    completed_at: typeof value.completed_at === "string" && value.completed_at.trim()
+      ? value.completed_at.trim()
+      : null,
+    ...counts,
+  };
+}
+
+function overallAdvisoryStatus(configuredCount, outcomes) {
+  if (configuredCount === 0) return "not_configured";
+  if (outcomes.length < configuredCount || outcomes.some((entry) => !ADVISORY_TERMINAL_STATUSES.has(entry.status))) {
+    return "incomplete";
+  }
+  if (outcomes.every((entry) => entry.outcome === "clean")) return "clean";
+  if (outcomes.every((entry) => entry.status === "success")) return "findings";
+  if (outcomes.every((entry) => entry.status === "timeout")) return "timed_out";
+  if (outcomes.every((entry) => entry.status !== "success")) return "failed";
+  return "partial";
+}
+
+function buildAdvisoryRoundEvidence({
+  configuredCount = 0,
+  headSha = null,
+  outcomes = [],
+  round,
+} = {}) {
+  const normalizedOutcomes = (outcomes || []).filter(Boolean).map(toAdvisoryLaneEvidence);
+  const normalizedConfiguredCount = Math.max(
+    nonNegativeCount(configuredCount),
+    normalizedOutcomes.length,
+  );
+  return {
+    round: nonNegativeCount(round),
+    head_sha: typeof headSha === "string" && headSha.trim() ? headSha.trim() : null,
+    configured_count: normalizedConfiguredCount,
+    status: overallAdvisoryStatus(normalizedConfiguredCount, normalizedOutcomes),
+    outcomes: normalizedOutcomes,
+  };
+}
+
+function evidenceRank(outcome) {
+  if (ADVISORY_TERMINAL_STATUSES.has(outcome?.status)) return 3;
+  if (outcome?.status === "deferred") return 2;
+  if (outcome?.status === "running") return 1;
+  return 0;
+}
+
+function preferAdvisoryOutcome(left, right) {
+  if (!left) return right;
+  if (!right) return left;
+  const leftRank = evidenceRank(left);
+  const rightRank = evidenceRank(right);
+  if (rightRank !== leftRank) return rightRank > leftRank ? right : left;
+  if (right.completed_at && (!left.completed_at || right.completed_at >= left.completed_at)) return right;
+  return left;
+}
+
+function mergeAdvisoryRoundEvidence(left, right) {
+  if (!left) return right || null;
+  if (!right) return left;
+  const leftRound = nonNegativeCount(left.round);
+  const rightRound = nonNegativeCount(right.round);
+  if (leftRound !== rightRound) return rightRound > leftRound ? right : left;
+  if (left.head_sha && right.head_sha && left.head_sha !== right.head_sha) return right;
+
+  const merged = new Map();
+  for (const outcome of left.outcomes || []) {
+    const normalized = toAdvisoryLaneEvidence(outcome);
+    merged.set(advisoryLaneKey(normalized), normalized);
+  }
+  for (const outcome of right.outcomes || []) {
+    const normalized = toAdvisoryLaneEvidence(outcome);
+    const key = advisoryLaneKey(normalized);
+    merged.set(key, preferAdvisoryOutcome(merged.get(key), normalized));
+  }
+  return buildAdvisoryRoundEvidence({
+    configuredCount: Math.max(
+      nonNegativeCount(left.configured_count),
+      nonNegativeCount(right.configured_count),
+    ),
+    headSha: right.head_sha || left.head_sha || null,
+    outcomes: Array.from(merged.values()).sort((a, b) => a.lane_index - b.lane_index),
+    round: rightRound || leftRound,
+  });
+}
+
+function formatAdvisoryRoundSummary(evidence) {
+  if (!evidence || evidence.configured_count === 0) {
+    return ["- No advisory reviewer was configured; advisory did not run."];
+  }
+  const lines = (evidence.outcomes || []).map((entry) => {
+    const label = `${entry.reviewer} (lane ${entry.lane_index}, ${entry.trigger})`;
+    if (entry.outcome === "clean") return `- ${label}: advisory ran and found nothing.`;
+    if (entry.outcome === "findings") {
+      return (
+        `- ${label}: advisory ran and reported required=${entry.required_count}, ` +
+        `advisory=${entry.advisory_count}, duplicate/low-confidence=${entry.duplicate_low_confidence_count}.`
+      );
+    }
+    if (entry.outcome === "timed_out") {
+      return `- ${label}: advisory did not run to completion (timed out)${entry.failure_reason ? ` — ${entry.failure_reason}` : "."}`;
+    }
+    if (entry.outcome === "failed" || entry.outcome === "policy_violation") {
+      return `- ${label}: advisory did not run to completion (${entry.outcome})${entry.failure_reason ? ` — ${entry.failure_reason}` : "."}`;
+    }
+    if (entry.outcome === "deferred") {
+      return `- ${label}: advisory did not complete before this round summary (deferred).`;
+    }
+    if (entry.outcome === "running") return `- ${label}: advisory was still running when this round was summarized.`;
+    return `- ${label}: advisory did not run.`;
+  });
+  while (lines.length < evidence.configured_count) {
+    lines.push("- Configured advisory lane had no execution evidence; advisory did not run.");
+  }
+  return lines;
+}
+
 module.exports = {
   ADVISORY_PROFILES,
+  buildAdvisoryRoundEvidence,
+  formatAdvisoryRoundSummary,
+  mergeAdvisoryRoundEvidence,
   normalizeAdvisoryJsonText,
   parseAdvisoryReview,
+  toAdvisoryLaneEvidence,
   validateAdvisoryProfile,
 };

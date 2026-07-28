@@ -383,7 +383,7 @@ setTimeout(() => {
   return filePath;
 }
 
-function writeFakeOpencode(repoRoot, { delayMs = 0, logPath = null, invalidJson = false, mutate = false, requiredFinding = false, primaryVerdict = null, profile = "blindspot" } = {}) {
+function writeFakeOpencode(repoRoot, { clean = false, delayMs = 0, logPath = null, invalidJson = false, mutate = false, requiredFinding = false, primaryVerdict = null, profile = "blindspot" } = {}) {
   const filePath = path.join(repoRoot, "fake-opencode.js");
   fs.writeFileSync(filePath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -402,7 +402,7 @@ setTimeout(() => {
       profile: ${JSON.stringify(profile)},
       summary: "One advisory blind spot.",
       required_findings: ${requiredFinding ? `[{ title: "Required hardened fix", body: "Must fix before merge.", file: "README.md", line: 1, severity: "P2", category: "bypass", confidence: 0.9 }]` : "[]"},
-      advisory_findings: [{
+      advisory_findings: ${clean ? "[]" : `[{
         title: "Advisory-only test gap",
         body: "This should be recorded but not merged into primary redispatch.",
         file: "README.md",
@@ -410,7 +410,7 @@ setTimeout(() => {
         severity: "P3",
         category: "test-gap",
         confidence: 0.8
-      }],
+      }]`},
       duplicate_or_low_confidence: []
     }));
   }
@@ -1212,6 +1212,46 @@ test("review-runner records successful opencode advisory review without gating p
   assert.match(event.reviewer_policy.read_only.warnings.join("\n"), /not prevent writes/i);
 });
 
+test("clean advisory is explicit in manifest, JSON evidence, and posted review summary", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const commentPath = path.join(repoRoot, "posted-clean-advisory-comment.md");
+  const ghFixture = installFakeGhOnPath({
+    body: "## Test PR\n\nFixture body.\n",
+    headRefOid: "a".repeat(40),
+    headRefName: "issue-429",
+    statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS", status: "COMPLETED" }],
+  }, { prefix: "relay-review-clean-advisory-gh-", capturePath: commentPath });
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { clean: true });
+
+  try {
+    const result = runReview({
+      repoRoot,
+      runId,
+      doneCriteriaPath,
+      diffPath,
+      primaryScript,
+      opencodeScript,
+      noComment: false,
+      extraArgs: ["--advisory-grace", "30"],
+    });
+    const manifest = readManifest(manifestPath).data;
+    const comment = fs.readFileSync(commentPath, "utf-8");
+
+    assert.equal(result.nextState, STATES.READY_TO_MERGE);
+    assert.equal(result.advisoryReview.status, "success");
+    assert.equal(result.advisoryReview.outcome, "clean");
+    assert.equal(result.advisorySummary.status, "clean");
+    assert.equal(manifest.review.last_advisory.status, "clean");
+    assert.equal(manifest.review.last_advisory.outcomes[0].outcome, "clean");
+    assert.equal(manifest.review.last_advisory.outcomes[0].ran, true);
+    assert.match(comment, /advisory ran and found nothing/i);
+    assert.doesNotMatch(comment, /advisory did not run/i);
+  } finally {
+    ghFixture.restore();
+  }
+});
+
 test("advisory lane request uses adversarial profile default timeout of 1800s", () => {
   const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
@@ -1953,7 +1993,7 @@ test("review-runner accepts cline advisory review when route policy allows the r
     opencodeScript: null,
     clineScript,
     advisoryReviewer: "cline",
-    extraArgs: ["--advisory-reviewer-model", "cline-pass/glm-5.2", "--advisory-grace", "30"],
+    extraArgs: ["--advisory-reviewer-model", "cline-pass/z-ai/glm-5.2", "--advisory-grace", "30"],
   });
   const event = readRunEvents(repoRoot, runId).find((record) => record.event === "advisory_review");
 
@@ -1963,7 +2003,7 @@ test("review-runner accepts cline advisory review when route policy allows the r
   assert.ok(fs.existsSync(path.join(runDir, "review-round-1-advisory-cline.json")));
   assert.equal(event.reviewer, "cline");
   assert.equal(event.policy_decision.allowed, true);
-  assert.equal(event.policy_decision.model, "cline-pass/glm-5.2");
+  assert.equal(event.policy_decision.model, "cline-pass/z-ai/glm-5.2");
   assert.equal(event.reviewer_policy.adapter, "cline");
   assert.equal(event.reviewer_policy.phase, "advisory_review");
   assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
@@ -1993,7 +2033,7 @@ process.stderr.write("cline-provider-stderr-887\\n");
     opencodeScript: null,
     clineScript,
     advisoryReviewer: "cline",
-    extraArgs: ["--advisory-reviewer-model", "cline-pass/glm-5.2", "--advisory-grace", "30"],
+    extraArgs: ["--advisory-reviewer-model", "cline-pass/z-ai/glm-5.2", "--advisory-grace", "30"],
   });
 
   assert.equal(result.advisoryReview.status, "failed");
@@ -2189,7 +2229,10 @@ test("on_pass advisory lane gets its own settlement deadline after a slow primar
   // Primary takes longer than the whole advisory settlement grace, so a
   // deadline computed at round start is already exhausted when the on_pass
   // lane spawns. The lane must still be settled from its own fresh deadline.
-  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict(), { delayMs: 3000 });
+  // Keep enough post-spawn room for nested Node startup under loaded CI hosts.
+  // The primary still exceeds timeout+grace, preserving the stale round-start
+  // deadline regression this test is meant to catch.
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict(), { delayMs: 4000 });
   const opencodeScript = writeFakeOpencode(repoRoot, {});
 
   const result = runReview({
@@ -2200,7 +2243,7 @@ test("on_pass advisory lane gets its own settlement deadline after a slow primar
     primaryScript,
     opencodeScript,
     advisoryReviewer: null,
-    extraArgs: ["--advisory-timeout", "1", "--advisory-grace", "1"],
+    extraArgs: ["--advisory-timeout", "1", "--advisory-grace", "2"],
   });
 
   assert.equal(result.nextState, STATES.READY_TO_MERGE);
@@ -2465,6 +2508,10 @@ test("standard review applies the primary verdict after advisory grace and recor
   assert.equal(event.frontier_step_replaced, false);
   assert.ok(event.elapsed_ms >= 3000);
   assert.ok(event.critical_path_wait_ms <= 75);
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.review.last_advisory.status, "findings");
+  assert.equal(manifest.review.last_advisory.outcomes[0].status, "success");
+  assert.equal(manifest.review.last_advisory.outcomes[0].outcome, "findings");
 });
 
 test("standard review applies the primary verdict when advisory times out during grace", () => {
@@ -2487,7 +2534,12 @@ test("standard review applies the primary verdict when advisory times out during
   assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
   assert.equal(result.advisoryReview.status, "timeout");
   assert.match(result.advisoryReview.failureReason, /reviewer advisory_review timed out after 1s/);
+  assert.equal(result.advisoryReview.outcome, "timed_out");
+  assert.equal(result.advisorySummary.status, "timed_out");
+  assert.equal(readManifest(manifestPath).data.review.last_advisory.status, "timed_out");
+  assert.equal(readManifest(manifestPath).data.review.last_advisory.outcomes[0].outcome, "timed_out");
   assert.equal(event.status, "timeout");
+  assert.equal(event.advisory_outcome, "timed_out");
   assert.equal(event.consumed_by_phase, "review");
 });
 
@@ -2953,7 +3005,12 @@ test("invalid advisory JSON is recorded as advisory failure while primary pass s
   assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
   assert.equal(result.advisoryReview.status, "failed");
   assert.match(result.advisoryReview.failureReason, /valid JSON|exited with code 1/);
+  assert.equal(result.advisoryReview.outcome, "failed");
+  assert.equal(result.advisorySummary.status, "failed");
+  assert.equal(readManifest(manifestPath).data.review.last_advisory.status, "failed");
+  assert.equal(readManifest(manifestPath).data.review.last_advisory.outcomes[0].outcome, "failed");
   assert.equal(event.status, "failed");
+  assert.equal(event.advisory_outcome, "failed");
 });
 
 test("standard gating lane infrastructure failure is surfaced in JSON, event, and posted comment without demotion", () => {
@@ -3000,6 +3057,7 @@ test("standard gating lane infrastructure failure is surfaced in JSON, event, an
     assert.equal(event.status, "failed");
     assert.equal(event.gating, true);
     assert.match(event.failure_reason, /valid JSON|exited with code 1/);
+    assert.match(comment, /advisory did not run to completion \(failed\)/i);
     assert.match(comment, /Advisory review warning.*opencode/i);
   } finally {
     ghFixture.restore();

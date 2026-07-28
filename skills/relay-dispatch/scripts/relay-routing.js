@@ -3,6 +3,10 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const {
+  isPatternRoute,
+  parseClineRelayModelRoute,
+} = require("./agent-adapters/cline-model-route");
 const { resolveExecutorDefaultModel } = require("./executor-model-config");
 const { getProjectRoutesPath } = require("./manifest/paths");
 const { buildDefaultRelayPolicy, evaluateRelayRoute } = require("./relay-policy");
@@ -508,6 +512,48 @@ function normalizePresets(value, sourceLabel) {
   return normalized;
 }
 
+function validatesClineAdvisoryRoute(entry) {
+  const phases = entry.phases;
+  const reviewers = entry.reviewers;
+  const canSelectAdvisory = phases === undefined || phases.includes("advisory_review");
+  return canSelectAdvisory && reviewers?.includes("cline");
+}
+
+function validateClineAdvisoryModel(model, label) {
+  if (model === undefined || model === null) return;
+  parseClineRelayModelRoute(model, { label });
+}
+
+function validateExecutableAdvisoryRoutes(routes, sourceLabel) {
+  for (const [index, entry] of (routes.routes || []).entries()) {
+    if (!validatesClineAdvisoryRoute(entry) || isPatternRoute(entry.route)) continue;
+    validateClineAdvisoryModel(
+      entry.route,
+      `invalid routes config at ${sourceLabel}: routes[${index}].route`
+    );
+  }
+
+  const defaults = routes.defaults?.advisory_review;
+  for (const [index, lane] of (Array.isArray(defaults) ? defaults : []).entries()) {
+    if (lane.reviewer !== "cline") continue;
+    validateClineAdvisoryModel(
+      lane.model,
+      `invalid routes config at ${sourceLabel}: defaults.advisory_review[${index}].model`
+    );
+  }
+
+  for (const [presetName, preset] of Object.entries(routes.presets || {})) {
+    const lanes = preset.advisory_review;
+    for (const [index, lane] of (Array.isArray(lanes) ? lanes : []).entries()) {
+      if (lane.reviewer !== "cline") continue;
+      validateClineAdvisoryModel(
+        lane.model,
+        `invalid routes config at ${sourceLabel}: presets.${presetName}.advisory_review[${index}].model`
+      );
+    }
+  }
+}
+
 function validateRouteConfig(routes, sourceLabel = "routes config", { project = false } = {}) {
   if (!isPlainObject(routes)) {
     throw new Error(`invalid routes config at ${sourceLabel}: expected object`);
@@ -535,6 +581,7 @@ function validateRouteConfig(routes, sourceLabel = "routes config", { project = 
   } else {
     normalized.strict = routes.strict === true;
   }
+  validateExecutableAdvisoryRoutes(normalized, sourceLabel);
   return normalized;
 }
 
@@ -694,6 +741,7 @@ function loadRouteConfig({ repoRoot, relayHome, globalPath, projectPath, globalR
     // legacy policy.json/executors.json precedence.
     if (globalConfig && projectConfig) {
       effectiveConfig = mergeRouteConfigs(globalConfig, projectConfig);
+      validateExecutableAdvisoryRoutes(effectiveConfig, "merged global and project routes");
     }
   } catch (error) {
     return { ok: false, status: "error", config: null, errors: [{ source: resolvedProjectPath, message: error.message }], sources };

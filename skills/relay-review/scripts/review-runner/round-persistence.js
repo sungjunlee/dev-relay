@@ -1,4 +1,8 @@
-const { writeManifest } = require("../../../relay-dispatch/scripts/manifest/store");
+const {
+  readManifest,
+  withManifestTransaction,
+  writeManifestUnlocked,
+} = require("../../../relay-dispatch/scripts/manifest/store");
 const {
   appendIterationScore,
   appendRunEvent,
@@ -9,9 +13,59 @@ const { buildCommentBody, postComment } = require("./comment");
 const { toIterationScoreEventEntry } = require("./score-utils");
 const { applyVerdictToManifest } = require("./manifest-apply");
 const { applyPendingChecksMarker } = require("./check-wait");
+const {
+  buildAdvisoryRoundEvidence,
+  mergeAdvisoryRoundEvidence,
+} = require("../advisory-review-schema");
+
+function advisoryOutcomesForRound(advisoryConfig, advisoryResults) {
+  const lanes = advisoryConfig?.lanes || [];
+  const results = advisoryResults || [];
+  return lanes.map((lane, index) => {
+    const laneIndex = Number(lane.index || index + 1);
+    const matching = results.find((result) => (
+      Number(result?.lane_index || result?.laneIndex || 0) === laneIndex
+      && (result?.trigger || "every_round") === (lane.trigger || "every_round")
+    ));
+    return matching || {
+      advisory_count: 0,
+      duplicate_low_confidence_count: 0,
+      failureReason: null,
+      gating: lane.gating === true,
+      lane_index: laneIndex,
+      model: lane.model || null,
+      profile: lane.profile || "blindspot",
+      required_count: 0,
+      reviewer: lane.reviewer,
+      status: "not_run",
+      trigger: lane.trigger || "every_round",
+    };
+  });
+}
+
+function persistManifestWithAdvisoryEvidence(manifestPath, updatedManifest, body, advisoryEvidence) {
+  let persistedManifest = updatedManifest;
+  withManifestTransaction(manifestPath, () => {
+    const current = readManifest(manifestPath);
+    persistedManifest = {
+      ...updatedManifest,
+      review: {
+        ...(updatedManifest.review || {}),
+        last_advisory: mergeAdvisoryRoundEvidence(
+          current.data.review?.last_advisory || null,
+          advisoryEvidence,
+        ),
+      },
+    };
+    writeManifestUnlocked(manifestPath, persistedManifest, body);
+  });
+  return persistedManifest;
+}
 
 function persistManifestAndEvents(context, analysis, artifacts) {
   const {
+    advisoryConfig,
+    advisoryResults,
     body,
     checkWait,
     data,
@@ -40,7 +94,16 @@ function persistManifestAndEvents(context, analysis, artifacts) {
     rubricGateFailure,
   } = artifacts;
 
+  const advisoryEvidence = buildAdvisoryRoundEvidence({
+    configuredCount: advisoryConfig?.lanes?.length || 0,
+    headSha: reviewedHeadSha,
+    outcomes: advisoryOutcomesForRound(advisoryConfig, advisoryResults),
+    round,
+  });
+  result.advisorySummary = advisoryEvidence;
+
   const commentBody = buildCommentBody(verdict, round, {
+    advisorySummary: advisoryEvidence,
     gateFailure: rubricGateFailure,
     warnings: result.advisoryWarnings || [],
   });
@@ -90,7 +153,12 @@ function persistManifestAndEvents(context, analysis, artifacts) {
     noComment || internalReview,
     runRepoPath
   );
-  writeManifest(manifestPath, updatedManifest, body);
+  updatedManifest = persistManifestWithAdvisoryEvidence(
+    manifestPath,
+    updatedManifest,
+    body,
+    advisoryEvidence,
+  );
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.ESCALATION_DECISION,
     state_from: data.state,

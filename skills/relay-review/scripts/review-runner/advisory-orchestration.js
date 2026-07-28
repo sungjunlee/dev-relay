@@ -422,6 +422,8 @@ function startConfiguredAdvisory({
       reviewer: lane.reviewer,
       source: lane.source,
       status: "running",
+      outcome: "running",
+      ran: false,
       trigger: lane.trigger,
       policy_decision: policyDecision,
     });

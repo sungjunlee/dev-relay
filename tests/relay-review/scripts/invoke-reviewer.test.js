@@ -103,7 +103,7 @@ process.stdout.write(JSON.stringify(${JSON.stringify(payload)}));
     envKey: "RELAY_CLINE_BIN",
     fakeName: "fake-cline.js",
     extraEnv: { RELAY_CLINE_REVIEW_TIMEOUT: "120s" },
-    extraArgs: ["--model", "cline-pass/glm-5.2"],
+    extraArgs: ["--model", "cline-pass/z-ai/glm-5.2"],
     fakeBody: (payload, markerPath) => `#!/usr/bin/env node
 const fs = require("fs");
 fs.writeFileSync(${JSON.stringify(markerPath)}, "spawned\\n", "utf-8");
@@ -1710,7 +1710,7 @@ process.stdin.on("end", () => {
     CLINE_SCRIPT,
     "--repo", repoRoot,
     "--prompt-file", promptPath,
-    "--model", "cline-pass/glm-5.2",
+    "--model", "cline-pass/z-ai/glm-5.2",
     "--phase", "advisory_review",
     "--json",
   ], {
@@ -1731,7 +1731,7 @@ process.stdin.on("end", () => {
     "--json",
     "--yolo",
     "-P", "cline-pass",
-    "-m", "cline-pass/glm-5.2",
+    "-m", "z-ai/glm-5.2",
     "--cwd", repoRoot,
     "--timeout", "60",
   ]);
@@ -1856,7 +1856,7 @@ fs.writeFileSync(${JSON.stringify(logPath)}, "invoked\\n", "utf-8");
 
   assert.equal(fs.existsSync(logPath), false);
   assert.match(String(error.stderr || ""), /modelType\/model/);
-  assert.match(String(error.stderr || ""), /cline-pass\/glm-5\.2/);
+  assert.match(String(error.stderr || ""), /cline-pass\/modelType\/model/);
 });
 
 test("cline adapter omits -m when model is absent and keeps default provider path", () => {
@@ -2080,7 +2080,7 @@ process.exit(0);
       CLINE_SCRIPT,
       "--repo", repoRoot,
       "--prompt-file", promptPath,
-      "--model", "cline-pass/glm-5.2",
+      "--model", "cline-pass/z-ai/glm-5.2",
       "--json",
     ], {
       cwd: repoRoot,
@@ -2114,7 +2114,7 @@ fs.writeFileSync(${JSON.stringify(logPath)}, "invoked\\n", "utf-8");
       CLINE_SCRIPT,
       "--repo", repoRoot,
       "--prompt-file", promptPath,
-      "--model", "cline-pass/glm-5.2",
+      "--model", "cline-pass/z-ai/glm-5.2",
       "--json",
     ], {
       cwd: repoRoot,

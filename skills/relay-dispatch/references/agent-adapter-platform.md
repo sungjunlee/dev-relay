@@ -106,5 +106,5 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --
 
 # ClinePass dispatch and advisory review with an explicit route
 node skills/relay-dispatch/scripts/dispatch.js . --executor cline --model cline-pass/glm-5.2 -b issue-42 -p "..." --rubric-file rubric.yaml
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer cline --advisory-reviewer-model cline-pass/glm-5.2 --json
+node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer cline --advisory-reviewer-model cline-pass/z-ai/glm-5.2 --json
 ```
