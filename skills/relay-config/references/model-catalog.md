@@ -4,6 +4,8 @@ Last checked: 2026-07-06. Treat as stale after 60 days.
 
 Use only when live model-list probes fail or the user asks for a recommendation. Prefer provider CLI model lists from `relay-config doctor` when available. The executable catalog data lives in `skills/relay-dispatch/scripts/model-catalog.js`; this note is operator-facing context, not a runtime allow-list.
 
+Cline routes in this fallback catalog are legacy dispatch values. Advisory review requires the executable relay form `cline-pass/modelType/model`; two-segment catalog routes are rejected during configuration.
+
 | Model | Actor routes | Use when | Cost hint |
 | --- | --- | --- | --- |
 | `glm-5.2` | `cline` -> `cline-pass/glm-5.2`; `opencode` -> `opencode-go/glm-5.2` | Strong default for harder coding and reasoning routes. | premium |

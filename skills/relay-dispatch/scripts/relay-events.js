@@ -445,6 +445,9 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
     ...(eventData.duplicate_low_confidence_count !== undefined
       ? { duplicate_low_confidence_count: normalizeEventValue(eventData.duplicate_low_confidence_count) }
       : {}),
+    ...(eventData.advisory_outcome !== undefined
+      ? { advisory_outcome: normalizeEventValue(eventData.advisory_outcome) }
+      : {}),
     ...(eventData.confidence_downgrade !== undefined
       ? { confidence_downgrade: eventData.confidence_downgrade === true }
       : {}),

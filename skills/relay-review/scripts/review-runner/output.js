@@ -1,4 +1,5 @@
 const { modeLabel } = require("../../../relay-dispatch/scripts/cli-args");
+const { formatAdvisoryRoundSummary } = require("../advisory-review-schema");
 
 function printUsage() {
   console.log("Usage: review-runner.js --repo <path> (--run-id <id> | --branch <name> | --pr <number>) [options]");
@@ -63,6 +64,10 @@ function printResult({
   console.log(`  State:    ${originalState} -> ${updatedManifest.state}`);
   console.log(`  Prompt:   ${promptPath}`);
   console.log(`  Verdict:  ${verdictPath}`);
+  console.log("  Advisory:");
+  for (const line of formatAdvisoryRoundSummary(result.advisorySummary)) {
+    console.log(`    ${line}`);
+  }
   if (redispatchPath) console.log(`  Re-dispatch: ${redispatchPath}`);
   if (result.commentPosted) console.log(`  PR comment posted to #${prNumber}`);
 }

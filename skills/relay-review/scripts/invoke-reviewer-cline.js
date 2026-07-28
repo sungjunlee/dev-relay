@@ -13,6 +13,10 @@ const {
   extractClineAdvisoryCandidates,
 } = require("../../relay-dispatch/scripts/agent-adapters/cline-jsonl");
 const {
+  CLINE_PROVIDER,
+  parseClineRelayModelRoute,
+} = require("../../relay-dispatch/scripts/agent-adapters/cline-model-route");
+const {
   summarizeFailure,
 } = require("./reviewer-helpers");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
@@ -36,7 +40,7 @@ if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("\nOptions:");
   console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
   console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
-  console.log(`  --model <route>      ${modeLabel("--model")} Model route, for example cline-pass/glm-5.2`);
+  console.log(`  --model <route>      ${modeLabel("--model")} Model route, for example cline-pass/z-ai/glm-5.2`);
   console.log(`  --phase <name>       ${modeLabel("--phase")} advisory_review only`);
   console.log(`  --profile <name>     ${modeLabel("--profile")} Advisory profile, defaults to blindspot`);
   console.log(`  --json               ${modeLabel("--json")} Output JSON`);
@@ -101,32 +105,19 @@ function isExecTimeout(error) {
   return error?.code === "ETIMEDOUT" || (error?.signal === "SIGKILL" && error?.killed);
 }
 
-function providerForModel(model) {
-  if (typeof model !== "string" || !model.trim()) return "cline-pass";
-  const idx = model.indexOf("/");
-  return idx > 0 ? model.slice(0, idx) : "cline-pass";
-}
-
 function validateModelRoute(model) {
-  if (typeof model !== "string" || !model.trim()) return null;
-  const normalized = model.trim();
-  if (!normalized.includes("/")) {
-    throw new Error(
-      `--model must use the expected modelType/model form, for example cline-pass/glm-5.2; got ${JSON.stringify(model)}`
-    );
-  }
-  return normalized;
+  return parseClineRelayModelRoute(model, { label: "--model" });
 }
 
-function buildTimeoutDiagnosticCommand({ clineBin, model, reviewTimeout }) {
+function buildTimeoutDiagnosticCommand({ clineBin, modelRoute, reviewTimeout }) {
   const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
   const command = [
     clineBin || "cline",
     "--json",
     "--yolo",
-    "-P", providerForModel(model),
+    "-P", modelRoute?.provider || CLINE_PROVIDER,
   ];
-  if (model) command.push("-m", model);
+  if (modelRoute) command.push("-m", modelRoute.cliModel);
   command.push(
     "--timeout", clineTimeoutSecondsFromParentMs(parentTimeoutMs),
     "'Return exactly {\"ok\":true} and nothing else.'"
@@ -156,7 +147,7 @@ function withRawAdapterOutput(error, rawOutput, rawStderr) {
 function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
-  const model = validateModelRoute(cliArgs.getArg("--model"));
+  const modelRoute = validateModelRoute(cliArgs.getArg("--model"));
   const phase = resolvePhase(cliArgs.getArg("--phase", "advisory_review"));
   const advisoryProfile = validateAdvisoryProfile(readAdvisoryProfileArg(args) || "blindspot");
   const clineBin = process.env.RELAY_CLINE_BIN || "cline";
@@ -173,9 +164,9 @@ function main() {
   const execArgs = [
     "--json",
     "--yolo",
-    "-P", providerForModel(model),
+    "-P", modelRoute?.provider || CLINE_PROVIDER,
   ];
-  if (model) execArgs.push("-m", model);
+  if (modelRoute) execArgs.push("-m", modelRoute.cliModel);
   execArgs.push(
     "--cwd", repoPath,
     "--timeout", clineTimeoutSecondsFromParentMs(parentTimeoutMs)
@@ -196,7 +187,7 @@ function main() {
   const rawStderr = String(execResult.stderr || "");
   if (execResult.error || execResult.status !== 0) {
     if (isExecTimeout(execResult.error)) {
-      const diagnosticCommand = buildTimeoutDiagnosticCommand({ clineBin, model, reviewTimeout });
+      const diagnosticCommand = buildTimeoutDiagnosticCommand({ clineBin, modelRoute, reviewTimeout });
       throw new Error(
         `Cline reviewer ${phase} timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
         "The cline --json invocation did not return before the parent-process timeout, so relay cannot treat this as healthy advisory evidence. " +

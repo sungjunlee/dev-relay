@@ -213,6 +213,64 @@ test("doctor stays quiet when primary-review routes use capable adapters", () =>
   );
 });
 
+test("add-route refuses an inexecutable cline advisory model with the expected format", () => {
+  const relayHome = tempDir();
+
+  const actorUnscoped = runConfig([
+    "add-route",
+    "cline-pass/glm-5.2",
+    "--phase",
+    "advisory_review",
+    "--json",
+  ], { relayHome });
+  assert.notEqual(actorUnscoped.status, 0, actorUnscoped.combined);
+  assert.match(actorUnscoped.combined, /cannot execute/i);
+  assert.match(actorUnscoped.combined, /modelType\/model/);
+  assert.match(actorUnscoped.combined, /cline-pass\/modelType\/model/);
+  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
+
+  const result = runConfig([
+    "add-route",
+    "cline-pass/glm-5.2",
+    "--phase",
+    "advisory_review",
+    "--reviewer",
+    "cline",
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0, result.combined);
+  assert.match(result.combined, /cannot execute/i);
+  assert.match(result.combined, /modelType\/model/);
+  assert.match(result.combined, /cline-pass\/modelType\/model/);
+  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
+
+  const extraSegment = runConfig([
+    "add-route",
+    "cline-pass/z-ai/glm/5.2",
+    "--phase",
+    "advisory_review",
+    "--reviewer",
+    "cline",
+    "--json",
+  ], { relayHome });
+  assert.notEqual(extraSegment.status, 0, extraSegment.combined);
+  assert.match(extraSegment.combined, /cline-pass\/modelType\/model/);
+  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
+
+  const valid = runConfig([
+    "add-route",
+    "cline-pass/z-ai/glm-5.2",
+    "--phase",
+    "advisory_review",
+    "--reviewer",
+    "cline",
+    "--json",
+  ], { relayHome });
+  assert.equal(valid.status, 0, valid.combined);
+  assert.equal(readRoutes(relayHome).routes[0].route, "cline-pass/z-ai/glm-5.2");
+});
+
 test("preset add resolves compact actor short-model and stores explicit route provenance", () => {
   const relayHome = tempDir();
   const binDir = tempDir("relay-config-preset-model-bin-");
@@ -247,7 +305,7 @@ test("preset add resolves compact actor short-model and stores explicit route pr
   assert.equal(output.preset.model_resolution.dispatch.original_input, "opencode:glm-5.2");
 });
 
-test("preset add resolves cline short model through catalog fallback in open mode", () => {
+test("preset add refuses a catalog fallback that cannot execute as a cline advisory model", () => {
   const relayHome = tempDir();
 
   const result = runConfig([
@@ -261,17 +319,10 @@ test("preset add resolves cline short model through catalog fallback in open mod
     "--json",
   ], { relayHome });
 
-  assert.equal(result.status, 0, result.combined);
-  const routes = readRoutes(relayHome);
-  assert.deepEqual(routes.presets.diverse.advisory_review, {
-    reviewer: "cline",
-    model: "cline-pass/glm-5.2",
-    profile: "blindspot",
-  });
-  const metadata = routes.presets.diverse.model_resolution.advisory_review;
-  assert.equal(metadata.original_input, "cline:glm-5.2");
-  assert.equal(metadata.source, "catalog_fallback");
-  assert.match(metadata.warnings.join("\n"), /catalog fallback/i);
+  assert.notEqual(result.status, 0, result.combined);
+  assert.match(result.combined, /cannot execute/i);
+  assert.match(result.combined, /modelType\/model/);
+  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
 });
 
 test("strict preset add rejects unresolved unregistered compact routes", () => {

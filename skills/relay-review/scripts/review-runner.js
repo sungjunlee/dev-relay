@@ -227,6 +227,7 @@ async function run() {
   ({ advisoryResults, advisoryRuns, gateResult, verdict } = gateSettlement);
 
   finalizeRound({
+    advisoryConfig,
     advisoryResults,
     body,
     checkWait,

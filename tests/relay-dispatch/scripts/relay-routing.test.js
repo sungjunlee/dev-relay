@@ -707,6 +707,34 @@ test("partial project advisory default composes with an inherited single global 
   assert.equal(result.phases.advisory_review[0].model, "example/opencode-model-fast");
 });
 
+test("merged project advisory override rejects an inexecutable inherited cline route", () => {
+  const { relayHome, repoRoot } = tempRepo();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    defaults: {
+      advisory_review: {
+        reviewer: "cline",
+        model: "cline-pass/z-ai/glm-5.2",
+      },
+    },
+    routes: [
+      { route: "cline-pass/*", phases: ["advisory_review"], reviewers: ["cline"] },
+    ],
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    defaults: {
+      advisory_review: { model: "cline-pass/glm-5.2" },
+    },
+  });
+
+  const result = loadRouteConfig({ repoRoot, relayHome });
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors[0].message, /modelType\/model/);
+  assert.match(result.errors[0].message, /cannot execute/);
+});
+
 test("partial advisory default over a multi-lane list fails closed", () => {
   assert.throws(() => resolveRouteIntent({
     projectRoutes: {
@@ -902,7 +930,7 @@ test("route preset expansion carries advisory model resolution metadata onto pre
         diverse: {
           advisory_review: {
             reviewer: "cline",
-            model: "cline-pass/glm-5.2",
+            model: "cline-pass/z-ai/glm-5.2",
             profile: "blindspot",
           },
           model_resolution: {
@@ -912,9 +940,9 @@ test("route preset expansion carries advisory model resolution metadata onto pre
               actor_field: "reviewer",
               phase: "advisory_review",
               requested_model: "glm-5.2",
-              resolved_route: "cline-pass/glm-5.2",
+              resolved_route: "cline-pass/z-ai/glm-5.2",
               source: "catalog_fallback",
-              candidates: ["cline-pass/glm-5.2"],
+              candidates: ["cline-pass/z-ai/glm-5.2"],
               warnings: ["catalog fallback"],
             },
           },
@@ -927,7 +955,7 @@ test("route preset expansion carries advisory model resolution metadata onto pre
   });
 
   assert.equal(result.phases.advisory_review[0].reviewer, "cline");
-  assert.equal(result.phases.advisory_review[0].model, "cline-pass/glm-5.2");
+  assert.equal(result.phases.advisory_review[0].model, "cline-pass/z-ai/glm-5.2");
   assert.equal(result.phases.advisory_review[0].model_resolution.original_input, "cline:glm-5.2");
   assert.equal(result.phases.advisory_review[0].model_resolution.source, "catalog_fallback");
 });
