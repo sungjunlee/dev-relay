@@ -41,6 +41,8 @@ function createRepository(t) {
   git(repoPath, ["config", "user.email", "runtime-dirt@example.com"]);
   writeFile(repoPath, TRACKED_RUNTIME_PATH, "base runtime config\n");
   writeFile(repoPath, "README.md", "base readme\n");
+  writeFile(repoPath, "a.txt", "a\n");
+  writeFile(repoPath, "keep.txt", "keep\n");
   git(repoPath, ["add", "-A"]);
   git(repoPath, ["commit", "-m", "initial"]);
   return repoPath;
@@ -62,7 +64,7 @@ test("stages a modified tracked runtime file while excluding untracked runtime m
   assert.match(dirt.reviewableStatus, new RegExp(TRACKED_RUNTIME_PATH.replace(".", "\\.")));
   assert.match(dirt.runtimeMetadataStatus, /runtime-file/);
 
-  git(repoPath, gitAddReviewableArgs(statusText));
+  git(repoPath, gitAddReviewableArgs(statusText, repoPath));
 
   assert.deepEqual(stagedPaths(repoPath), [TRACKED_RUNTIME_PATH]);
   assert.match(git(repoPath, ["status", "--porcelain"]), /runtime-file/);
@@ -80,7 +82,7 @@ test("stages every path classified as reviewable in a mixed status", (t) => {
   const classifiedReviewablePaths = reviewableStatusPaths(statusText);
   assert.equal(dirt.reviewableStatus.split("\n").filter(Boolean).length, 3);
 
-  git(repoPath, gitAddReviewableArgs(statusText));
+  git(repoPath, gitAddReviewableArgs(statusText, repoPath));
 
   const staged = new Set(stagedPaths(repoPath));
   assert.deepEqual(
@@ -99,7 +101,7 @@ test("excludes an untracked runtime file created after the status snapshot", (t)
   writeFile(repoPath, `${RUNTIME_DIR}/runtime-seen`, "seen metadata\n");
 
   const statusSnapshot = git(repoPath, ["status", "--porcelain"]);
-  const addArgs = gitAddReviewableArgs(statusSnapshot);
+  const addArgs = gitAddReviewableArgs(statusSnapshot, repoPath);
   writeFile(repoPath, `${RUNTIME_DIR}/runtime-created-later`, "late metadata\n");
 
   git(repoPath, addArgs);
@@ -158,7 +160,7 @@ test("stages a staged rename with runtime dirt and preserves it as a rename", (t
   writeFile(repoPath, `${RUNTIME_DIR}/runtime-file`, "runtime metadata\n");
 
   const statusText = execGit(repoPath, ["status", "--porcelain"]);
-  const addArgs = gitAddReviewableArgs(statusText);
+  const addArgs = gitAddReviewableArgs(statusText, repoPath);
   assert.deepEqual(addArgs, ["add", "-A", "--", destination]);
 
   git(repoPath, addArgs);
@@ -182,7 +184,7 @@ test("stages an unstaged rename with runtime dirt", (t) => {
   writeFile(repoPath, `${RUNTIME_DIR}/runtime-file`, "runtime metadata\n");
 
   const statusText = execGit(repoPath, ["status", "--porcelain"]);
-  const addArgs = gitAddReviewableArgs(statusText);
+  const addArgs = gitAddReviewableArgs(statusText, repoPath);
   assert.deepEqual(
     new Set(addArgs.slice(3)),
     new Set(["README.md", destination]),
@@ -208,7 +210,7 @@ test("stages a plain deletion with runtime dirt", (t) => {
   writeFile(repoPath, `${RUNTIME_DIR}/runtime-file`, "runtime metadata\n");
 
   const statusText = execGit(repoPath, ["status", "--porcelain"]);
-  const addArgs = gitAddReviewableArgs(statusText);
+  const addArgs = gitAddReviewableArgs(statusText, repoPath);
   assert.deepEqual(addArgs, ["add", "-A", "--", "README.md"]);
 
   git(repoPath, addArgs);
@@ -218,4 +220,70 @@ test("stages a plain deletion with runtime dirt", (t) => {
     "D\tREADME.md",
   );
   assert.match(git(repoPath, ["status", "--porcelain"]), /runtime-file/);
+});
+
+test("stages a modified sibling without naming an already staged deletion", (t) => {
+  const repoPath = createRepository(t);
+  git(repoPath, ["rm", "a.txt"]);
+  writeFile(repoPath, "keep.txt", "modified keep\n");
+  writeFile(repoPath, `${RUNTIME_DIR}/runtime-file`, "runtime metadata\n");
+
+  const statusText = execGit(repoPath, ["status", "--porcelain"]);
+  assert.match(statusText, /^D  a\.txt/m);
+  assert.match(statusText, /^ M keep\.txt/m);
+  const addArgs = gitAddReviewableArgs(statusText, repoPath);
+  assert.deepEqual(addArgs, ["add", "-A", "--", "keep.txt"]);
+
+  git(repoPath, addArgs);
+
+  assert.deepEqual(
+    git(repoPath, ["diff", "--cached", "--name-status"]).split("\n"),
+    ["D\ta.txt", "M\tkeep.txt"],
+  );
+  assert.equal(stagedPaths(repoPath).includes("keep.txt"), true);
+  assert.match(git(repoPath, ["status", "--porcelain"]), /runtime-file/);
+});
+
+test("stages a staged rename alongside an already staged deletion", (t) => {
+  const repoPath = createRepository(t);
+  const destination = "RENAMED.md";
+  git(repoPath, ["mv", "README.md", destination]);
+  git(repoPath, ["rm", "a.txt"]);
+  writeFile(repoPath, `${RUNTIME_DIR}/runtime-file`, "runtime metadata\n");
+
+  const statusText = execGit(repoPath, ["status", "--porcelain"]);
+  assert.match(statusText, /^D  a\.txt/m);
+  assert.match(statusText, /^R  README\.md -> RENAMED\.md/m);
+  const addArgs = gitAddReviewableArgs(statusText, repoPath);
+  assert.deepEqual(addArgs, ["add", "-A", "--", destination]);
+
+  git(repoPath, addArgs);
+
+  assert.deepEqual(
+    git(repoPath, ["diff", "--cached", "--name-status"]).split("\n"),
+    ["R100\tREADME.md\tRENAMED.md", "D\ta.txt"],
+  );
+  assert.match(git(repoPath, ["status", "--porcelain"]), /runtime-file/);
+});
+
+test("emits an AD path that is absent from disk so git add records the deletion", (t) => {
+  const repoPath = createRepository(t);
+  const addedThenDeleted = "added-then-deleted.txt";
+  writeFile(repoPath, addedThenDeleted, "temporary\n");
+  git(repoPath, ["add", "--", addedThenDeleted]);
+  fs.unlinkSync(path.join(repoPath, addedThenDeleted));
+  writeFile(repoPath, `${RUNTIME_DIR}/runtime-file`, "runtime metadata\n");
+
+  const statusText = execGit(repoPath, ["status", "--porcelain"]);
+  assert.match(statusText, /^AD added-then-deleted\.txt/m);
+  const addArgs = gitAddReviewableArgs(statusText, repoPath);
+  assert.deepEqual(addArgs, ["add", "-A", "--", addedThenDeleted]);
+
+  git(repoPath, addArgs);
+
+  assert.deepEqual(stagedPaths(repoPath), []);
+  assert.equal(
+    git(repoPath, ["status", "--porcelain"]),
+    `?? ${RUNTIME_DIR}/runtime-file`,
+  );
 });

@@ -1,5 +1,8 @@
 "use strict";
 
+const fs = require("node:fs");
+const path = require("node:path");
+
 const RUNTIME_METADATA_ROOTS = Object.freeze([
   ".antigravitycli",
 ]);
@@ -106,21 +109,40 @@ function statusPaths(line) {
   ];
 }
 
-function statusPathspecs(line) {
+function worktreeStatusCode(line) {
+  if (typeof line !== "string") return " ";
+  if (line[2] === " ") return line[1] || " ";
+  // execGit trims the leading index-column space from the first unstaged line.
+  if (line[1] === " ") return line[0] || " ";
+  return " ";
+}
+
+function isPresentOnDisk(repoPath, filePath) {
+  try {
+    fs.lstatSync(path.resolve(repoPath, filePath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function statusPathspecs(repoPath, line) {
   const paths = statusPaths(line);
+  const worktreePath = paths.at(-1);
   /*
-   * A staged rename/copy has R/C in the index column. A rename source is
-   * already absent from the index, so passing it to git add as an allowlist
-   * pathspec aborts the entire add. The destination alone is sufficient for
-   * both shapes to retain the staged index entry (and to pick up any later
-   * destination edits).
+   * General pathspec predicate: emit a path only when git add can have work
+   * to do for it — the path is present on disk, or it is the current worktree
+   * path and porcelain column 2 reports an unstaged change. This omits any
+   * fully staged path that is absent from disk, regardless of its status code,
+   * while retaining absent paths for AD and unstaged deletions.
    *
-   * line[2] distinguishes an intact "R  old -> new" / "RM old -> new" entry
-   * from an unstaged first entry whose leading space execGit trimmed to
-   * "R old -> new". The latter must keep both paths.
+   * Rename/copy porcelain lists a historical source before the current path;
+   * column 2 describes the current path only.
    */
-  const hasStagedRenameOrCopy = line[2] === " " && /[RC]/.test(line[0]);
-  return hasStagedRenameOrCopy && paths.length > 1 ? paths.slice(-1) : paths;
+  return paths.filter((filePath) => (
+    isPresentOnDisk(repoPath, filePath) ||
+    (filePath === worktreePath && worktreeStatusCode(line) !== " ")
+  ));
 }
 
 function isRuntimeMetadataStatusLine(line) {
@@ -164,10 +186,10 @@ function reviewableStatusPaths(statusText) {
   )];
 }
 
-function reviewableStatusPathspecs(statusText) {
+function reviewableStatusPathspecs(statusText, repoPath) {
   const classified = classifyRepositoryDirt(statusText);
   return [...new Set(
-    splitStatusLines(classified.reviewableStatus).flatMap((line) => statusPathspecs(line))
+    splitStatusLines(classified.reviewableStatus).flatMap((line) => statusPathspecs(repoPath, line))
   )];
 }
 
@@ -190,7 +212,7 @@ function runtimeMetadataRootExclusions() {
   ]);
 }
 
-function gitAddReviewableArgs(statusText) {
+function gitAddReviewableArgs(statusText, repoPath = process.cwd()) {
   const classified = classifyRepositoryDirt(statusText);
   if (!classified.hasRuntimeMetadataDirt) {
     return ["add", "-A"];
@@ -207,7 +229,7 @@ function gitAddReviewableArgs(statusText) {
    * Both the allowlist and runtime classification derive from
    * RUNTIME_METADATA_ROOTS through classifyRepositoryDirt.
    */
-  const reviewablePaths = reviewableStatusPathspecs(statusText);
+  const reviewablePaths = reviewableStatusPathspecs(statusText, repoPath);
   if (reviewablePaths.length > 0) {
     return ["add", "-A", "--", ...reviewablePaths];
   }

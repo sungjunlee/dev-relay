@@ -3211,7 +3211,7 @@ async function main() {
   const supersededBeforeCommit = readManifest(manifestPath).data.state !== STATES.DISPATCHED;
   if (!DRY_RUN && AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !supersededBeforeCommit) {
     try {
-      execGit(wtPath, gitAddReviewableArgs(rawUncommitted));
+      execGit(wtPath, gitAddReviewableArgs(rawUncommitted, wtPath));
       if (dirt.hasReviewableDirt && !execGit(wtPath, ["diff", "--cached", "--name-only"])) {
         throw new Error(formatEmptyReviewableIndexError(rawUncommitted));
       }

@@ -562,7 +562,7 @@ function main() {
   let commitCreated = false;
   if (hasUncommittedChanges) {
     try {
-      execGit(worktreePath, gitAddReviewableArgs(statusText));
+      execGit(worktreePath, gitAddReviewableArgs(statusText, worktreePath));
       if (dirt.hasReviewableDirt && !execGit(worktreePath, ["diff", "--cached", "--name-only"])) {
         throw new Error(formatEmptyReviewableIndexError(statusText));
       }
