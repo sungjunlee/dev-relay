@@ -42,7 +42,7 @@ Isolation details by built-in reviewer:
 
 Advisory review can be a multi-lane list selected by CLI or routing. Each lane records reviewer/model/profile/trigger/gating identity in `advisory_review` events; supported profiles include `blindspot` and `adversarial`. Standard non-gating lanes record artifacts and metrics only, while gating lanes can demote an applied pass when successful advisory output contains required findings. Late artifacts are classified as metrics after a passing primary decision or redispatch evidence after changes requested.
 
-For `policy.review_assurance=hardened`, the runner fails fast unless the command or manifest routing supplies an advisory reviewer. Advisory failures or required findings block a passing primary verdict, and execution evidence must be strict. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; otherwise they fall back to legacy `test_exit_code=0` plus a SHA-bound result hash.
+For `policy.review_assurance=hardened`, the runner fails fast unless the command or manifest routing supplies an advisory reviewer. Advisory failures or required findings block a passing primary verdict, and execution evidence must be strict. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer executor-confirmed command-run records collected from the original sandboxed dispatch and bound to its resulting HEAD; relay must never re-run those commands with orchestrator privileges. Otherwise they fall back to legacy `test_exit_code=0` plus a SHA-bound result hash.
 
 ## Capability Matrix
 

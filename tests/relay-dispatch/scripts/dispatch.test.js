@@ -194,6 +194,46 @@ process.stdout.write("ok\\n");
   return claudePath;
 }
 
+function fakeExecutorVerificationSupportSource() {
+  return `
+function withVerificationEvidence(summary) {
+  const prompt = String(args[args.length - 1] || "");
+  const requestBegin = "RELAY_VERIFICATION_REQUEST_BEGIN";
+  const requestEnd = "RELAY_VERIFICATION_REQUEST_END";
+  const resultBegin = "RELAY_VERIFICATION_RESULT_BEGIN";
+  const resultEnd = "RELAY_VERIFICATION_RESULT_END";
+  const beginIndex = prompt.lastIndexOf(requestBegin);
+  if (beginIndex === -1) return summary;
+  const jsonStart = beginIndex + requestBegin.length;
+  const endIndex = prompt.indexOf(requestEnd, jsonStart);
+  const request = JSON.parse(prompt.slice(jsonStart, endIndex).trim());
+  const forcedRaw = process.env.RELAY_TEST_VERIFICATION_EXIT_CODE;
+  const forcedExitCode = /^\\d+$/.test(String(forcedRaw || ""))
+    ? Number(forcedRaw)
+    : null;
+  const runs = request.gates.map((gate) => {
+    const exitCode = forcedExitCode === null
+      ? (gate.command.trim() === "false" ? 1 : 0)
+      : forcedExitCode;
+    return {
+      command: gate.command,
+      exit_code: exitCode,
+      output: exitCode === 0
+        ? "verified by fake executor policy\\n"
+        : "blocked or failed under fake executor policy\\n",
+    };
+  });
+  return [
+    String(summary || "").trimEnd(),
+    resultBegin,
+    JSON.stringify({ schema_version: 1, runs }),
+    resultEnd,
+    "",
+  ].join("\\n");
+}
+`;
+}
+
 function writeFakeCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -201,6 +241,7 @@ function writeFakeCodex(binDir) {
 const fs = require("fs");
 const { execFileSync } = require("child_process");
 const args = process.argv.slice(2);
+${fakeExecutorVerificationSupportSource()}
 if (args[0] === "--version") {
   process.stdout.write("codex-fake\\n");
   process.exit(0);
@@ -215,7 +256,7 @@ const fileName = fs.existsSync(cwd + "/first.txt") ? "resume.txt" : "first.txt";
 fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
 execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
 execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
-fs.writeFileSync(output, "ok\\n", "utf-8");
+fs.writeFileSync(output, withVerificationEvidence("ok\\n"), "utf-8");
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -419,6 +460,7 @@ function writeNoOpCodex(binDir) {
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
+${fakeExecutorVerificationSupportSource()}
 if (args[0] === "--version") {
   process.stdout.write("codex-fake\\n");
   process.exit(0);
@@ -428,7 +470,7 @@ if (args[0] !== "exec") {
   process.exit(1);
 }
 const output = args[args.indexOf("-o") + 1];
-fs.writeFileSync(output, "already applied\\n", "utf-8");
+fs.writeFileSync(output, withVerificationEvidence("already applied\\n"), "utf-8");
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -7668,11 +7710,19 @@ test("dispatch seeds execution evidence test_command from structured verificatio
     "node --version"
   );
   assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
+  assert.equal(
+    evidence.test_result_summary,
+    "codex confirmed verification result.txt hashed"
+  );
   assert.equal(evidence.test_exit_code, 0);
   assert.equal(evidence.verification_runs.length, 1);
   assert.equal(evidence.verification_runs[0].command, "node --version");
   assert.equal(evidence.verification_runs[0].head_sha, result.headSha);
   assert.equal(evidence.verification_runs[0].exit_code, 0);
+  assert.equal(
+    evidence.verification_runs[0].recorded_by,
+    "codex-confirmed-verification-v1"
+  );
   assert.equal(
     evidence.verification_runs[0].output_hash,
     hashFileSha256(path.join(result.runDir, evidence.verification_runs[0].output_path))
@@ -7684,18 +7734,22 @@ test("dispatch seeds execution evidence test_command from structured verificatio
   assert.notEqual(evidence.test_result_hash, hashFileSha256(result.resultFile));
 });
 
-test("dispatch fails closed when a structured verification gate does not pass", () => {
+test("dispatch cannot execute a gate with orchestrator environment privileges", () => {
   const fixture = setupRepoWithOrigin();
   const env = createPushPrTestEnv({
     relayHome: fixture.relayHome,
     codexMode: "noop",
   });
+  const sentinelPath = path.join(
+    os.tmpdir(),
+    `relay-orchestrator-env-sentinel-${process.pid}-${Date.now()}`
+  );
   const rubricFile = writeAssuranceRubric("hardened");
   fs.writeFileSync(
     rubricFile,
     fs.readFileSync(rubricFile, "utf-8").replace(
       "command: node --version",
-      "command: false"
+      "command: 'printf leaked > \"$RELAY_ORCHESTRATOR_SENTINEL\"'"
     ),
     "utf-8"
   );
@@ -7710,7 +7764,11 @@ test("dispatch fails closed when a structured verification gate does not pass", 
   ], {
     cwd: fixture.repoRoot,
     encoding: "utf-8",
-    env: env.env,
+    env: {
+      ...env.env,
+      RELAY_ORCHESTRATOR_SENTINEL: sentinelPath,
+      RELAY_TEST_VERIFICATION_EXIT_CODE: "1",
+    },
   });
   const result = JSON.parse(dispatched.stdout);
   const evidence = readExecutionEvidence(result.runDir);
@@ -7719,9 +7777,18 @@ test("dispatch fails closed when a structured verification gate does not pass", 
   assert.equal(result.status, "failed");
   assert.equal(result.runState, STATES.ESCALATED);
   assert.match(result.error, /verification_gate_failed: 'focused test' exited 1/);
+  assert.equal(fs.existsSync(sentinelPath), false);
   assert.equal(evidence.test_exit_code, 1);
   assert.equal(evidence.verification_runs.length, 1);
   assert.equal(evidence.verification_runs[0].exit_code, 1);
+  assert.equal(evidence.verification_runs[0].recorded_by, "codex-confirmed-verification-v1");
+  assert.match(
+    fs.readFileSync(
+      path.join(result.runDir, evidence.verification_runs[0].output_path),
+      "utf-8"
+    ),
+    /blocked or failed under fake executor policy/
+  );
 });
 
 test("dispatch writes execution evidence for no-op runs with the stable start head", () => {

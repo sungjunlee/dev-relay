@@ -1,11 +1,15 @@
 const crypto = require("crypto");
-const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
 const EXECUTION_EVIDENCE_FILENAME = "execution-evidence.json";
 const EXECUTION_EVIDENCE_SCHEMA_VERSION = 1;
 const VERIFICATION_OUTPUT_FILENAME = "verification-gates.log";
+const VERIFICATION_REQUEST_BEGIN = "RELAY_VERIFICATION_REQUEST_BEGIN";
+const VERIFICATION_REQUEST_END = "RELAY_VERIFICATION_REQUEST_END";
+const VERIFICATION_RESULT_BEGIN = "RELAY_VERIFICATION_RESULT_BEGIN";
+const VERIFICATION_RESULT_END = "RELAY_VERIFICATION_RESULT_END";
+const MAX_VERIFICATION_OUTPUT_BYTES = 1024 * 1024;
 
 function yamlKeyMatch(line) {
   return String(line || "").match(/^(\s*)(?:-\s*)?([A-Za-z_][\w.-]*):\s*(.*?)\s*$/);
@@ -146,44 +150,125 @@ function hashFileSha256(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
-function runVerificationGates({
+function buildExecutorVerificationInstructions(gates) {
+  if (!Array.isArray(gates) || gates.length === 0) return "";
+  const request = {
+    schema_version: 1,
+    gates: gates.map(({ name, command }) => ({ name, command })),
+  };
+  return [
+    "## Required executor-side verification",
+    "",
+    "After completing the task, run every command below inside this same executor session.",
+    "The commands must remain subject to the executor's current sandbox and network policy.",
+    "Do not delegate them back to the relay orchestrator and do not expose credentials or secret environment values.",
+    "",
+    VERIFICATION_REQUEST_BEGIN,
+    JSON.stringify(request),
+    VERIFICATION_REQUEST_END,
+    "",
+    "At the end of your final response, append exactly one result envelope using this shape:",
+    VERIFICATION_RESULT_BEGIN,
+    '{"schema_version":1,"runs":[{"command":"exact command from request","exit_code":0,"output":"captured stdout/stderr"}]}',
+    VERIFICATION_RESULT_END,
+    "Preserve each command verbatim, keep request order, and report a nonzero exit_code when policy blocks a command.",
+  ].join("\n");
+}
+
+function parseExecutorVerificationResult(resultText) {
+  const text = String(resultText || "").replace(/\r\n/g, "\n").trimEnd();
+  if (!text.includes(VERIFICATION_RESULT_BEGIN)) {
+    throw new Error("executor did not return the required verification result envelope");
+  }
+  const endToken = `\n${VERIFICATION_RESULT_END}`;
+  if (!text.endsWith(endToken) && text !== VERIFICATION_RESULT_END) {
+    throw new Error("executor verification result envelope must be the final response content");
+  }
+  const endIndex = text.length - VERIFICATION_RESULT_END.length - (
+    text.endsWith(endToken) ? 1 : 0
+  );
+  const beforeEnd = text.slice(0, endIndex);
+  const beginToken = `${VERIFICATION_RESULT_BEGIN}\n`;
+  const beginLineIndex = beforeEnd.lastIndexOf(`\n${beginToken}`);
+  const beginIndex = beginLineIndex === -1
+    ? (beforeEnd.startsWith(beginToken) ? 0 : -1)
+    : beginLineIndex + 1;
+  if (beginIndex === -1) {
+    throw new Error("executor did not return the required verification result envelope");
+  }
+  const jsonStart = beginIndex + beginToken.length;
+
+  let result;
+  try {
+    result = JSON.parse(text.slice(jsonStart, endIndex).trim());
+  } catch (error) {
+    throw new Error(`executor verification result must be valid JSON: ${error.message}`);
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("executor verification result must be a JSON object");
+  }
+  if (result.schema_version !== 1) {
+    throw new Error(`unsupported executor verification schema_version=${result.schema_version}`);
+  }
+  if (!Array.isArray(result.runs)) {
+    throw new Error("executor verification result runs must be an array");
+  }
+  return result;
+}
+
+function collectExecutorVerificationEvidence({
   gates,
   cwd,
   headSha,
   runDir,
-  timeoutMs,
-  execFile = execFileSync,
+  resultText,
+  executor,
+  recordedAt,
 } = {}) {
   if (!Array.isArray(gates) || gates.length === 0) {
     return { runs: [], outputPath: null, exitCode: undefined };
   }
   if (!cwd || !headSha || !runDir) {
-    throw new Error("verification gate execution requires cwd, headSha, and runDir");
+    throw new Error("executor verification evidence requires cwd, headSha, and runDir");
+  }
+
+  const result = parseExecutorVerificationResult(resultText);
+  if (result.runs.length !== gates.length) {
+    throw new Error(
+      `executor verification result recorded ${result.runs.length} runs for ${gates.length} required gates`
+    );
   }
 
   const aggregateOutputPath = path.join(runDir, VERIFICATION_OUTPUT_FILENAME);
   const aggregateChunks = [];
   const runs = gates.map((gate, index) => {
-    const outputName = `verification-gate-${index + 1}.log`;
-    const outputPath = path.join(runDir, outputName);
-    const outputFd = fs.openSync(outputPath, "w");
-    let exitCode = 0;
-    let executionError = null;
-    try {
-      execFile("/bin/sh", ["-c", gate.command], {
-        cwd,
-        env: process.env,
-        stdio: ["ignore", outputFd, outputFd],
-        ...(Number.isInteger(timeoutMs) && timeoutMs > 0 ? { timeout: timeoutMs } : {}),
-      });
-    } catch (error) {
-      exitCode = Number.isInteger(error.status) && error.status >= 0 ? error.status : 1;
-      executionError = String(error.message || error).split("\n")[0];
-    } finally {
-      fs.closeSync(outputFd);
+    const confirmed = result.runs[index];
+    if (!confirmed || typeof confirmed !== "object" || Array.isArray(confirmed)) {
+      throw new Error(`executor verification runs[${index}] must be a JSON object`);
+    }
+    if (confirmed.command !== gate.command) {
+      throw new Error(
+        `executor verification runs[${index}].command did not match required gate '${gate.name}'`
+      );
+    }
+    if (!Number.isInteger(confirmed.exit_code) || confirmed.exit_code < 0) {
+      throw new Error(
+        `executor verification runs[${index}].exit_code must be a non-negative integer`
+      );
+    }
+    if (typeof confirmed.output !== "string") {
+      throw new Error(`executor verification runs[${index}].output must be a string`);
+    }
+    if (Buffer.byteLength(confirmed.output, "utf-8") > MAX_VERIFICATION_OUTPUT_BYTES) {
+      throw new Error(
+        `executor verification runs[${index}].output exceeds ${MAX_VERIFICATION_OUTPUT_BYTES} bytes`
+      );
     }
 
-    const output = fs.readFileSync(outputPath);
+    const outputName = `verification-gate-${index + 1}.log`;
+    const outputPath = path.join(runDir, outputName);
+    const output = Buffer.from(confirmed.output, "utf-8");
+    fs.writeFileSync(outputPath, output);
     aggregateChunks.push(Buffer.from(
       `${index ? "\n" : ""}$ ${gate.command}\n`,
       "utf-8"
@@ -198,12 +283,11 @@ function runVerificationGates({
       command: gate.command,
       cwd,
       head_sha: headSha,
-      exit_code: exitCode,
+      exit_code: confirmed.exit_code,
       output_path: outputName,
       output_hash: hashFileSha256(outputPath),
-      recorded_by: "dispatch-verification-gate-v1",
-      recorded_at: new Date().toISOString(),
-      ...(executionError ? { execution_error: executionError } : {}),
+      recorded_by: `${executor || "executor"}-confirmed-verification-v1`,
+      recorded_at: recordedAt || new Date().toISOString(),
     };
   });
   fs.writeFileSync(aggregateOutputPath, Buffer.concat(aggregateChunks));
@@ -302,10 +386,11 @@ module.exports = {
   EXECUTION_EVIDENCE_SCHEMA_VERSION,
   VERIFICATION_OUTPUT_FILENAME,
   buildExecutionEvidence,
+  buildExecutorVerificationInstructions,
+  collectExecutorVerificationEvidence,
   extractVerificationGates,
   hashFileSha256,
   rebrandEvidence,
   resolveExecutionEvidenceTestCommand,
-  runVerificationGates,
   writeExecutionEvidence,
 };

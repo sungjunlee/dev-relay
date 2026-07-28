@@ -362,7 +362,31 @@ if (args[0] !== "exec") {
   process.exit(1);
 }
 const output = args[args.indexOf("-o") + 1];
-fs.writeFileSync(output, "preset dispatch ok\\n", "utf-8");
+const prompt = String(args[args.length - 1] || "");
+const requestBegin = "RELAY_VERIFICATION_REQUEST_BEGIN";
+const requestEnd = "RELAY_VERIFICATION_REQUEST_END";
+const requestStart = prompt.lastIndexOf(requestBegin);
+let result = "preset dispatch ok\\n";
+if (requestStart !== -1) {
+  const request = JSON.parse(prompt.slice(
+    requestStart + requestBegin.length,
+    prompt.indexOf(requestEnd, requestStart)
+  ).trim());
+  result += [
+    "RELAY_VERIFICATION_RESULT_BEGIN",
+    JSON.stringify({
+      schema_version: 1,
+      runs: request.gates.map((gate) => ({
+        command: gate.command,
+        exit_code: 0,
+        output: "verified inside fake executor policy\\n",
+      })),
+    }),
+    "RELAY_VERIFICATION_RESULT_END",
+    "",
+  ].join("\\n");
+}
+fs.writeFileSync(output, result, "utf-8");
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;

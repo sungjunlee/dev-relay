@@ -68,10 +68,11 @@ const os = require("os");
 const { pushAndOpenPR } = require("./dispatch-publish");
 const {
   buildExecutionEvidence,
+  buildExecutorVerificationInstructions,
+  collectExecutorVerificationEvidence,
   extractVerificationGates,
   hashFileSha256,
   resolveExecutionEvidenceTestCommand,
-  runVerificationGates,
   writeExecutionEvidence,
 } = require("./execution-evidence");
 const {
@@ -2886,11 +2887,13 @@ async function main() {
 
   // Prepend non-interactive directive so the model doesn't wait for approval
   // (e.g. brainstorming HARD-GATE or design-confirmation patterns).
+  const executorVerificationInstructions = buildExecutorVerificationInstructions(verificationGates);
   const execPrompt =
     "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. " +
     "Do not present plans for approval or wait for user confirmation. " +
     "Execute the task fully and autonomously.\n\n" +
-    taskPrompt;
+    taskPrompt +
+    (executorVerificationInstructions ? `\n\n${executorVerificationInstructions}` : "");
 
   const buildResult = adapter.buildExecCommand({
     wtPath,
@@ -3273,20 +3276,21 @@ async function main() {
   }
 
   let verificationEvidence = { runs: [], outputPath: null, exitCode: undefined };
-  const canRunVerificationGates = (
+  const canCollectVerificationGates = (
     !DRY_RUN
     && verificationGates.length > 0
     && exitCode === 0
     && (status === "completed" || status === "completed-no-op")
   );
-  if (canRunVerificationGates) {
+  if (canCollectVerificationGates) {
     try {
-      verificationEvidence = runVerificationGates({
+      verificationEvidence = collectExecutorVerificationEvidence({
         gates: verificationGates,
         cwd: wtPath,
         headSha: currentHead || startHead,
         runDir: getRunDir(repoRoot, runId),
-        timeoutMs: TIMEOUT * 1000,
+        resultText,
+        executor: EXECUTOR,
       });
       const failedVerification = verificationEvidence.runs.find((run) => run.exit_code !== 0);
       if (failedVerification) {
@@ -3300,7 +3304,7 @@ async function main() {
     } catch (verificationError) {
       status = "failed";
       exitCode = exitCode || 1;
-      error = `verification_gate_execution_failed: ${String(
+      error = `verification_gate_evidence_invalid: ${String(
         verificationError.message || verificationError
       ).split("\n")[0]}`;
     }
@@ -3352,7 +3356,7 @@ async function main() {
       testCommand: evidenceTestCommand,
       resultFilePath: verificationEvidence.outputPath
         || (fs.existsSync(resultFile) ? resultFile : null),
-      executor: verificationEvidence.outputPath ? "dispatch verification gates" : EXECUTOR,
+      executor: verificationEvidence.outputPath ? `${EXECUTOR} confirmed verification` : EXECUTOR,
       testExitCode: verificationEvidence.exitCode ?? exitCode,
       ...(verificationEvidence.runs.length
         ? { verificationRuns: verificationEvidence.runs }
