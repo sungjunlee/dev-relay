@@ -216,6 +216,19 @@ test("doctor stays quiet when primary-review routes use capable adapters", () =>
 test("add-route refuses an inexecutable cline advisory model with the expected format", () => {
   const relayHome = tempDir();
 
+  const actorUnscoped = runConfig([
+    "add-route",
+    "cline-pass/glm-5.2",
+    "--phase",
+    "advisory_review",
+    "--json",
+  ], { relayHome });
+  assert.notEqual(actorUnscoped.status, 0, actorUnscoped.combined);
+  assert.match(actorUnscoped.combined, /cannot execute/i);
+  assert.match(actorUnscoped.combined, /modelType\/model/);
+  assert.match(actorUnscoped.combined, /cline-pass\/modelType\/model/);
+  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
+
   const result = runConfig([
     "add-route",
     "cline-pass/glm-5.2",

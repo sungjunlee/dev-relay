@@ -514,9 +514,11 @@ function normalizePresets(value, sourceLabel) {
 
 function validatesClineAdvisoryRoute(entry) {
   const phases = entry.phases;
+  const executors = entry.executors;
   const reviewers = entry.reviewers;
   const canSelectAdvisory = phases === undefined || phases.includes("advisory_review");
-  return canSelectAdvisory && reviewers?.includes("cline");
+  const hasActorScope = executors !== undefined || reviewers !== undefined;
+  return canSelectAdvisory && (!hasActorScope || reviewers?.includes("cline"));
 }
 
 function validateClineAdvisoryModel(model, label) {

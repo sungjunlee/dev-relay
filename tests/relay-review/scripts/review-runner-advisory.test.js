@@ -2229,10 +2229,7 @@ test("on_pass advisory lane gets its own settlement deadline after a slow primar
   // Primary takes longer than the whole advisory settlement grace, so a
   // deadline computed at round start is already exhausted when the on_pass
   // lane spawns. The lane must still be settled from its own fresh deadline.
-  // Keep enough post-spawn room for nested Node startup under loaded CI hosts.
-  // The primary still exceeds timeout+grace, preserving the stale round-start
-  // deadline regression this test is meant to catch.
-  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict(), { delayMs: 4000 });
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict(), { delayMs: 3000 });
   const opencodeScript = writeFakeOpencode(repoRoot, {});
 
   const result = runReview({
@@ -2243,7 +2240,7 @@ test("on_pass advisory lane gets its own settlement deadline after a slow primar
     primaryScript,
     opencodeScript,
     advisoryReviewer: null,
-    extraArgs: ["--advisory-timeout", "1", "--advisory-grace", "2"],
+    extraArgs: ["--advisory-timeout", "1", "--advisory-grace", "1"],
   });
 
   assert.equal(result.nextState, STATES.READY_TO_MERGE);
