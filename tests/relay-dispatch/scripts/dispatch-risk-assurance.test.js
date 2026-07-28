@@ -90,10 +90,11 @@ function previewPrompt(name, prompt, extra = []) {
   return JSON.parse(stdout);
 }
 
-test("real dispatch surface selects compact without weakening durable runtime boundaries", () => {
+test("real dispatch surface keeps the default when prompt risk metadata suggests compact", () => {
   const result = preview("compact");
 
-  assert.equal(result.reviewAssurance, "compact");
+  assert.equal(result.reviewAssurance, "standard");
+  assert.equal(result.reviewAssuranceSource, "flag");
   assert.equal(result.publishPolicy, "immediate");
   assert.equal(result.sandbox, "workspace-write");
   assert.equal(result.networkAccess, "disabled");
@@ -102,40 +103,34 @@ test("real dispatch surface selects compact without weakening durable runtime bo
   assert.equal(fs.existsSync(result.worktree), false);
 });
 
-test("real dispatch surface accepts an explicit compact tier at the derived floor", () => {
+test("real dispatch surface accepts an explicit compact tier when the rubric omits assurance", () => {
   const result = preview("compact", ["--review-assurance", "compact"]);
 
   assert.equal(result.reviewAssurance, "compact");
   assert.equal(result.publishPolicy, "immediate");
 });
 
-test("real dispatch surface rejects compact without a task-derived risk floor", () => {
+test("real dispatch surface accepts the assurance flag without a prompt risk floor", () => {
   const defaultResult = previewPrompt(
     "missing-risk-default",
     "Update a repository file according to the issue."
   );
   assert.equal(defaultResult.reviewAssurance, "standard");
 
-  assert.throws(
-    () => previewPrompt(
-      "missing-risk-compact",
-      "Update a repository file according to the issue.",
-      ["--review-assurance", "compact"]
-    ),
-    (error) => {
-      assert.match(
-        `${String(error.stdout)}\n${String(error.stderr)}`,
-        /compact.*complete risk-aware task_profile|task-derived risk floor/i
-      );
-      return true;
-    }
+  const compactResult = previewPrompt(
+    "missing-risk-compact",
+    "Update a repository file according to the issue.",
+    ["--review-assurance", "compact"]
   );
+  assert.equal(compactResult.reviewAssurance, "compact");
+  assert.equal(compactResult.reviewAssuranceSource, "flag");
 });
 
-test("real dispatch surface selects hardened on the existing delayed-publication path", () => {
+test("real dispatch surface keeps default assurance on the existing delayed-publication path", () => {
   const result = preview("hardened");
 
-  assert.equal(result.reviewAssurance, "hardened");
+  assert.equal(result.reviewAssurance, "standard");
+  assert.equal(result.reviewAssuranceSource, "flag");
   assert.equal(result.publishPolicy, "after-internal-review");
   assert.equal(result.sandbox, "workspace-write");
   assert.equal(result.networkAccess, "disabled");
@@ -158,20 +153,15 @@ test("real dispatch surface refuses immediate publication below a high-risk path
   );
 });
 
-test("real dispatch surface rejects an explicit tier below the task-derived floor", () => {
-  assert.throws(
-    () => preview("hardened", [
-      "--review-assurance",
-      "standard",
-      "--publish-policy",
-      "after-internal-review",
-    ]),
-    (error) => {
-      assert.match(
-        `${String(error.stdout)}\n${String(error.stderr)}`,
-        /below.*hardened.*risk floor/i
-      );
-      return true;
-    }
-  );
+test("real dispatch surface accepts a flag below prompt-derived assurance metadata", () => {
+  const result = preview("hardened", [
+    "--review-assurance",
+    "standard",
+    "--publish-policy",
+    "after-internal-review",
+  ]);
+
+  assert.equal(result.reviewAssurance, "standard");
+  assert.equal(result.reviewAssuranceSource, "flag");
+  assert.equal(result.publishPolicy, "after-internal-review");
 });

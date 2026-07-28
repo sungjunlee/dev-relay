@@ -89,11 +89,9 @@ const {
 const { parseModelHints } = require("./model-hints");
 const { resolveExecutorDefaultModel } = require("./executor-model-config");
 const {
-  REVIEW_ASSURANCE: REVIEW_ASSURANCE_LEVEL,
   extractReviewAssuranceFromRubric,
   normalizeReviewAssurance,
   resolveReviewAssurance,
-  reviewAssuranceRank,
 } = require("./manifest/review-assurance");
 const {
   createRunId,
@@ -376,7 +374,6 @@ const DONE_CRITERIA_FILE = readArg(args, "--done-criteria-file", undefined, CLI_
 const REVIEW_ASSURANCE_RAW = readArg(args, "--review-assurance", undefined, CLI_ARG_OPTIONS);
 const ROUTING_TAGS = readArg(args, "--tags", "", CLI_ARG_OPTIONS);
 let REVIEW_ASSURANCE;
-let REVIEW_ASSURANCE_SOURCE = REVIEW_ASSURANCE_RAW ? "cli" : null;
 let REVIEW_ASSURANCE_RESOLUTION = null;
 try {
   REVIEW_ASSURANCE = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW || "standard");
@@ -395,30 +392,6 @@ let AUTO_RECOVER_COMMIT = null;
 
 function resolveDispatchRuntime(repoRoot) {
   const routeResolution = loadInitialRoutePlan(repoRoot);
-  // Route-derived review assurance is a preset-feature behavior. No-preset
-  // dispatches must stay byte-identical (DC6): a route-intent file must not
-  // change policy.review_assurance when no --route-preset was requested; those
-  // runs fall through to prompt-derived assurance extraction as before.
-  if (!REVIEW_ASSURANCE_RAW && ROUTE_PRESET) {
-    const intentReviewAssurance = nonEmptyString(routeResolution.routeIntent?.review_assurance);
-    const presetReviewAssurance = nonEmptyString(routeResolution.routePlan?.route_preset?.review_assurance);
-    const routeReviewAssurance = intentReviewAssurance || presetReviewAssurance;
-    if (routeReviewAssurance) {
-      try {
-        REVIEW_ASSURANCE = normalizeReviewAssurance(routeReviewAssurance);
-        REVIEW_ASSURANCE_SOURCE = intentReviewAssurance
-          ? "route_intent"
-          : routeResolution.routePlan.route_preset.source;
-      } catch (error) {
-        failEarly(error.message, {
-          error_code: "invalid_review_assurance",
-          review_assurance_source: intentReviewAssurance
-            ? "route_intent"
-            : routeResolution.routePlan?.route_preset?.source || null,
-        });
-      }
-    }
-  }
   const executor = EXECUTOR_ARG || routeResolution.routePlan.phases.dispatch?.executor || "codex";
   let resolvedAdapter;
   let resolvedAdapterDescriptor;
@@ -2343,7 +2316,6 @@ async function main() {
         };
       }
       REVIEW_ASSURANCE = REVIEW_ASSURANCE_RESOLUTION.level;
-      REVIEW_ASSURANCE_SOURCE = REVIEW_ASSURANCE_RESOLUTION.source;
       manifest = {
         ...manifest,
         policy: {
@@ -2359,14 +2331,13 @@ async function main() {
       console.error(`Error: ${error.message}`);
       process.exit(1);
     }
-  } else if (rubricReviewAssurance) {
+  } else {
     REVIEW_ASSURANCE_RESOLUTION = resolveReviewAssurance({
       rubricReviewAssurance,
       flagReviewAssurance: REVIEW_ASSURANCE,
       flagWasExplicit: REVIEW_ASSURANCE_RAW !== undefined,
     });
     REVIEW_ASSURANCE = REVIEW_ASSURANCE_RESOLUTION.level;
-    REVIEW_ASSURANCE_SOURCE = REVIEW_ASSURANCE_RESOLUTION.source;
   }
   let routePlanSnapshot = null;
 
@@ -2397,36 +2368,6 @@ async function main() {
   if (!RESUME_MODE) {
     try {
       const promptTaskProfile = extractTaskProfileSummaryFromPrompt(taskPrompt);
-      const promptReviewAssurance = promptTaskProfile?.review_assurance || null;
-      if (
-        promptReviewAssurance
-        && REVIEW_ASSURANCE_SOURCE !== "rubric"
-        && REVIEW_ASSURANCE_RAW === undefined
-        && REVIEW_ASSURANCE_SOURCE === null
-      ) {
-        REVIEW_ASSURANCE = promptReviewAssurance;
-      } else if (
-        promptReviewAssurance
-        && REVIEW_ASSURANCE_SOURCE !== "rubric"
-        && reviewAssuranceRank(REVIEW_ASSURANCE)
-          < reviewAssuranceRank(promptReviewAssurance)
-      ) {
-        throw new Error(
-          `review_assurance=${REVIEW_ASSURANCE} is below the `
-          + `${promptReviewAssurance} risk floor from task_profile`
-        );
-      }
-      const minimumReviewAssurance = promptTaskProfile?.minimum_review_assurance
-        || REVIEW_ASSURANCE_LEVEL.STANDARD;
-      if (
-        reviewAssuranceRank(REVIEW_ASSURANCE)
-        < reviewAssuranceRank(minimumReviewAssurance)
-      ) {
-        throw new Error(
-          `review_assurance=${REVIEW_ASSURANCE} requires a complete risk-aware `
-          + "task_profile before selecting below the standard fail-closed floor"
-        );
-      }
       if (promptTaskProfile?.publish_policy === "after-internal-review") {
         if (
           PUBLISH_POLICY_ARG !== undefined
@@ -2443,12 +2384,6 @@ async function main() {
         error_code: "task_profile_parse_failed",
       });
     }
-  }
-  if (!REVIEW_ASSURANCE_RESOLUTION) {
-    REVIEW_ASSURANCE_RESOLUTION = resolveReviewAssurance({
-      flagReviewAssurance: REVIEW_ASSURANCE,
-      flagWasExplicit: REVIEW_ASSURANCE_RAW !== undefined,
-    });
   }
   if (taskPromptResult.source === "auto-discovered-redispatch" && !JSON_OUT) {
     console.log(`Auto-discovered redispatch prompt (round ${taskPromptResult.round}): ${taskPromptResult.path}`);

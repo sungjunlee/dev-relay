@@ -6062,30 +6062,48 @@ test("dispatch persists selected guidance metadata in run artifacts and events",
   assert.deepEqual(guidanceEvent.task_profile_summary, artifact.task_profile_summary);
 });
 
-test("dispatch derives review assurance from task_profile when CLI policy is unset", () => {
+test("dispatch keeps rubric-omission default and flag over prompt task_profile assurance", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
 
-  const result = JSON.parse(runDispatch(repoRoot, [
+  const defaultResult = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-profile-assurance",
     "--prompt", guidancePrompt({ reviewAssurance: "hardened" }),
     "--json",
   ], env));
 
-  assert.equal(result.status, "completed");
-  const manifest = readManifest(result.manifestPath).data;
-  assert.equal(manifest.policy.review_assurance, "hardened");
-  assert.equal(manifest.advisory.guidance.task_profile_summary.review_assurance, "hardened");
+  assert.equal(defaultResult.status, "completed");
+  const defaultManifest = readManifest(defaultResult.manifestPath).data;
+  assert.equal(defaultResult.reviewAssurance, "standard");
+  assert.equal(defaultResult.reviewAssuranceSource, "flag");
+  assert.equal(defaultManifest.policy.review_assurance, "standard");
+  assert.equal(defaultManifest.policy.review_assurance_source, "flag");
+  assert.equal(defaultManifest.advisory.guidance.task_profile_summary.review_assurance, "hardened");
+
+  const flagResult = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-profile-assurance-flag",
+    "--prompt", guidancePrompt({ reviewAssurance: "hardened" }),
+    "--review-assurance", "standard",
+    "--json",
+  ], env));
+
+  assert.equal(flagResult.status, "completed");
+  const flagManifest = readManifest(flagResult.manifestPath).data;
+  assert.equal(flagResult.reviewAssurance, "standard");
+  assert.equal(flagResult.reviewAssuranceSource, "flag");
+  assert.equal(flagManifest.policy.review_assurance, "standard");
+  assert.equal(flagManifest.policy.review_assurance_source, "flag");
+  assert.equal(flagManifest.advisory.guidance.task_profile_summary.review_assurance, "hardened");
 });
 
-test("dispatch uses rubric-only review assurance and persists its resolved cap and source", () => {
+test("dispatch uses rubric assurance over prompt metadata and persists its resolved cap and source", () => {
   const { repoRoot, relayHome } = setupRepo();
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-rubric-assurance-bin-"));
   writeFakeCodex(binDir);
-  const rubricFile = writeAssuranceRubric("hardened");
+  const rubricFile = writeAssuranceRubric("compact");
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
@@ -6094,19 +6112,20 @@ test("dispatch uses rubric-only review assurance and persists its resolved cap a
 
   const result = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-rubric-assurance-only",
-    "--prompt", "honour the fixed rubric assurance",
+    "--prompt", guidancePrompt({ reviewAssurance: "hardened" }),
     "--rubric-file", rubricFile,
     "--json",
   ], env));
 
   const manifest = readManifest(result.manifestPath).data;
-  assert.equal(result.reviewAssurance, "hardened");
+  assert.equal(result.reviewAssurance, "compact");
   assert.equal(result.reviewAssuranceSource, "rubric");
   assert.equal(result.reviewAssuranceOverridden, null);
-  assert.equal(manifest.policy.review_assurance, "hardened");
+  assert.equal(manifest.policy.review_assurance, "compact");
   assert.equal(manifest.policy.review_assurance_source, "rubric");
   assert.equal(manifest.policy.review_assurance_overridden, undefined);
-  assert.equal(manifest.review.max_rounds, 3);
+  assert.equal(manifest.advisory.guidance.task_profile_summary.review_assurance, "hardened");
+  assert.equal(manifest.review.max_rounds, 1);
 });
 
 test("dispatch uses the review assurance flag when the rubric omits the field", () => {
