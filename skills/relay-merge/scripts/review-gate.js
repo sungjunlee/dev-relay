@@ -578,6 +578,7 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
     runDir,
     reviewedHead,
     strict: true,
+    manifestData,
   });
   if (executionStatus.status !== "pass") {
     return {

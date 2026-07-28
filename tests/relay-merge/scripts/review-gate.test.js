@@ -840,6 +840,43 @@ test("evaluateReviewGate accepts hardened PASS with verification_runs evidence",
   assert.equal(result.readyToMerge, true);
 });
 
+test("evaluateReviewGate resolves hardened verification gates from a non-default rubric anchor", () => {
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({ verificationRuns: true });
+  const retainedRubricPath = path.join(runDir, "retained", "rubric-r5.yaml");
+  fs.mkdirSync(path.dirname(retainedRubricPath), { recursive: true });
+  fs.writeFileSync(retainedRubricPath, [
+    "evaluation:",
+    "  verification:",
+    "    checks:",
+    "      - name: retained merge gate",
+    "        type: command",
+    "        command: node --test retained-merge.test.js",
+  ].join("\n"), "utf-8");
+  manifestData.anchor.rubric_path = "retained/rubric-r5.yaml";
+
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "hardened_execution_evidence_failed");
+  assert.equal(result.readyToMerge, false);
+  assert.match(result.reason, /verification gate went unrecorded: 'retained merge gate'/);
+});
+
 test("evaluateReviewGate rejects the legacy grandfather field matrix", async (t) => {
   const cases = [
     { label: "undefined", state: "loaded", expectedStatus: "lgtm", expectedRubricStatus: "satisfied", readyToMerge: true },

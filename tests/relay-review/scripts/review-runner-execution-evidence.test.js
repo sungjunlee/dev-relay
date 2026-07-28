@@ -176,6 +176,75 @@ test("execution-evidence strict mode prefers verification_runs when present", ()
   );
 });
 
+test("execution-evidence strict mode resolves retained non-default rubric anchors", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-anchor-"));
+  const rubricPath = path.join(runDir, "retained", "rubric-r5.yaml");
+  fs.mkdirSync(path.dirname(rubricPath), { recursive: true });
+  fs.writeFileSync(rubricPath, [
+    "evaluation:",
+    "  verification:",
+    "    checks:",
+    "      - name: retained mandatory gate",
+    "        type: command",
+    "        command: node --test retained.test.js",
+  ].join("\n"), "utf-8");
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    verification_runs: [{
+      command: "node --test other.test.js",
+      cwd: "/repo",
+      head_sha: "a".repeat(40),
+      exit_code: 0,
+      output_hash: "b".repeat(64),
+      recorded_by: "orchestrator",
+      recorded_at: "2026-04-22T00:00:00.000Z",
+    }],
+  }));
+  const manifestData = {
+    run_id: "issue-1116-retained-run",
+    anchor: { rubric_path: "retained/rubric-r5.yaml" },
+  };
+
+  const result = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead: "a".repeat(40),
+    strict: true,
+    manifestData,
+  });
+
+  assert.equal(result.status, "fail");
+  assert.match(result.reason, /verification gate went unrecorded: 'retained mandatory gate'/);
+});
+
+test("execution-evidence strict mode fails closed for an invalid present rubric anchor", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-anchor-invalid-"));
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "evaluation:",
+    "  verification:",
+    "    checks:",
+    "      - name: fallback must not be used",
+    "        type: command",
+    "        command: node --test fallback.test.js",
+  ].join("\n"), "utf-8");
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    test_result_hash: "b".repeat(64),
+    test_exit_code: 0,
+  }));
+
+  const result = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead: "a".repeat(40),
+    strict: true,
+    manifestData: {
+      run_id: "issue-1116-invalid-anchor",
+      anchor: { rubric_path: "../outside.yaml" },
+    },
+  });
+
+  assert.equal(result.status, "fail");
+  assert.match(result.reason, /rubric anchor outside_run_dir/);
+  assert.match(result.reason, /anchor\.rubric_path/);
+});
+
 test("execution-evidence strict verification_runs fail on nonzero exit and stale head", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-runs-fail-"));
   writeArtifact(runDir, makeArtifact("a".repeat(40), {

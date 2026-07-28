@@ -360,8 +360,26 @@ function rebrandEvidence(runDir, { newHeadSha, recordedBy = "recover-commit-rebr
   }
 
   const previousSha = existing.head_sha;
+  const previousVerificationRuns = Array.isArray(existing.verification_runs)
+    ? existing.verification_runs
+    : null;
+  const {
+    verification_runs: _staleVerificationRuns,
+    ...rebrandedEvidence
+  } = existing;
+  const verificationRunsAudit = previousVerificationRuns
+      ? {
+          verification_runs: {
+            policy: "removed_stale_after_rebrand",
+            removed_count: previousVerificationRuns.length,
+            previous_head_shas: [...new Set(previousVerificationRuns.map((run) => run.head_sha))],
+            removed_runs: previousVerificationRuns,
+            next_action: "re-verify at the new HEAD or record audited operator evidence",
+          },
+        }
+      : {};
   writeExecutionEvidence(runDir, {
-    ...existing,
+    ...rebrandedEvidence,
     head_sha: newHeadSha,
     recorded_by: recordedBy,
     rebrand: {
@@ -369,6 +387,7 @@ function rebrandEvidence(runDir, { newHeadSha, recordedBy = "recover-commit-rebr
       previous_recorded_by: existing.recorded_by,
       reason,
       recorded_at: new Date().toISOString(),
+      ...verificationRunsAudit,
     },
   });
 
@@ -378,6 +397,12 @@ function rebrandEvidence(runDir, { newHeadSha, recordedBy = "recover-commit-rebr
     newHeadSha,
     evidencePath,
     evidenceHash: hashFileSha256(evidencePath),
+    ...(previousVerificationRuns
+      ? {
+          verificationRunsPolicy: "removed_stale_after_rebrand",
+          removedVerificationRuns: previousVerificationRuns.length,
+        }
+      : {}),
   };
 }
 

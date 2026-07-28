@@ -26,6 +26,9 @@ const {
   VERIFICATION_OUTPUT_FILENAME,
   hashFileSha256,
 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
+const {
+  buildExecutionEvidencePreflight,
+} = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
 const { parseModelHints } = require("../../../skills/relay-dispatch/scripts/model-hints");
 const {
   extractRubricSize,
@@ -545,6 +548,7 @@ function writeUncommittedCodex(binDir) {
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
+${fakeExecutorVerificationSupportSource()}
 if (args[0] === "--version") {
   process.stdout.write("codex-fake\\n");
   process.exit(0);
@@ -564,7 +568,7 @@ if (process.env.RELAY_TEST_EXTERNAL_ADVANCE === "1") {
   fs.writeFileSync(manifestPath, manifest, "utf-8");
 }
 fs.appendFileSync(cwd + "/README.md", "dirty\\n", "utf-8");
-fs.writeFileSync(output, "work completed without commit\\n", "utf-8");
+fs.writeFileSync(output, withVerificationEvidence("work completed without commit\\n"), "utf-8");
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -7097,6 +7101,66 @@ test("dispatch orchestrator-commits uncommitted codex runs by default", () => {
     result.headSha,
     "execution evidence binds to the orchestrator commit SHA, not the pre-commit HEAD",
   );
+});
+
+test("dispatch fails closed when a commit hook changes the tree after executor verification", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    codexMode: "uncommitted",
+  });
+  const hookPath = path.join(repoRoot, ".git", "hooks", "pre-commit");
+  fs.writeFileSync(hookPath, [
+    "#!/bin/sh",
+    "printf 'mutated by pre-commit hook\\n' >> README.md",
+    "git add README.md",
+    "",
+  ].join("\n"), "utf-8");
+  fs.chmodSync(hookPath, 0o755);
+  const rubricFile = writeAssuranceRubric("hardened");
+
+  const dispatched = spawnSync(process.execPath, [
+    SCRIPT,
+    repoRoot,
+    "-b", "issue-1116-tree-mutating-hook",
+    "--prompt", "verify uncommitted work before orchestrator commit",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+  const result = JSON.parse(dispatched.stdout);
+  const evidence = readExecutionEvidence(result.runDir);
+  const manifestData = readManifest(result.manifestPath).data;
+  const preflight = buildExecutionEvidencePreflight({
+    runDir: result.runDir,
+    reviewedHead: result.headSha,
+    strict: true,
+    manifestData,
+  });
+
+  assert.equal(dispatched.status, 1, dispatched.stderr);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.equal(result.commitMode, "orchestrator-committed");
+  assert.match(result.error, /verification_tree_mismatch/);
+  assert.match(result.error, /re-run the executor verification gates at the committed HEAD/);
+  assert.equal(evidence.head_sha, result.headSha);
+  assert.equal(evidence.verification_runs, undefined);
+  assert.equal(evidence.test_exit_code, 1);
+  assert.match(
+    execFileSync("git", ["show", `${result.headSha}:README.md`], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }),
+    /mutated by pre-commit hook/
+  );
+  assert.equal(preflight.status, "blocked");
+  assert.equal(preflight.qualityExecutionStatus, "fail");
+  assert.match(preflight.reason, /verification gate went unrecorded: 'focused test'/);
 });
 
 test("dispatch Claude resume orchestrator-commits completed-uncommitted work by default", () => {
