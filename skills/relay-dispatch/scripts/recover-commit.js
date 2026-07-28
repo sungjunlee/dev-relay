@@ -31,6 +31,7 @@ const {
 const { execGit, execGh, resolveBranchRemote } = require("./exec");
 const {
   classifyRepositoryDirt,
+  formatEmptyReviewableIndexError,
   formatRuntimeMetadataDirt,
   gitAddReviewableArgs,
 } = require("./runtime-dirt");
@@ -561,7 +562,10 @@ function main() {
   let commitCreated = false;
   if (hasUncommittedChanges) {
     try {
-      execGit(worktreePath, gitAddReviewableArgs(statusText));
+      execGit(worktreePath, gitAddReviewableArgs(statusText, worktreePath));
+      if (dirt.hasReviewableDirt && !execGit(worktreePath, ["diff", "--cached", "--name-only"])) {
+        throw new Error(formatEmptyReviewableIndexError(statusText));
+      }
       execGit(worktreePath, ["commit", "-m", commitTitle, "-m", commitBody]);
       commitSha = execGit(worktreePath, ["rev-parse", "HEAD"]);
       commitCreated = true;
