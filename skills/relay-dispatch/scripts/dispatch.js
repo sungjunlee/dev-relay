@@ -68,7 +68,11 @@ const os = require("os");
 const { pushAndOpenPR } = require("./dispatch-publish");
 const {
   buildExecutionEvidence,
+  buildExecutorVerificationInstructions,
+  collectExecutorVerificationEvidence,
+  extractVerificationGates,
   hashFileSha256,
+  resolveExecutionEvidenceTestCommand,
   writeExecutionEvidence,
 } = require("./execution-evidence");
 const {
@@ -2501,18 +2505,33 @@ async function main() {
       },
     },
   };
+  const routingRubricText = resolveRoutingRubricText({
+    rubricFile: RUBRIC_FILE,
+    manifest,
+    runDir: manifestRunDir,
+  });
+  let evidenceTestCommand;
+  let verificationGates;
+  try {
+    verificationGates = extractVerificationGates(routingRubricText);
+    evidenceTestCommand = resolveExecutionEvidenceTestCommand({
+      explicitTestCommand: TEST_COMMAND,
+      rubricYaml: routingRubricText,
+    });
+  } catch (error) {
+    failEarly(`Failed to seed execution evidence from verification gates: ${error.message}`, {
+      error_code: "verification_gate_evidence_seed_failed",
+      rubric_file: RUBRIC_FILE || manifest?.anchor?.rubric_path || null,
+    });
+  }
   let routingDecision = resolveRoutingDecision({
     policy: effectivePolicy.policy || {},
     cliTags: ROUTING_TAGS,
     taskProfile: manifest?.advisory?.guidance?.task_profile_summary || null,
     promptText: taskPrompt,
-    rubricText: resolveRoutingRubricText({
-      rubricFile: RUBRIC_FILE,
-      manifest,
-      runDir: manifestRunDir,
-    }),
+    rubricText: routingRubricText,
     changedFiles: collectChangedFilesForRouting(RESUME_MODE ? wtPath : repoRoot, baseBranch),
-    testCommands: TEST_COMMAND ? [TEST_COMMAND] : [],
+    testCommands: evidenceTestCommand ? [evidenceTestCommand] : [],
   });
   routingDecision = applyPresetAdvisoryToRoutingDecision(routingDecision, routePlan);
 
@@ -2868,11 +2887,13 @@ async function main() {
 
   // Prepend non-interactive directive so the model doesn't wait for approval
   // (e.g. brainstorming HARD-GATE or design-confirmation patterns).
+  const executorVerificationInstructions = buildExecutorVerificationInstructions(verificationGates);
   const execPrompt =
     "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. " +
     "Do not present plans for approval or wait for user confirmation. " +
     "Execute the task fully and autonomously.\n\n" +
-    taskPrompt;
+    taskPrompt +
+    (executorVerificationInstructions ? `\n\n${executorVerificationInstructions}` : "");
 
   const buildResult = adapter.buildExecCommand({
     wtPath,
@@ -3254,6 +3275,41 @@ async function main() {
     delayedReviewRequiresRecover = true;
   }
 
+  let verificationEvidence = { runs: [], outputPath: null, exitCode: undefined };
+  const canCollectVerificationGates = (
+    !DRY_RUN
+    && verificationGates.length > 0
+    && exitCode === 0
+    && (status === "completed" || status === "completed-no-op")
+  );
+  if (canCollectVerificationGates) {
+    try {
+      verificationEvidence = collectExecutorVerificationEvidence({
+        gates: verificationGates,
+        cwd: wtPath,
+        headSha: currentHead || startHead,
+        runDir: getRunDir(repoRoot, runId),
+        resultText,
+        executor: EXECUTOR,
+      });
+      const failedVerification = verificationEvidence.runs.find((run) => run.exit_code !== 0);
+      if (failedVerification) {
+        status = "failed";
+        exitCode = failedVerification.exit_code || 1;
+        error = (
+          `verification_gate_failed: '${failedVerification.name}' exited ` +
+          `${failedVerification.exit_code}; output=${failedVerification.output_path}`
+        );
+      }
+    } catch (verificationError) {
+      status = "failed";
+      exitCode = exitCode || 1;
+      error = `verification_gate_evidence_invalid: ${String(
+        verificationError.message || verificationError
+      ).split("\n")[0]}`;
+    }
+  }
+
   let prNumber = manifest.git?.pr_number ?? null;
   let prCreatedByUs = null;
   const shouldPublishImmediately = PUBLISH_POLICY === "immediate";
@@ -3297,10 +3353,14 @@ async function main() {
   try {
     executionEvidencePath = writeExecutionEvidence(runDir, buildExecutionEvidence({
       headSha: currentHead || startHead || null,
-      testCommand: TEST_COMMAND,
-      resultFilePath: fs.existsSync(resultFile) ? resultFile : null,
-      executor: EXECUTOR,
-      testExitCode: exitCode,
+      testCommand: evidenceTestCommand,
+      resultFilePath: verificationEvidence.outputPath
+        || (fs.existsSync(resultFile) ? resultFile : null),
+      executor: verificationEvidence.outputPath ? `${EXECUTOR} confirmed verification` : EXECUTOR,
+      testExitCode: verificationEvidence.exitCode ?? exitCode,
+      ...(verificationEvidence.runs.length
+        ? { verificationRuns: verificationEvidence.runs }
+        : {}),
     }));
   } catch (executionEvidenceError) {
     status = "failed";

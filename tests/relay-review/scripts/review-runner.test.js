@@ -2684,7 +2684,7 @@ test("review-runner execution evidence preflight blocks primary reviewer invocat
     },
     {
       name: "strict-failing",
-      mutate({ manifestPath }) {
+      mutate({ manifestPath, runDir }) {
         updateManifestRecord(manifestPath, (data) => ({
           ...data,
           policy: {
@@ -2692,8 +2692,21 @@ test("review-runner execution evidence preflight blocks primary reviewer invocat
             review_assurance: "hardened",
           },
         }));
+        fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+          "evaluation:",
+          "  schema_version: 2",
+          "  outcome_contract:",
+          "    source: done_criteria",
+          "  verification:",
+          "    checks:",
+          "      - name: hardened suite",
+          "        type: command",
+          "        command: node --test hardened.test.js",
+          "  earned_rubric:",
+          "    factors: []",
+        ].join("\n"), "utf-8");
       },
-      reason: /strict execution evidence requires a non-empty test_command/,
+      reason: /verification gate went unrecorded: 'hardened suite'/,
       qualityExecutionStatus: "fail",
       evidenceHeadSha: ({ reviewedHead }) => reviewedHead,
     },

@@ -362,7 +362,31 @@ if (args[0] !== "exec") {
   process.exit(1);
 }
 const output = args[args.indexOf("-o") + 1];
-fs.writeFileSync(output, "preset dispatch ok\\n", "utf-8");
+const prompt = String(args[args.length - 1] || "");
+const requestBegin = "RELAY_VERIFICATION_REQUEST_BEGIN";
+const requestEnd = "RELAY_VERIFICATION_REQUEST_END";
+const requestStart = prompt.lastIndexOf(requestBegin);
+let result = "preset dispatch ok\\n";
+if (requestStart !== -1) {
+  const request = JSON.parse(prompt.slice(
+    requestStart + requestBegin.length,
+    prompt.indexOf(requestEnd, requestStart)
+  ).trim());
+  result += [
+    "RELAY_VERIFICATION_RESULT_BEGIN",
+    JSON.stringify({
+      schema_version: 1,
+      runs: request.gates.map((gate) => ({
+        command: gate.command,
+        exit_code: 0,
+        output: "verified inside fake executor policy\\n",
+      })),
+    }),
+    "RELAY_VERIFICATION_RESULT_END",
+    "",
+  ].join("\\n");
+}
+fs.writeFileSync(output, result, "utf-8");
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -1827,6 +1851,91 @@ test("preset-only dispatch starts advisory review through manifest routing selec
   assert.equal(result.nextState, STATES.READY_TO_MERGE);
   assert.equal(result.advisoryReview.reviewer, "opencode");
   assert.equal(result.advisoryReview.source, "routing");
+});
+
+test("dispatch verification gates seed evidence that passes hardened review end to end", () => {
+  const { repoRoot, relayHome, rubricFile, doneCriteriaPath, diffPath } = setupDispatchRepoForPresetAdvisory();
+  const testCommand = "node --version";
+  fs.writeFileSync(rubricFile, [
+    "evaluation:",
+    "  schema_version: 2",
+    "  outcome_contract:",
+    "    source: done_criteria",
+    "    path: done-criteria.md",
+    "  verification:",
+    "    checks:",
+    "      - name: hardened review suite",
+    "        type: command",
+    `        command: "${testCommand}"`,
+    "        target: exit code 0",
+    "  earned_rubric:",
+    "    factors: []",
+    "  task_profile:",
+    "    review_assurance: hardened",
+  ].join("\n"), "utf-8");
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gate-seed-bin-"));
+  writeNoOpCodex(binDir);
+
+  const dispatch = spawnSync(process.execPath, [
+    DISPATCH_SCRIPT,
+    repoRoot,
+    "-b",
+    "issue-1099-gate-seeded-hardened",
+    "-p",
+    "dispatch verification gates into hardened execution evidence",
+    "--rubric-file",
+    rubricFile,
+    "--route-preset",
+    "diverse",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_HOME: relayHome,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+    },
+  });
+  assert.equal(dispatch.status, 0, dispatch.stderr);
+  const dispatchOutput = JSON.parse(dispatch.stdout);
+  const evidencePath = path.join(dispatchOutput.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+
+  assert.equal(evidence.test_command, testCommand);
+  assert.notEqual(evidence.test_command, "unspecified");
+  assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
+  assert.equal(evidence.test_exit_code, 0);
+  assert.equal(evidence.verification_runs.length, 1);
+  assert.equal(evidence.verification_runs[0].command, testCommand);
+  assert.equal(evidence.verification_runs[0].head_sha, dispatchOutput.headSha);
+  assert.equal(evidence.verification_runs[0].exit_code, 0);
+  assert.equal(
+    evidence.verification_runs[0].output_hash,
+    hashFile(path.join(dispatchOutput.runDir, evidence.verification_runs[0].output_path))
+  );
+
+  const primaryScript = writePrimaryReviewer(repoRoot, {
+    ...passVerdict(),
+    rubric_scores: [],
+  });
+  const opencodeScript = writeFakeOpencode(repoRoot, { clean: true });
+  const result = runReview({
+    repoRoot,
+    runId: dispatchOutput.runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-timeout", "30"],
+  });
+
+  assert.equal(result.reviewAssurance, "hardened");
+  assert.equal(result.executionEvidencePreflight.status, "pass");
+  assert.equal(result.executionEvidencePreflight.qualityExecutionStatus, "pass");
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(readManifest(dispatchOutput.manifestPath).data.state, STATES.READY_TO_MERGE);
 });
 
 test("review-runner denies disallowed advisory model before spawning advisory reviewer", () => {

@@ -127,6 +127,14 @@ test("execution-evidence strict mode fails nonzero test_exit_code and accepts ze
 
 test("execution-evidence strict mode prefers verification_runs when present", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-runs-pass-"));
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "evaluation:",
+    "  verification:",
+    "    checks:",
+    "      - name: required gate",
+    "        type: command",
+    "        command: node --test required.test.js",
+  ].join("\n"), "utf-8");
   writeArtifact(runDir, makeArtifact("a".repeat(40), {
     test_command: "unspecified",
     test_result_hash: "unspecified",
@@ -141,6 +149,27 @@ test("execution-evidence strict mode prefers verification_runs when present", ()
     }],
   }));
 
+  const unrecorded = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead: "a".repeat(40),
+    strict: true,
+  });
+  assert.equal(unrecorded.status, "fail");
+  assert.match(unrecorded.reason, /verification gate went unrecorded: 'required gate'/);
+
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    test_command: "unspecified",
+    test_result_hash: "unspecified",
+    verification_runs: [{
+      command: "node --test required.test.js",
+      cwd: "/repo",
+      head_sha: "a".repeat(40),
+      exit_code: 0,
+      output_hash: "b".repeat(64),
+      recorded_by: "orchestrator",
+      recorded_at: "2026-04-22T00:00:00.000Z",
+    }],
+  }));
   assert.deepEqual(
     computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40), strict: true }),
     { status: "pass", reason: null }

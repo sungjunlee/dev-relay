@@ -6,11 +6,63 @@ const path = require("path");
 
 const {
   EXECUTION_EVIDENCE_FILENAME,
+  VERIFICATION_OUTPUT_FILENAME,
   buildExecutionEvidence,
+  buildExecutorVerificationInstructions,
+  collectExecutorVerificationEvidence,
+  extractVerificationGates,
   hashFileSha256,
   rebrandEvidence,
+  resolveExecutionEvidenceTestCommand,
   writeExecutionEvidence,
 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
+
+test("verification gates seed the evidence command and identify malformed command gates", () => {
+  const rubric = [
+    "evaluation:",
+    "  schema_version: 2",
+    "  outcome_contract:",
+    "    source: done_criteria",
+    "  verification:",
+    "    checks:",
+    "      - name: dispatch suite",
+    "        type: command",
+    "        command: \"node --test tests/relay-dispatch/scripts/*.test.js\"",
+    "      - name: review suite",
+    "        type: command",
+    "        command: 'node --test tests/relay-review/scripts/*.test.js'",
+    "  earned_rubric:",
+    "    factors: []",
+  ].join("\n");
+
+  assert.deepEqual(extractVerificationGates(rubric), [{
+    name: "dispatch suite",
+    type: "command",
+    command: "node --test tests/relay-dispatch/scripts/*.test.js",
+  }, {
+    name: "review suite",
+    type: "command",
+    command: "node --test tests/relay-review/scripts/*.test.js",
+  }]);
+  assert.equal(
+    resolveExecutionEvidenceTestCommand({ rubricYaml: rubric }),
+    "node --test tests/relay-dispatch/scripts/*.test.js && node --test tests/relay-review/scripts/*.test.js"
+  );
+  assert.equal(
+    resolveExecutionEvidenceTestCommand({ explicitTestCommand: "node --test focused.test.js", rubricYaml: rubric }),
+    "node --test focused.test.js"
+  );
+
+  assert.throws(
+    () => resolveExecutionEvidenceTestCommand({
+      rubricYaml: rubric.replace(
+        "command: 'node --test tests/relay-review/scripts/*.test.js'",
+        "target: exit code 0"
+      ),
+    }),
+    /verification gate 'review suite' did not record a command/
+  );
+});
 
 test("dispatch execution evidence records all fields and uses an atomic rename in the run dir", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-execution-"));
@@ -48,6 +100,92 @@ test("dispatch execution evidence records all fields and uses an atomic rename i
   } finally {
     fs.renameSync = originalRenameSync;
   }
+});
+
+test("executor verification instructions keep gate execution inside the dispatched policy", () => {
+  const instructions = buildExecutorVerificationInstructions([{
+    name: "focused gate",
+    command: "node --test focused.test.js",
+  }]);
+
+  assert.match(instructions, /inside this same executor session/);
+  assert.match(instructions, /current sandbox and network policy/);
+  assert.match(instructions, /Do not delegate them back to the relay orchestrator/);
+  assert.match(instructions, /"command":"node --test focused\.test\.js"/);
+});
+
+test("executor-confirmed verification results persist SHA-bound output evidence without executing commands", () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-verification-cwd-"));
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-verification-run-"));
+  const headSha = "b".repeat(40);
+  const sentinelPath = path.join(runDir, "must-not-execute");
+  const command = `printf leaked > ${JSON.stringify(sentinelPath)}`;
+  const resultText = [
+    "Verification completed under executor policy.",
+    "RELAY_VERIFICATION_RESULT_BEGIN",
+    JSON.stringify({
+      schema_version: 1,
+      runs: [{
+        command,
+        exit_code: 1,
+        output: "sandbox policy denied write",
+      }],
+    }),
+    "RELAY_VERIFICATION_RESULT_END",
+  ].join("\n");
+
+  const result = collectExecutorVerificationEvidence({
+    gates: [{ name: "focused gate", type: "command", command }],
+    cwd,
+    headSha,
+    runDir,
+    resultText,
+    executor: "codex",
+    recordedAt: "2026-07-28T00:00:00.000Z",
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.runs.length, 1);
+  assert.equal(result.runs[0].name, "focused gate");
+  assert.equal(result.runs[0].command, command);
+  assert.equal(result.runs[0].cwd, cwd);
+  assert.equal(result.runs[0].head_sha, headSha);
+  assert.equal(result.runs[0].exit_code, 1);
+  assert.equal(result.runs[0].recorded_by, "codex-confirmed-verification-v1");
+  assert.equal(result.runs[0].recorded_at, "2026-07-28T00:00:00.000Z");
+  assert.equal(
+    result.runs[0].output_hash,
+    hashFileSha256(path.join(runDir, result.runs[0].output_path))
+  );
+  assert.equal(path.basename(result.outputPath), VERIFICATION_OUTPUT_FILENAME);
+  assert.match(fs.readFileSync(result.outputPath, "utf-8"), /sandbox policy denied write/);
+  assert.equal(fs.existsSync(sentinelPath), false);
+});
+
+test("executor verification evidence fails closed on missing or mismatched confirmations", () => {
+  const options = {
+    gates: [{ name: "focused gate", command: "node --test focused.test.js" }],
+    cwd: "/repo",
+    headSha: "b".repeat(40),
+    runDir: fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-verification-invalid-")),
+    executor: "codex",
+  };
+
+  assert.throws(
+    () => collectExecutorVerificationEvidence({ ...options, resultText: "completed" }),
+    /did not return the required verification result envelope/
+  );
+  assert.throws(
+    () => collectExecutorVerificationEvidence({
+      ...options,
+      resultText: [
+        "RELAY_VERIFICATION_RESULT_BEGIN",
+        '{"schema_version":1,"runs":[{"command":"npm test","exit_code":0,"output":"ok"}]}',
+        "RELAY_VERIFICATION_RESULT_END",
+      ].join("\n"),
+    }),
+    /did not match required gate/
+  );
 });
 
 test("dispatch execution evidence preserves the caller test-command verbatim", () => {

@@ -1,5 +1,9 @@
 const fs = require("fs");
 const path = require("path");
+const {
+  extractVerificationGates,
+  hashFileSha256,
+} = require("../../../relay-dispatch/scripts/execution-evidence");
 
 const EXECUTION_EVIDENCE_FILENAME = "execution-evidence.json";
 const REQUIRED_EXECUTION_EVIDENCE_FIELDS = [
@@ -26,6 +30,49 @@ function isObject(value) {
 
 function buildMissingExecutionEvidenceReason() {
   return `execution-evidence.json missing; if this is a pre-261 run, use ${FORCE_FINALIZE_GUIDANCE}`;
+}
+
+function strictMissingTestCommandReason(runDir) {
+  try {
+    const rubricPath = path.join(runDir, "rubric.yaml");
+    if (!fs.existsSync(rubricPath)) {
+      return "strict execution evidence requires a non-empty test_command";
+    }
+    const gates = extractVerificationGates(fs.readFileSync(rubricPath, "utf-8"));
+    if (!gates.length) {
+      return "strict execution evidence requires a non-empty test_command";
+    }
+    return (
+      "strict execution evidence requires a non-empty test_command; " +
+      `verification ${gates.length === 1 ? "gate" : "gates"} went unrecorded: ` +
+      gates.map((gate) => `'${gate.name}'`).join(", ")
+    );
+  } catch (error) {
+    return `strict execution evidence requires a non-empty test_command; ${error.message}`;
+  }
+}
+
+function expectedVerificationGates(runDir) {
+  const rubricPath = path.join(runDir, "rubric.yaml");
+  if (!fs.existsSync(rubricPath)) return [];
+  return extractVerificationGates(fs.readFileSync(rubricPath, "utf-8"));
+}
+
+function missingVerificationGateReason(gates) {
+  return (
+    `strict execution evidence verification ${gates.length === 1 ? "gate" : "gates"} ` +
+    `went unrecorded: ${gates.map((gate) => `'${gate.name}'`).join(", ")}`
+  );
+}
+
+function findMissingVerificationGates(gates, verificationRuns) {
+  const unmatchedRuns = [...verificationRuns];
+  return gates.filter((gate) => {
+    const matchIndex = unmatchedRuns.findIndex((run) => run.command === gate.command);
+    if (matchIndex === -1) return true;
+    unmatchedRuns.splice(matchIndex, 1);
+    return false;
+  });
 }
 
 function validateVerificationHash(value, fieldName) {
@@ -59,11 +106,37 @@ function validateVerificationRun(run, index) {
   for (const fieldName of VERIFICATION_HASH_FIELDS) {
     validateVerificationHash(run[fieldName], fieldName);
   }
+  if (run.output_path !== undefined && !isNonEmptyString(run.output_path)) {
+    throw new Error(`execution evidence verification_runs[${index}].output_path must be a non-empty string when present`);
+  }
   if (!VERIFICATION_HASH_FIELDS.some((fieldName) => isNonEmptyString(run[fieldName]))) {
     throw new Error(
       `execution evidence verification_runs[${index}] requires at least one of ${VERIFICATION_HASH_FIELDS.join(", ")}`
     );
   }
+}
+
+function validateVerificationRunOutputPaths(artifact, runDir) {
+  (artifact.verification_runs || []).forEach((run, index) => {
+    if (run.output_path === undefined) return;
+    if (!pathStaysInsideRunDir(runDir, run.output_path)) {
+      throw new Error(
+        `execution evidence verification_runs[${index}].output_path must stay inside the run directory`
+      );
+    }
+    const resolvedPath = path.resolve(runDir, run.output_path);
+    const stat = fs.existsSync(resolvedPath) ? fs.lstatSync(resolvedPath) : null;
+    if (!stat || !stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(
+        `execution evidence verification_runs[${index}].output_path must resolve to an existing regular file`
+      );
+    }
+    if (run.output_hash !== hashFileSha256(resolvedPath)) {
+      throw new Error(
+        `execution evidence verification_runs[${index}].output_hash does not match output_path`
+      );
+    }
+  });
 }
 
 function validateStringArray(value, fieldName) {
@@ -265,6 +338,7 @@ function readExecutionEvidenceArtifact(runDir) {
       throw new Error("execution evidence must be a regular file inside the run directory");
     }
     const artifact = parseExecutionEvidenceArtifact(fs.readFileSync(artifactPath, "utf-8"));
+    validateVerificationRunOutputPaths(artifact, runDir);
     validateBrowserEvidencePaths(artifact, runDir);
     return {
       state: "loaded",
@@ -309,6 +383,33 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false })
     };
   }
   if (strict) {
+    let verificationGates;
+    try {
+      verificationGates = expectedVerificationGates(runDir);
+    } catch (error) {
+      return {
+        status: "fail",
+        reason: `strict execution evidence could not resolve verification gates: ${error.message}`,
+      };
+    }
+    if (verificationGates.length > 0) {
+      if (artifactLoad.artifact.verification_runs === undefined) {
+        return {
+          status: "fail",
+          reason: missingVerificationGateReason(verificationGates),
+        };
+      }
+      const missingGates = findMissingVerificationGates(
+        verificationGates,
+        artifactLoad.artifact.verification_runs
+      );
+      if (missingGates.length > 0) {
+        return {
+          status: "fail",
+          reason: missingVerificationGateReason(missingGates),
+        };
+      }
+    }
     if (artifactLoad.artifact.verification_runs !== undefined) {
       const staleRun = artifactLoad.artifact.verification_runs.find((run) => run.head_sha !== reviewedHead);
       if (staleRun) {
@@ -332,7 +433,7 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false })
     if (!isNonEmptyString(artifactLoad.artifact.test_command) || artifactLoad.artifact.test_command === "unspecified") {
       return {
         status: "fail",
-        reason: "strict execution evidence requires a non-empty test_command",
+        reason: strictMissingTestCommandReason(runDir),
       };
     }
     if (artifactLoad.artifact.test_result_hash === "unspecified") {
