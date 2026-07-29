@@ -3281,6 +3281,15 @@ test("standard assurance admits internal repair verification and required post-p
   }, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
   writeManifest(manifestPath, internal, initial.body);
 
+  const prepared = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId,
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--prepare-only", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(prepared.reviewBudget.substantive_failures.consumed, 0);
+  assert.equal(prepared.reviewBudget.protocol_verifications.consumed, 0);
+  assert.equal(prepared.reviewBudget.applied_in_phase, 0);
+
   const changesFile = writeVerdict(repoRoot, "topology-internal-changes.json", {
     verdict: "changes_requested",
     summary: "One substantive repair is required.",
@@ -3306,6 +3315,9 @@ test("standard assurance admits internal repair verification and required post-p
     "--review-file", changesFile, "--no-comment", "--json",
   ], { encoding: "utf-8" }));
   assert.equal(first.state, STATES.CHANGES_REQUESTED);
+  assert.equal(first.reviewBudget.substantive_failures.consumed, 1);
+  assert.equal(first.reviewBudget.protocol_verifications.consumed, 0);
+  assert.equal(first.reviewBudget.applied_in_phase, 1);
 
   fs.writeFileSync(path.join(worktreePath, "repair.txt"), "repaired\n", "utf-8");
   execFileSync("git", ["add", "repair.txt"], { cwd: worktreePath, stdio: "pipe" });
@@ -3353,6 +3365,9 @@ test("standard assurance admits internal repair verification and required post-p
   ], { encoding: "utf-8" }));
   assert.equal(second.state, STATES.PUBLISH_PENDING, JSON.stringify(second));
   assert.equal(second.round, 2);
+  assert.equal(second.reviewBudget.substantive_failures.consumed, 1);
+  assert.equal(second.reviewBudget.protocol_verifications.consumed, 1);
+  assert.equal(second.reviewBudget.applied_in_phase, 2);
 
   const publishPending = readManifest(manifestPath);
   let published = updateManifestState(
