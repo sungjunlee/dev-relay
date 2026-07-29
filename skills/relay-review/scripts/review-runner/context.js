@@ -745,6 +745,12 @@ function formatPriorRoundContext(runDir, round) {
       ? `${verdict.verdict} (applied: ${appliedVerdict})`
       : verdict.verdict;
     const parts = [`### Round ${roundNum}: ${label}`, verdict.summary];
+    if (verdict.relay_escalation) {
+      parts.push(
+        `Relay escalation: trigger=${verdict.relay_escalation.trigger || "unknown"}; `
+        + `reason=${verdict.relay_escalation.reason || "unknown"}`
+      );
+    }
     if (Array.isArray(verdict.issues) && verdict.issues.length) {
       parts.push(
         appliedVerdict === "changes_requested" ? "Issues flagged:" : "Advisory issues preserved from the raw verdict:",

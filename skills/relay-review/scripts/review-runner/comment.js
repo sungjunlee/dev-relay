@@ -60,6 +60,8 @@ function buildCommentBody(
     gateFailure = null,
     advisorySummary = null,
     appliedVerdict = null,
+    originalReviewerVerdict = null,
+    relayEscalation = null,
   } = {}
 ) {
   if (gateFailure) {
@@ -129,11 +131,18 @@ function buildCommentBody(
     ].join("\n"), advisorySummary), warnings);
   }
 
+  const escalationAudit = relayEscalation
+    ? [
+      `Reviewer verdict: ${formatStatus(originalReviewerVerdict?.verdict)} (next_action=${originalReviewerVerdict?.next_action || "unknown"})`,
+      `Escalation trigger: ${relayEscalation.trigger || "unknown"} (reason=${relayEscalation.reason || "unknown"})`,
+    ]
+    : [];
   return appendCommentWarnings(appendAdvisorySummary([
     REVIEW_MARKER,
     "## Relay Review",
     "Verdict: ESCALATED",
     `Summary: ${verdict.summary}`,
+    ...escalationAudit,
     `Contract: ${formatStatus(verdict.contract_status)}`,
     `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
     `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,

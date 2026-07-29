@@ -26,7 +26,10 @@ const {
   EXECUTION_EVIDENCE_FILENAME,
   FORCE_FINALIZE_GUIDANCE,
 } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
-const { loadDoneCriteria } = require("../../../skills/relay-review/scripts/review-runner/context");
+const {
+  formatPriorRoundContext,
+  loadDoneCriteria,
+} = require("../../../skills/relay-review/scripts/review-runner/context");
 const {
   installFakeGhOnPath,
   writeFakeGhScript: writeSharedFakeGhScript,
@@ -2132,6 +2135,8 @@ test("compact assurance escalates its first rubric gate failure immediately", ()
   assert.equal(verdictRecord.next_action, "ready_to_merge");
   assert.equal(verdictRecord.summary, "All done criteria are satisfied.");
   assert.equal(verdictRecord.applied_verdict, "escalated");
+  assert.equal("original_reviewer_verdict" in verdictRecord, false);
+  assert.equal("relay_escalation" in verdictRecord, false);
   assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
   assert.equal(verdictRecord.relay_gate.recovery_command, null);
   assert.doesNotMatch(verdictRecord.relay_gate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
@@ -3521,6 +3526,7 @@ test("#1116 invoke failure and salvage on a new HEAD do not consume substantive 
 
 test("default repair cycle escalates after the corrected result fails its second review", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const commentCapturePath = path.join(repoRoot, "repair-cycle-escalation-comment.txt");
   const reviewFile = writeVerdict(repoRoot, "bounded-cycle-issue.json", {
     verdict: "changes_requested",
     summary: "A substantive issue remains.",
@@ -3549,16 +3555,48 @@ test("default repair cycle escalates after the corrected result fails its second
   assert.equal(first.state, STATES.CHANGES_REQUESTED);
   assert.ok(first.redispatchPath);
   setReviewPending(manifestPath);
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: "",
+  });
 
   const second = JSON.parse(execFileSync("node", [
     SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123",
     "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
-    "--review-file", reviewFile, "--no-comment", "--json",
-  ], { encoding: "utf-8" }));
+    "--review-file", reviewFile, "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
 
   assert.equal(second.state, STATES.ESCALATED);
   assert.equal(second.appliedVerdict, "escalated");
   assert.equal(second.redispatchPath, null);
+  const verdictRecord = JSON.parse(fs.readFileSync(second.verdictPath, "utf-8"));
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+  assert.equal(verdictRecord.verdict, "escalated");
+  assert.equal(verdictRecord.next_action, "escalated");
+  assert.equal(verdictRecord.applied_verdict, "escalated");
+  assert.match(verdictRecord.summary, /corrected result still has substantive review failures/i);
+  assert.equal(verdictRecord.original_reviewer_verdict.verdict, "changes_requested");
+  assert.equal(verdictRecord.original_reviewer_verdict.next_action, "changes_requested");
+  assert.equal(verdictRecord.original_reviewer_verdict.summary, "A substantive issue remains.");
+  assert.equal(verdictRecord.relay_escalation.trigger, "repair_cycle_exhausted");
+  assert.equal(verdictRecord.relay_escalation.reason, "repair_cycle_exhausted");
+  assert.equal(verdictRecord.relay_escalation.summary, verdictRecord.summary);
+  assert.match(commentBody, /Summary: The corrected result still has substantive review failures/i);
+  assert.match(commentBody, /Reviewer verdict: CHANGES_REQUESTED \(next_action=changes_requested\)/);
+  assert.match(commentBody, /Escalation trigger: repair_cycle_exhausted \(reason=repair_cycle_exhausted\)/);
+  const priorContext = formatPriorRoundContext(
+    ensureRunLayout(repoRoot, runId).runDir,
+    3
+  );
+  assert.match(priorContext, /Round 2: escalated/);
+  assert.match(priorContext, /corrected result still has substantive review failures/i);
+  assert.match(priorContext, /Relay escalation: trigger=repair_cycle_exhausted; reason=repair_cycle_exhausted/);
   const events = readRunEvents(repoRoot, runId);
   const escalation = events.findLast((event) => event.event === "escalation_decision");
   assert.equal(escalation.trigger, "repair_cycle_exhausted");

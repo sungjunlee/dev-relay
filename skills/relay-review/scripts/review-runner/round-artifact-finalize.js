@@ -28,6 +28,27 @@ function normalizeRubricGateFailure(rubricGateFailure, appliedVerdict) {
   };
 }
 
+function buildRelayEscalationAudit({
+  appliedVerdict,
+  escalationDecision,
+  persistedRubricGateFailure,
+  reviewerVerdict,
+  verdict,
+}) {
+  if (
+    persistedRubricGateFailure
+    || appliedVerdict !== "escalated"
+    || verdict.verdict !== "escalated"
+    || reviewerVerdict.verdict === "escalated"
+  ) {
+    return null;
+  }
+  return {
+    ...escalationDecision,
+    summary: verdict.summary,
+  };
+}
+
 function persistVerdictArtifacts(context, analysis) {
   const {
     advisoryResults,
@@ -43,6 +64,7 @@ function persistVerdictArtifacts(context, analysis) {
     analysisVerdict,
     assuranceMetadata,
     confidenceDowngradeApplied,
+    escalationDecision,
     factorFlips,
     repeatedIssueCount,
     reviewerVerdict,
@@ -77,6 +99,13 @@ function persistVerdictArtifacts(context, analysis) {
     rubricGateFailure,
     appliedVerdict
   );
+  const relayEscalation = buildRelayEscalationAudit({
+    appliedVerdict,
+    escalationDecision,
+    persistedRubricGateFailure,
+    reviewerVerdict,
+    verdict: analysis.verdict,
+  });
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
   const verdictRecord = persistedRubricGateFailure
     ? {
@@ -92,7 +121,16 @@ function persistVerdictArtifacts(context, analysis) {
         recovery: persistedRubricGateFailure.recovery,
       },
     }
-    : { ...reviewerVerdict, applied_verdict: appliedVerdict };
+    : {
+      ...analysis.verdict,
+      applied_verdict: appliedVerdict,
+      ...(relayEscalation
+        ? {
+          original_reviewer_verdict: reviewerVerdict,
+          relay_escalation: relayEscalation,
+        }
+        : {}),
+    };
   writeText(verdictPath, `${JSON.stringify(verdictRecord, null, 2)}\n`);
 
   let redispatchPath = null;
@@ -133,6 +171,7 @@ function persistVerdictArtifacts(context, analysis) {
     confidenceDowngradeAppliedAsFinalPass,
     convergenceSummary,
     redispatchPath,
+    relayEscalation,
     rubricGateFailure: persistedRubricGateFailure,
     verdictPath,
   };

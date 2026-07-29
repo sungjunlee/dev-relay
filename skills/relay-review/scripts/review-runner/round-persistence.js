@@ -94,6 +94,7 @@ function persistManifestAndEvents(context, analysis, artifacts) {
   const {
     appliedVerdict,
     confidenceDowngradeAppliedAsFinalPass,
+    relayEscalation,
     rubricGateFailure,
   } = artifacts;
 
@@ -110,6 +111,8 @@ function persistManifestAndEvents(context, analysis, artifacts) {
     appliedVerdict,
     advisorySummary: advisoryEvidence,
     gateFailure: rubricGateFailure,
+    originalReviewerVerdict: reviewerVerdict,
+    relayEscalation,
     warnings: result.advisoryWarnings || [],
   });
   if (!noComment && !internalReview) {
