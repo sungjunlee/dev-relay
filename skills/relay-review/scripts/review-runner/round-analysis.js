@@ -24,6 +24,7 @@ function analyzeVerdict({
   runDir,
   verdict,
 }) {
+  const reviewerVerdict = verdict;
   const confidenceDowngrade = gateResult.confidenceDowngrade;
   const assuranceMetadata = getReviewAssuranceMetadata(verdict);
   const confidenceDowngradeApplied = (
@@ -150,6 +151,7 @@ function analyzeVerdict({
     repeatedIssueCount,
     rubricGateFailure,
     substantiveFailure,
+    reviewerVerdict,
     verdict,
   };
 }

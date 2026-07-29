@@ -2128,11 +2128,16 @@ test("compact assurance escalates its first rubric gate failure immediately", ()
     manifest.review.last_escalation_decision.trigger,
     "repair_cycle_exhausted"
   );
+  assert.equal(verdictRecord.verdict, "pass");
+  assert.equal(verdictRecord.next_action, "ready_to_merge");
+  assert.equal(verdictRecord.summary, "All done criteria are satisfied.");
   assert.equal(verdictRecord.applied_verdict, "escalated");
   assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
   assert.equal(verdictRecord.relay_gate.recovery_command, null);
   assert.doesNotMatch(verdictRecord.relay_gate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
   assert.match(commentBody, /Verdict: ESCALATED/);
+  assert.match(commentBody, /Reviewer verdict: PASS \(next_action=ready_to_merge\)/);
+  assert.doesNotMatch(commentBody, /Reviewer verdict: ESCALATED/);
   assert.match(commentBody, /Recovery command: unavailable after escalation/);
   assert.doesNotMatch(commentBody, /dispatch\.js|review-round-1-redispatch\.md/);
 });

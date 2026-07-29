@@ -87,6 +87,7 @@ function persistManifestAndEvents(context, analysis, artifacts) {
     escalationDecision,
     lineageSummary,
     repeatedIssueCount,
+    reviewerVerdict,
     substantiveFailure,
     verdict,
   } = analysis;
@@ -104,7 +105,9 @@ function persistManifestAndEvents(context, analysis, artifacts) {
   });
   result.advisorySummary = advisoryEvidence;
 
-  const commentBody = buildCommentBody(verdict, round, {
+  const commentVerdict = rubricGateFailure ? reviewerVerdict : verdict;
+  const commentBody = buildCommentBody(commentVerdict, round, {
+    appliedVerdict,
     advisorySummary: advisoryEvidence,
     gateFailure: rubricGateFailure,
     warnings: result.advisoryWarnings || [],

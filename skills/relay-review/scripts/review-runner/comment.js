@@ -52,9 +52,18 @@ function formatStatus(value) {
   return String(value || "unknown").toUpperCase();
 }
 
-function buildCommentBody(verdict, round, { warnings = [], gateFailure = null, advisorySummary = null } = {}) {
+function buildCommentBody(
+  verdict,
+  round,
+  {
+    warnings = [],
+    gateFailure = null,
+    advisorySummary = null,
+    appliedVerdict = null,
+  } = {}
+) {
   if (gateFailure) {
-    const appliedVerdict = verdict.verdict === "escalated"
+    const gateVerdict = appliedVerdict === "escalated" || verdict.verdict === "escalated"
       ? "ESCALATED"
       : "CHANGES_REQUESTED";
     const recoveryCommand = gateFailure.recoveryCommand
@@ -63,7 +72,7 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null, a
     return appendCommentWarnings(appendAdvisorySummary([
       REVIEW_ROUND_MARKER,
       `## Relay Review Round ${round}`,
-      `Verdict: ${appliedVerdict}`,
+      `Verdict: ${gateVerdict}`,
       `Summary: ${gateFailure.summary}`,
       `Reviewer verdict: ${String(verdict.verdict || "unknown").toUpperCase()} (next_action=${verdict.next_action || "unknown"})`,
       `Contract: ${formatStatus(verdict.contract_status)}`,

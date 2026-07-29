@@ -45,6 +45,7 @@ function persistVerdictArtifacts(context, analysis) {
     confidenceDowngradeApplied,
     factorFlips,
     repeatedIssueCount,
+    reviewerVerdict,
     rubricGateFailure,
   } = analysis;
   const convergenceSummary = buildConvergenceSummary({
@@ -79,7 +80,7 @@ function persistVerdictArtifacts(context, analysis) {
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
   const verdictRecord = persistedRubricGateFailure
     ? {
-      ...analysis.verdict,
+      ...reviewerVerdict,
       applied_verdict: appliedVerdict,
       relay_gate: {
         status: persistedRubricGateFailure.status,
@@ -91,7 +92,7 @@ function persistVerdictArtifacts(context, analysis) {
         recovery: persistedRubricGateFailure.recovery,
       },
     }
-    : { ...analysis.verdict, applied_verdict: appliedVerdict };
+    : { ...reviewerVerdict, applied_verdict: appliedVerdict };
   writeText(verdictPath, `${JSON.stringify(verdictRecord, null, 2)}\n`);
 
   let redispatchPath = null;
