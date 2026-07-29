@@ -52,12 +52,29 @@ function formatStatus(value) {
   return String(value || "unknown").toUpperCase();
 }
 
-function buildCommentBody(verdict, round, { warnings = [], gateFailure = null, advisorySummary = null } = {}) {
+function buildCommentBody(
+  verdict,
+  round,
+  {
+    warnings = [],
+    gateFailure = null,
+    advisorySummary = null,
+    appliedVerdict = null,
+    originalReviewerVerdict = null,
+    relayEscalation = null,
+  } = {}
+) {
   if (gateFailure) {
+    const gateVerdict = appliedVerdict === "escalated" || verdict.verdict === "escalated"
+      ? "ESCALATED"
+      : "CHANGES_REQUESTED";
+    const recoveryCommand = gateFailure.recoveryCommand
+      ? `Recovery command: ${gateFailure.recoveryCommand}`
+      : "Recovery command: unavailable after escalation";
     return appendCommentWarnings(appendAdvisorySummary([
       REVIEW_ROUND_MARKER,
       `## Relay Review Round ${round}`,
-      "Verdict: CHANGES_REQUESTED",
+      `Verdict: ${gateVerdict}`,
       `Summary: ${gateFailure.summary}`,
       `Reviewer verdict: ${String(verdict.verdict || "unknown").toUpperCase()} (next_action=${verdict.next_action || "unknown"})`,
       `Contract: ${formatStatus(verdict.contract_status)}`,
@@ -66,7 +83,7 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null, a
       `Gate status: ${gateFailure.status}`,
       `Layer: ${gateFailure.layer}`,
       `Rubric state: ${gateFailure.rubricState} (anchor status: ${gateFailure.rubricStatus})`,
-      `Recovery command: ${gateFailure.recoveryCommand}`,
+      recoveryCommand,
       "Issues:",
       `- Rubric gate failed closed: ${gateFailure.reason}. ${gateFailure.recovery}`,
     ].join("\n"), advisorySummary), warnings);
@@ -114,11 +131,18 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null, a
     ].join("\n"), advisorySummary), warnings);
   }
 
+  const escalationAudit = relayEscalation
+    ? [
+      `Reviewer verdict: ${formatStatus(originalReviewerVerdict?.verdict)} (next_action=${originalReviewerVerdict?.next_action || "unknown"})`,
+      `Escalation trigger: ${relayEscalation.trigger || "unknown"} (reason=${relayEscalation.reason || "unknown"})`,
+    ]
+    : [];
   return appendCommentWarnings(appendAdvisorySummary([
     REVIEW_MARKER,
     "## Relay Review",
     "Verdict: ESCALATED",
     `Summary: ${verdict.summary}`,
+    ...escalationAudit,
     `Contract: ${formatStatus(verdict.contract_status)}`,
     `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
     `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,

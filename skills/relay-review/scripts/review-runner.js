@@ -15,7 +15,7 @@ const { printFailureAndExit } = require("./review-runner/failure-output");
 const { buildRedispatchPrompt, detectChurnGrowth } = require("./review-runner/redispatch");
 const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { enforceRoundCap } = require("./review-runner/round-cap");
-const { passNextActionsFor, writeRoundArtifacts } = require("./review-runner/round-artifacts");
+const { passNextActionsFor, reviewPhaseFor, writeRoundArtifacts } = require("./review-runner/round-artifacts");
 const { maybeBlockForBehindBasePreflight, maybeBlockForExecutionEvidencePreflight } = require("./review-runner/preflight");
 const { preflightResolvedPrimaryReviewer } = require("./review-runner/entry-preflight");
 const { buildPrimaryReviewerPreflight, loadReviewText, loadRunRoutePlan, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
@@ -81,14 +81,24 @@ async function run() {
     reviewedHeadSha = git(reviewRepoPath, "rev-parse", "HEAD").trim();
   } catch {}
 
-  enforceRoundCap({ body, data, manifestPath, prNumber, reviewedHeadSha, round, runRepoPath });
+  const reviewPhase = reviewPhaseFor(internalReview);
+  const reviewBudget = enforceRoundCap({
+    body,
+    data,
+    manifestPath,
+    phase: reviewPhase,
+    prNumber,
+    reviewedHeadSha,
+    round,
+    runRepoPath,
+  });
 
   const checkWait = maybeWaitForChecks({ internalReview, prepareOnly, prNumber, round, runDir, runRepoPath, waitForChecksArg });
 
   const {
     diffPath, diffText, doneCriteria, doneCriteriaPath,
     doneCriteriaSource, prBodyPath, prBodySnapshot, prReviewSignals,
-    promptPath, reviewPhase, rubricLoad,
+    promptPath, rubricLoad,
   } = writeRoundArtifacts({
     branch,
     data,
@@ -130,6 +140,7 @@ async function run() {
     reviewHeadSha: reviewedHeadSha,
     reviewRepoPath,
     reviewAssurance: data.policy?.review_assurance || "standard",
+    reviewBudget,
     reviewPhase,
     prReviewSignals,
     manualReviewReason: manualReviewReason || null,
@@ -214,6 +225,7 @@ async function run() {
     manifestData: data,
   });
   verdict = applyQualityExecutionStatus(verdict, executionStatus);
+  const primaryReviewerVerdict = verdict;
   const gateSettlement = await settleAdvisoryGatesForRound({
     advisoryConfig,
     advisoryRuns,
@@ -252,6 +264,7 @@ async function run() {
     prepareOnly,
     prNumber,
     promptPath,
+    primaryReviewerVerdict,
     result,
     reviewedHeadSha,
     reviewerName,

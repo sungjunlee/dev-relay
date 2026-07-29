@@ -792,7 +792,10 @@ if (!plan.stall) {
       ...manifest,
       review: {
         ...(manifest.review || {}),
-        rounds: Number(manifest.review?.rounds || 0) + 1,
+        rounds: plan.review_rounds === undefined
+          ? Number(manifest.review?.rounds || 0) + 1
+          : Number(plan.review_rounds),
+        ...(plan.round_budget === undefined ? {} : { round_budget: plan.round_budget }),
         latest_verdict: verdict,
       },
     };
@@ -921,6 +924,66 @@ test("relay-fleet default invocation drives two leaves through review, serial me
     fs.realpathSync(sprintStateInvocations[0][3]),
     fs.realpathSync(path.join(repoRoot, "backlog"))
   );
+});
+
+test("relay-fleet completes a merged run whose third global review is a protocol verification", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-drive-protocol-round-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-drive-protocol-round-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const finalizeScript = writeFakeFinalizeScript(tmpDir);
+  const runId = "issue-562-20260601010101000-a1b2c3d4";
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 562 });
+  const leavesFile = writeLeavesFile(repoRoot, [leaf]);
+  const dispatchConfig = path.join(tmpDir, "dispatch-config.json");
+  const reviewConfig = path.join(tmpDir, "review-config.json");
+  writeJson(dispatchConfig, {
+    [leaf.branch]: { run_id: runId },
+  });
+  writeJson(reviewConfig, {
+    [runId]: {
+      review_rounds: 3,
+      round_budget: {
+        schema_version: 1,
+        topology: "substantive_failures_with_protocol_verifications",
+        limit_source: "review.max_rounds",
+        consumed: {
+          substantive_failures: 1,
+          protocol_verifications: {
+            internal: 1,
+            post_publication: 1,
+          },
+          applied_by_phase: {
+            internal: 2,
+            post_publication: 1,
+          },
+        },
+      },
+    },
+  });
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-drive-protocol-round",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--review-script", reviewScript,
+    "--finalize-script", finalizeScript,
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      FAKE_DISPATCH_CONFIG: dispatchConfig,
+      FAKE_REVIEW_CONFIG: reviewConfig,
+    },
+  });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.summary.by_run_state[RUN_STATES.MERGED], 1);
+  assert.equal(payload.summary.children[0].review_round, 3);
+  assert.deepEqual(payload.operator_attention, []);
 });
 
 test("relay-fleet rejects missing and mixed ownership before manifest or dispatch side effects", () => {
@@ -4922,6 +4985,7 @@ test("relay-fleet --status surfaces missing_pr, merge_blocked, high_review_round
   const missingPrRun = "issue-553-20260601010101000-a1b2c3d4";
   const mergeBlockedRun = "issue-554-20260601010101000-a1b2c3d4";
   const highReviewRoundsRun = "issue-555-20260601010101000-a1b2c3d4";
+  const legacyHighReviewRoundsRun = "issue-559-20260601010101000-a1b2c3d4";
   const staleBaseRun = "issue-556-20260601010101000-a1b2c3d4";
   const stuckChildRun = "issue-557-20260601010101000-a1b2c3d4";
   const healthyRun = "issue-558-20260601010101000-a1b2c3d4";
@@ -4978,7 +5042,32 @@ test("relay-fleet --status surfaces missing_pr, merge_blocked, high_review_round
       return {
         ...manifest,
         git: { ...manifest.git, pr_number: 602 },
-        review: { ...manifest.review, rounds: 3 },
+        review: {
+          ...manifest.review,
+          rounds: 3,
+          round_budget: {
+            ...manifest.review.round_budget,
+            consumed: {
+              ...manifest.review.round_budget.consumed,
+              substantive_failures: 3,
+              applied_by_phase: {
+                internal: 3,
+                post_publication: 0,
+              },
+            },
+          },
+        },
+      };
+    },
+  });
+  makeChildManifest(legacyHighReviewRoundsRun, "leaf-legacy-high-review-rounds", {
+    patch: (manifest) => {
+      manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+      const { round_budget: _roundBudget, ...legacyReview } = manifest.review;
+      return {
+        ...manifest,
+        git: { ...manifest.git, pr_number: 606 },
+        review: { ...legacyReview, rounds: 3 },
       };
     },
   });
@@ -5016,6 +5105,7 @@ test("relay-fleet --status surfaces missing_pr, merge_blocked, high_review_round
       { leaf_ref: "leaf-missing-pr", run_id: missingPrRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
       { leaf_ref: "leaf-merge-blocked", run_id: mergeBlockedRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
       { leaf_ref: "leaf-high-review-rounds", run_id: highReviewRoundsRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-legacy-high-review-rounds", run_id: legacyHighReviewRoundsRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
       { leaf_ref: "leaf-stale-base", run_id: staleBaseRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
       { leaf_ref: "leaf-stuck-child", run_id: stuckChildRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
       { leaf_ref: "leaf-healthy", run_id: healthyRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
@@ -5049,6 +5139,7 @@ test("relay-fleet --status surfaces missing_pr, merge_blocked, high_review_round
   assert.equal(has("leaf-missing-pr", "missing_pr"), true);
   assert.equal(has("leaf-merge-blocked", "merge_blocked"), true);
   assert.equal(has("leaf-high-review-rounds", "high_review_rounds"), true);
+  assert.equal(has("leaf-legacy-high-review-rounds", "high_review_rounds"), true);
   assert.equal(has("leaf-stale-base", "stale_base"), true);
   assert.equal(has("leaf-stuck-child", "stuck_child"), true);
 
@@ -5368,7 +5459,21 @@ test("relay-fleet stalled_executor operator_attention pins the six-row matrix (#
       const data = readManifest(manifestPath).data;
       writeManifest(manifestPath, {
         ...data,
-        review: { ...data.review, rounds: 3 },
+        review: {
+          ...data.review,
+          rounds: 3,
+          round_budget: {
+            ...data.review.round_budget,
+            consumed: {
+              ...data.review.round_budget.consumed,
+              substantive_failures: 3,
+              applied_by_phase: {
+                internal: 3,
+                post_publication: 0,
+              },
+            },
+          },
+        },
         git: { ...data.git, pr_number: 939 },
       });
     }

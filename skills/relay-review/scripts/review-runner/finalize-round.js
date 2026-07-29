@@ -1,4 +1,5 @@
 const { printResult } = require("./output");
+const { getReviewRoundBudget } = require("../../../relay-dispatch/scripts/manifest/review-budget");
 const { analyzeVerdict } = require("./round-analysis");
 const { persistVerdictArtifacts } = require("./round-artifact-finalize");
 const { persistManifestAndEvents } = require("./round-persistence");
@@ -17,6 +18,7 @@ function finalizeRound(context) {
     nextState: persisted.updatedManifest.state,
     redispatchPath: artifacts.redispatchPath,
     repeatedIssueCount: analysis.repeatedIssueCount,
+    reviewBudget: getReviewRoundBudget(persisted.updatedManifest, { phase: context.reviewPhase }),
     lineageSummary: (
       analysis.escalationDecision.lineage_summary
       || analysis.lineageSummary

@@ -27,6 +27,9 @@ const {
   writeManifest,
   writeManifestUnlocked,
 } = require("../../relay-dispatch/scripts/manifest/store");
+const {
+  normalizeReviewRoundBudget,
+} = require("../../relay-dispatch/scripts/manifest/review-budget");
 const { execGh } = require("../../relay-dispatch/scripts/exec");
 const {
   formatOwnership,
@@ -2448,6 +2451,23 @@ function detectStalledExecutor(repoRoot, child, { thresholdMs = resolveStallThre
   return { detail };
 }
 
+function hasHighReviewRounds(child) {
+  const legacyRounds = Number(child.review_round);
+  if (!Number.isFinite(legacyRounds) || legacyRounds < 3) return false;
+  if (!child.manifest_path) return true;
+
+  try {
+    const manifest = readManifest(child.manifest_path).data;
+    const { budget, compatibility } = normalizeReviewRoundBudget(manifest);
+    if (compatibility !== "persisted") return true;
+    return budget.consumed.substantive_failures >= 3;
+  } catch {
+    // Preserve the existing conservative signal if the new accounting cannot
+    // be read. A corrupt or concurrently removed manifest must not hide debt.
+    return true;
+  }
+}
+
 // New reasons are independent of each other and of the legacy reason above, so
 // a single child can surface more than one attention item.
 function additionalAttentionReasons(child, { repoRoot, fleetId, defaultBranchName }) {
@@ -2459,7 +2479,7 @@ function additionalAttentionReasons(child, { repoRoot, fleetId, defaultBranchNam
   if (child.run_state === RUN_STATES.MERGE_BLOCKED) {
     reasons.push("merge_blocked");
   }
-  if (Number(child.review_round) >= 3) {
+  if (hasHighReviewRounds(child)) {
     reasons.push("high_review_rounds");
   }
   if (child.base_branch && defaultBranchName && child.base_branch !== defaultBranchName) {

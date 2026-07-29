@@ -144,8 +144,20 @@ anchor:
   rubric_source: manifest        # where rubric lives
 
 review:
-  rounds: 2
-  max_rounds: 2              # compact=1, standard=2, hardened=3
+  rounds: 3                   # total applied verdicts; audit/artifact sequence
+  max_rounds: 2               # substantive-failure threshold; compact=1, standard=2, hardened=3
+  round_budget:
+    schema_version: 1
+    topology: substantive_failures_with_protocol_verifications
+    limit_source: review.max_rounds
+    consumed:
+      substantive_failures: 1
+      protocol_verifications:
+        internal: 1
+        post_publication: 1
+      applied_by_phase:
+        internal: 2
+        post_publication: 1
   latest_verdict: pass           # pending | pass | changes_requested | escalated
   repeated_issue_count: 0
   last_reviewed_sha: abc123def
@@ -188,17 +200,24 @@ bootstrap_exempt:
 | `model_hints.*` | Optional per-phase model preference. Current runtime consumers: `dispatch`, `review`, `advisory_review`. For unmanaged harnesses, values must resolve to approved provider/model routes. Do not add Codex/Claude model hints in generated company defaults just to pin their managed CLI model. |
 | `dispatch.last_model` / executor config | Dispatch records the effective model route when one exists. The skill-bundled `skills/relay-dispatch/references/executor-models.json` intentionally ships empty; unmanaged executors need an explicit route from CLI/model hints/project routes or a local `~/.relay/executors.json` default, and the selected route still passes through the route policy gate. Codex/Claude managed CLI defaults normally record a null model route. |
 | Route policy | Stored outside the manifest in `~/.relay/policy.json`, optional repo-local `.relay/policy.json`, and optional project-local `~/.relay/projects/<repo-slug>/policy.json`. Executor/reviewer names are harnesses; provider/model route strings are the policy boundary. Final operator precedence is `CLI flags / --route-intent-file -> project routes.json -> routing rules -> defaults -> existing relay defaults -> policy gate`. Adapter capability gates run before this policy gate. |
+| `review.rounds`, `review.round_budget` | `rounds` remains the monotonic applied-verdict/artifact sequence. `round_budget` separately records substantive failures and protocol verification/application consumption by `internal` vs `post_publication`; `max_rounds` is its referenced substantive-failure threshold. Failed invokes update neither counter. |
 | Route plan | Dispatch writes `route-plan.json` in the run directory with effective dispatch/review/advisory routes, source traces, and policy decisions. The manifest stores only a compact `routes.summary` plus `routes.plan_path` so operators can audit routing without bloating the lifecycle contract. |
 | Run-dir runtime artifacts | While dispatch is active, `lease.json` records `{ pid, pgid, host, started_at, timeout_s }` for crash-only reconciliation. `pid` is the dispatch supervisor and `pgid` is the detached executor process group. Executor stdout, stderr, and result output live as `dispatch-stdout.log`, `dispatch-stderr.log`, and `dispatch-result.txt` in the same run directory and are referenced from manifest `paths`. |
 | Detached launch receipt | `dispatch.js --detach --json` re-execs dispatch under a detached Node supervisor and returns only after the child has entered `dispatched`, written `lease.json`, and created the real run-dir log files. The receipt includes `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and `reconcileCommand`; it is a launch contract, not a manifest field. |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
-| `policy.review_assurance` | `compact` gives low-risk work one independent review with the same permission, sandbox, network, repository, SHA, audit, publication, and merge protections; `standard` keeps the bounded two-round default; `hardened` requires stronger review/evidence gates without using agent identity heuristics. Hardened review commands must include an advisory reviewer, and passing verdicts require successful advisory artifacts plus strict execution evidence. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; legacy evidence without that array still falls back to `test_exit_code=0` plus a SHA-bound result hash |
+| `policy.review_assurance` | `compact` gives low-risk work the same permission, sandbox, network, repository, SHA, audit, publication, and merge protections but escalates its first substantive failure; `standard` permits one bounded repair; `hardened` permits two and requires stronger review/evidence gates without using agent identity heuristics. Hardened review commands must include an advisory reviewer, and passing verdicts require successful advisory artifacts plus strict execution evidence. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; legacy evidence without that array still falls back to `test_exit_code=0` plus a SHA-bound result hash |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
 | `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; escalated same-adapter retry requires an `--independent-review-reason`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
 | `git.pr_number` / `github.pr_created_by_orchestrator` | Orchestrator-owned push + PR creation persists `git.pr_number` for review/merge consumers; `github.pr_created_by_orchestrator` records whether relay created or reused the PR. In delayed-publication runs these fields stay null/absent until `publish-run.js` advances `publish_pending -> review_pending`. See [ADR-0001](../docs/decisions/0001-orchestrator-owns-publication.md) |
 | `bootstrap_exempt.*` | Optional operator-declared reconciliation for runs that predate an artifact writer but are closed after that writer lands |
+
+Manifests without `review.round_budget` use the deterministic
+`legacy_conservative` compatibility bridge: every historical round except a
+definitely passing latest verdict is treated as substantive, and all applied
+rounds are assigned to the phase established from current frontmatter. The next
+applied verdict persists schema version 1.
 
 ### Adapter Capability vs Route Policy
 

@@ -42,7 +42,9 @@ list of files whose patches were omitted. The marker, observed byte size, and
 threshold are persisted in `review-round-N-diff.patch`. Operator-supplied
 `--diff-file` content remains an unguarded, verbatim escape hatch.
 
-The runner reviews the retained checkout recorded in `paths.worktree`, not the repo root. It records `review.last_reviewed_sha` and enforces `review.max_rounds`: compact defaults to `1`, standard to `2`, and hardened to `3`. A still-higher persisted value is an explicit experimental policy; repeated-issue and flip-flop escalation still apply within that budget.
+The runner reviews the retained checkout recorded in `paths.worktree`, not the repo root. It records `review.last_reviewed_sha`; `review.rounds` remains the total applied-verdict/artifact sequence. Cap accounting is separate under `review.round_budget`: blocking substantive failures consume the threshold referenced by `review.max_rounds` (compact defaults to `1`, standard to `2`, hardened to `3`), while successful protocol verification is recorded by `internal` or `post_publication` phase and is exempt from that threshold. Thus standard assurance can apply one substantive `changes_requested`, verify its corrected internal result, and perform the required post-publication verification even though the last artifact is global round 3. Reviewer invocation failures do not apply a verdict and consume neither axis.
+
+New manifests persist `round_budget.schema_version=1`, its topology and limit source, `consumed.substantive_failures`, and phase-specific protocol/application counts. Legacy manifests without the block resolve through a deterministic conservative bridge; their next applied verdict persists the normalized block. A still-higher `review.max_rounds` remains an explicit experimental policy extension. Repeated-issue, flip-flop, stale-SHA, advisory, and lifecycle gates remain independent and can escalate earlier.
 
 ## Audit Trail
 

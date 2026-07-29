@@ -1,5 +1,4 @@
 const path = require("path");
-const { buildReviewRunnerRubricGateFailure } = require("../../../relay-dispatch/scripts/manifest/rubric");
 const { writeText } = require("./common");
 const {
   buildRedispatchPrompt,
@@ -10,25 +9,66 @@ const {
   formatConvergenceMarkdown,
 } = require("./convergence");
 
+function normalizeRubricGateFailure(rubricGateFailure, appliedVerdict) {
+  if (!rubricGateFailure || appliedVerdict !== "escalated") {
+    return rubricGateFailure;
+  }
+
+  const recovery = (
+    "Automatic rubric repair re-dispatch is unavailable because the run exhausted "
+    + "its substantive failure budget and escalated. Inspect the review failure; "
+    + "continuation requires an explicit owner decision through the documented "
+    + "review-policy extension and escalated-state recovery paths."
+  );
+  return {
+    ...rubricGateFailure,
+    recoveryCommand: null,
+    recovery,
+    summary: `review-runner fail-closed: the rubric gate exhausted the repair budget. ${recovery}`,
+  };
+}
+
+function buildRelayEscalationAudit({
+  appliedVerdict,
+  escalationDecision,
+  persistedRubricGateFailure,
+  reviewerVerdict,
+  verdict,
+}) {
+  if (
+    persistedRubricGateFailure
+    || appliedVerdict !== "escalated"
+    || verdict.verdict !== "escalated"
+    || reviewerVerdict.verdict === "escalated"
+  ) {
+    return null;
+  }
+  return {
+    ...escalationDecision,
+    summary: verdict.summary,
+  };
+}
+
 function persistVerdictArtifacts(context, analysis) {
   const {
     advisoryResults,
     churnGrowth,
-    data,
     doneCriteria,
     doneCriteriaSource,
     hardenedAssurance,
     reviewedHeadSha,
     round,
-    rubricLoad,
     runDir,
   } = context;
   const {
     analysisVerdict,
     assuranceMetadata,
     confidenceDowngradeApplied,
+    escalationDecision,
     factorFlips,
     repeatedIssueCount,
+    reviewerVerdict,
+    rubricGateFailure,
   } = analysis;
   const convergenceSummary = buildConvergenceSummary({
     runDir,
@@ -44,61 +84,70 @@ function persistVerdictArtifacts(context, analysis) {
     );
   }
 
-  const rubricGateRedispatchPath = path.join(
-    runDir,
-    `review-round-${round}-redispatch.md`
-  );
-  const rubricGateFailure = (
-    analysis.verdict.verdict === "pass"
-    || confidenceDowngradeApplied
-  )
-    ? buildReviewRunnerRubricGateFailure(
-      data.run_id,
-      rubricGateRedispatchPath,
-      rubricLoad
-    )
-    : null;
   const confidenceDowngradeAppliedAsFinalPass = (
     confidenceDowngradeApplied
     && !rubricGateFailure
   );
-  const appliedVerdict = rubricGateFailure
-    ? "changes_requested"
-    : confidenceDowngradeAppliedAsFinalPass
-      ? "pass"
-      : analysis.verdict.verdict;
+  const appliedVerdict = analysis.verdict.verdict === "escalated"
+    ? "escalated"
+    : rubricGateFailure
+      ? "changes_requested"
+      : confidenceDowngradeAppliedAsFinalPass
+        ? "pass"
+        : analysis.verdict.verdict;
+  const persistedRubricGateFailure = normalizeRubricGateFailure(
+    rubricGateFailure,
+    appliedVerdict
+  );
+  const relayEscalation = buildRelayEscalationAudit({
+    appliedVerdict,
+    escalationDecision,
+    persistedRubricGateFailure,
+    reviewerVerdict,
+    verdict: analysis.verdict,
+  });
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
-  const verdictRecord = rubricGateFailure
+  const verdictRecord = persistedRubricGateFailure
     ? {
-      ...analysis.verdict,
+      ...reviewerVerdict,
       applied_verdict: appliedVerdict,
       relay_gate: {
-        status: rubricGateFailure.status,
-        layer: rubricGateFailure.layer,
-        rubric_state: rubricGateFailure.rubricState,
-        rubric_status: rubricGateFailure.rubricStatus,
-        reason: rubricGateFailure.reason,
-        recovery_command: rubricGateFailure.recoveryCommand,
-        recovery: rubricGateFailure.recovery,
+        status: persistedRubricGateFailure.status,
+        layer: persistedRubricGateFailure.layer,
+        rubric_state: persistedRubricGateFailure.rubricState,
+        rubric_status: persistedRubricGateFailure.rubricStatus,
+        reason: persistedRubricGateFailure.reason,
+        recovery_command: persistedRubricGateFailure.recoveryCommand,
+        recovery: persistedRubricGateFailure.recovery,
       },
     }
-    : { ...analysis.verdict, applied_verdict: appliedVerdict };
+    : {
+      ...analysis.verdict,
+      applied_verdict: appliedVerdict,
+      ...(relayEscalation
+        ? {
+          original_reviewer_verdict: reviewerVerdict,
+          relay_escalation: relayEscalation,
+        }
+        : {}),
+    };
   writeText(verdictPath, `${JSON.stringify(verdictRecord, null, 2)}\n`);
 
   let redispatchPath = null;
   if (
-    (
-      analysis.verdict.verdict === "changes_requested"
-      && !confidenceDowngradeAppliedAsFinalPass
+    analysis.verdict.verdict !== "escalated"
+    && (
+      (
+        analysis.verdict.verdict === "changes_requested"
+        && !confidenceDowngradeAppliedAsFinalPass
+      )
+      || persistedRubricGateFailure
     )
-    || rubricGateFailure
   ) {
-    redispatchPath = rubricGateFailure
-      ? rubricGateRedispatchPath
-      : path.join(runDir, `review-round-${round}-redispatch.md`);
-    const redispatchPrompt = rubricGateFailure
+    redispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
+    const redispatchPrompt = persistedRubricGateFailure
       ? buildRubricGateRedispatchPrompt(
-        rubricGateFailure,
+        persistedRubricGateFailure,
         doneCriteria,
         doneCriteriaSource,
         convergenceSummary
@@ -122,7 +171,8 @@ function persistVerdictArtifacts(context, analysis) {
     confidenceDowngradeAppliedAsFinalPass,
     convergenceSummary,
     redispatchPath,
-    rubricGateFailure,
+    relayEscalation,
+    rubricGateFailure: persistedRubricGateFailure,
     verdictPath,
   };
 }

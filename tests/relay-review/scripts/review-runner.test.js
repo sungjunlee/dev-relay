@@ -26,7 +26,10 @@ const {
   EXECUTION_EVIDENCE_FILENAME,
   FORCE_FINALIZE_GUIDANCE,
 } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
-const { loadDoneCriteria } = require("../../../skills/relay-review/scripts/review-runner/context");
+const {
+  formatPriorRoundContext,
+  loadDoneCriteria,
+} = require("../../../skills/relay-review/scripts/review-runner/context");
 const {
   installFakeGhOnPath,
   writeFakeGhScript: writeSharedFakeGhScript,
@@ -278,6 +281,17 @@ function writeReviewerScript(repoRoot, name, verdict) {
   const filePath = path.join(repoRoot, name);
   const body = `#!/usr/bin/env node
 process.stdout.write(${JSON.stringify(JSON.stringify(verdict))});
+`;
+  fs.writeFileSync(filePath, body, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function writeFailingReviewerScript(repoRoot, name, message = "simulated reviewer invoke failure") {
+  const filePath = path.join(repoRoot, name);
+  const body = `#!/usr/bin/env node
+process.stderr.write(${JSON.stringify(message)});
+process.exit(23);
 `;
   fs.writeFileSync(filePath, body, "utf-8");
   fs.chmodSync(filePath, 0o755);
@@ -2058,6 +2072,136 @@ test("all-low-confidence changes_requested verdict is blocked by rubric gate fai
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
+test("compact assurance escalates its first rubric gate failure immediately", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const commentCapturePath = path.join(repoRoot, "compact-rubric-gate-comment.txt");
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    policy: {
+      ...(data.policy || {}),
+      review_assurance: "compact",
+    },
+    review: {
+      ...(data.review || {}),
+      max_rounds: 1,
+    },
+  }));
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: "",
+  });
+  const reviewFile = writePassVerdict(repoRoot, "compact-missing-rubric.json");
+
+  const result = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile,
+    noComment: false,
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  });
+  const manifest = readManifest(manifestPath).data;
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+  const redispatchPath = path.join(
+    ensureRunLayout(repoRoot, runId).runDir,
+    "review-round-1-redispatch.md"
+  );
+
+  assert.equal(result.appliedVerdict, "escalated");
+  assert.equal(result.state, STATES.ESCALATED);
+  assert.equal(result.redispatchPath, null);
+  assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
+  assert.equal(result.reviewGate.recoveryCommand, null);
+  assert.match(result.reviewGate.recovery, /Automatic rubric repair re-dispatch is unavailable/);
+  assert.doesNotMatch(result.reviewGate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
+  assert.equal(fs.existsSync(redispatchPath), false);
+  assert.equal(manifest.next_action, "inspect_review_failure");
+  assert.equal(manifest.review.latest_verdict, "escalated");
+  assert.equal(manifest.review.last_gate.recovery_command, null);
+  assert.match(manifest.review.last_gate.recovery, /explicit owner decision/);
+  assert.doesNotMatch(manifest.review.last_gate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
+  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 1);
+  assert.equal(
+    manifest.review.last_escalation_decision.trigger,
+    "repair_cycle_exhausted"
+  );
+  assert.equal(verdictRecord.verdict, "pass");
+  assert.equal(verdictRecord.next_action, "ready_to_merge");
+  assert.equal(verdictRecord.summary, "All done criteria are satisfied.");
+  assert.equal(verdictRecord.applied_verdict, "escalated");
+  assert.equal("original_reviewer_verdict" in verdictRecord, false);
+  assert.equal("relay_escalation" in verdictRecord, false);
+  assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
+  assert.equal(verdictRecord.relay_gate.recovery_command, null);
+  assert.doesNotMatch(verdictRecord.relay_gate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
+  assert.match(commentBody, /Verdict: ESCALATED/);
+  assert.match(commentBody, /Reviewer verdict: PASS \(next_action=ready_to_merge\)/);
+  assert.doesNotMatch(commentBody, /Reviewer verdict: ESCALATED/);
+  assert.match(commentBody, /Recovery command: unavailable after escalation/);
+  assert.doesNotMatch(commentBody, /dispatch\.js|review-round-1-redispatch\.md/);
+});
+
+test("standard assurance escalates a rubric gate as the second substantive failure", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const blockingReviewFile = writeVerdict(repoRoot, "first-substantive-failure.json", {
+    verdict: "changes_requested",
+    summary: "A substantive issue remains.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Required recovery state is missing",
+      body: "The implementation omits the required recovery state.",
+      file: "src/index.js",
+      line: 12,
+      category: "contract",
+      severity: "high",
+      confidence: "high",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const first = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile: blockingReviewFile,
+  });
+  assert.equal(first.state, STATES.CHANGES_REQUESTED);
+  setReviewPending(manifestPath);
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
+
+  const passReviewFile = writePassVerdict(repoRoot, "second-round-missing-rubric.json");
+  const second = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile: passReviewFile,
+  });
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(second.round, 2);
+  assert.equal(second.appliedVerdict, "escalated");
+  assert.equal(second.state, STATES.ESCALATED);
+  assert.equal(second.redispatchPath, null);
+  assert.equal(second.reviewGate.status, "rubric_state_failed_closed");
+  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 2);
+  assert.equal(
+    manifest.review.last_escalation_decision.trigger,
+    "repair_cycle_exhausted"
+  );
+});
+
 test("mixed-confidence changes_requested verdict records no downgrade event marker", () => {
   const { repoRoot, doneCriteriaPath, diffPath, runId } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "mixed-confidence-changes.json", {
@@ -3099,6 +3243,8 @@ test("review runner enforces max_rounds before starting a new round", () => {
   const { data, body } = readManifest(manifestPath);
   data.review.rounds = 1;
   data.review.max_rounds = 1;
+  data.review.round_budget.consumed.substantive_failures = 1;
+  data.review.round_budget.consumed.applied_by_phase.post_publication = 1;
   writeManifest(manifestPath, data, body);
 
   assert.throws(() => execFileSync("node", [
@@ -3110,7 +3256,7 @@ test("review runner enforces max_rounds before starting a new round", () => {
     "--diff-file", diffPath,
     "--prepare-only",
     "--json",
-  ], { encoding: "utf-8", stdio: "pipe" }), /Review round cap exceeded/);
+  ], { encoding: "utf-8", stdio: "pipe" }), /Review substantive failure cap exhausted/);
 
   const manifest = readManifest(manifestPath).data;
   const events = readRunEvents(repoRoot, runId);
@@ -3122,8 +3268,265 @@ test("review runner enforces max_rounds before starting a new round", () => {
   assert.equal("reviewer" in reviewApplyEvent, false);
 });
 
+test("standard assurance admits internal repair verification and required post-publication verification", () => {
+  const {
+    repoRoot,
+    worktreePath,
+    manifestPath,
+    doneCriteriaPath,
+    diffPath,
+    runId,
+  } = setupRepo();
+  const initial = readManifest(manifestPath);
+  const internal = forceTransitionState({
+    ...initial.data,
+    dispatch: {
+      ...(initial.data.dispatch || {}),
+      publish_policy: "after-internal-review",
+    },
+    git: {
+      ...(initial.data.git || {}),
+      pr_number: null,
+    },
+  }, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
+  writeManifest(manifestPath, internal, initial.body);
+
+  const prepared = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId,
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--prepare-only", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(prepared.reviewBudget.substantive_failures.consumed, 0);
+  assert.equal(prepared.reviewBudget.protocol_verifications.consumed, 0);
+  assert.equal(prepared.reviewBudget.applied_in_phase, 0);
+
+  const changesFile = writeVerdict(repoRoot, "topology-internal-changes.json", {
+    verdict: "changes_requested",
+    summary: "One substantive repair is required.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Repair the retained result",
+      body: "The internal result needs one focused correction.",
+      file: "src/index.js",
+      line: 12,
+      category: "contract",
+      severity: "high",
+      confidence: "high",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+  const first = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId,
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--review-file", changesFile, "--no-comment", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(first.state, STATES.CHANGES_REQUESTED);
+  assert.equal(first.reviewBudget.substantive_failures.consumed, 1);
+  assert.equal(first.reviewBudget.protocol_verifications.consumed, 0);
+  assert.equal(first.reviewBudget.applied_in_phase, 1);
+
+  fs.writeFileSync(path.join(worktreePath, "repair.txt"), "repaired\n", "utf-8");
+  execFileSync("git", ["add", "repair.txt"], { cwd: worktreePath, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "repair review finding"], {
+    cwd: worktreePath,
+    stdio: "pipe",
+  });
+  const repairedHead = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: worktreePath,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  writeExecutionEvidence(ensureRunLayout(repoRoot, runId).runDir, repairedHead);
+  let repaired = readManifest(manifestPath);
+  repaired.data = updateManifestState(repaired.data, STATES.DISPATCHED, "await_dispatch_result");
+  repaired.data = {
+    ...repaired.data,
+    git: {
+      ...(repaired.data.git || {}),
+      head_sha: repairedHead,
+    },
+  };
+  repaired.data = updateManifestState(
+    repaired.data,
+    STATES.INTERNAL_REVIEW_PENDING,
+    "run_internal_review"
+  );
+  writeManifest(manifestPath, repaired.data, repaired.body);
+
+  const internalPassFile = writeVerdict(repoRoot, "topology-internal-pass.json", {
+    verdict: "pass",
+    summary: "The corrected internal result passes.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "publish_pending",
+    issues: [],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+  const second = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId,
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--review-file", internalPassFile, "--no-comment", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(second.state, STATES.PUBLISH_PENDING, JSON.stringify(second));
+  assert.equal(second.round, 2);
+  assert.equal(second.reviewBudget.substantive_failures.consumed, 1);
+  assert.equal(second.reviewBudget.protocol_verifications.consumed, 1);
+  assert.equal(second.reviewBudget.applied_in_phase, 2);
+
+  const publishPending = readManifest(manifestPath);
+  let published = updateManifestState(
+    publishPending.data,
+    STATES.REVIEW_PENDING,
+    "run_review"
+  );
+  published = {
+    ...published,
+    git: {
+      ...(published.git || {}),
+      pr_number: 123,
+    },
+  };
+  writeManifest(manifestPath, published, publishPending.body);
+
+  const publicPassFile = writePassVerdict(repoRoot, "topology-public-pass.json");
+  const third = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--review-file", publicPassFile, "--no-comment", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(third.state, STATES.READY_TO_MERGE);
+  assert.equal(third.round, 3);
+  assert.equal(third.reviewBudget.substantive_failures.consumed, 1);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.review.rounds, 3);
+  assert.equal(manifest.review.max_rounds, 2);
+  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 1);
+  assert.deepEqual(manifest.review.round_budget.consumed.applied_by_phase, {
+    internal: 2,
+    post_publication: 1,
+  });
+  assert.deepEqual(manifest.review.round_budget.consumed.protocol_verifications, {
+    internal: 1,
+    post_publication: 1,
+  });
+});
+
+test("#1116 invoke failure and salvage on a new HEAD do not consume substantive repair budget", () => {
+  const {
+    repoRoot,
+    worktreePath,
+    manifestPath,
+    doneCriteriaPath,
+    diffPath,
+    runId,
+  } = setupRepo();
+  const failingReviewer = writeFailingReviewerScript(
+    repoRoot,
+    "reviewer-invoke-fails.js"
+  );
+  const failedInvoke = spawnSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--reviewer-script", failingReviewer, "--no-comment", "--json",
+  ], { encoding: "utf-8" });
+  assert.notEqual(failedInvoke.status, 0);
+
+  let manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.review.rounds, 0);
+  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 0);
+  assert.equal(manifest.review.round_budget.consumed.applied_by_phase.post_publication, 0);
+
+  const changesFile = writeVerdict(repoRoot, "issue-1116-round-1.json", {
+    verdict: "changes_requested",
+    summary: "The first applied review found one substantive repair.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Preserve recovery evidence",
+      body: "The recovery path needs the requested evidence.",
+      file: "src/index.js",
+      line: 12,
+      category: "contract",
+      severity: "high",
+      confidence: "high",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+  const firstApplied = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--review-file", changesFile, "--no-comment", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(firstApplied.round, 1);
+  assert.equal(firstApplied.state, STATES.CHANGES_REQUESTED);
+
+  fs.writeFileSync(path.join(worktreePath, "salvaged-repair.txt"), "fixed\n", "utf-8");
+  execFileSync("git", ["add", "salvaged-repair.txt"], { cwd: worktreePath, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "repair before salvage"], {
+    cwd: worktreePath,
+    stdio: "pipe",
+  });
+  const salvagedHead = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: worktreePath,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  writeExecutionEvidence(ensureRunLayout(repoRoot, runId).runDir, salvagedHead);
+
+  let salvaged = readManifest(manifestPath);
+  salvaged.data = updateManifestState(
+    salvaged.data,
+    STATES.DISPATCHED,
+    "await_dispatch_result"
+  );
+  salvaged.data = {
+    ...salvaged.data,
+    git: {
+      ...(salvaged.data.git || {}),
+      head_sha: salvagedHead,
+    },
+  };
+  salvaged.data = updateManifestState(
+    salvaged.data,
+    STATES.ESCALATED,
+    "inspect_dispatch_failure"
+  );
+  salvaged.data = updateManifestState(
+    salvaged.data,
+    STATES.REVIEW_PENDING,
+    "run_review"
+  );
+  writeManifest(manifestPath, salvaged.data, salvaged.body);
+
+  const reverifyFile = writePassVerdict(repoRoot, "issue-1116-round-2-pass.json");
+  const reverified = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--review-file", reverifyFile, "--no-comment", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(reverified.round, 2);
+  assert.equal(reverified.state, STATES.READY_TO_MERGE, JSON.stringify(reverified));
+
+  manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.review.rounds, 2);
+  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 1);
+  assert.equal(manifest.review.round_budget.consumed.applied_by_phase.post_publication, 2);
+  assert.equal(manifest.review.round_budget.consumed.protocol_verifications.post_publication, 1);
+});
+
 test("default repair cycle escalates after the corrected result fails its second review", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const commentCapturePath = path.join(repoRoot, "repair-cycle-escalation-comment.txt");
   const reviewFile = writeVerdict(repoRoot, "bounded-cycle-issue.json", {
     verdict: "changes_requested",
     summary: "A substantive issue remains.",
@@ -3152,16 +3555,48 @@ test("default repair cycle escalates after the corrected result fails its second
   assert.equal(first.state, STATES.CHANGES_REQUESTED);
   assert.ok(first.redispatchPath);
   setReviewPending(manifestPath);
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: "",
+  });
 
   const second = JSON.parse(execFileSync("node", [
     SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123",
     "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
-    "--review-file", reviewFile, "--no-comment", "--json",
-  ], { encoding: "utf-8" }));
+    "--review-file", reviewFile, "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
 
   assert.equal(second.state, STATES.ESCALATED);
   assert.equal(second.appliedVerdict, "escalated");
   assert.equal(second.redispatchPath, null);
+  const verdictRecord = JSON.parse(fs.readFileSync(second.verdictPath, "utf-8"));
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+  assert.equal(verdictRecord.verdict, "escalated");
+  assert.equal(verdictRecord.next_action, "escalated");
+  assert.equal(verdictRecord.applied_verdict, "escalated");
+  assert.match(verdictRecord.summary, /corrected result still has substantive review failures/i);
+  assert.equal(verdictRecord.original_reviewer_verdict.verdict, "changes_requested");
+  assert.equal(verdictRecord.original_reviewer_verdict.next_action, "changes_requested");
+  assert.equal(verdictRecord.original_reviewer_verdict.summary, "A substantive issue remains.");
+  assert.equal(verdictRecord.relay_escalation.trigger, "repair_cycle_exhausted");
+  assert.equal(verdictRecord.relay_escalation.reason, "repair_cycle_exhausted");
+  assert.equal(verdictRecord.relay_escalation.summary, verdictRecord.summary);
+  assert.match(commentBody, /Summary: The corrected result still has substantive review failures/i);
+  assert.match(commentBody, /Reviewer verdict: CHANGES_REQUESTED \(next_action=changes_requested\)/);
+  assert.match(commentBody, /Escalation trigger: repair_cycle_exhausted \(reason=repair_cycle_exhausted\)/);
+  const priorContext = formatPriorRoundContext(
+    ensureRunLayout(repoRoot, runId).runDir,
+    3
+  );
+  assert.match(priorContext, /Round 2: escalated/);
+  assert.match(priorContext, /corrected result still has substantive review failures/i);
+  assert.match(priorContext, /Relay escalation: trigger=repair_cycle_exhausted; reason=repair_cycle_exhausted/);
   const events = readRunEvents(repoRoot, runId);
   const escalation = events.findLast((event) => event.event === "escalation_decision");
   assert.equal(escalation.trigger, "repair_cycle_exhausted");

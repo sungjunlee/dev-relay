@@ -16,6 +16,7 @@ const {
   normalizeReviewAssuranceSource,
   reviewRoundLimitForAssurance,
 } = require("./review-assurance");
+const { createReviewRoundBudget } = require("./review-budget");
 const { normalizeOwnership } = require("../ownership");
 
 const RELAY_VERSION = 2;
@@ -409,6 +410,7 @@ function createManifestSkeleton({
     review: {
       rounds: 0,
       max_rounds: reviewRoundLimitForAssurance(normalizedReviewAssurance),
+      round_budget: createReviewRoundBudget(),
       latest_verdict: "pending",
       repeated_issue_count: 0,
       last_reviewed_sha: null,

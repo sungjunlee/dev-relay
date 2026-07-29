@@ -82,15 +82,19 @@ function persistManifestAndEvents(context, analysis, artifacts) {
   } = context;
   const {
     assuranceMetadata,
+    blockingChangesRequested,
     confidenceDowngrade,
     escalationDecision,
     lineageSummary,
     repeatedIssueCount,
+    reviewerVerdict,
+    substantiveFailure,
     verdict,
   } = analysis;
   const {
     appliedVerdict,
     confidenceDowngradeAppliedAsFinalPass,
+    relayEscalation,
     rubricGateFailure,
   } = artifacts;
 
@@ -102,9 +106,13 @@ function persistManifestAndEvents(context, analysis, artifacts) {
   });
   result.advisorySummary = advisoryEvidence;
 
-  const commentBody = buildCommentBody(verdict, round, {
+  const commentVerdict = rubricGateFailure ? reviewerVerdict : verdict;
+  const commentBody = buildCommentBody(commentVerdict, round, {
+    appliedVerdict,
     advisorySummary: advisoryEvidence,
     gateFailure: rubricGateFailure,
+    originalReviewerVerdict: reviewerVerdict,
+    relayEscalation,
     warnings: result.advisoryWarnings || [],
   });
   if (!noComment && !internalReview) {
@@ -123,6 +131,8 @@ function persistManifestAndEvents(context, analysis, artifacts) {
       rubricGateFailure,
       escalationDecision,
       lineageSummary: escalationDecision.lineage_summary || lineageSummary,
+      reviewPhase: internalReview ? "internal" : "post_publication",
+      substantiveFailure,
     }
   );
   updatedManifest = {
