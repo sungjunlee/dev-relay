@@ -225,6 +225,7 @@ async function run() {
     manifestData: data,
   });
   verdict = applyQualityExecutionStatus(verdict, executionStatus);
+  const primaryReviewerVerdict = verdict;
   const gateSettlement = await settleAdvisoryGatesForRound({
     advisoryConfig,
     advisoryRuns,
@@ -263,6 +264,7 @@ async function run() {
     prepareOnly,
     prNumber,
     promptPath,
+    primaryReviewerVerdict,
     result,
     reviewedHeadSha,
     reviewerName,

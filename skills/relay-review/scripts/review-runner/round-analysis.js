@@ -19,12 +19,13 @@ function analyzeVerdict({
   data,
   gateResult,
   internalReview,
+  primaryReviewerVerdict,
   round,
   rubricLoad,
   runDir,
   verdict,
 }) {
-  const reviewerVerdict = verdict;
+  const reviewerVerdict = primaryReviewerVerdict || verdict;
   const confidenceDowngrade = gateResult.confidenceDowngrade;
   const assuranceMetadata = getReviewAssuranceMetadata(verdict);
   const confidenceDowngradeApplied = (

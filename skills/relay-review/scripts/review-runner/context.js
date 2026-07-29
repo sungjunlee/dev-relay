@@ -745,6 +745,14 @@ function formatPriorRoundContext(runDir, round) {
       ? `${verdict.verdict} (applied: ${appliedVerdict})`
       : verdict.verdict;
     const parts = [`### Round ${roundNum}: ${label}`, verdict.summary];
+    if (verdict.original_reviewer_verdict) {
+      parts.push(
+        `Primary reviewer verdict: ${String(verdict.original_reviewer_verdict.verdict || "unknown").toUpperCase()} `
+        + `(next_action=${verdict.original_reviewer_verdict.next_action || "unknown"})`,
+        `Primary reviewer summary: ${verdict.original_reviewer_verdict.summary || "unknown"}`,
+        `Applied verdict: ${String(appliedVerdict || verdict.verdict || "unknown").toUpperCase()}`
+      );
+    }
     if (verdict.relay_escalation) {
       parts.push(
         `Relay escalation: trigger=${verdict.relay_escalation.trigger || "unknown"}; `

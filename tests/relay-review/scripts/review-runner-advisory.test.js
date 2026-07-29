@@ -23,6 +23,7 @@ const {
   createEnforcementFixture,
 } = require("../../relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
+const { formatPriorRoundContext } = require("../../../skills/relay-review/scripts/review-runner/context");
 const {
   executeAdvisoryRequest,
   finishAdvisoryReview,
@@ -3219,7 +3220,14 @@ test("gating lane demotes a pass produced by low-confidence primary downgrade", 
 });
 
 test("persisted lane demotion cap escalates the third lane-driven demotion", () => {
-  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const { repoRoot, manifestPath, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const commentPath = path.join(repoRoot, "lane-demotion-cap-comment.md");
+  const ghFixture = installFakeGhOnPath({
+    body: "## Test PR\n\nFixture body.\n",
+    headRefOid: "a".repeat(40),
+    headRefName: "issue-429",
+    statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS", status: "COMPLETED" }],
+  }, { prefix: "relay-review-lane-cap-gh-", capturePath: commentPath });
   const record = readManifest(manifestPath);
   writeManifest(manifestPath, {
     ...record.data,
@@ -3239,24 +3247,46 @@ test("persisted lane demotion cap escalates the third lane-driven demotion", () 
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
   const opencodeScript = writeFakeOpencode(repoRoot, { requiredFinding: true });
 
-  const result = runReview({
-    repoRoot,
-    runId,
-    doneCriteriaPath,
-    diffPath,
-    primaryScript,
-    opencodeScript,
-    advisoryReviewer: null,
-    extraArgs: ["--advisory-grace", "30"],
-  });
-  const manifest = readManifest(manifestPath).data;
-  const verdict = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  try {
+    const result = runReview({
+      repoRoot,
+      runId,
+      doneCriteriaPath,
+      diffPath,
+      primaryScript,
+      opencodeScript,
+      advisoryReviewer: null,
+      extraArgs: ["--advisory-grace", "30"],
+      noComment: false,
+    });
+    const manifest = readManifest(manifestPath).data;
+    const verdict = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+    const comment = fs.readFileSync(commentPath, "utf-8");
+    const priorContext = formatPriorRoundContext(runDir, 2);
 
-  assert.equal(result.nextState, STATES.ESCALATED);
-  assert.equal(manifest.state, STATES.ESCALATED);
-  assert.equal(manifest.review.lane_demotions, 2);
-  assert.match(verdict.summary, /demotion cap/i);
-  assert.match(manifest.review.last_escalation_decision.reason, /lane_demotion_cap/);
+    assert.equal(result.nextState, STATES.ESCALATED);
+    assert.equal(result.appliedVerdict, "escalated");
+    assert.equal(manifest.state, STATES.ESCALATED);
+    assert.equal(manifest.review.lane_demotions, 2);
+    assert.equal(verdict.verdict, "escalated");
+    assert.equal(verdict.applied_verdict, "escalated");
+    assert.match(verdict.summary, /demotion cap/i);
+    assert.equal(verdict.original_reviewer_verdict.verdict, "pass");
+    assert.equal(verdict.original_reviewer_verdict.next_action, "ready_to_merge");
+    assert.equal(verdict.original_reviewer_verdict.summary, "All done criteria are satisfied.");
+    assert.equal(verdict.relay_escalation.trigger, "lane_demotion_cap");
+    assert.equal(verdict.relay_escalation.reason, "lane_demotion_cap");
+    assert.match(comment, /Verdict: ESCALATED/);
+    assert.match(comment, /Reviewer verdict: PASS \(next_action=ready_to_merge\)/);
+    assert.match(comment, /Escalation trigger: lane_demotion_cap \(reason=lane_demotion_cap\)/);
+    assert.match(priorContext, /Primary reviewer verdict: PASS \(next_action=ready_to_merge\)/);
+    assert.match(priorContext, /Primary reviewer summary: All done criteria are satisfied\./);
+    assert.match(priorContext, /Applied verdict: ESCALATED/);
+    assert.match(priorContext, /Relay escalation: trigger=lane_demotion_cap; reason=lane_demotion_cap/);
+    assert.match(manifest.review.last_escalation_decision.reason, /lane_demotion_cap/);
+  } finally {
+    ghFixture.restore();
+  }
 });
 
 test("persisted lane demotion cap escalates the third hardened lane failure", () => {
