@@ -2071,6 +2071,7 @@ test("all-low-confidence changes_requested verdict is blocked by rubric gate fai
 
 test("compact assurance escalates its first rubric gate failure immediately", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const commentCapturePath = path.join(repoRoot, "compact-rubric-gate-comment.txt");
   updateManifestRecord(manifestPath, (data) => ({
     ...data,
     policy: {
@@ -2083,6 +2084,10 @@ test("compact assurance escalates its first rubric gate failure immediately", ()
     },
   }));
   configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: "",
+  });
   const reviewFile = writePassVerdict(repoRoot, "compact-missing-rubric.json");
 
   const result = runPassReview({
@@ -2091,15 +2096,33 @@ test("compact assurance escalates its first rubric gate failure immediately", ()
     doneCriteriaPath,
     diffPath,
     reviewFile,
+    noComment: false,
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
   });
   const manifest = readManifest(manifestPath).data;
   const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+  const redispatchPath = path.join(
+    ensureRunLayout(repoRoot, runId).runDir,
+    "review-round-1-redispatch.md"
+  );
 
   assert.equal(result.appliedVerdict, "escalated");
   assert.equal(result.state, STATES.ESCALATED);
   assert.equal(result.redispatchPath, null);
   assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
+  assert.equal(result.reviewGate.recoveryCommand, null);
+  assert.match(result.reviewGate.recovery, /Automatic rubric repair re-dispatch is unavailable/);
+  assert.doesNotMatch(result.reviewGate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
+  assert.equal(fs.existsSync(redispatchPath), false);
+  assert.equal(manifest.next_action, "inspect_review_failure");
   assert.equal(manifest.review.latest_verdict, "escalated");
+  assert.equal(manifest.review.last_gate.recovery_command, null);
+  assert.match(manifest.review.last_gate.recovery, /explicit owner decision/);
+  assert.doesNotMatch(manifest.review.last_gate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
   assert.equal(manifest.review.round_budget.consumed.substantive_failures, 1);
   assert.equal(
     manifest.review.last_escalation_decision.trigger,
@@ -2107,6 +2130,11 @@ test("compact assurance escalates its first rubric gate failure immediately", ()
   );
   assert.equal(verdictRecord.applied_verdict, "escalated");
   assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
+  assert.equal(verdictRecord.relay_gate.recovery_command, null);
+  assert.doesNotMatch(verdictRecord.relay_gate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
+  assert.match(commentBody, /Verdict: ESCALATED/);
+  assert.match(commentBody, /Recovery command: unavailable after escalation/);
+  assert.doesNotMatch(commentBody, /dispatch\.js|review-round-1-redispatch\.md/);
 });
 
 test("standard assurance escalates a rubric gate as the second substantive failure", () => {

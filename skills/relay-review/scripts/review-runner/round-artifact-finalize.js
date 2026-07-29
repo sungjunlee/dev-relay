@@ -9,6 +9,25 @@ const {
   formatConvergenceMarkdown,
 } = require("./convergence");
 
+function normalizeRubricGateFailure(rubricGateFailure, appliedVerdict) {
+  if (!rubricGateFailure || appliedVerdict !== "escalated") {
+    return rubricGateFailure;
+  }
+
+  const recovery = (
+    "Automatic rubric repair re-dispatch is unavailable because the run exhausted "
+    + "its substantive failure budget and escalated. Inspect the review failure; "
+    + "continuation requires an explicit owner decision through the documented "
+    + "review-policy extension and escalated-state recovery paths."
+  );
+  return {
+    ...rubricGateFailure,
+    recoveryCommand: null,
+    recovery,
+    summary: `review-runner fail-closed: the rubric gate exhausted the repair budget. ${recovery}`,
+  };
+}
+
 function persistVerdictArtifacts(context, analysis) {
   const {
     advisoryResults,
@@ -53,19 +72,23 @@ function persistVerdictArtifacts(context, analysis) {
       : confidenceDowngradeAppliedAsFinalPass
         ? "pass"
         : analysis.verdict.verdict;
+  const persistedRubricGateFailure = normalizeRubricGateFailure(
+    rubricGateFailure,
+    appliedVerdict
+  );
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
-  const verdictRecord = rubricGateFailure
+  const verdictRecord = persistedRubricGateFailure
     ? {
       ...analysis.verdict,
       applied_verdict: appliedVerdict,
       relay_gate: {
-        status: rubricGateFailure.status,
-        layer: rubricGateFailure.layer,
-        rubric_state: rubricGateFailure.rubricState,
-        rubric_status: rubricGateFailure.rubricStatus,
-        reason: rubricGateFailure.reason,
-        recovery_command: rubricGateFailure.recoveryCommand,
-        recovery: rubricGateFailure.recovery,
+        status: persistedRubricGateFailure.status,
+        layer: persistedRubricGateFailure.layer,
+        rubric_state: persistedRubricGateFailure.rubricState,
+        rubric_status: persistedRubricGateFailure.rubricStatus,
+        reason: persistedRubricGateFailure.reason,
+        recovery_command: persistedRubricGateFailure.recoveryCommand,
+        recovery: persistedRubricGateFailure.recovery,
       },
     }
     : { ...analysis.verdict, applied_verdict: appliedVerdict };
@@ -79,13 +102,13 @@ function persistVerdictArtifacts(context, analysis) {
         analysis.verdict.verdict === "changes_requested"
         && !confidenceDowngradeAppliedAsFinalPass
       )
-      || rubricGateFailure
+      || persistedRubricGateFailure
     )
   ) {
     redispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
-    const redispatchPrompt = rubricGateFailure
+    const redispatchPrompt = persistedRubricGateFailure
       ? buildRubricGateRedispatchPrompt(
-        rubricGateFailure,
+        persistedRubricGateFailure,
         doneCriteria,
         doneCriteriaSource,
         convergenceSummary
@@ -109,7 +132,7 @@ function persistVerdictArtifacts(context, analysis) {
     confidenceDowngradeAppliedAsFinalPass,
     convergenceSummary,
     redispatchPath,
-    rubricGateFailure,
+    rubricGateFailure: persistedRubricGateFailure,
     verdictPath,
   };
 }

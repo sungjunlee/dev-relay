@@ -54,10 +54,16 @@ function formatStatus(value) {
 
 function buildCommentBody(verdict, round, { warnings = [], gateFailure = null, advisorySummary = null } = {}) {
   if (gateFailure) {
+    const appliedVerdict = verdict.verdict === "escalated"
+      ? "ESCALATED"
+      : "CHANGES_REQUESTED";
+    const recoveryCommand = gateFailure.recoveryCommand
+      ? `Recovery command: ${gateFailure.recoveryCommand}`
+      : "Recovery command: unavailable after escalation";
     return appendCommentWarnings(appendAdvisorySummary([
       REVIEW_ROUND_MARKER,
       `## Relay Review Round ${round}`,
-      "Verdict: CHANGES_REQUESTED",
+      `Verdict: ${appliedVerdict}`,
       `Summary: ${gateFailure.summary}`,
       `Reviewer verdict: ${String(verdict.verdict || "unknown").toUpperCase()} (next_action=${verdict.next_action || "unknown"})`,
       `Contract: ${formatStatus(verdict.contract_status)}`,
@@ -66,7 +72,7 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null, a
       `Gate status: ${gateFailure.status}`,
       `Layer: ${gateFailure.layer}`,
       `Rubric state: ${gateFailure.rubricState} (anchor status: ${gateFailure.rubricStatus})`,
-      `Recovery command: ${gateFailure.recoveryCommand}`,
+      recoveryCommand,
       "Issues:",
       `- Rubric gate failed closed: ${gateFailure.reason}. ${gateFailure.recovery}`,
     ].join("\n"), advisorySummary), warnings);
