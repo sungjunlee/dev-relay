@@ -114,6 +114,43 @@ test("legacy manifests receive a deterministic conservative budget bridge", () =
   });
 });
 
+test("legacy delayed-publication attribution requires unambiguous internal evidence", () => {
+  const ambiguous = {
+    state: "review_pending",
+    dispatch: {
+      publish_policy: "after-internal-review",
+    },
+    git: {
+      pr_number: 123,
+    },
+    review: {
+      rounds: 2,
+      max_rounds: 2,
+      latest_verdict: "pending",
+    },
+  };
+  const ambiguousBudget = getReviewRoundBudget(ambiguous);
+  assert.equal(ambiguousBudget.phase, "post_publication");
+  assert.deepEqual(ambiguousBudget.consumed_by_phase, {
+    internal: 0,
+    post_publication: 2,
+  });
+
+  const phaseEvidence = {
+    ...ambiguous,
+    review: {
+      ...ambiguous.review,
+      last_review_phase: "internal",
+    },
+  };
+  const migratedBudget = getReviewRoundBudget(phaseEvidence);
+  assert.equal(migratedBudget.phase, "post_publication");
+  assert.deepEqual(migratedBudget.consumed_by_phase, {
+    internal: 2,
+    post_publication: 0,
+  });
+});
+
 test("malformed persisted accounting fails closed instead of falling back to legacy", () => {
   const data = withBudget();
   data.review.round_budget.consumed.substantive_failures = "0";

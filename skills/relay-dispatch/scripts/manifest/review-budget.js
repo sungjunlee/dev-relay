@@ -155,12 +155,37 @@ function isProtocolPass(latestVerdict) {
   return ["internal_lgtm", "lgtm", "pass"].includes(latestVerdict);
 }
 
+function legacyAppliedPhaseForManifest(data) {
+  const currentPhase = reviewPhaseForManifest(data);
+  if (
+    currentPhase !== REVIEW_PHASES.POST_PUBLICATION
+    || data?.state !== STATES.REVIEW_PENDING
+    || !data?.git?.pr_number
+  ) {
+    return currentPhase;
+  }
+
+  const latestVerdict = data?.review?.latest_verdict;
+  const lastReviewPhase = data?.review?.last_review_phase;
+  const hasInternalVerdictEvidence = (
+    latestVerdict === "internal_lgtm"
+    && lastReviewPhase !== REVIEW_PHASES.POST_PUBLICATION
+  );
+  const hasInternalPhaseEvidence = (
+    lastReviewPhase === REVIEW_PHASES.INTERNAL
+    && !["lgtm", "pass"].includes(latestVerdict)
+  );
+  return hasInternalVerdictEvidence || hasInternalPhaseEvidence
+    ? REVIEW_PHASES.INTERNAL
+    : currentPhase;
+}
+
 function deriveLegacyBudget(data) {
   const rounds = requireNonNegativeInteger(
     data?.review?.rounds ?? 0,
     "Persisted review.rounds"
   );
-  const phase = reviewPhaseForManifest(data);
+  const phase = legacyAppliedPhaseForManifest(data);
   const budget = createReviewRoundBudget();
   const latestVerdict = data?.review?.latest_verdict;
 

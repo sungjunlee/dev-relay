@@ -255,6 +255,43 @@ test("manifest-apply/applyVerdictToManifest maps internal PASS to publish_pendin
   });
 });
 
+test("manifest-apply migrates legacy delayed-publication rounds before applying public PASS", () => {
+  const manifest = createManifestInState(STATES.REVIEW_PENDING);
+  const { round_budget: _legacyMissingBudget, ...legacyReview } = manifest.review;
+  const legacy = {
+    ...manifest,
+    dispatch: {
+      ...(manifest.dispatch || {}),
+      publish_policy: "after-internal-review",
+    },
+    review: {
+      ...legacyReview,
+      rounds: 2,
+      latest_verdict: "internal_lgtm",
+    },
+  };
+
+  const result = applyVerdictToManifest(
+    legacy,
+    makeVerdict("pass", "ready_to_merge"),
+    3,
+    189,
+    "abc123",
+    0
+  );
+
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.review.last_review_phase, "post_publication");
+  assert.deepEqual(result.review.round_budget.consumed.applied_by_phase, {
+    internal: 2,
+    post_publication: 1,
+  });
+  assert.deepEqual(result.review.round_budget.consumed.protocol_verifications, {
+    internal: 1,
+    post_publication: 1,
+  });
+});
+
 test("manifest-apply/applyVerdictToManifest writes last_escalation_decision on clean rounds", () => {
   const manifest = createManifestInState(STATES.REVIEW_PENDING);
   const escalationDecision = makeEscalationDecision();
