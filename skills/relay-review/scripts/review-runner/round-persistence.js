@@ -87,6 +87,7 @@ function persistManifestAndEvents(context, analysis, artifacts) {
     escalationDecision,
     lineageSummary,
     repeatedIssueCount,
+    substantiveFailure,
     verdict,
   } = analysis;
   const {
@@ -125,7 +126,7 @@ function persistManifestAndEvents(context, analysis, artifacts) {
       escalationDecision,
       lineageSummary: escalationDecision.lineage_summary || lineageSummary,
       reviewPhase: internalReview ? "internal" : "post_publication",
-      substantiveFailure: blockingChangesRequested || Boolean(rubricGateFailure),
+      substantiveFailure,
     }
   );
   updatedManifest = {

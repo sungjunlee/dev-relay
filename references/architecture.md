@@ -145,7 +145,7 @@ anchor:
 
 review:
   rounds: 3                   # total applied verdicts; audit/artifact sequence
-  max_rounds: 2               # substantive-failure threshold
+  max_rounds: 2               # substantive-failure threshold; compact=1, standard=2, hardened=3
   round_budget:
     schema_version: 1
     topology: substantive_failures_with_protocol_verifications

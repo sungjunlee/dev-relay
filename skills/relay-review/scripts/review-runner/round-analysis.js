@@ -1,3 +1,7 @@
+const path = require("path");
+const {
+  buildReviewRunnerRubricGateFailure,
+} = require("../../../relay-dispatch/scripts/manifest/rubric");
 const {
   buildLaneCapEscalationDecision,
   getReviewAssuranceMetadata,
@@ -11,7 +15,15 @@ const {
 } = require("./redispatch");
 const { shouldEscalateRepairCycle } = require("./round-cap");
 
-function analyzeVerdict({ data, gateResult, internalReview, round, runDir, verdict }) {
+function analyzeVerdict({
+  data,
+  gateResult,
+  internalReview,
+  round,
+  rubricLoad,
+  runDir,
+  verdict,
+}) {
   const confidenceDowngrade = gateResult.confidenceDowngrade;
   const assuranceMetadata = getReviewAssuranceMetadata(verdict);
   const confidenceDowngradeApplied = (
@@ -85,11 +97,28 @@ function analyzeVerdict({ data, gateResult, internalReview, round, runDir, verdi
     );
     analysisVerdict = verdict;
   }
+  const rubricGateFailure = (
+    escalationDecision.decision !== "escalate"
+    && (
+      verdict.verdict === "pass"
+      || confidenceDowngradeApplied
+    )
+  )
+    ? buildReviewRunnerRubricGateFailure(
+      data.run_id,
+      path.join(runDir, `review-round-${round}-redispatch.md`),
+      rubricLoad
+    )
+    : null;
+  const substantiveFailure = (
+    blockingChangesRequested
+    || Boolean(rubricGateFailure)
+  );
   if (
     escalationDecision.decision !== "escalate"
     && shouldEscalateRepairCycle({
       data,
-      blocking: blockingChangesRequested,
+      blocking: substantiveFailure,
       phase: internalReview ? "internal" : "post_publication",
     })
   ) {
@@ -119,6 +148,8 @@ function analyzeVerdict({ data, gateResult, internalReview, round, runDir, verdi
     factorFlips,
     lineageSummary,
     repeatedIssueCount,
+    rubricGateFailure,
+    substantiveFailure,
     verdict,
   };
 }

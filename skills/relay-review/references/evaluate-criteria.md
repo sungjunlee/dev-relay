@@ -41,9 +41,11 @@ Note: The reviewer does NOT fix code directly — all fixes go through the execu
 
 **Convergence model:** `review.rounds` is the global applied-verdict sequence, not
 the repair budget. Compact escalates its first substantive failure. Standard
-allows one substantive failure to enter targeted repair; corrected-result and
-post-publication PASS verification are protocol work and do not consume that
-substantive budget. Hardened admits one further substantive repair cycle.
+allows two review rounds in its targeted repair cycle: one independent review
+and one review of the corrected result after re-dispatch. It allows one
+substantive failure to enter that repair; corrected-result and post-publication
+PASS verification are protocol work and do not consume the substantive budget.
+Hardened admits one further substantive repair cycle.
 
 An explicit extended policy for experimental work may persist a still-higher
 `review.max_rounds`. This changes the substantive-failure threshold referenced by

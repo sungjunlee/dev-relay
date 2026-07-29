@@ -2069,6 +2069,101 @@ test("all-low-confidence changes_requested verdict is blocked by rubric gate fai
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
+test("compact assurance escalates its first rubric gate failure immediately", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    policy: {
+      ...(data.policy || {}),
+      review_assurance: "compact",
+    },
+    review: {
+      ...(data.review || {}),
+      max_rounds: 1,
+    },
+  }));
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
+  const reviewFile = writePassVerdict(repoRoot, "compact-missing-rubric.json");
+
+  const result = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile,
+  });
+  const manifest = readManifest(manifestPath).data;
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+
+  assert.equal(result.appliedVerdict, "escalated");
+  assert.equal(result.state, STATES.ESCALATED);
+  assert.equal(result.redispatchPath, null);
+  assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
+  assert.equal(manifest.review.latest_verdict, "escalated");
+  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 1);
+  assert.equal(
+    manifest.review.last_escalation_decision.trigger,
+    "repair_cycle_exhausted"
+  );
+  assert.equal(verdictRecord.applied_verdict, "escalated");
+  assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
+});
+
+test("standard assurance escalates a rubric gate as the second substantive failure", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const blockingReviewFile = writeVerdict(repoRoot, "first-substantive-failure.json", {
+    verdict: "changes_requested",
+    summary: "A substantive issue remains.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Required recovery state is missing",
+      body: "The implementation omits the required recovery state.",
+      file: "src/index.js",
+      line: 12,
+      category: "contract",
+      severity: "high",
+      confidence: "high",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const first = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile: blockingReviewFile,
+  });
+  assert.equal(first.state, STATES.CHANGES_REQUESTED);
+  setReviewPending(manifestPath);
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
+
+  const passReviewFile = writePassVerdict(repoRoot, "second-round-missing-rubric.json");
+  const second = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile: passReviewFile,
+  });
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(second.round, 2);
+  assert.equal(second.appliedVerdict, "escalated");
+  assert.equal(second.state, STATES.ESCALATED);
+  assert.equal(second.redispatchPath, null);
+  assert.equal(second.reviewGate.status, "rubric_state_failed_closed");
+  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 2);
+  assert.equal(
+    manifest.review.last_escalation_decision.trigger,
+    "repair_cycle_exhausted"
+  );
+});
+
 test("mixed-confidence changes_requested verdict records no downgrade event marker", () => {
   const { repoRoot, doneCriteriaPath, diffPath, runId } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "mixed-confidence-changes.json", {

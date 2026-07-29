@@ -1,5 +1,4 @@
 const path = require("path");
-const { buildReviewRunnerRubricGateFailure } = require("../../../relay-dispatch/scripts/manifest/rubric");
 const { writeText } = require("./common");
 const {
   buildRedispatchPrompt,
@@ -14,13 +13,11 @@ function persistVerdictArtifacts(context, analysis) {
   const {
     advisoryResults,
     churnGrowth,
-    data,
     doneCriteria,
     doneCriteriaSource,
     hardenedAssurance,
     reviewedHeadSha,
     round,
-    rubricLoad,
     runDir,
   } = context;
   const {
@@ -29,6 +26,7 @@ function persistVerdictArtifacts(context, analysis) {
     confidenceDowngradeApplied,
     factorFlips,
     repeatedIssueCount,
+    rubricGateFailure,
   } = analysis;
   const convergenceSummary = buildConvergenceSummary({
     runDir,
@@ -44,29 +42,17 @@ function persistVerdictArtifacts(context, analysis) {
     );
   }
 
-  const rubricGateRedispatchPath = path.join(
-    runDir,
-    `review-round-${round}-redispatch.md`
-  );
-  const rubricGateFailure = (
-    analysis.verdict.verdict === "pass"
-    || confidenceDowngradeApplied
-  )
-    ? buildReviewRunnerRubricGateFailure(
-      data.run_id,
-      rubricGateRedispatchPath,
-      rubricLoad
-    )
-    : null;
   const confidenceDowngradeAppliedAsFinalPass = (
     confidenceDowngradeApplied
     && !rubricGateFailure
   );
-  const appliedVerdict = rubricGateFailure
-    ? "changes_requested"
-    : confidenceDowngradeAppliedAsFinalPass
-      ? "pass"
-      : analysis.verdict.verdict;
+  const appliedVerdict = analysis.verdict.verdict === "escalated"
+    ? "escalated"
+    : rubricGateFailure
+      ? "changes_requested"
+      : confidenceDowngradeAppliedAsFinalPass
+        ? "pass"
+        : analysis.verdict.verdict;
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
   const verdictRecord = rubricGateFailure
     ? {
@@ -87,15 +73,16 @@ function persistVerdictArtifacts(context, analysis) {
 
   let redispatchPath = null;
   if (
-    (
-      analysis.verdict.verdict === "changes_requested"
-      && !confidenceDowngradeAppliedAsFinalPass
+    analysis.verdict.verdict !== "escalated"
+    && (
+      (
+        analysis.verdict.verdict === "changes_requested"
+        && !confidenceDowngradeAppliedAsFinalPass
+      )
+      || rubricGateFailure
     )
-    || rubricGateFailure
   ) {
-    redispatchPath = rubricGateFailure
-      ? rubricGateRedispatchPath
-      : path.join(runDir, `review-round-${round}-redispatch.md`);
+    redispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
     const redispatchPrompt = rubricGateFailure
       ? buildRubricGateRedispatchPrompt(
         rubricGateFailure,
