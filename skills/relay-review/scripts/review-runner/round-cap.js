@@ -1,29 +1,32 @@
 const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
 const { writeManifest } = require("../../../relay-dispatch/scripts/manifest/store");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
+const {
+  DEFAULT_MAX_REVIEW_ROUNDS,
+  getMaxReviewRounds,
+  getReviewRoundBudget,
+} = require("../../../relay-dispatch/scripts/manifest/review-budget");
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
 const { summarizeLineage } = require("./redispatch");
 
-const DEFAULT_MAX_REVIEW_ROUNDS = 2;
-
-function getMaxReviewRounds(data) {
-  const configured = data?.review?.max_rounds;
-  if (configured === undefined || configured === null) {
-    return DEFAULT_MAX_REVIEW_ROUNDS;
-  }
-  if (!Number.isInteger(configured) || configured <= 0) {
-    throw new Error("Persisted review.max_rounds must be a positive integer");
-  }
-  return configured;
+function shouldEscalateRepairCycle({ data, blocking, phase }) {
+  if (!blocking) return false;
+  const budget = getReviewRoundBudget(data, { phase });
+  return budget.substantive_failures.consumed + 1 >= budget.limit;
 }
 
-function shouldEscalateRepairCycle({ data, round, blocking }) {
-  return Boolean(blocking) && Number(round) >= getMaxReviewRounds(data);
-}
-
-function enforceRoundCap({ body, data, manifestPath, prNumber, reviewedHeadSha, round, runRepoPath }) {
-  const maxRounds = getMaxReviewRounds(data);
-  if (round <= maxRounds) return;
+function enforceRoundCap({
+  body,
+  data,
+  manifestPath,
+  phase,
+  prNumber,
+  reviewedHeadSha,
+  round,
+  runRepoPath,
+}) {
+  const budget = getReviewRoundBudget(data, { phase });
+  if (budget.substantive_failures.consumed < budget.limit) return budget;
   const previousRound = Number(data.review?.rounds || 0);
   const escalationDecision = {
     round: previousRound,
@@ -33,6 +36,8 @@ function enforceRoundCap({ body, data, manifestPath, prNumber, reviewedHeadSha, 
     lineage_summary: summarizeLineage([]),
     decision: "escalate",
     reason: "max_rounds_exceeded",
+    review_phase: phase,
+    review_budget: budget,
   };
   const escalatedManifest = applyPolicyViolationToManifest(
     data,
@@ -53,7 +58,10 @@ function enforceRoundCap({ body, data, manifestPath, prNumber, reviewedHeadSha, 
     reason: "max_rounds_exceeded",
     origin: "system",
   });
-  throw new Error(`Review round cap exceeded: next round ${round} would exceed max_rounds=${maxRounds}`);
+  throw new Error(
+    `Review substantive failure cap exhausted before round ${round}: `
+    + `consumed=${budget.substantive_failures.consumed}, max_rounds=${budget.limit}`
+  );
 }
 
 module.exports = {

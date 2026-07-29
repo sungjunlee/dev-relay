@@ -273,6 +273,23 @@ test("reliability-report derives the core scorecard from manifests and events", 
     rounds: 1,
     updatedAt: staleTs,
   });
+  const mergedManifestRecord = readManifest(ensureRunLayout(repoRoot, runMerged).manifestPath);
+  mergedManifestRecord.data.review.round_budget.consumed = {
+    substantive_failures: 1,
+    protocol_verifications: {
+      internal: 1,
+      post_publication: 1,
+    },
+    applied_by_phase: {
+      internal: 2,
+      post_publication: 1,
+    },
+  };
+  writeManifest(
+    ensureRunLayout(repoRoot, runMerged).manifestPath,
+    mergedManifestRecord.data,
+    mergedManifestRecord.body
+  );
 
   appendRunEvent(repoRoot, runReady, {
     event: "dispatch_start",
@@ -296,6 +313,14 @@ test("reliability-report derives the core scorecard from manifests and events", 
     state_to: STATES.READY_TO_MERGE,
     head_sha: "def456",
     round: 2,
+    reason: "pass",
+  });
+  appendRunEvent(repoRoot, runMerged, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.READY_TO_MERGE,
+    head_sha: "aaa111",
+    round: 3,
     reason: "pass",
   });
   appendRunEvent(repoRoot, runMerged, {

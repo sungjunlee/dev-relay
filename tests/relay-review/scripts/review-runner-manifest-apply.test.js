@@ -6,6 +6,7 @@ const os = require("os");
 const path = require("path");
 
 const { STATES, updateManifestState } = require("../../../skills/relay-dispatch/scripts/manifest/lifecycle");
+const { recordAppliedReviewBudget } = require("../../../skills/relay-dispatch/scripts/manifest/review-budget");
 const { createManifestSkeleton, ensureRunLayout } = require("../../../skills/relay-dispatch/scripts/manifest/store");
 const {
   applyPolicyViolationToManifest,
@@ -172,6 +173,18 @@ function assertManifestWriteParity(actual, before, expected) {
   assert.deepEqual(normalizeUpdatedTimestamp(actual), normalizeUpdatedTimestamp(expected));
 }
 
+function expectedAppliedBudget(manifest, {
+  phase = "post_publication",
+  protocolVerification = false,
+  substantiveFailure = false,
+} = {}) {
+  return recordAppliedReviewBudget(manifest, {
+    phase,
+    protocolVerification,
+    substantiveFailure,
+  });
+}
+
 test("manifest-apply/applyVerdictToManifest preserves the PASS field-write contract", () => {
   const manifest = createManifestInState(STATES.REVIEW_PENDING);
   const result = applyVerdictToManifest(
@@ -195,6 +208,10 @@ test("manifest-apply/applyVerdictToManifest preserves the PASS field-write contr
     review: {
       ...manifest.review,
       rounds: 1,
+      round_budget: expectedAppliedBudget(manifest, {
+        protocolVerification: true,
+      }),
+      last_review_phase: "post_publication",
       latest_verdict: "lgtm",
       repeated_issue_count: 0,
       last_reviewed_sha: "abc123",
@@ -225,6 +242,11 @@ test("manifest-apply/applyVerdictToManifest maps internal PASS to publish_pendin
     review: {
       ...manifest.review,
       rounds: 1,
+      round_budget: expectedAppliedBudget(manifest, {
+        phase: "internal",
+        protocolVerification: true,
+      }),
+      last_review_phase: "internal",
       latest_verdict: "internal_lgtm",
       repeated_issue_count: 0,
       last_reviewed_sha: "abc123",
@@ -282,6 +304,10 @@ test("manifest-apply/applyVerdictToManifest fail-closes PASS with the full rubri
     review: {
       ...manifest.review,
       rounds: 2,
+      round_budget: expectedAppliedBudget(manifest, {
+        substantiveFailure: true,
+      }),
+      last_review_phase: "post_publication",
       latest_verdict: "rubric_state_failed_closed",
       repeated_issue_count: 0,
       last_reviewed_sha: "abc123",
@@ -321,6 +347,10 @@ test("manifest-apply/applyVerdictToManifest preserves the CHANGES_REQUESTED fiel
     review: {
       ...manifest.review,
       rounds: 3,
+      round_budget: expectedAppliedBudget(manifest, {
+        substantiveFailure: true,
+      }),
+      last_review_phase: "post_publication",
       latest_verdict: "changes_requested",
       repeated_issue_count: 4,
       last_reviewed_sha: "abc123",
@@ -411,6 +441,10 @@ test("manifest-apply/applyVerdictToManifest refreshes same-state CHANGES_REQUEST
     review: {
       ...manifest.review,
       rounds: 4,
+      round_budget: expectedAppliedBudget(manifest, {
+        substantiveFailure: true,
+      }),
+      last_review_phase: "post_publication",
       latest_verdict: "changes_requested",
       repeated_issue_count: 2,
       last_reviewed_sha: "abc123",
@@ -442,6 +476,8 @@ test("manifest-apply/applyVerdictToManifest preserves the ESCALATED field-write 
     review: {
       ...manifest.review,
       rounds: 5,
+      round_budget: expectedAppliedBudget(manifest),
+      last_review_phase: "post_publication",
       latest_verdict: "escalated",
       repeated_issue_count: 0,
       last_reviewed_sha: "abc123",

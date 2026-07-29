@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { STATES } = require("./manifest/lifecycle");
 const { getRunDir } = require("./manifest/paths");
+const { REVIEW_BUDGET_TOPOLOGY } = require("./manifest/review-budget");
 const { readTextFileWithoutFollowingSymlinks } = require("./manifest/rubric");
 const { listManifestRecords } = require("./manifest/store");
 const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
@@ -1614,10 +1615,23 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
 
   const reviewRuns = new Map();
   for (const manifest of manifests) {
-    reviewRuns.set(manifest.data.run_id, Number(manifest.data.review?.max_rounds || 2));
+    reviewRuns.set(manifest.data.run_id, {
+      maxRounds: Number(manifest.data.review?.max_rounds || 2),
+      roundBudget: manifest.data.review?.round_budget || null,
+    });
   }
   const maxRoundsCompliant = new Set();
-  for (const [runId, maxRounds] of reviewRuns.entries()) {
+  for (const [runId, policy] of reviewRuns.entries()) {
+    const { maxRounds, roundBudget } = policy;
+    if (
+      roundBudget?.topology === REVIEW_BUDGET_TOPOLOGY
+      && Number.isInteger(roundBudget?.consumed?.substantive_failures)
+    ) {
+      if (roundBudget.consumed.substantive_failures <= maxRounds) {
+        maxRoundsCompliant.add(runId);
+      }
+      continue;
+    }
     const runEvents = events.filter((event) => event.run_id === runId && event.event === EVENTS.REVIEW_APPLY);
     const overflow = runEvents.some((event) => Number(event.round || 0) > maxRounds);
     if (!overflow) {

@@ -11,7 +11,7 @@ const {
 } = require("./redispatch");
 const { shouldEscalateRepairCycle } = require("./round-cap");
 
-function analyzeVerdict({ data, gateResult, round, runDir, verdict }) {
+function analyzeVerdict({ data, gateResult, internalReview, round, runDir, verdict }) {
   const confidenceDowngrade = gateResult.confidenceDowngrade;
   const assuranceMetadata = getReviewAssuranceMetadata(verdict);
   const confidenceDowngradeApplied = (
@@ -89,8 +89,8 @@ function analyzeVerdict({ data, gateResult, round, runDir, verdict }) {
     escalationDecision.decision !== "escalate"
     && shouldEscalateRepairCycle({
       data,
-      round,
       blocking: blockingChangesRequested,
+      phase: internalReview ? "internal" : "post_publication",
     })
   ) {
     verdict = toEscalatedVerdict(
@@ -112,6 +112,7 @@ function analyzeVerdict({ data, gateResult, round, runDir, verdict }) {
   return {
     analysisVerdict,
     assuranceMetadata,
+    blockingChangesRequested,
     confidenceDowngrade,
     confidenceDowngradeApplied,
     escalationDecision,

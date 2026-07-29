@@ -82,6 +82,7 @@ function persistManifestAndEvents(context, analysis, artifacts) {
   } = context;
   const {
     assuranceMetadata,
+    blockingChangesRequested,
     confidenceDowngrade,
     escalationDecision,
     lineageSummary,
@@ -123,6 +124,8 @@ function persistManifestAndEvents(context, analysis, artifacts) {
       rubricGateFailure,
       escalationDecision,
       lineageSummary: escalationDecision.lineage_summary || lineageSummary,
+      reviewPhase: internalReview ? "internal" : "post_publication",
+      substantiveFailure: blockingChangesRequested || Boolean(rubricGateFailure),
     }
   );
   updatedManifest = {

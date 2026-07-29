@@ -120,7 +120,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
 ```
 If `REVIEW_BEFORE.ready_status.status == "merge_ready"`, skip the review invocation and continue to Step 5.
 
-Invoke **relay-review** in an isolated context. It runs Spec Compliance then Code Quality, re-dispatches on issues, updates manifest state, and keeps the relay-plan rubric fixed as the review anchor. Review rounds use the assurance-derived cap (compact 1, standard 2, hardened 3) unless a higher run cap is explicit. Do NOT review inline.
+Invoke **relay-review** in an isolated context. It runs Spec Compliance then Code Quality, re-dispatches on issues, updates manifest state, and keeps the relay-plan rubric fixed as the review anchor. The assurance-derived cap (compact 1, standard 2, hardened 3) applies to substantive failures; corrected-result and post-publication PASS verifications are phase-recorded protocol work and do not consume repair capacity. A higher run cap remains explicit. Do NOT review inline.
 
 After review returns, compare against the snapshot:
 ```bash
@@ -144,7 +144,6 @@ If relay-review returns LGTM, the review runner should already have recorded `re
 ## Batch Mode
 
 When multiple independent tasks are ready, prepare a `relay-fleet` batch but preserve `/relay`'s `ready_to_merge` stop until the user explicitly authorizes landing it; after authorization, `relay-fleet` is the default parallel batch drive. See `references/batch-mode.md` for the remaining conflict-recovery note and the "when in doubt, run sequentially" principle.
-
 ## Summary Checklist
 
 Verify Done Criteria fully implemented, relay-review LGTM/audit comment, `ready_to_merge` state, and any sprint/follow-up updates.

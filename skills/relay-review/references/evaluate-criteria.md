@@ -39,13 +39,16 @@ Note: The reviewer does NOT fix code directly — all fixes go through the execu
 
 **Re-dispatch rules:** file:line references, what to fix (not how), "do not change anything else".
 
-**Convergence model:** Compact assurance allows one post-publication review. Standard
-allows two review rounds: one independent review, one targeted re-dispatch when
-needed, then one review of the corrected result. Hardened allows three rounds for
-the existing pre-publication, targeted-repair, and post-publication path.
+**Convergence model:** `review.rounds` is the global applied-verdict sequence, not
+the repair budget. Compact escalates its first substantive failure. Standard
+allows one substantive failure to enter targeted repair; corrected-result and
+post-publication PASS verification are protocol work and do not consume that
+substantive budget. Hardened admits one further substantive repair cycle.
 
-An explicit extended policy for experimental work may persist a still-higher `review.max_rounds`. It
-retains repeated-issue, flip-flop, SHA, and audit gates.
+An explicit extended policy for experimental work may persist a still-higher
+`review.max_rounds`. This changes the substantive-failure threshold referenced by
+`review.round_budget.limit_source`; it retains repeated-issue, flip-flop, SHA,
+advisory, lifecycle, and audit gates.
 
 **After the configured cap:** Escalate — show the user the PR URL, list unresolved
 issues, and let them decide. More default rounds are not evidence of convergence.

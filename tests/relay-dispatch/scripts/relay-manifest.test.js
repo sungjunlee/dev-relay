@@ -139,6 +139,22 @@ test("createManifestSkeleton defaults and validates review assurance policy", ()
   assert.equal(standard.policy.review_assurance_source, "flag");
   assert.equal(standard.policy.review_assurance_overridden, undefined);
   assert.equal(standard.review.max_rounds, 2);
+  assert.deepEqual(standard.review.round_budget, {
+    schema_version: 1,
+    topology: "substantive_failures_with_protocol_verifications",
+    limit_source: "review.max_rounds",
+    consumed: {
+      substantive_failures: 0,
+      protocol_verifications: {
+        internal: 0,
+        post_publication: 0,
+      },
+      applied_by_phase: {
+        internal: 0,
+        post_publication: 0,
+      },
+    },
+  });
 
   const compact = createManifestSkeleton({
     repoRoot,

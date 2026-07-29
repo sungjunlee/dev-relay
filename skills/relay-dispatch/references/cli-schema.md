@@ -49,7 +49,7 @@ This is the authoritative statement of how dispatch resolves a run's review assu
 
 When an explicitly passed flag disagrees with the rubric, the rubric wins and the disagreement is recorded loudly. Resolution happens before the manifest is created and before the first review round is spent:
 
-- Run manifest: `policy.review_assurance` (resolved level: `compact` | `standard` | `hardened`), `policy.review_assurance_source` (`rubric` | `flag`), and `policy.review_assurance_overridden` (present only when an explicit flag lost to the rubric; holds the overridden flag value). `review.max_rounds` derives from the resolved level (compact 1, standard 2, hardened 3).
+- Run manifest: `policy.review_assurance` (resolved level: `compact` | `standard` | `hardened`), `policy.review_assurance_source` (`rubric` | `flag`), and `policy.review_assurance_overridden` (present only when an explicit flag lost to the rubric; holds the overridden flag value). `review.max_rounds` derives from the resolved level (compact 1, standard 2, hardened 3) and is the substantive-failure threshold referenced by `review.round_budget`; global `review.rounds` remains the applied-verdict sequence.
 - Dispatch output: the dry-run plan, the detached receipt, and the final result all carry `reviewAssurance`, `reviewAssuranceSource`, and `reviewAssuranceOverridden`; human output prints `Assurance: <level> (source=rubric|flag)[; overridden flag=<level>]`.
 
 On same-run resume the resolved level is immutable: a rubric value that disagrees with the persisted `policy.review_assurance` fails closed, and when the rubric omits the field an explicit flag that disagrees with the persisted level is refused.

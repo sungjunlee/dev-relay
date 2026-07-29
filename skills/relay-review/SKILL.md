@@ -86,7 +86,7 @@ This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `re
 | Converged (post-publication) | ready verdict emitted | `converged` | `ready_to_merge` |
 | Configured cap | fail | `repair_cycle_exhausted` | Escalated |
 
-Two phases run in order. Standard assurance uses one independent review, one targeted re-dispatch when needed, and one review of the corrected result. Compact escalates a substantive first-review failure; hardened has an explicit third-round budget for its pre-publication/repair/post-publication path. Each round re-measures against the **original anchor**, not the previous round's state.
+Two phases run in order. `review.rounds` is the global applied-verdict sequence. Compact escalates its first substantive failure; standard permits one targeted repair; hardened permits two. Corrected-result PASS and required post-publication PASS are phase-recorded protocol verifications and do not consume substantive repair capacity. Each round re-measures against the **original anchor**, not the previous round's state.
 
 ### Phase 1: Spec Compliance
 
