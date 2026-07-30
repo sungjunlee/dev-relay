@@ -221,6 +221,40 @@ test("execution-evidence strict preflight binds confirmed verification proof to 
   writeArtifact(runDir, makeArtifact(reviewedHead, {
     verification_runs: [{
       ...confirmedRun,
+      recorded_by: 42,
+    }],
+  }));
+  let malformedRecorder;
+  assert.doesNotThrow(() => {
+    malformedRecorder = strictPreflight();
+  });
+  assert.equal(malformedRecorder.status, "blocked");
+  assert.match(
+    malformedRecorder.reason,
+    /verification_runs\[0\]\.recorded_by must be a non-empty string/
+  );
+
+  for (const malformedProof of [null, "", "not-a-tree-sha", 42, {}, []]) {
+    writeArtifact(runDir, makeArtifact(reviewedHead, {
+      verification_runs: [{
+        ...confirmedRun,
+        verification_tree_sha: malformedProof,
+      }],
+    }));
+    let malformedResult;
+    assert.doesNotThrow(() => {
+      malformedResult = strictPreflight();
+    });
+    assert.equal(malformedResult.status, "blocked");
+    assert.match(
+      malformedResult.reason,
+      /verification_runs\[0\]\.verification_tree_sha must be a 40-character hex Git tree SHA when present/
+    );
+  }
+
+  writeArtifact(runDir, makeArtifact(reviewedHead, {
+    verification_runs: [{
+      ...confirmedRun,
       verification_tree_sha: "f".repeat(40),
     }],
   }));

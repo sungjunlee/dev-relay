@@ -256,6 +256,26 @@ function verificationTreeProofTrackedGitAddArgs() {
   return ["add", "-u", "--", "."];
 }
 
+function verificationTreeProofStagedRuntimeAdditionsGitDiffArgs() {
+  /*
+   * A path added under a runtime root exists only in the repository's real
+   * index, so `git add -u` cannot discover it from the HEAD-seeded proof
+   * index. Export only staged additions as a binary/full-index patch. Applying
+   * that patch to the proof index preserves the staged blob and mode without
+   * reading later unstaged worktree content or adjacent untracked metadata.
+   */
+  return [
+    "diff",
+    "--cached",
+    "--binary",
+    "--full-index",
+    "--no-ext-diff",
+    "--diff-filter=A",
+    "--",
+    ...RUNTIME_METADATA_ROOTS,
+  ];
+}
+
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
@@ -276,6 +296,12 @@ function buildExecutorVerificationInstructions(gates) {
     "git",
     ...verificationTreeProofTrackedGitAddArgs().map(shellQuote),
   ].join(" ");
+  const stagedRuntimeAdditionsCommand = [
+    'GIT_INDEX_FILE="$verification_real_index"',
+    "git",
+    ...verificationTreeProofStagedRuntimeAdditionsGitDiffArgs().map(shellQuote),
+    '> "$verification_runtime_patch"',
+  ].join(" ");
   return [
     "## Required executor-side verification",
     "",
@@ -283,15 +309,20 @@ function buildExecutorVerificationInstructions(gates) {
     "The commands must remain subject to the executor's current sandbox and network policy.",
     "Do not delegate them back to the relay orchestrator and do not expose credentials or secret environment values.",
     "After all required gates finish, capture the exact reviewable repository state with the temporary Git index commands below.",
-    "Do not use the repository's real index for this proof; untracked executor runtime metadata must stay excluded even if it is already staged there, while tracked runtime-root modifications and deletions remain reviewable.",
+    "Use the repository's real index only as a read-only source for intentionally staged runtime-root additions; untracked, unstaged executor runtime metadata must stay excluded, while tracked runtime-root modifications and deletions remain reviewable.",
+    "The staged-addition overlay preserves the exact staged blob and mode instead of later unstaged working-tree content.",
     "",
+    'verification_real_index="$(git rev-parse --git-path index)"',
     'verification_index="$(mktemp)"',
+    'verification_runtime_patch="$(mktemp)"',
     'rm -f "$verification_index"',
     'GIT_INDEX_FILE="$verification_index" git read-tree HEAD',
     reviewableGitAddCommand,
     trackedGitAddCommand,
+    stagedRuntimeAdditionsCommand,
+    'if test -s "$verification_runtime_patch"; then GIT_INDEX_FILE="$verification_index" git apply --cached --whitespace=nowarn "$verification_runtime_patch"; fi',
     'verification_tree_sha="$(GIT_INDEX_FILE="$verification_index" git write-tree)"',
-    'rm -f "$verification_index"',
+    'rm -f "$verification_runtime_patch" "$verification_index"',
     "",
     "Capture this proof before any later commit or commit hook can mutate the tree, then report it as verification_tree_sha.",
     "",
@@ -615,6 +646,7 @@ module.exports = {
   rebrandEvidence,
   resolveExecutionEvidenceTestCommand,
   verificationTreeProofGitAddArgs,
+  verificationTreeProofStagedRuntimeAdditionsGitDiffArgs,
   verificationTreeProofTrackedGitAddArgs,
   writeExecutionEvidence,
 };

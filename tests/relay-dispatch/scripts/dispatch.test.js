@@ -639,6 +639,58 @@ fs.writeFileSync(
   return codexPath;
 }
 
+function writeStagedRuntimeRootAdditionCodex(binDir, { directCommit = false } = {}) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+${fakeExecutorVerificationSupportSource()}
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const runtimeDir = path.join(cwd, ".antigravitycli");
+const stagedAddition = path.join(runtimeDir, "reviewable-runtime-config");
+fs.mkdirSync(runtimeDir, { recursive: true });
+fs.writeFileSync(stagedAddition, "intentionally staged runtime config\\n", "utf-8");
+fs.chmodSync(stagedAddition, 0o755);
+execFileSync(
+  "git",
+  ["-C", cwd, "add", ".antigravitycli/reviewable-runtime-config"],
+  { stdio: "pipe" }
+);
+fs.writeFileSync(
+  path.join(runtimeDir, "runtime-state.json"),
+  '{"session":"unstaged-runtime-metadata"}\\n',
+  "utf-8"
+);
+const verificationTreeSha = captureVerificationTree(cwd);
+if (${JSON.stringify(directCommit)}) {
+  execFileSync(
+    "git",
+    ["-C", cwd, "commit", "-m", "add staged runtime config"],
+    { stdio: "pipe" }
+  );
+}
+fs.writeFileSync(
+  output,
+  withVerificationEvidence("staged runtime-root addition completed\\n", verificationTreeSha),
+  "utf-8"
+);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeUncommittedClaude(binDir) {
   ensureDefaultFakeGh(binDir);
   const claudePath = path.join(binDir, "claude");
@@ -902,6 +954,10 @@ function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, cod
     writeSilentCodex(binDir);
   } else if (codexMode === "commit-no-result") {
     writeCommittedNoResultCodex(binDir);
+  } else if (codexMode === "runtime-root-staged-addition-direct") {
+    writeStagedRuntimeRootAdditionCodex(binDir, { directCommit: true });
+  } else if (codexMode === "runtime-root-staged-addition-uncommitted") {
+    writeStagedRuntimeRootAdditionCodex(binDir);
   } else if (codexMode === "runtime-root-uncommitted") {
     writeUncommittedRuntimeRootCodex(binDir);
   } else if (codexMode === "uncommitted") {
@@ -7271,6 +7327,85 @@ test("dispatch commit keeps tracked runtime-root changes but excludes adjacent m
     revParse(repoRoot, `${result.headSha}^{tree}`)
   );
 });
+
+for (const scenario of [
+  {
+    name: "orchestrator commit",
+    codexMode: "runtime-root-staged-addition-uncommitted",
+    branch: "issue-1121-staged-runtime-addition-orchestrator",
+    commitMode: "orchestrator-committed",
+  },
+  {
+    name: "executor-direct commit",
+    codexMode: "runtime-root-staged-addition-direct",
+    branch: "issue-1121-staged-runtime-addition-direct",
+    commitMode: "committed in-sandbox",
+  },
+]) {
+  test(`dispatch ${scenario.name} preserves a staged runtime-root addition beside unstaged metadata`, () => {
+    const { repoRoot, relayHome } = setupRepoWithOrigin();
+    process.env.RELAY_HOME = relayHome;
+    const { env } = createPushPrTestEnv({
+      relayHome,
+      ghState: {
+        prCreateUrl: "https://github.com/acme/dev-relay/pull/1121",
+      },
+      codexMode: scenario.codexMode,
+    });
+    const rubricFile = writeAssuranceRubric("hardened");
+
+    const result = JSON.parse(runDispatch(repoRoot, [
+      "-b", scenario.branch,
+      "--prompt", "stage a reviewable runtime-root addition beside executor metadata",
+      "--rubric-file", rubricFile,
+      "--json",
+    ], env));
+    const stagedPath = ".antigravitycli/reviewable-runtime-config";
+    const metadataPath = ".antigravitycli/runtime-state.json";
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.commitMode, scenario.commitMode);
+    assert.equal(
+      execFileSync("git", ["show", `${result.headSha}:${stagedPath}`], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }),
+      "intentionally staged runtime config\n"
+    );
+    assert.match(
+      execFileSync("git", ["ls-tree", result.headSha, stagedPath], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }),
+      /^100755 blob /
+    );
+    assert.notEqual(
+      spawnSync("git", ["cat-file", "-e", `${result.headSha}:${metadataPath}`], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }).status,
+      0
+    );
+    assert.match(
+      execFileSync("git", ["status", "--porcelain"], {
+        cwd: result.worktree,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }),
+      /^\?\? \.antigravitycli\/runtime-state\.json$/m
+    );
+
+    const evidence = readExecutionEvidence(result.runDir);
+    assert.equal(evidence.verification_runs.length, 1);
+    assert.equal(
+      evidence.verification_runs[0].verification_tree_sha,
+      revParse(repoRoot, `${result.headSha}^{tree}`)
+    );
+  });
+}
 
 test("dispatch fails closed when an orchestrator-owned commit hook changes the verified tree", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();

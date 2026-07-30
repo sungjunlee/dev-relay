@@ -145,7 +145,10 @@ function findMissingVerificationGates(gates, verificationRuns) {
 }
 
 function isConfirmedVerificationRun(run) {
-  return run.recorded_by.endsWith(CONFIRMED_VERIFICATION_RECORDED_BY_SUFFIX);
+  return (
+    typeof run.recorded_by === "string"
+    && run.recorded_by.endsWith(CONFIRMED_VERIFICATION_RECORDED_BY_SUFFIX)
+  );
 }
 
 function resolveReviewedTreeSha(artifact, reviewedHead, manifestData) {
@@ -172,6 +175,12 @@ function resolveReviewedTreeSha(artifact, reviewedHead, manifestData) {
 }
 
 function confirmedVerificationTreeReason(artifact, reviewedHead, manifestData) {
+  try {
+    artifact.verification_runs.forEach(validateVerificationRun);
+  } catch (error) {
+    return error.message;
+  }
+
   const confirmedRuns = artifact.verification_runs
     .map((run, index) => ({ run, index }))
     .filter(({ run }) => isConfirmedVerificationRun(run));
