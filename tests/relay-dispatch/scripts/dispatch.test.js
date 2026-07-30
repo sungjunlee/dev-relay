@@ -1375,6 +1375,55 @@ finishWhenReady();
   return codexPath;
 }
 
+function writeMarkedProcessInventoryCommands(binDir) {
+  const pgrepPath = path.join(binDir, "pgrep");
+  fs.writeFileSync(pgrepPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+let marker;
+try {
+  marker = JSON.parse(fs.readFileSync(process.env.RELAY_TEST_EXECUTOR_MARKER, "utf-8"));
+} catch {
+  process.exit(1);
+}
+if (
+  args.length === 2 &&
+  args[0] === "-g" &&
+  Number(args[1]) === Number(marker.pgid) &&
+  Number.isFinite(Number(marker.childPid))
+) {
+  process.stdout.write(String(marker.childPid) + "\\n");
+  process.exit(0);
+}
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(pgrepPath, 0o755);
+
+  const psPath = path.join(binDir, "ps");
+  fs.writeFileSync(psPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+let marker;
+try {
+  marker = JSON.parse(fs.readFileSync(process.env.RELAY_TEST_EXECUTOR_MARKER, "utf-8"));
+} catch {
+  process.exit(1);
+}
+if (
+  args.length === 4 &&
+  args[0] === "-p" &&
+  Number(args[1]) === Number(marker.childPid) &&
+  args[2] === "-o" &&
+  args[3] === "comm="
+) {
+  process.stdout.write("relay-lingering-child\\n");
+  process.exit(0);
+}
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(psPath, 0o755);
+}
+
 async function waitForDispatchExit(proc) {
   let stdout = "";
   let stderr = "";
@@ -5953,6 +6002,7 @@ test("dispatch completes normally when clean leader exit leaves a lingering proc
     paths: () => [binDir, markerPath, `${markerPath}.child-ready`],
   });
   writeLeaderExitBackgroundCodex(binDir);
+  writeMarkedProcessInventoryCommands(binDir);
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
