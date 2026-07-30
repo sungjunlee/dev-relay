@@ -31,6 +31,7 @@ const cliArgs = bindCliArgs(args, {
   reservedFlags: KNOWN_FLAGS,
 });
 const REVIEW_TIMEOUT_ENV = "RELAY_PI_REVIEW_TIMEOUT";
+const REVIEW_PROVIDER_EXTENSION_ENV = "RELAY_PI_REVIEW_PROVIDER_EXTENSION";
 const DEFAULT_REVIEW_TIMEOUT = "1800s";
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
@@ -84,6 +85,30 @@ function parseReviewTimeoutMs(value) {
     );
   }
   return timeoutMs;
+}
+
+function resolveProviderExtension(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (!path.isAbsolute(raw)) {
+    throw new Error(
+      `${REVIEW_PROVIDER_EXTENSION_ENV} must be an absolute path to a trusted Pi provider extension`
+    );
+  }
+  let stat;
+  try {
+    stat = fs.statSync(raw);
+  } catch {
+    throw new Error(
+      `${REVIEW_PROVIDER_EXTENSION_ENV} does not exist: ${raw}`
+    );
+  }
+  if (!stat.isFile()) {
+    throw new Error(
+      `${REVIEW_PROVIDER_EXTENSION_ENV} must reference a provider extension file: ${raw}`
+    );
+  }
+  return raw;
 }
 
 function isExecTimeout(error) {
@@ -160,6 +185,9 @@ function main() {
   const piBin = process.env.RELAY_PI_BIN || "pi";
   const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
   const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
+  const providerExtension = resolveProviderExtension(
+    process.env[REVIEW_PROVIDER_EXTENSION_ENV]
+  );
 
   if (!promptFile) {
     throw new Error("--prompt-file is required");
@@ -172,6 +200,7 @@ function main() {
     "--no-session",
     "--no-context-files",
     "--no-extensions",
+    ...(providerExtension ? ["--extension", providerExtension] : []),
     "--no-skills",
     "--no-prompt-templates",
     "--no-themes",

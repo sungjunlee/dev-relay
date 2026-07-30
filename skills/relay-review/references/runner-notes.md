@@ -77,6 +77,17 @@ Lane composition is operator/orchestrator judgment, not script policy. Low-risk 
 
 For `cline` advisory lanes, `executeAdvisoryRequest` exports the lane's effective `timeoutSeconds` into the adapter child as `RELAY_CLINE_REVIEW_TIMEOUT="<timeoutSeconds>s"`. That lane budget supersedes any inherited `RELAY_CLINE_REVIEW_TIMEOUT` in the review-runner process so one number governs both the parent `execFileSync` kill and the adapter's internal `--timeout` (env − 60s headroom). Operator knob: `--advisory-timeout`. Direct (non-advisory) invocations of `invoke-reviewer-cline.js` keep the existing env contract and default (`1800s`).
 
+### Pi provider extension isolation
+
+Pi reviews disable automatic extension discovery so an operator's unrelated
+extensions cannot add tools or hooks to the read-only reviewer. When the chosen
+model provider itself is supplied by a trusted Pi extension, set
+`RELAY_PI_REVIEW_PROVIDER_EXTENSION` to the absolute path of that provider's
+entry file. The adapter keeps `--no-extensions` and adds exactly one explicit
+`--extension <path>`; relative, missing, and non-file values fail before Pi is
+invoked. Treat the extension as executable reviewer infrastructure and pin or
+audit it with the same care as the Pi binary.
+
 ## External Review Triggers
 
 Delayed-publication runs should spend external review quota only after the internal relay review has converged:
