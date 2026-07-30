@@ -480,6 +480,7 @@ function writeFakeAdvisoryCli(repoRoot, name, {
   mutate = false,
   profile = "blindspot",
   requiredFinding = false,
+  promptCapturePath = null,
 } = {}) {
   const filePath = path.join(repoRoot, `fake-${name}.js`);
   const advisoryPayload = `JSON.stringify({
@@ -502,7 +503,31 @@ const fs = require("fs");
 const path = require("path");
 const logPath = ${JSON.stringify(logPath)};
 ${name === "cline"
-  ? "// Cline receives the prompt through a positional file reference."
+  ? `const promptCapturePath = ${JSON.stringify(promptCapturePath)};
+const promptReference = process.argv.at(-1);
+const mentions = Array.from(promptReference.matchAll(/(^|[\\s])@([^\\s]+)/g))
+  .map((match) => match[2].trim())
+  .map((mention) => mention.replace(/^[('"\\x60]+/, "").replace(/[),.:;!?\\x60'"]+$/, ""))
+  .filter(Boolean);
+if (mentions.length !== 1) {
+  process.stderr.write("expected exactly one Cline file mention\\n");
+  process.exit(2);
+}
+const resolvedPromptPath = path.resolve(process.cwd(), mentions[0].replace(/\\\\/g, "/"));
+const relativePromptPath = path.relative(process.cwd(), resolvedPromptPath);
+if (relativePromptPath.startsWith("..") || path.isAbsolute(relativePromptPath) || !fs.existsSync(resolvedPromptPath)) {
+  process.stderr.write("invalid Cline workspace file mention\\n");
+  process.exit(2);
+}
+const promptText = fs.readFileSync(resolvedPromptPath, "utf-8");
+if (promptCapturePath) {
+  fs.writeFileSync(promptCapturePath, JSON.stringify({
+    promptReference,
+    resolvedPromptPath,
+    relativePromptPath,
+    promptText,
+  }), "utf-8");
+}`
   : "process.stdin.resume();"}
 if (logPath) fs.appendFileSync(logPath, "advisory-start " + Date.now() + "\\n");
 if (${mutate ? "true" : "false"}) fs.writeFileSync(path.join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
@@ -2261,7 +2286,8 @@ test("review-runner accepts antigravity advisory review when route policy allows
 test("review-runner accepts cline advisory review when route policy allows the reviewer model", () => {
   const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "allow-cline-advisory" });
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
-  const clineScript = writeFakeAdvisoryCli(repoRoot, "cline");
+  const promptCapturePath = path.join(runDir, "cline-prompt-capture.json");
+  const clineScript = writeFakeAdvisoryCli(repoRoot, "cline", { promptCapturePath });
 
   const result = runReview({
     repoRoot,
@@ -2298,6 +2324,23 @@ test("review-runner accepts cline advisory review when route policy allows the r
   assert.equal(transportEvidence.mode, "prompt_file_reference");
   assert.equal(transportEvidence.prompt_text_in_argv, false);
   assert.equal(transportEvidence.compatibility_fallback, true);
+  const promptCapture = JSON.parse(fs.readFileSync(promptCapturePath, "utf-8"));
+  assert.match(
+    promptCapture.promptReference,
+    /^Read and follow the complete review instructions in @\.relay-review-cline-prompt-[^/\s]+\/review-prompt\.md\. Return only the JSON requested by that file\.$/
+  );
+  assert.match(
+    promptCapture.relativePromptPath,
+    /^\.relay-review-cline-prompt-[^/\s]+\/review-prompt\.md$/
+  );
+  assert.equal(promptCapture.promptReference.includes("[NON-INTERACTIVE ADVISORY REVIEW]"), false);
+  assert.match(promptCapture.promptText, /\[NON-INTERACTIVE ADVISORY REVIEW\]/);
+  assert.match(promptCapture.promptText, /Done Criteria/);
+  assert.equal(fs.existsSync(promptCapture.resolvedPromptPath), false);
+  assert.deepEqual(
+    fs.readdirSync(repoRoot).filter((entry) => entry.startsWith(".relay-review-cline-prompt-")),
+    []
+  );
 });
 
 test("review-runner persists raw cline JSONL and stderr after a successful exit fails to parse", () => {
