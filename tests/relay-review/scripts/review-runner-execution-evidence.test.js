@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -14,6 +15,14 @@ const {
   parseExecutionEvidenceArtifact,
   readExecutionEvidenceArtifact,
 } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
+
+function git(repoPath, ...args) {
+  return execFileSync("git", args, {
+    cwd: repoPath,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
 
 function makeArtifact(headSha, overrides = {}) {
   return {
@@ -174,6 +183,68 @@ test("execution-evidence strict mode prefers verification_runs when present", ()
     computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40), strict: true }),
     { status: "pass", reason: null }
   );
+});
+
+test("execution-evidence strict preflight binds confirmed verification proof to reviewed HEAD tree", () => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-confirmed-tree-"));
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-confirmed-tree-run-"));
+  git(repoPath, "init", "--object-format=sha1");
+  git(repoPath, "config", "user.name", "Relay Test");
+  git(repoPath, "config", "user.email", "relay@example.com");
+  fs.writeFileSync(path.join(repoPath, "reviewed.txt"), "reviewed tree\n", "utf-8");
+  git(repoPath, "add", "reviewed.txt");
+  git(repoPath, "commit", "-m", "reviewed head");
+  const reviewedHead = git(repoPath, "rev-parse", "HEAD");
+  const reviewedTree = git(repoPath, "rev-parse", "HEAD^{tree}");
+  const confirmedRun = {
+    command: "node --test confirmed.test.js",
+    cwd: repoPath,
+    head_sha: reviewedHead,
+    exit_code: 0,
+    output_hash: "b".repeat(64),
+    recorded_by: "antigravity-confirmed-verification-v1",
+    recorded_at: "2026-07-30T00:00:00.000Z",
+  };
+  const strictPreflight = () => buildExecutionEvidencePreflight({
+    runDir,
+    reviewedHead,
+    strict: true,
+  });
+
+  writeArtifact(runDir, makeArtifact(reviewedHead, {
+    verification_runs: [confirmedRun],
+  }));
+  const missingProof = strictPreflight();
+  assert.equal(missingProof.status, "blocked");
+  assert.match(missingProof.reason, /confirmed-verification-v1.*requires verification_tree_sha/);
+
+  writeArtifact(runDir, makeArtifact(reviewedHead, {
+    verification_runs: [{
+      ...confirmedRun,
+      verification_tree_sha: "f".repeat(40),
+    }],
+  }));
+  const mismatchedProof = strictPreflight();
+  assert.equal(mismatchedProof.status, "blocked");
+  assert.match(mismatchedProof.reason, /verification_tree_sha/);
+  assert.match(mismatchedProof.reason, new RegExp(`reviewed HEAD ${reviewedHead}\\^\\{tree\\} ${reviewedTree}`));
+
+  writeArtifact(runDir, makeArtifact(reviewedHead, {
+    verification_runs: [{
+      ...confirmedRun,
+      verification_tree_sha: reviewedTree,
+    }],
+  }));
+  assert.equal(strictPreflight().status, "pass");
+
+  writeArtifact(runDir, makeArtifact(reviewedHead, {
+    verification_runs: [{
+      ...confirmedRun,
+      recorded_by: "legacy-orchestrator-v1",
+      verification_tree_sha: undefined,
+    }],
+  }));
+  assert.equal(strictPreflight().status, "pass");
 });
 
 test("execution-evidence strict mode resolves retained non-default rubric anchors", () => {

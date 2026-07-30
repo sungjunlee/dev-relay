@@ -1,6 +1,9 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const {
+  RUNTIME_METADATA_ROOTS,
+} = require("./runtime-dirt");
 
 const EXECUTION_EVIDENCE_FILENAME = "execution-evidence.json";
 const EXECUTION_EVIDENCE_SCHEMA_VERSION = 1;
@@ -230,19 +233,50 @@ function hashFileSha256(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
+function verificationTreeProofGitAddArgs() {
+  return [
+    "add",
+    "-A",
+    "--",
+    ".",
+    ...RUNTIME_METADATA_ROOTS.flatMap((root) => [
+      `:(exclude)${root}`,
+      `:(exclude)${root}/**`,
+    ]),
+  ];
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
 function buildExecutorVerificationInstructions(gates) {
   if (!Array.isArray(gates) || gates.length === 0) return "";
   const request = {
     schema_version: 1,
     gates: gates.map(({ name, command }) => ({ name, command })),
   };
+  const reviewableGitAddCommand = [
+    'GIT_INDEX_FILE="$verification_index"',
+    "git",
+    ...verificationTreeProofGitAddArgs().map(shellQuote),
+  ].join(" ");
   return [
     "## Required executor-side verification",
     "",
     "After completing the task, run every command below inside this same executor session.",
     "The commands must remain subject to the executor's current sandbox and network policy.",
     "Do not delegate them back to the relay orchestrator and do not expose credentials or secret environment values.",
-    "After all required gates finish, stage the exact verified repository state and capture its Git tree with `git write-tree`.",
+    "After all required gates finish, capture the exact reviewable repository state with the temporary Git index commands below.",
+    "Do not use the repository's real index for this proof; executor runtime metadata roots must stay excluded even if they are already staged there.",
+    "",
+    'verification_index="$(mktemp)"',
+    'rm -f "$verification_index"',
+    'GIT_INDEX_FILE="$verification_index" git read-tree HEAD',
+    reviewableGitAddCommand,
+    'verification_tree_sha="$(GIT_INDEX_FILE="$verification_index" git write-tree)"',
+    'rm -f "$verification_index"',
+    "",
     "Capture this proof before any later commit or commit hook can mutate the tree, then report it as verification_tree_sha.",
     "",
     VERIFICATION_REQUEST_BEGIN,
@@ -564,5 +598,6 @@ module.exports = {
   hashFileSha256,
   rebrandEvidence,
   resolveExecutionEvidenceTestCommand,
+  verificationTreeProofGitAddArgs,
   writeExecutionEvidence,
 };

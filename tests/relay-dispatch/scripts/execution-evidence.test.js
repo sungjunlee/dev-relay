@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -14,11 +15,20 @@ const {
   hashFileSha256,
   rebrandEvidence,
   resolveExecutionEvidenceTestCommand,
+  verificationTreeProofGitAddArgs,
   writeExecutionEvidence,
 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
 const {
   buildExecutionEvidencePreflight,
 } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
+
+function git(repoPath, ...args) {
+  return execFileSync("git", args, {
+    cwd: repoPath,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
 
 test("verification gates seed the evidence command and identify malformed command gates", () => {
   const rubric = [
@@ -115,10 +125,70 @@ test("executor verification instructions keep gate execution inside the dispatch
   assert.match(instructions, /current sandbox and network policy/);
   assert.match(instructions, /Do not delegate them back to the relay orchestrator/);
   assert.match(instructions, /After all required gates finish/);
+  assert.match(instructions, /temporary Git index/);
+  assert.match(instructions, /GIT_INDEX_FILE/);
   assert.match(instructions, /git write-tree/);
+  assert.match(instructions, /:\(exclude\)\.antigravitycli/);
   assert.match(instructions, /before any later commit or commit hook can mutate the tree/);
   assert.match(instructions, /verification_tree_sha/);
   assert.match(instructions, /"command":"node --test focused\.test\.js"/);
+});
+
+test("verification tree proof excludes staged Antigravity runtime metadata", (t) => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-verification-tree-"));
+  const verificationIndex = path.join(
+    os.tmpdir(),
+    `relay-verification-index-${process.pid}-${Date.now()}`
+  );
+  t.after(() => fs.rmSync(verificationIndex, { force: true }));
+
+  git(repoPath, "init");
+  git(repoPath, "config", "user.name", "Relay Test");
+  git(repoPath, "config", "user.email", "relay@example.com");
+  fs.writeFileSync(path.join(repoPath, "reviewable.txt"), "before\n", "utf-8");
+  git(repoPath, "add", "reviewable.txt");
+  git(repoPath, "commit", "-m", "base");
+
+  fs.writeFileSync(path.join(repoPath, "reviewable.txt"), "after\n", "utf-8");
+  fs.mkdirSync(path.join(repoPath, ".antigravitycli"), { recursive: true });
+  fs.writeFileSync(
+    path.join(repoPath, ".antigravitycli", "runtime-state.json"),
+    '{"session":"runtime-only"}\n',
+    "utf-8"
+  );
+  git(repoPath, "add", "-A");
+
+  const proofEnv = {
+    ...process.env,
+    GIT_INDEX_FILE: verificationIndex,
+  };
+  execFileSync("git", ["read-tree", "HEAD"], {
+    cwd: repoPath,
+    env: proofEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  execFileSync("git", verificationTreeProofGitAddArgs(), {
+    cwd: repoPath,
+    env: proofEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const verificationTreeSha = execFileSync("git", ["write-tree"], {
+    cwd: repoPath,
+    env: proofEnv,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+  const realIndexTreeSha = git(repoPath, "write-tree");
+
+  assert.deepEqual(
+    git(repoPath, "ls-tree", "-r", "--name-only", verificationTreeSha).split("\n"),
+    ["reviewable.txt"]
+  );
+  assert.match(
+    git(repoPath, "ls-tree", "-r", "--name-only", realIndexTreeSha),
+    /\.antigravitycli\/runtime-state\.json/
+  );
+  assert.notEqual(verificationTreeSha, realIndexTreeSha);
 });
 
 test("executor-confirmed verification results persist SHA-bound output evidence without executing commands", () => {
