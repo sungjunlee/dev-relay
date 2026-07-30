@@ -41,6 +41,13 @@ function verificationRunsMalformation(verificationRuns) {
     if (!isNonEmptyString(run.head_sha) || !SHA40_PATTERN.test(run.head_sha)) {
       return `verification_runs[${index}].head_sha must be a 40-character hex SHA`;
     }
+    if (
+      run.verification_tree_sha !== undefined
+      && (!isNonEmptyString(run.verification_tree_sha)
+        || !SHA40_PATTERN.test(run.verification_tree_sha))
+    ) {
+      return `verification_runs[${index}].verification_tree_sha must be a 40-character hex Git tree SHA when present`;
+    }
     if (!Number.isInteger(run.exit_code) || run.exit_code < 0) {
       return `verification_runs[${index}].exit_code must be a non-negative integer`;
     }
@@ -235,6 +242,8 @@ function buildExecutorVerificationInstructions(gates) {
     "After completing the task, run every command below inside this same executor session.",
     "The commands must remain subject to the executor's current sandbox and network policy.",
     "Do not delegate them back to the relay orchestrator and do not expose credentials or secret environment values.",
+    "After all required gates finish, stage the exact verified repository state and capture its Git tree with `git write-tree`.",
+    "Capture this proof before any later commit or commit hook can mutate the tree, then report it as verification_tree_sha.",
     "",
     VERIFICATION_REQUEST_BEGIN,
     JSON.stringify(request),
@@ -242,7 +251,7 @@ function buildExecutorVerificationInstructions(gates) {
     "",
     "At the end of your final response, append exactly one result envelope using this shape:",
     VERIFICATION_RESULT_BEGIN,
-    '{"schema_version":1,"runs":[{"command":"exact command from request","exit_code":0,"output":"captured stdout/stderr"}]}',
+    '{"schema_version":1,"verification_tree_sha":"40-hex Git tree SHA captured after all gates and before commit","runs":[{"command":"exact command from request","exit_code":0,"output":"captured stdout/stderr"}]}',
     VERIFICATION_RESULT_END,
     "Preserve each command verbatim, keep request order, and report a nonzero exit_code when policy blocks a command.",
   ].join("\n");
@@ -289,10 +298,35 @@ function parseExecutorVerificationResult(resultText) {
   return result;
 }
 
+function validateVerificationTreeProof(verificationTreeSha, finalTreeSha) {
+  if (!isNonEmptyString(verificationTreeSha) || !SHA40_PATTERN.test(verificationTreeSha)) {
+    throw new Error(
+      "verification_tree_proof_invalid: executor verification result verification_tree_sha " +
+      "must be an exact 40-character hex Git tree SHA captured after all required gates and " +
+      "before any later commit or hook; re-run the executor verification gates at the committed HEAD"
+    );
+  }
+  if (!isNonEmptyString(finalTreeSha) || !SHA40_PATTERN.test(finalTreeSha)) {
+    throw new Error(
+      "verification_tree_proof_invalid: final HEAD^{tree} did not resolve to an exact " +
+      "40-character hex Git tree SHA; repair the commit and re-run the executor verification gates"
+    );
+  }
+  if (verificationTreeSha.toLowerCase() !== finalTreeSha.toLowerCase()) {
+    throw new Error(
+      "verification_tree_mismatch: executor verification ran against tree " +
+      `${verificationTreeSha}, but final HEAD^{tree} is ${finalTreeSha}; ` +
+      "re-run the executor verification gates at the committed HEAD and report a new tree proof"
+    );
+  }
+  return verificationTreeSha.toLowerCase();
+}
+
 function collectExecutorVerificationEvidence({
   gates,
   cwd,
   headSha,
+  finalTreeSha,
   runDir,
   resultText,
   executor,
@@ -301,11 +335,15 @@ function collectExecutorVerificationEvidence({
   if (!Array.isArray(gates) || gates.length === 0) {
     return { runs: [], outputPath: null, exitCode: undefined };
   }
-  if (!cwd || !headSha || !runDir) {
-    throw new Error("executor verification evidence requires cwd, headSha, and runDir");
+  if (!cwd || !headSha || !finalTreeSha || !runDir) {
+    throw new Error("executor verification evidence requires cwd, headSha, finalTreeSha, and runDir");
   }
 
   const result = parseExecutorVerificationResult(resultText);
+  const verificationTreeSha = validateVerificationTreeProof(
+    result.verification_tree_sha,
+    finalTreeSha
+  );
   if (result.runs.length !== gates.length) {
     throw new Error(
       `executor verification result recorded ${result.runs.length} runs for ${gates.length} required gates`
@@ -356,6 +394,7 @@ function collectExecutorVerificationEvidence({
       command: gate.command,
       cwd,
       head_sha: headSha,
+      verification_tree_sha: verificationTreeSha,
       exit_code: confirmed.exit_code,
       output_path: outputName,
       output_hash: hashFileSha256(outputPath),
@@ -370,6 +409,7 @@ function collectExecutorVerificationEvidence({
     runs,
     outputPath: aggregateOutputPath,
     exitCode: failedRun ? failedRun.exit_code : 0,
+    verificationTreeSha,
   };
 }
 

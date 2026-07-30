@@ -114,6 +114,10 @@ test("executor verification instructions keep gate execution inside the dispatch
   assert.match(instructions, /inside this same executor session/);
   assert.match(instructions, /current sandbox and network policy/);
   assert.match(instructions, /Do not delegate them back to the relay orchestrator/);
+  assert.match(instructions, /After all required gates finish/);
+  assert.match(instructions, /git write-tree/);
+  assert.match(instructions, /before any later commit or commit hook can mutate the tree/);
+  assert.match(instructions, /verification_tree_sha/);
   assert.match(instructions, /"command":"node --test focused\.test\.js"/);
 });
 
@@ -128,6 +132,7 @@ test("executor-confirmed verification results persist SHA-bound output evidence 
     "RELAY_VERIFICATION_RESULT_BEGIN",
     JSON.stringify({
       schema_version: 1,
+      verification_tree_sha: "c".repeat(40),
       runs: [{
         command,
         exit_code: 1,
@@ -141,6 +146,7 @@ test("executor-confirmed verification results persist SHA-bound output evidence 
     gates: [{ name: "focused gate", type: "command", command }],
     cwd,
     headSha,
+    finalTreeSha: "c".repeat(40),
     runDir,
     resultText,
     executor: "codex",
@@ -153,6 +159,7 @@ test("executor-confirmed verification results persist SHA-bound output evidence 
   assert.equal(result.runs[0].command, command);
   assert.equal(result.runs[0].cwd, cwd);
   assert.equal(result.runs[0].head_sha, headSha);
+  assert.equal(result.runs[0].verification_tree_sha, "c".repeat(40));
   assert.equal(result.runs[0].exit_code, 1);
   assert.equal(result.runs[0].recorded_by, "codex-confirmed-verification-v1");
   assert.equal(result.runs[0].recorded_at, "2026-07-28T00:00:00.000Z");
@@ -161,6 +168,7 @@ test("executor-confirmed verification results persist SHA-bound output evidence 
     hashFileSha256(path.join(runDir, result.runs[0].output_path))
   );
   assert.equal(path.basename(result.outputPath), VERIFICATION_OUTPUT_FILENAME);
+  assert.equal(result.verificationTreeSha, "c".repeat(40));
   assert.match(fs.readFileSync(result.outputPath, "utf-8"), /sandbox policy denied write/);
   assert.equal(fs.existsSync(sentinelPath), false);
 });
@@ -170,6 +178,7 @@ test("executor verification evidence fails closed on missing or mismatched confi
     gates: [{ name: "focused gate", command: "node --test focused.test.js" }],
     cwd: "/repo",
     headSha: "b".repeat(40),
+    finalTreeSha: "c".repeat(40),
     runDir: fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-verification-invalid-")),
     executor: "codex",
   };
@@ -183,11 +192,54 @@ test("executor verification evidence fails closed on missing or mismatched confi
       ...options,
       resultText: [
         "RELAY_VERIFICATION_RESULT_BEGIN",
-        '{"schema_version":1,"runs":[{"command":"npm test","exit_code":0,"output":"ok"}]}',
+        `{"schema_version":1,"verification_tree_sha":"${"c".repeat(40)}","runs":[{"command":"npm test","exit_code":0,"output":"ok"}]}`,
         "RELAY_VERIFICATION_RESULT_END",
       ].join("\n"),
     }),
     /did not match required gate/
+  );
+
+  for (const verificationTreeSha of [undefined, "not-a-tree", "a".repeat(39)]) {
+    const envelope = {
+      schema_version: 1,
+      ...(verificationTreeSha === undefined ? {} : { verification_tree_sha: verificationTreeSha }),
+      runs: [{
+        command: "node --test focused.test.js",
+        exit_code: 0,
+        output: "ok",
+      }],
+    };
+    assert.throws(
+      () => collectExecutorVerificationEvidence({
+        ...options,
+        resultText: [
+          "RELAY_VERIFICATION_RESULT_BEGIN",
+          JSON.stringify(envelope),
+          "RELAY_VERIFICATION_RESULT_END",
+        ].join("\n"),
+      }),
+      /verification_tree_proof_invalid.*40-character hex Git tree SHA.*re-run the executor verification gates/
+    );
+  }
+
+  assert.throws(
+    () => collectExecutorVerificationEvidence({
+      ...options,
+      resultText: [
+        "RELAY_VERIFICATION_RESULT_BEGIN",
+        JSON.stringify({
+          schema_version: 1,
+          verification_tree_sha: "d".repeat(40),
+          runs: [{
+            command: "node --test focused.test.js",
+            exit_code: 0,
+            output: "ok",
+          }],
+        }),
+        "RELAY_VERIFICATION_RESULT_END",
+      ].join("\n"),
+    }),
+    /verification_tree_mismatch.*final HEAD\^\{tree\}.*re-run the executor verification gates/
   );
 });
 
@@ -455,6 +507,74 @@ test("rebrandEvidence safely audits malformed verification_runs and strict prefl
       entry.name
     );
   }
+});
+
+test("strict preflight blocks a malformed verification rebrand audit with zero command gates", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-rebrand-gateless-"));
+  const rubric = [
+    "evaluation:",
+    "  verification:",
+    "    checks:",
+    "      - name: inspect artifact",
+    "        type: observation",
+  ].join("\n");
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), rubric, "utf-8");
+  const legacyFields = {
+    schema_version: 1,
+    test_command: "node --test legacy.test.js",
+    test_result_hash: "c".repeat(64),
+    test_result_summary: "legacy gate passed",
+    test_exit_code: 0,
+    recorded_at: "2026-04-22T00:00:00.000Z",
+    recorded_by: "dispatch-orchestrator-v1",
+  };
+  writeExecutionEvidence(runDir, {
+    ...legacyFields,
+    head_sha: "a".repeat(40),
+    verification_runs: { command: "node --test malformed.test.js" },
+  });
+
+  rebrandEvidence(runDir, {
+    newHeadSha: "b".repeat(40),
+    reason: "recover malformed gateless evidence",
+  });
+  const blocked = buildExecutionEvidencePreflight({
+    runDir,
+    reviewedHead: "b".repeat(40),
+    strict: true,
+  });
+
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.qualityExecutionStatus, "fail");
+  assert.match(blocked.reason, /removed malformed verification_runs/);
+  assert.match(blocked.reason, /must be an array when present; found object/);
+  assert.match(blocked.reason, new RegExp(`from ${"a".repeat(40)} to ${"b".repeat(40)}`));
+  assert.match(blocked.reason, /Re-verify at the new HEAD or record audited operator evidence/);
+  assert.doesNotMatch(blocked.reason, /Required verification gates?:/);
+
+  const cleanRunDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-clean-gateless-"));
+  fs.writeFileSync(path.join(cleanRunDir, "rubric.yaml"), rubric, "utf-8");
+  writeExecutionEvidence(cleanRunDir, {
+    ...legacyFields,
+    head_sha: "b".repeat(40),
+  });
+  assert.deepEqual(
+    buildExecutionEvidencePreflight({
+      runDir: cleanRunDir,
+      reviewedHead: "b".repeat(40),
+      strict: true,
+    }),
+    {
+      status: "pass",
+      qualityExecutionStatus: "pass",
+      reason: null,
+      reviewedHeadSha: "b".repeat(40),
+      evidenceHeadSha: "b".repeat(40),
+      artifactPath: path.join(cleanRunDir, EXECUTION_EVIDENCE_FILENAME),
+      browserEvidence: { present: false },
+      nextAction: "invoke_primary_reviewer",
+    }
+  );
 });
 
 test("rebrandEvidence retains verification removal provenance across repeated rebrands", () => {

@@ -90,17 +90,17 @@ function missingVerificationGateReason(gates) {
   );
 }
 
-function rebrandVerificationGateReason(artifact, gates) {
+function rebrandVerificationGateReason(artifact, gates, policies = [
+  "removed_stale_after_rebrand",
+  "removed_malformed_after_rebrand",
+]) {
   const rebrands = [
     artifact.rebrand,
     ...(Array.isArray(artifact.rebrand_history)
       ? [...artifact.rebrand_history].reverse()
       : []),
   ].filter(isObject);
-  const rebrand = rebrands.find((entry) => (
-    entry.verification_runs?.policy === "removed_stale_after_rebrand"
-    || entry.verification_runs?.policy === "removed_malformed_after_rebrand"
-  ));
+  const rebrand = rebrands.find((entry) => policies.includes(entry.verification_runs?.policy));
   if (!rebrand) return null;
 
   const audit = rebrand.verification_runs;
@@ -108,16 +108,18 @@ function rebrandVerificationGateReason(artifact, gates) {
   const laterRebrand = rebrandHead !== artifact.head_sha
     ? `; evidence is now at ${artifact.head_sha}`
     : "";
-  const requiredGates = (
-    `Required verification ${gates.length === 1 ? "gate" : "gates"}: ` +
-    gates.map((gate) => `'${gate.name}'`).join(", ")
-  );
+  const requiredGates = gates.length > 0
+    ? (
+        ` Required verification ${gates.length === 1 ? "gate" : "gates"}: ` +
+        gates.map((gate) => `'${gate.name}'`).join(", ")
+      )
+    : "";
   if (audit.policy === "removed_malformed_after_rebrand") {
     return (
       "strict execution evidence rebrand removed malformed verification_runs after HEAD changed " +
       `from ${rebrand.previous_head_sha} to ${rebrandHead}${laterRebrand}; ` +
       `${audit.malformation_reason}. ` +
-      "Re-verify at the new HEAD or record audited operator evidence. " +
+      "Re-verify at the new HEAD or record audited operator evidence." +
       requiredGates
     );
   }
@@ -125,7 +127,7 @@ function rebrandVerificationGateReason(artifact, gates) {
     `strict execution evidence rebrand removed ${audit.removed_count} stale ` +
     `${audit.removed_count === 1 ? "verification_run" : "verification_runs"} after HEAD changed ` +
     `from ${rebrand.previous_head_sha} to ${rebrandHead}${laterRebrand}; ` +
-    "re-verify at the new HEAD or record audited operator evidence. " +
+    "re-verify at the new HEAD or record audited operator evidence." +
     requiredGates
   );
 }
@@ -158,6 +160,15 @@ function validateVerificationRun(run, index) {
   }
   if (!isNonEmptyString(run.head_sha) || !SHA40_PATTERN.test(run.head_sha)) {
     throw new Error(`execution evidence verification_runs[${index}].head_sha must be a 40-character hex SHA`);
+  }
+  if (
+    run.verification_tree_sha !== undefined
+    && (!isNonEmptyString(run.verification_tree_sha)
+      || !SHA40_PATTERN.test(run.verification_tree_sha))
+  ) {
+    throw new Error(
+      `execution evidence verification_runs[${index}].verification_tree_sha must be a 40-character hex Git tree SHA when present`
+    );
   }
   if (!Number.isInteger(run.exit_code) || run.exit_code < 0) {
     throw new Error(`execution evidence verification_runs[${index}].exit_code must be a non-negative integer`);
@@ -455,6 +466,17 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false, m
       return {
         status: "fail",
         reason: `strict execution evidence could not resolve verification gates: ${error.message}`,
+      };
+    }
+    const malformedRebrandReason = rebrandVerificationGateReason(
+      artifactLoad.artifact,
+      verificationGates,
+      ["removed_malformed_after_rebrand"]
+    );
+    if (malformedRebrandReason) {
+      return {
+        status: "fail",
+        reason: malformedRebrandReason,
       };
     }
     if (verificationGates.length > 0) {

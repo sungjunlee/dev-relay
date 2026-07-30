@@ -199,7 +199,14 @@ process.stdout.write("ok\\n");
 
 function fakeExecutorVerificationSupportSource() {
   return `
-function withVerificationEvidence(summary) {
+function captureVerificationTree(cwd) {
+  return require("child_process").execFileSync(
+    "git",
+    ["-C", cwd, "write-tree"],
+    { encoding: "utf-8", stdio: "pipe" }
+  ).trim();
+}
+function withVerificationEvidence(summary, verificationTreeSha) {
   const prompt = String(args[args.length - 1] || "");
   const requestBegin = "RELAY_VERIFICATION_REQUEST_BEGIN";
   const requestEnd = "RELAY_VERIFICATION_REQUEST_END";
@@ -229,7 +236,11 @@ function withVerificationEvidence(summary) {
   return [
     String(summary || "").trimEnd(),
     resultBegin,
-    JSON.stringify({ schema_version: 1, runs }),
+    JSON.stringify({
+      schema_version: 1,
+      verification_tree_sha: verificationTreeSha,
+      runs,
+    }),
     resultEnd,
     "",
   ].join("\\n");
@@ -258,8 +269,9 @@ const output = args[args.indexOf("-o") + 1];
 const fileName = fs.existsSync(cwd + "/first.txt") ? "resume.txt" : "first.txt";
 fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
 execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+const verificationTreeSha = captureVerificationTree(cwd);
 execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
-fs.writeFileSync(output, withVerificationEvidence("ok\\n"), "utf-8");
+fs.writeFileSync(output, withVerificationEvidence("ok\\n", verificationTreeSha), "utf-8");
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -472,8 +484,13 @@ if (args[0] !== "exec") {
   process.stderr.write("unsupported fake codex invocation");
   process.exit(1);
 }
+const cwd = args[args.indexOf("-C") + 1];
 const output = args[args.indexOf("-o") + 1];
-fs.writeFileSync(output, withVerificationEvidence("already applied\\n"), "utf-8");
+fs.writeFileSync(
+  output,
+  withVerificationEvidence("already applied\\n", captureVerificationTree(cwd)),
+  "utf-8"
+);
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -547,6 +564,7 @@ function writeUncommittedCodex(binDir) {
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
+const { execFileSync } = require("child_process");
 const args = process.argv.slice(2);
 ${fakeExecutorVerificationSupportSource()}
 if (args[0] === "--version") {
@@ -568,7 +586,13 @@ if (process.env.RELAY_TEST_EXTERNAL_ADVANCE === "1") {
   fs.writeFileSync(manifestPath, manifest, "utf-8");
 }
 fs.appendFileSync(cwd + "/README.md", "dirty\\n", "utf-8");
-fs.writeFileSync(output, withVerificationEvidence("work completed without commit\\n"), "utf-8");
+execFileSync("git", ["-C", cwd, "add", "README.md"], { stdio: "pipe" });
+const verificationTreeSha = captureVerificationTree(cwd);
+fs.writeFileSync(
+  output,
+  withVerificationEvidence("work completed without commit\\n", verificationTreeSha),
+  "utf-8"
+);
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -7060,10 +7084,12 @@ test("dispatch orchestrator-commits uncommitted codex runs by default", () => {
     },
     codexMode: "uncommitted",
   });
+  const rubricFile = writeAssuranceRubric("hardened");
 
   const result = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-508-codex-default-auto-recover",
     "--prompt", "work without commit",
+    "--rubric-file", rubricFile,
     "--json",
   ], env));
 
@@ -7101,9 +7127,14 @@ test("dispatch orchestrator-commits uncommitted codex runs by default", () => {
     result.headSha,
     "execution evidence binds to the orchestrator commit SHA, not the pre-commit HEAD",
   );
+  assert.equal(evidence.verification_runs.length, 1);
+  assert.equal(
+    evidence.verification_runs[0].verification_tree_sha,
+    revParse(repoRoot, `${result.headSha}^{tree}`)
+  );
 });
 
-test("dispatch fails closed when a commit hook changes the tree after executor verification", () => {
+test("dispatch fails closed when an orchestrator-owned commit hook changes the verified tree", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   const { env } = createPushPrTestEnv({
     relayHome,
@@ -7157,6 +7188,67 @@ test("dispatch fails closed when a commit hook changes the tree after executor v
       stdio: "pipe",
     }),
     /mutated by pre-commit hook/
+  );
+  assert.equal(preflight.status, "blocked");
+  assert.equal(preflight.qualityExecutionStatus, "fail");
+  assert.match(preflight.reason, /verification gate went unrecorded: 'focused test'/);
+});
+
+test("dispatch fails closed when an executor-direct commit hook changes the verified tree", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    codexMode: "commit",
+  });
+  const hookPath = path.join(repoRoot, ".git", "hooks", "pre-commit");
+  fs.writeFileSync(hookPath, [
+    "#!/bin/sh",
+    "printf 'mutated in executor-direct pre-commit hook\\n' >> README.md",
+    "git add README.md",
+    "",
+  ].join("\n"), "utf-8");
+  fs.chmodSync(hookPath, 0o755);
+  const rubricFile = writeAssuranceRubric("hardened");
+
+  const dispatched = spawnSync(process.execPath, [
+    SCRIPT,
+    repoRoot,
+    "-b", "issue-1121-executor-tree-mutating-hook",
+    "--prompt", "verify work before the executor commits it",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+  const result = JSON.parse(dispatched.stdout);
+  const evidence = readExecutionEvidence(result.runDir);
+  const manifestData = readManifest(result.manifestPath).data;
+  const preflight = buildExecutionEvidencePreflight({
+    runDir: result.runDir,
+    reviewedHead: result.headSha,
+    strict: true,
+    manifestData,
+  });
+
+  assert.equal(dispatched.status, 1, dispatched.stderr);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.equal(result.commitMode, "committed in-sandbox");
+  assert.match(result.error, /verification_tree_mismatch/);
+  assert.match(result.error, /final HEAD\^\{tree\}/);
+  assert.match(result.error, /re-run the executor verification gates at the committed HEAD/);
+  assert.equal(evidence.head_sha, result.headSha);
+  assert.equal(evidence.verification_runs, undefined);
+  assert.equal(evidence.test_exit_code, 1);
+  assert.match(
+    execFileSync("git", ["show", `${result.headSha}:README.md`], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }),
+    /mutated in executor-direct pre-commit hook/
   );
   assert.equal(preflight.status, "blocked");
   assert.equal(preflight.qualityExecutionStatus, "fail");
@@ -7782,6 +7874,10 @@ test("dispatch seeds execution evidence test_command from structured verificatio
   assert.equal(evidence.verification_runs.length, 1);
   assert.equal(evidence.verification_runs[0].command, "node --version");
   assert.equal(evidence.verification_runs[0].head_sha, result.headSha);
+  assert.equal(
+    evidence.verification_runs[0].verification_tree_sha,
+    revParse(fixture.repoRoot, `${result.headSha}^{tree}`)
+  );
   assert.equal(evidence.verification_runs[0].exit_code, 0);
   assert.equal(
     evidence.verification_runs[0].recorded_by,
