@@ -598,6 +598,47 @@ fs.writeFileSync(
   return codexPath;
 }
 
+function writeUncommittedRuntimeRootCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+${fakeExecutorVerificationSupportSource()}
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const runtimeDir = path.join(cwd, ".antigravitycli");
+fs.appendFileSync(path.join(runtimeDir, "tracked-config"), "tracked after\\n", "utf-8");
+fs.rmSync(path.join(runtimeDir, "tracked-obsolete"));
+fs.writeFileSync(
+  path.join(runtimeDir, "runtime-state.json"),
+  '{"session":"runtime-only"}\\n',
+  "utf-8"
+);
+execFileSync("git", ["-C", cwd, "add", "-u", "--", ".antigravitycli"], {
+  stdio: "pipe",
+});
+const verificationTreeSha = captureVerificationTree(cwd);
+fs.writeFileSync(
+  output,
+  withVerificationEvidence("runtime-root work completed without commit\\n", verificationTreeSha),
+  "utf-8"
+);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeUncommittedClaude(binDir) {
   ensureDefaultFakeGh(binDir);
   const claudePath = path.join(binDir, "claude");
@@ -861,6 +902,8 @@ function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, cod
     writeSilentCodex(binDir);
   } else if (codexMode === "commit-no-result") {
     writeCommittedNoResultCodex(binDir);
+  } else if (codexMode === "runtime-root-uncommitted") {
+    writeUncommittedRuntimeRootCodex(binDir);
   } else if (codexMode === "uncommitted") {
     writeUncommittedCodex(binDir);
   } else if (codexMode === "partial-no-result") {
@@ -1373,55 +1416,6 @@ finishWhenReady();
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
-}
-
-function writeMarkedProcessInventoryCommands(binDir) {
-  const pgrepPath = path.join(binDir, "pgrep");
-  fs.writeFileSync(pgrepPath, `#!/usr/bin/env node
-const fs = require("fs");
-const args = process.argv.slice(2);
-let marker;
-try {
-  marker = JSON.parse(fs.readFileSync(process.env.RELAY_TEST_EXECUTOR_MARKER, "utf-8"));
-} catch {
-  process.exit(1);
-}
-if (
-  args.length === 2 &&
-  args[0] === "-g" &&
-  Number(args[1]) === Number(marker.pgid) &&
-  Number.isFinite(Number(marker.childPid))
-) {
-  process.stdout.write(String(marker.childPid) + "\\n");
-  process.exit(0);
-}
-process.exit(1);
-`, "utf-8");
-  fs.chmodSync(pgrepPath, 0o755);
-
-  const psPath = path.join(binDir, "ps");
-  fs.writeFileSync(psPath, `#!/usr/bin/env node
-const fs = require("fs");
-const args = process.argv.slice(2);
-let marker;
-try {
-  marker = JSON.parse(fs.readFileSync(process.env.RELAY_TEST_EXECUTOR_MARKER, "utf-8"));
-} catch {
-  process.exit(1);
-}
-if (
-  args.length === 4 &&
-  args[0] === "-p" &&
-  Number(args[1]) === Number(marker.childPid) &&
-  args[2] === "-o" &&
-  args[3] === "comm="
-) {
-  process.stdout.write("relay-lingering-child\\n");
-  process.exit(0);
-}
-process.exit(1);
-`, "utf-8");
-  fs.chmodSync(psPath, 0o755);
 }
 
 async function waitForDispatchExit(proc) {
@@ -6002,7 +5996,6 @@ test("dispatch completes normally when clean leader exit leaves a lingering proc
     paths: () => [binDir, markerPath, `${markerPath}.child-ready`],
   });
   writeLeaderExitBackgroundCodex(binDir);
-  writeMarkedProcessInventoryCommands(binDir);
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
@@ -7177,6 +7170,101 @@ test("dispatch orchestrator-commits uncommitted codex runs by default", () => {
     result.headSha,
     "execution evidence binds to the orchestrator commit SHA, not the pre-commit HEAD",
   );
+  assert.equal(evidence.verification_runs.length, 1);
+  assert.equal(
+    evidence.verification_runs[0].verification_tree_sha,
+    revParse(repoRoot, `${result.headSha}^{tree}`)
+  );
+});
+
+test("dispatch commit keeps tracked runtime-root changes but excludes adjacent metadata", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  process.env.RELAY_HOME = relayHome;
+  const runtimeDir = path.join(repoRoot, ".antigravitycli");
+  const trackedRuntimePath = ".antigravitycli/tracked-config";
+  const deletedRuntimePath = ".antigravitycli/tracked-obsolete";
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(repoRoot, trackedRuntimePath),
+    "tracked before\n",
+    "utf-8"
+  );
+  fs.writeFileSync(
+    path.join(repoRoot, deletedRuntimePath),
+    "remove during dispatch\n",
+    "utf-8"
+  );
+  execFileSync("git", ["add", trackedRuntimePath, deletedRuntimePath], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  execFileSync("git", ["commit", "-m", "track runtime config"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  execFileSync("git", ["push", "origin", "main"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/1121",
+    },
+    codexMode: "runtime-root-uncommitted",
+  });
+  const rubricFile = writeAssuranceRubric("hardened");
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-1121-runtime-root-reviewable",
+    "--prompt", "change tracked runtime config beside executor metadata",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.commitMode, "orchestrator-committed");
+  assert.equal(
+    execFileSync("git", ["show", `${result.headSha}:${trackedRuntimePath}`], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }),
+    "tracked before\ntracked after\n"
+  );
+  assert.notEqual(
+    spawnSync("git", [
+      "cat-file",
+      "-e",
+      `${result.headSha}:.antigravitycli/runtime-state.json`,
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).status,
+    0
+  );
+  assert.notEqual(
+    spawnSync("git", ["cat-file", "-e", `${result.headSha}:${deletedRuntimePath}`], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).status,
+    0
+  );
+  const worktreeStatus = execFileSync("git", ["status", "--porcelain"], {
+    cwd: result.worktree,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.match(worktreeStatus, /^\?\? \.antigravitycli\/runtime-state\.json$/m);
+  assert.doesNotMatch(worktreeStatus, /tracked-config/);
+
+  const evidence = readExecutionEvidence(result.runDir);
   assert.equal(evidence.verification_runs.length, 1);
   assert.equal(
     evidence.verification_runs[0].verification_tree_sha,

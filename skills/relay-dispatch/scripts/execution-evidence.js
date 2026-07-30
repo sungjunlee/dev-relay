@@ -246,6 +246,16 @@ function verificationTreeProofGitAddArgs() {
   ];
 }
 
+function verificationTreeProofTrackedGitAddArgs() {
+  /*
+   * The first proof add deliberately excludes runtime roots so untracked
+   * executor metadata cannot enter the verification tree. Overlay every
+   * tracked worktree update afterward: `git add -u` records modifications and
+   * deletions beneath those roots without adding their untracked neighbors.
+   */
+  return ["add", "-u", "--", "."];
+}
+
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
@@ -261,6 +271,11 @@ function buildExecutorVerificationInstructions(gates) {
     "git",
     ...verificationTreeProofGitAddArgs().map(shellQuote),
   ].join(" ");
+  const trackedGitAddCommand = [
+    'GIT_INDEX_FILE="$verification_index"',
+    "git",
+    ...verificationTreeProofTrackedGitAddArgs().map(shellQuote),
+  ].join(" ");
   return [
     "## Required executor-side verification",
     "",
@@ -268,12 +283,13 @@ function buildExecutorVerificationInstructions(gates) {
     "The commands must remain subject to the executor's current sandbox and network policy.",
     "Do not delegate them back to the relay orchestrator and do not expose credentials or secret environment values.",
     "After all required gates finish, capture the exact reviewable repository state with the temporary Git index commands below.",
-    "Do not use the repository's real index for this proof; executor runtime metadata roots must stay excluded even if they are already staged there.",
+    "Do not use the repository's real index for this proof; untracked executor runtime metadata must stay excluded even if it is already staged there, while tracked runtime-root modifications and deletions remain reviewable.",
     "",
     'verification_index="$(mktemp)"',
     'rm -f "$verification_index"',
     'GIT_INDEX_FILE="$verification_index" git read-tree HEAD',
     reviewableGitAddCommand,
+    trackedGitAddCommand,
     'verification_tree_sha="$(GIT_INDEX_FILE="$verification_index" git write-tree)"',
     'rm -f "$verification_index"',
     "",
@@ -599,5 +615,6 @@ module.exports = {
   rebrandEvidence,
   resolveExecutionEvidenceTestCommand,
   verificationTreeProofGitAddArgs,
+  verificationTreeProofTrackedGitAddArgs,
   writeExecutionEvidence,
 };

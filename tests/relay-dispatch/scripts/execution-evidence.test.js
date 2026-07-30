@@ -16,6 +16,7 @@ const {
   rebrandEvidence,
   resolveExecutionEvidenceTestCommand,
   verificationTreeProofGitAddArgs,
+  verificationTreeProofTrackedGitAddArgs,
   writeExecutionEvidence,
 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
 const {
@@ -129,12 +130,13 @@ test("executor verification instructions keep gate execution inside the dispatch
   assert.match(instructions, /GIT_INDEX_FILE/);
   assert.match(instructions, /git write-tree/);
   assert.match(instructions, /:\(exclude\)\.antigravitycli/);
+  assert.match(instructions, /tracked runtime-root modifications and deletions remain reviewable/);
   assert.match(instructions, /before any later commit or commit hook can mutate the tree/);
   assert.match(instructions, /verification_tree_sha/);
   assert.match(instructions, /"command":"node --test focused\.test\.js"/);
 });
 
-test("verification tree proof excludes staged Antigravity runtime metadata", (t) => {
+test("verification tree proof keeps tracked runtime changes and excludes adjacent metadata", (t) => {
   const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-verification-tree-"));
   const verificationIndex = path.join(
     os.tmpdir(),
@@ -146,11 +148,33 @@ test("verification tree proof excludes staged Antigravity runtime metadata", (t)
   git(repoPath, "config", "user.name", "Relay Test");
   git(repoPath, "config", "user.email", "relay@example.com");
   fs.writeFileSync(path.join(repoPath, "reviewable.txt"), "before\n", "utf-8");
-  git(repoPath, "add", "reviewable.txt");
+  fs.mkdirSync(path.join(repoPath, ".antigravitycli"), { recursive: true });
+  fs.writeFileSync(
+    path.join(repoPath, ".antigravitycli", "tracked-config"),
+    "tracked before\n",
+    "utf-8"
+  );
+  fs.writeFileSync(
+    path.join(repoPath, ".antigravitycli", "tracked-obsolete"),
+    "remove after verification\n",
+    "utf-8"
+  );
+  git(
+    repoPath,
+    "add",
+    "reviewable.txt",
+    ".antigravitycli/tracked-config",
+    ".antigravitycli/tracked-obsolete"
+  );
   git(repoPath, "commit", "-m", "base");
 
   fs.writeFileSync(path.join(repoPath, "reviewable.txt"), "after\n", "utf-8");
-  fs.mkdirSync(path.join(repoPath, ".antigravitycli"), { recursive: true });
+  fs.writeFileSync(
+    path.join(repoPath, ".antigravitycli", "tracked-config"),
+    "tracked after\n",
+    "utf-8"
+  );
+  fs.unlinkSync(path.join(repoPath, ".antigravitycli", "tracked-obsolete"));
   fs.writeFileSync(
     path.join(repoPath, ".antigravitycli", "runtime-state.json"),
     '{"session":"runtime-only"}\n',
@@ -172,6 +196,11 @@ test("verification tree proof excludes staged Antigravity runtime metadata", (t)
     env: proofEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  execFileSync("git", verificationTreeProofTrackedGitAddArgs(), {
+    cwd: repoPath,
+    env: proofEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   const verificationTreeSha = execFileSync("git", ["write-tree"], {
     cwd: repoPath,
     env: proofEnv,
@@ -182,11 +211,23 @@ test("verification tree proof excludes staged Antigravity runtime metadata", (t)
 
   assert.deepEqual(
     git(repoPath, "ls-tree", "-r", "--name-only", verificationTreeSha).split("\n"),
-    ["reviewable.txt"]
+    [".antigravitycli/tracked-config", "reviewable.txt"]
+  );
+  assert.equal(
+    git(repoPath, "show", `${verificationTreeSha}:.antigravitycli/tracked-config`),
+    "tracked after"
   );
   assert.match(
     git(repoPath, "ls-tree", "-r", "--name-only", realIndexTreeSha),
     /\.antigravitycli\/runtime-state\.json/
+  );
+  assert.match(
+    git(repoPath, "ls-tree", "-r", "--name-only", verificationTreeSha),
+    /\.antigravitycli\/tracked-config/
+  );
+  assert.doesNotMatch(
+    git(repoPath, "ls-tree", "-r", "--name-only", verificationTreeSha),
+    /\.antigravitycli\/(?:runtime-state\.json|tracked-obsolete)/
   );
   assert.notEqual(verificationTreeSha, realIndexTreeSha);
 });
