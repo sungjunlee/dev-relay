@@ -72,6 +72,7 @@ function buildAdvisoryPrompt({
     }, null, 2),
     "",
     "Use empty arrays when there are no findings in a bucket.",
+    "severity is required in required_findings and advisory_findings. It may be omitted only in duplicate_or_low_confidence; Relay normalizes an omitted value to P3 without reclassifying that entry as required.",
     "",
     "## Review Context",
     "",

@@ -22,6 +22,7 @@ const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS, readRunEvents 
 const { writeAdvisoryLaneLease } = require("../../../relay-dispatch/scripts/run-runtime-state");
 const { reapPriorAdvisoryLaneAttempts } = require("./advisory-lane-reap");
 const {
+  ADVISORY_SCHEMA_VALIDATION_FAILURE_SIGNAL,
   buildAdvisoryRoundEvidence,
   mergeAdvisoryRoundEvidence,
   parseAdvisoryReview,
@@ -344,7 +345,13 @@ function isAdapterParseFailureSignal({ stdout, stderr, outcome }) {
   const hasOutput = Boolean(String(stdout || "").trim() || String(stderr || "").trim());
   if (!hasOutput) return false;
   const haystack = [stderr, stdout, outcome?.error?.message].filter(Boolean).join("\n");
-  return ADAPTER_PARSE_FAILURE_SIGNAL_RE.test(haystack);
+  const trustedSchemaFailureSignal = String(stderr || "")
+    .split(/\r?\n/)
+    .some((line) => line.trim() === ADVISORY_SCHEMA_VALIDATION_FAILURE_SIGNAL);
+  return (
+    trustedSchemaFailureSignal ||
+    ADAPTER_PARSE_FAILURE_SIGNAL_RE.test(haystack)
+  );
 }
 
 function buildDeferredResult(advisoryRun, { criticalPathWaitMs = 0, consumedByPhase = "metrics" } = {}) {

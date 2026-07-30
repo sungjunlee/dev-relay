@@ -15,7 +15,11 @@ const {
   summarizeFailure,
 } = require("./reviewer-helpers");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
-const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
+const {
+  parseAdvisoryReview,
+  validateAdvisoryProfile,
+  writeAdvisorySchemaFailure,
+} = require("./advisory-review-schema");
 const {
   execFileSyncWithStdinPrompt,
 } = require("./reviewer-prompt-transport");
@@ -211,5 +215,6 @@ try {
   main();
 } catch (error) {
   console.error(`Error: ${error.message}`);
+  writeAdvisorySchemaFailure(error);
   process.exit(1);
 }

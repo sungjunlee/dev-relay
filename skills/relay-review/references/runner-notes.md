@@ -65,7 +65,7 @@ Reviewer adapter capabilities are shared with dispatch adapter metadata. See `..
 
 Advisory review is configured as a list of lanes. Each lane has `reviewer`, optional `model`, `profile`, `trigger`, and `gating`. Profile defaults are part of lane normalization: `blindspot` defaults to `trigger=every_round,gating=false`; `adversarial` defaults to `trigger=on_pass,gating=true`; explicit `trigger` or `gating` values override the profile default. Route planning and review-runner normalization must agree on these defaults.
 
-`every_round` lanes start before the primary reviewer completes and settle against one round-start deadline. `on_pass` lanes start only after the primary verdict plus all `every_round` gates produce a pass-equivalent outcome; they share a fresh settlement deadline for that trigger group. The runner folds advisory outcomes after each trigger group. Non-gating standard lanes record artifacts, warnings, and metrics only. Gating lanes can demote an applied pass when a successful advisory result reports `required_findings`; hardened assurance treats advisory failures, missing advisory evidence, and required findings as gates.
+`every_round` lanes start before the primary reviewer completes and settle against one round-start deadline. `on_pass` lanes start only after the primary verdict plus all `every_round` gates produce a pass-equivalent outcome; they share a fresh settlement deadline for that trigger group. The runner folds advisory outcomes after each trigger group. Non-gating standard lanes record artifacts, warnings, and metrics only. Gating lanes can demote an applied pass when a successful advisory result reports `required_findings`; hardened assurance treats advisory failures, missing advisory evidence, and required findings as gates. Bucket identity is authoritative: an omitted `severity` is accepted only for `duplicate_or_low_confidence` and normalized to `P3` while remaining non-required. Missing `severity` in either actionable bucket is still a schema failure. Adapter-side schema failures emit the stable `advisory_schema_validation_failed` signal plus the pre-validation model response so the runner can durably preserve every attempt before its single bounded retry.
 
 Lane-driven demotion is capped at two demotions per run. A third lane-driven demotion escalates for owner decision instead of feeding another automatic fix loop. When a gating lane demotes because of required findings, the redispatch prompt includes that lane's required findings as actionable fix items. The `advisory_review` event already carries lane identity (`reviewer`, `model`, `profile`, `trigger`, `gating`), and `reliability-report --by-lane` derives per-lane counts from those events plus `review_apply` demotion signals.
 
@@ -76,6 +76,17 @@ Lane composition is operator/orchestrator judgment, not script policy. Low-risk 
 ### Cline advisory timeout budget
 
 For `cline` advisory lanes, `executeAdvisoryRequest` exports the lane's effective `timeoutSeconds` into the adapter child as `RELAY_CLINE_REVIEW_TIMEOUT="<timeoutSeconds>s"`. That lane budget supersedes any inherited `RELAY_CLINE_REVIEW_TIMEOUT` in the review-runner process so one number governs both the parent `execFileSync` kill and the adapter's internal `--timeout` (env − 60s headroom). Operator knob: `--advisory-timeout`. Direct (non-advisory) invocations of `invoke-reviewer-cline.js` keep the existing env contract and default (`1800s`).
+
+### Pi provider extension isolation
+
+Pi reviews disable automatic extension discovery so an operator's unrelated
+extensions cannot add tools or hooks to the read-only reviewer. When the chosen
+model provider itself is supplied by a trusted Pi extension, set
+`RELAY_PI_REVIEW_PROVIDER_EXTENSION` to the absolute path of that provider's
+entry file. The adapter keeps `--no-extensions` and adds exactly one explicit
+`--extension <path>`; relative, missing, and non-file values fail before Pi is
+invoked. Treat the extension as executable reviewer infrastructure and pin or
+audit it with the same care as the Pi binary.
 
 ## External Review Triggers
 

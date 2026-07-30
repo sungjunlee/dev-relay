@@ -28,6 +28,62 @@ test("advisory schema accepts normalized blindspot payloads", () => {
   assert.equal(parsed.advisory_findings[0].category, "test-gap");
 });
 
+test("advisory schema normalizes omitted low-confidence severity without promoting the finding", () => {
+  const parsed = parseAdvisoryReview(JSON.stringify(advisoryPayload({
+    advisory_findings: [],
+    duplicate_or_low_confidence: [{
+      title: "Possible duplicate timeout concern",
+      body: "This may duplicate existing timeout coverage and is intentionally non-required.",
+      file: "skills/relay-review/scripts/review-runner.js",
+      line: 42,
+      category: "test-gap",
+      confidence: 0.35,
+    }],
+  })), { profile: "blindspot" });
+
+  assert.deepEqual(parsed.required_findings, []);
+  assert.deepEqual(parsed.advisory_findings, []);
+  assert.equal(parsed.duplicate_or_low_confidence.length, 1);
+  assert.equal(parsed.duplicate_or_low_confidence[0].severity, "P3");
+});
+
+test("advisory schema still requires severity for actionable findings", () => {
+  for (const bucket of ["required_findings", "advisory_findings"]) {
+    assert.throws(
+      () => parseAdvisoryReview(JSON.stringify(advisoryPayload({
+        advisory_findings: [],
+        [bucket]: [{
+          title: "Actionable finding without severity",
+          body: "Actionable buckets must remain fail-closed.",
+          file: "README.md",
+          line: 1,
+          category: "other",
+          confidence: 0.9,
+        }],
+      }))),
+      new RegExp(`${bucket}\\[0\\]\\.severity must be a non-empty string`)
+    );
+  }
+});
+
+test("advisory schema treats explicit null low-confidence severity as invalid, not omitted", () => {
+  assert.throws(
+    () => parseAdvisoryReview(JSON.stringify(advisoryPayload({
+      advisory_findings: [],
+      duplicate_or_low_confidence: [{
+        title: "Explicitly malformed duplicate",
+        body: "Only an omitted severity is normalized; an explicit invalid value remains fail-closed.",
+        file: "README.md",
+        line: null,
+        severity: null,
+        category: "other",
+        confidence: 0.3,
+      }],
+    }))),
+    /duplicate_or_low_confidence\[0\]\.severity must be a non-empty string/
+  );
+});
+
 test("advisory schema defaults missing and empty profile echoes to the lane profile", () => {
   for (const profile of [undefined, null, "", "  \t\n"]) {
     const parsed = parseAdvisoryReview(JSON.stringify(advisoryPayload({ profile })), {

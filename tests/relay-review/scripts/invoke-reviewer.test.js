@@ -116,11 +116,19 @@ process.stdout.write(JSON.stringify({
   },
 ];
 
-function runAdvisoryAdapter(adapter, { profileArg = null, payloadProfile = "blindspot" } = {}) {
+function runAdvisoryAdapter(adapter, {
+  payload = null,
+  profileArg = null,
+  payloadProfile = "blindspot",
+} = {}) {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), `relay-review-fake-${adapter.name}-profile-`));
   const markerPath = path.join(fakeDir, "spawned.txt");
-  const fakeBin = writeExecutable(fakeDir, adapter.fakeName, adapter.fakeBody(advisoryPayload(payloadProfile), markerPath));
+  const fakeBin = writeExecutable(
+    fakeDir,
+    adapter.fakeName,
+    adapter.fakeBody(payload || advisoryPayload(payloadProfile), markerPath)
+  );
   const args = [
     adapter.script,
     "--repo", repoRoot,
@@ -738,6 +746,23 @@ process.stdout.write("Sure, here is the advisory result:\\n" + JSON.stringify({
 });
 
 for (const adapter of ADVISORY_ADAPTERS) {
+  test(`${adapter.name} advisory adapter keeps omitted low-confidence severity non-required`, () => {
+    const payload = advisoryPayload();
+    payload.duplicate_or_low_confidence = [{
+      title: "Speculative duplicate",
+      body: "This remains in the non-required bucket.",
+      file: "README.md",
+      line: 1,
+      category: "other",
+      confidence: 0.3,
+    }];
+    const { stdout } = runAdvisoryAdapter(adapter, { payload });
+    const result = JSON.parse(stdout);
+
+    assert.deepEqual(result.required_findings, []);
+    assert.equal(result.duplicate_or_low_confidence[0].severity, "P3");
+  });
+
   test(`${adapter.name} advisory adapter accepts matching --profile adversarial payload`, () => {
     const { stdout } = runAdvisoryAdapter(adapter, {
       profileArg: "adversarial",
@@ -811,6 +836,38 @@ for (const adapter of ADVISORY_ADAPTERS) {
     assert.notEqual(error.status, 0);
     assert.match(String(error.stderr || ""), /Unknown advisory profile/);
     assert.equal(fs.existsSync(markerPath), false);
+  });
+}
+
+// Cline has a separate raw-envelope preservation contract because it must
+// extract candidates from run_result/content_end output first. These direct
+// JSON adapters share writeAdvisorySchemaFailure and must stay in lockstep.
+for (const adapter of ADVISORY_ADAPTERS.filter(({ name }) => name !== "cline")) {
+  test(`${adapter.name} adapter emits the pre-validation model response on advisory schema failure`, () => {
+    const rawPayload = {
+      ...advisoryPayload(),
+      summary: `raw-schema-failure-marker-${adapter.name}`,
+      required_findings: [{
+        title: "Required finding without severity",
+        body: "This malformed actionable finding must fail closed.",
+        file: "README.md",
+        line: 1,
+        category: "other",
+        confidence: 0.95,
+      }],
+    };
+
+    assert.throws(
+      () => runAdvisoryAdapter(adapter, { payload: rawPayload }),
+      (error) => {
+        const stderr = String(error.stderr || "");
+        assert.match(stderr, /advisory_schema_validation_failed/);
+        assert.match(stderr, /Raw advisory response before validation:/);
+        assert.match(stderr, new RegExp(`raw-schema-failure-marker-${adapter.name}`));
+        assert.match(stderr, /required_findings\[0\]\.severity/);
+        return true;
+      }
+    );
   });
 }
 
@@ -1018,6 +1075,82 @@ process.stdin.on("end", () => {
   const stdin = fs.readFileSync(stdinPath, "utf-8");
   assert.match(stdin, /NON-INTERACTIVE REVIEW/);
   assert.match(stdin, /Return a passing review\./);
+});
+
+test("pi adapter can load one explicitly trusted provider extension while discovery stays disabled", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-provider-"));
+  const logPath = path.join(fakeDir, "pi-args.log");
+  const providerExtension = path.join(fakeDir, "provider.ts");
+  fs.writeFileSync(providerExtension, "export default function provider() {}\n", "utf-8");
+  const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, process.argv.slice(2).join("\\n") + "\\n", "utf-8");
+process.stdout.write(JSON.stringify({
+  verdict: "pass",
+  summary: "Looks good.",
+  contract_status: "pass",
+  quality_review_status: "pass",
+  next_action: "ready_to_merge",
+  issues: [],
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
+}));
+`);
+
+  execFileSync("node", [
+    PI_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--model", "example/review-model",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      RELAY_PI_BIN: fakePi,
+      RELAY_PI_REVIEW_PROVIDER_EXTENSION: providerExtension,
+    },
+  });
+
+  const loggedArgs = fs.readFileSync(logPath, "utf-8").split("\n");
+  assert.deepEqual(loggedArgs.slice(0, 5), [
+    "--no-session",
+    "--no-context-files",
+    "--no-extensions",
+    "--extension",
+    providerExtension,
+  ]);
+});
+
+test("pi adapter rejects non-absolute provider extension paths before invoking Pi", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  assert.throws(
+    () => execFileSync("node", [
+      PI_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        RELAY_PI_BIN: path.join(repoRoot, "must-not-run"),
+        RELAY_PI_REVIEW_PROVIDER_EXTENSION: "./provider.ts",
+      },
+    }),
+    (error) => {
+      assert.match(
+        String(error.stderr || ""),
+        /RELAY_PI_REVIEW_PROVIDER_EXTENSION must be an absolute path/
+      );
+      return true;
+    }
+  );
 });
 
 test("pi adapter supports advisory review JSON when phase is advisory_review", () => {
@@ -1741,6 +1874,51 @@ process.stdin.on("end", () => {
   assert.match(stdin, /Return a passing review\./);
   assert.match(stdin, /Do not use cline --worktree; relay already selected the review checkout with --cwd\./);
   assert.equal(loggedArgs.includes("--worktree"), false);
+});
+
+test("cline adapter normalizes omitted duplicate severity through the shared advisory schema", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-duplicate-severity-"));
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: JSON.stringify({
+    profile: "blindspot",
+    summary: "Duplicate only.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [{
+      title: "Already covered",
+      body: "The primary review already verified this path.",
+      file: "skills/relay-review/scripts/advisory-review-schema.js",
+      category: "other",
+      confidence: 0.4,
+    }],
+  }),
+}) + "\\n");
+`);
+
+  const stdout = execFileSync("node", [
+    CLINE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--phase", "advisory_review",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      RELAY_CLINE_BIN: fakeCline,
+      RELAY_CLINE_REVIEW_TIMEOUT: "120s",
+    },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.required_findings.length, 0);
+  assert.equal(result.duplicate_or_low_confidence[0].severity, "P3");
 });
 
 test("cline adapter parses yolo content_end candidate when run_result text is a paraphrase", () => {

@@ -16,7 +16,11 @@ const {
   recoverExecStdout,
   summarizeFailure,
 } = require("./reviewer-helpers");
-const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
+const {
+  parseAdvisoryReview,
+  validateAdvisoryProfile,
+  writeAdvisorySchemaFailure,
+} = require("./advisory-review-schema");
 const {
   assertControlSafeArgv,
   createPromptFileReference,
@@ -234,5 +238,6 @@ try {
   main();
 } catch (error) {
   console.error(`Error: ${error.message}`);
+  writeAdvisorySchemaFailure(error);
   process.exit(1);
 }
