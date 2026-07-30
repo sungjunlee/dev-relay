@@ -692,7 +692,11 @@ test("missing execution evidence without operator test flags preserves recovery 
 });
 
 test("operator test flags refuse to overwrite existing execution evidence", () => {
-  const fixture = setupRepo({ dirty: true, evidence: true });
+  const fixture = setupRepo({
+    dirty: true,
+    evidence: true,
+    evidenceOverrides: { test_result_hash: "a".repeat(64) },
+  });
   const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
   fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
   const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
@@ -750,7 +754,7 @@ test("placeholder evidence without replacement flag is refused with the flag hin
   const fixture = setupRepo({
     dirty: true,
     evidence: true,
-    evidenceOverrides: { test_command: "unspecified" },
+    evidenceOverrides: { test_exit_code: 1 },
   });
   const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
   fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
@@ -776,7 +780,7 @@ test("replacement flag without operator evidence flags is rejected before recove
   const fixture = setupRepo({
     dirty: true,
     evidence: true,
-    evidenceOverrides: { test_command: "unspecified", test_exit_code: 1 },
+    evidenceOverrides: { test_exit_code: 1 },
   });
   const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
   const beforeEvidence = fs.readFileSync(evidencePath, "utf-8");
@@ -799,11 +803,11 @@ test("replacement flag without operator evidence flags is rejected before recove
   assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
 });
 
-test("replacement flag replaces exact placeholder and journals replaced fields on operator evidence event", () => {
+test("replacement flag replaces gate-seeded placeholder and journals replaced fields on operator evidence event", () => {
   const fixture = setupRepo({
     dirty: true,
     evidence: true,
-    evidenceOverrides: { test_command: "unspecified", test_exit_code: 1 },
+    evidenceOverrides: { test_exit_code: 1 },
   });
   const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
   fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
@@ -837,9 +841,9 @@ test("replacement flag replaces exact placeholder and journals replaced fields o
 });
 
 [
-  { name: "recorded_by differs", overrides: { test_command: "unspecified", recorded_by: "recover-commit-operator-v1" } },
-  { name: "test_command differs", overrides: { test_command: "node --test", recorded_by: "dispatch-orchestrator-v1" } },
-  { name: "both fields differ", overrides: { test_command: "node --test", recorded_by: "codex-executor-v1" } },
+  { name: "recorded_by differs", overrides: { recorded_by: "recover-commit-operator-v1" } },
+  { name: "test_result_hash differs", overrides: { test_result_hash: "a".repeat(64) } },
+  { name: "test_result_summary differs", overrides: { test_result_summary: "executor result.txt hashed" } },
 ].forEach(({ name, overrides }) => {
   test(`replacement flag refuses non-placeholder evidence when ${name}`, () => {
     const fixture = setupRepo({ dirty: true, evidence: true, evidenceOverrides: overrides });

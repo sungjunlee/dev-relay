@@ -422,7 +422,8 @@ function main() {
     } catch {}
     const isPlaceholder = (
       existingEvidence?.recorded_by === "dispatch-orchestrator-v1" &&
-      existingEvidence?.test_command === "unspecified"
+      existingEvidence?.test_result_hash === "unspecified" &&
+      existingEvidence?.test_result_summary === "unspecified"
     );
     if (replacePlaceholderEvidence && isPlaceholder) {
       replacedEvidence = {
