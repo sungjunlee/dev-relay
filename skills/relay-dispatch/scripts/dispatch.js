@@ -3229,7 +3229,6 @@ async function main() {
   // the prior behavior: the downstream recover-commit path is itself
   // supersede-guarded and correctly no-ops.
   let orchestratorCommitted = false;
-  let verificationTreeMismatch = null;
   const supersededBeforeCommit = readManifest(manifestPath).data.state !== STATES.DISPATCHED;
   if (!DRY_RUN && AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !supersededBeforeCommit) {
     try {
@@ -3237,39 +3236,19 @@ async function main() {
       if (dirt.hasReviewableDirt && !execGit(wtPath, ["diff", "--cached", "--name-only"])) {
         throw new Error(formatEmptyReviewableIndexError(rawUncommitted));
       }
-      // Verification gates ran against the executor's completed working tree.
-      // Staging snapshots that tree into the index; a hook must not change the
-      // commit tree before the executor-confirmed results are SHA-bound below.
-      const verifiedTree = verificationGates.length > 0
-        ? execGit(wtPath, ["write-tree"])
-        : null;
       execGit(wtPath, [
         "commit",
         "-m", `Relay run ${runId}`,
         "-m", `Executor reviewable changes committed by the relay orchestrator (run ${runId}).`,
       ]);
       currentHead = execGit(wtPath, ["rev-parse", "HEAD"]);
-      const committedTree = execGit(wtPath, ["rev-parse", "HEAD^{tree}"]);
-      if (verifiedTree && verifiedTree !== committedTree) {
-        verificationTreeMismatch = { verifiedTree, committedTree };
-      }
       if (startHead && currentHead !== startHead) {
         gitLog = execGit(wtPath, ["log", "--oneline", `${startHead}..HEAD`]);
       }
       uncommitted = classifyRepositoryDirt(execGit(wtPath, ["status", "--porcelain"])).reviewableStatus;
       if (!uncommitted) uncommittedDiff = "";
       orchestratorCommitted = true;
-      if (verificationTreeMismatch) {
-        status = "failed";
-        exitCode = exitCode || 1;
-        error = (
-          "verification_tree_mismatch: the orchestrator commit changed the tree after executor " +
-          `verification (${verificationTreeMismatch.verifiedTree} -> ` +
-          `${verificationTreeMismatch.committedTree}); re-run the executor verification gates at the committed HEAD`
-        );
-      } else {
-        status = "completed";
-      }
+      status = "completed";
     } catch (orchestratorCommitError) {
       // Leave status as completed-uncommitted; the auto-recover-commit fallback runs
       // below. Surface the git failure reason — this is now the primary commit path,
@@ -3309,6 +3288,7 @@ async function main() {
         gates: verificationGates,
         cwd: wtPath,
         headSha: currentHead || startHead,
+        finalTreeSha: execGit(wtPath, ["rev-parse", "HEAD^{tree}"]),
         runDir: getRunDir(repoRoot, runId),
         resultText,
         executor: EXECUTOR,
@@ -3328,6 +3308,7 @@ async function main() {
       error = `verification_gate_evidence_invalid: ${String(
         verificationError.message || verificationError
       ).split("\n")[0]}`;
+      verificationEvidence = { runs: [], outputPath: null, exitCode: undefined };
     }
   }
 

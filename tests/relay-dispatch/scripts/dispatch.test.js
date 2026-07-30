@@ -25,6 +25,10 @@ const {
   EXECUTION_EVIDENCE_FILENAME,
   VERIFICATION_OUTPUT_FILENAME,
   hashFileSha256,
+  verificationTreeProofGitAddArgs,
+  verificationTreeProofStagedRuntimeAdditionsGitDiffArgs,
+  verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs,
+  verificationTreeProofTrackedGitAddArgs,
 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
 const {
   buildExecutionEvidencePreflight,
@@ -198,8 +202,74 @@ process.stdout.write("ok\\n");
 }
 
 function fakeExecutorVerificationSupportSource() {
+  const proofGitAddArgs = JSON.stringify(verificationTreeProofGitAddArgs());
+  const proofTrackedGitAddArgs = JSON.stringify(verificationTreeProofTrackedGitAddArgs());
+  const stagedRuntimePathArgs = JSON.stringify(
+    verificationTreeProofStagedRuntimeAdditionsGitDiffArgs()
+  );
+  const stageGateTimeRuntimeArgs = JSON.stringify(
+    verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs()
+  );
   return `
-function withVerificationEvidence(summary) {
+function captureVerificationTree(cwd) {
+  return require("child_process").execFileSync(
+    "git",
+    ["-C", cwd, "write-tree"],
+    { encoding: "utf-8", stdio: "pipe" }
+  ).trim();
+}
+function captureGateTimeVerificationTree(cwd) {
+  const childProcess = require("child_process");
+  const fs = require("fs");
+  const os = require("os");
+  const path = require("path");
+  const proofDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-time-proof-"));
+  const proofIndex = path.join(proofDir, "index");
+  const realIndex = childProcess.execFileSync(
+    "git",
+    ["-C", cwd, "rev-parse", "--git-path", "index"],
+    { encoding: "utf-8", stdio: "pipe" }
+  ).trim();
+  const proofEnv = { ...process.env, GIT_INDEX_FILE: proofIndex };
+  const realIndexEnv = { ...process.env, GIT_INDEX_FILE: realIndex };
+  try {
+    childProcess.execFileSync(
+      "git",
+      ["-C", cwd, "read-tree", "HEAD"],
+      { env: proofEnv, stdio: "pipe" }
+    );
+    childProcess.execFileSync(
+      "git",
+      ["-C", cwd, ...${proofGitAddArgs}],
+      { env: proofEnv, stdio: "pipe" }
+    );
+    childProcess.execFileSync(
+      "git",
+      ["-C", cwd, ...${proofTrackedGitAddArgs}],
+      { env: proofEnv, stdio: "pipe" }
+    );
+    const stagedRuntimePaths = childProcess.execFileSync(
+      "git",
+      ["-C", cwd, ...${stagedRuntimePathArgs}],
+      { env: realIndexEnv, stdio: "pipe" }
+    );
+    if (stagedRuntimePaths.length > 0) {
+      childProcess.execFileSync(
+        "git",
+        ["-C", cwd, ...${stageGateTimeRuntimeArgs}],
+        { env: proofEnv, input: stagedRuntimePaths, stdio: ["pipe", "pipe", "pipe"] }
+      );
+    }
+    return childProcess.execFileSync(
+      "git",
+      ["-C", cwd, "write-tree"],
+      { env: proofEnv, encoding: "utf-8", stdio: "pipe" }
+    ).trim();
+  } finally {
+    fs.rmSync(proofDir, { recursive: true, force: true });
+  }
+}
+function withVerificationEvidence(summary, verificationTreeSha) {
   const prompt = String(args[args.length - 1] || "");
   const requestBegin = "RELAY_VERIFICATION_REQUEST_BEGIN";
   const requestEnd = "RELAY_VERIFICATION_REQUEST_END";
@@ -229,7 +299,11 @@ function withVerificationEvidence(summary) {
   return [
     String(summary || "").trimEnd(),
     resultBegin,
-    JSON.stringify({ schema_version: 1, runs }),
+    JSON.stringify({
+      schema_version: 1,
+      verification_tree_sha: verificationTreeSha,
+      runs,
+    }),
     resultEnd,
     "",
   ].join("\\n");
@@ -258,8 +332,9 @@ const output = args[args.indexOf("-o") + 1];
 const fileName = fs.existsSync(cwd + "/first.txt") ? "resume.txt" : "first.txt";
 fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
 execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+const verificationTreeSha = captureVerificationTree(cwd);
 execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
-fs.writeFileSync(output, withVerificationEvidence("ok\\n"), "utf-8");
+fs.writeFileSync(output, withVerificationEvidence("ok\\n", verificationTreeSha), "utf-8");
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -472,8 +547,13 @@ if (args[0] !== "exec") {
   process.stderr.write("unsupported fake codex invocation");
   process.exit(1);
 }
+const cwd = args[args.indexOf("-C") + 1];
 const output = args[args.indexOf("-o") + 1];
-fs.writeFileSync(output, withVerificationEvidence("already applied\\n"), "utf-8");
+fs.writeFileSync(
+  output,
+  withVerificationEvidence("already applied\\n", captureVerificationTree(cwd)),
+  "utf-8"
+);
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -547,6 +627,7 @@ function writeUncommittedCodex(binDir) {
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
+const { execFileSync } = require("child_process");
 const args = process.argv.slice(2);
 ${fakeExecutorVerificationSupportSource()}
 if (args[0] === "--version") {
@@ -568,7 +649,121 @@ if (process.env.RELAY_TEST_EXTERNAL_ADVANCE === "1") {
   fs.writeFileSync(manifestPath, manifest, "utf-8");
 }
 fs.appendFileSync(cwd + "/README.md", "dirty\\n", "utf-8");
-fs.writeFileSync(output, withVerificationEvidence("work completed without commit\\n"), "utf-8");
+execFileSync("git", ["-C", cwd, "add", "README.md"], { stdio: "pipe" });
+const verificationTreeSha = captureVerificationTree(cwd);
+fs.writeFileSync(
+  output,
+  withVerificationEvidence("work completed without commit\\n", verificationTreeSha),
+  "utf-8"
+);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+function writeUncommittedRuntimeRootCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+${fakeExecutorVerificationSupportSource()}
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const runtimeDir = path.join(cwd, ".antigravitycli");
+fs.appendFileSync(path.join(runtimeDir, "tracked-config"), "tracked after\\n", "utf-8");
+fs.rmSync(path.join(runtimeDir, "tracked-obsolete"));
+fs.writeFileSync(
+  path.join(runtimeDir, "runtime-state.json"),
+  '{"session":"runtime-only"}\\n',
+  "utf-8"
+);
+execFileSync("git", ["-C", cwd, "add", "-u", "--", ".antigravitycli"], {
+  stdio: "pipe",
+});
+const verificationTreeSha = captureVerificationTree(cwd);
+fs.writeFileSync(
+  output,
+  withVerificationEvidence("runtime-root work completed without commit\\n", verificationTreeSha),
+  "utf-8"
+);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+function writeStagedRuntimeRootAdditionCodex(
+  binDir,
+  { directCommit = false, intentToAdd = false, postStageMutation = "none" } = {}
+) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+${fakeExecutorVerificationSupportSource()}
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const runtimeDir = path.join(cwd, ".antigravitycli");
+const stagedAddition = path.join(runtimeDir, "reviewable-runtime-config");
+fs.mkdirSync(runtimeDir, { recursive: true });
+fs.writeFileSync(stagedAddition, "intentionally staged runtime config\\n", "utf-8");
+fs.chmodSync(stagedAddition, 0o755);
+execFileSync(
+  "git",
+  ["-C", cwd, "add", ${JSON.stringify(intentToAdd ? "-N" : null)}, ".antigravitycli/reviewable-runtime-config"].filter(Boolean),
+  { stdio: "pipe" }
+);
+fs.writeFileSync(
+  path.join(runtimeDir, "runtime-state.json"),
+  '{"session":"unstaged-runtime-metadata"}\\n',
+  "utf-8"
+);
+if (${JSON.stringify(postStageMutation)} === "content-mode") {
+  fs.writeFileSync(stagedAddition, "gate-time runtime config\\n", "utf-8");
+  fs.chmodSync(stagedAddition, 0o644);
+} else if (${JSON.stringify(postStageMutation)} === "delete") {
+  fs.unlinkSync(stagedAddition);
+  fs.appendFileSync(path.join(cwd, "README.md"), "gate-time sibling change\\n", "utf-8");
+}
+const verificationTreeSha = (
+  ${JSON.stringify(postStageMutation)} === "none"
+  && !${JSON.stringify(intentToAdd)}
+)
+  ? captureVerificationTree(cwd)
+  : captureGateTimeVerificationTree(cwd);
+if (${JSON.stringify(directCommit)}) {
+  execFileSync(
+    "git",
+    ["-C", cwd, "commit", ${JSON.stringify(intentToAdd ? "-a" : null)}, "-m", "add staged runtime config"].filter(Boolean),
+    { stdio: "pipe" }
+  );
+}
+fs.writeFileSync(
+  output,
+  withVerificationEvidence("staged runtime-root addition completed\\n", verificationTreeSha),
+  "utf-8"
+);
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -837,6 +1032,39 @@ function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, cod
     writeSilentCodex(binDir);
   } else if (codexMode === "commit-no-result") {
     writeCommittedNoResultCodex(binDir);
+  } else if (codexMode === "runtime-root-staged-addition-direct") {
+    writeStagedRuntimeRootAdditionCodex(binDir, { directCommit: true });
+  } else if (codexMode === "runtime-root-staged-addition-uncommitted") {
+    writeStagedRuntimeRootAdditionCodex(binDir);
+  } else if (codexMode === "runtime-root-staged-addition-mutated-direct") {
+    writeStagedRuntimeRootAdditionCodex(binDir, {
+      directCommit: true,
+      postStageMutation: "content-mode",
+    });
+  } else if (codexMode === "runtime-root-staged-addition-mutated-uncommitted") {
+    writeStagedRuntimeRootAdditionCodex(binDir, {
+      postStageMutation: "content-mode",
+    });
+  } else if (codexMode === "runtime-root-staged-addition-deleted-direct") {
+    writeStagedRuntimeRootAdditionCodex(binDir, {
+      directCommit: true,
+      postStageMutation: "delete",
+    });
+  } else if (codexMode === "runtime-root-staged-addition-deleted-uncommitted") {
+    writeStagedRuntimeRootAdditionCodex(binDir, {
+      postStageMutation: "delete",
+    });
+  } else if (codexMode === "runtime-root-intent-to-add-direct") {
+    writeStagedRuntimeRootAdditionCodex(binDir, {
+      directCommit: true,
+      intentToAdd: true,
+    });
+  } else if (codexMode === "runtime-root-intent-to-add-uncommitted") {
+    writeStagedRuntimeRootAdditionCodex(binDir, {
+      intentToAdd: true,
+    });
+  } else if (codexMode === "runtime-root-uncommitted") {
+    writeUncommittedRuntimeRootCodex(binDir);
   } else if (codexMode === "uncommitted") {
     writeUncommittedCodex(binDir);
   } else if (codexMode === "partial-no-result") {
@@ -7060,10 +7288,12 @@ test("dispatch orchestrator-commits uncommitted codex runs by default", () => {
     },
     codexMode: "uncommitted",
   });
+  const rubricFile = writeAssuranceRubric("hardened");
 
   const result = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-508-codex-default-auto-recover",
     "--prompt", "work without commit",
+    "--rubric-file", rubricFile,
     "--json",
   ], env));
 
@@ -7101,9 +7331,370 @@ test("dispatch orchestrator-commits uncommitted codex runs by default", () => {
     result.headSha,
     "execution evidence binds to the orchestrator commit SHA, not the pre-commit HEAD",
   );
+  assert.equal(evidence.verification_runs.length, 1);
+  assert.equal(
+    evidence.verification_runs[0].verification_tree_sha,
+    revParse(repoRoot, `${result.headSha}^{tree}`)
+  );
 });
 
-test("dispatch fails closed when a commit hook changes the tree after executor verification", () => {
+test("dispatch commit keeps tracked runtime-root changes but excludes adjacent metadata", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  process.env.RELAY_HOME = relayHome;
+  const runtimeDir = path.join(repoRoot, ".antigravitycli");
+  const trackedRuntimePath = ".antigravitycli/tracked-config";
+  const deletedRuntimePath = ".antigravitycli/tracked-obsolete";
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(repoRoot, trackedRuntimePath),
+    "tracked before\n",
+    "utf-8"
+  );
+  fs.writeFileSync(
+    path.join(repoRoot, deletedRuntimePath),
+    "remove during dispatch\n",
+    "utf-8"
+  );
+  execFileSync("git", ["add", trackedRuntimePath, deletedRuntimePath], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  execFileSync("git", ["commit", "-m", "track runtime config"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  execFileSync("git", ["push", "origin", "main"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/1121",
+    },
+    codexMode: "runtime-root-uncommitted",
+  });
+  const rubricFile = writeAssuranceRubric("hardened");
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-1121-runtime-root-reviewable",
+    "--prompt", "change tracked runtime config beside executor metadata",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.commitMode, "orchestrator-committed");
+  assert.equal(
+    execFileSync("git", ["show", `${result.headSha}:${trackedRuntimePath}`], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }),
+    "tracked before\ntracked after\n"
+  );
+  assert.notEqual(
+    spawnSync("git", [
+      "cat-file",
+      "-e",
+      `${result.headSha}:.antigravitycli/runtime-state.json`,
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).status,
+    0
+  );
+  assert.notEqual(
+    spawnSync("git", ["cat-file", "-e", `${result.headSha}:${deletedRuntimePath}`], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).status,
+    0
+  );
+  const worktreeStatus = execFileSync("git", ["status", "--porcelain"], {
+    cwd: result.worktree,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.match(worktreeStatus, /^\?\? \.antigravitycli\/runtime-state\.json$/m);
+  assert.doesNotMatch(worktreeStatus, /tracked-config/);
+
+  const evidence = readExecutionEvidence(result.runDir);
+  assert.equal(evidence.verification_runs.length, 1);
+  assert.equal(
+    evidence.verification_runs[0].verification_tree_sha,
+    revParse(repoRoot, `${result.headSha}^{tree}`)
+  );
+});
+
+for (const scenario of [
+  {
+    name: "orchestrator commit",
+    codexMode: "runtime-root-staged-addition-uncommitted",
+    branch: "issue-1121-staged-runtime-addition-orchestrator",
+    commitMode: "orchestrator-committed",
+  },
+  {
+    name: "executor-direct commit",
+    codexMode: "runtime-root-staged-addition-direct",
+    branch: "issue-1121-staged-runtime-addition-direct",
+    commitMode: "committed in-sandbox",
+  },
+]) {
+  test(`dispatch ${scenario.name} preserves a staged runtime-root addition beside unstaged metadata`, () => {
+    const { repoRoot, relayHome } = setupRepoWithOrigin();
+    process.env.RELAY_HOME = relayHome;
+    const { env } = createPushPrTestEnv({
+      relayHome,
+      ghState: {
+        prCreateUrl: "https://github.com/acme/dev-relay/pull/1121",
+      },
+      codexMode: scenario.codexMode,
+    });
+    const rubricFile = writeAssuranceRubric("hardened");
+
+    const result = JSON.parse(runDispatch(repoRoot, [
+      "-b", scenario.branch,
+      "--prompt", "stage a reviewable runtime-root addition beside executor metadata",
+      "--rubric-file", rubricFile,
+      "--json",
+    ], env));
+    const stagedPath = ".antigravitycli/reviewable-runtime-config";
+    const metadataPath = ".antigravitycli/runtime-state.json";
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.commitMode, scenario.commitMode);
+    assert.equal(
+      execFileSync("git", ["show", `${result.headSha}:${stagedPath}`], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }),
+      "intentionally staged runtime config\n"
+    );
+    assert.match(
+      execFileSync("git", ["ls-tree", result.headSha, stagedPath], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }),
+      /^100755 blob /
+    );
+    assert.notEqual(
+      spawnSync("git", ["cat-file", "-e", `${result.headSha}:${metadataPath}`], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }).status,
+      0
+    );
+    assert.match(
+      execFileSync("git", ["status", "--porcelain"], {
+        cwd: result.worktree,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }),
+      /^\?\? \.antigravitycli\/runtime-state\.json$/m
+    );
+
+    const evidence = readExecutionEvidence(result.runDir);
+    assert.equal(evidence.verification_runs.length, 1);
+    assert.equal(
+      evidence.verification_runs[0].verification_tree_sha,
+      revParse(repoRoot, `${result.headSha}^{tree}`)
+    );
+  });
+}
+
+for (const scenario of [
+  {
+    name: "orchestrator commit",
+    codexMode: "runtime-root-intent-to-add-uncommitted",
+    branch: "issue-1121-runtime-intent-orchestrator",
+    commitMode: "orchestrator-committed",
+  },
+  {
+    name: "executor-direct commit -a",
+    codexMode: "runtime-root-intent-to-add-direct",
+    branch: "issue-1121-runtime-intent-direct",
+    commitMode: "committed in-sandbox",
+  },
+]) {
+  test(`dispatch ${scenario.name} proves an intent-to-add runtime-root path from the gate-time worktree`, () => {
+    const { repoRoot, relayHome } = setupRepoWithOrigin();
+    process.env.RELAY_HOME = relayHome;
+    const { env } = createPushPrTestEnv({
+      relayHome,
+      ghState: {
+        prCreateUrl: "https://github.com/acme/dev-relay/pull/1121",
+      },
+      codexMode: scenario.codexMode,
+    });
+    const rubricFile = writeAssuranceRubric("hardened");
+
+    const result = JSON.parse(runDispatch(repoRoot, [
+      "-b", scenario.branch,
+      "--prompt", "prove an intent-to-add runtime-root path beside executor metadata",
+      "--rubric-file", rubricFile,
+      "--json",
+    ], env));
+    const stagedPath = ".antigravitycli/reviewable-runtime-config";
+    const metadataPath = ".antigravitycli/runtime-state.json";
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.commitMode, scenario.commitMode);
+    assert.equal(
+      execFileSync("git", ["show", `${result.headSha}:${stagedPath}`], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }),
+      "intentionally staged runtime config\n"
+    );
+    assert.notEqual(
+      spawnSync("git", ["cat-file", "-e", `${result.headSha}:${metadataPath}`], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }).status,
+      0
+    );
+    const evidence = readExecutionEvidence(result.runDir);
+    assert.equal(evidence.verification_runs.length, 1);
+    assert.equal(
+      evidence.verification_runs[0].verification_tree_sha,
+      revParse(repoRoot, `${result.headSha}^{tree}`)
+    );
+  });
+}
+
+for (const scenario of [
+  {
+    name: "content and mode mutation",
+    codexMode: "runtime-root-staged-addition-mutated-uncommitted",
+    branch: "issue-1121-staged-runtime-mutated-orchestrator",
+    expectedContent: "gate-time runtime config\n",
+    expectedMode: /^100644 blob /,
+  },
+  {
+    name: "deletion",
+    codexMode: "runtime-root-staged-addition-deleted-uncommitted",
+    branch: "issue-1121-staged-runtime-deleted-orchestrator",
+    expectedContent: null,
+    expectedMode: null,
+  },
+]) {
+  test(`dispatch orchestrator commit proves staged runtime-root ${scenario.name} from the gate-time worktree`, () => {
+    const { repoRoot, relayHome } = setupRepoWithOrigin();
+    process.env.RELAY_HOME = relayHome;
+    const { env } = createPushPrTestEnv({
+      relayHome,
+      ghState: {
+        prCreateUrl: "https://github.com/acme/dev-relay/pull/1121",
+      },
+      codexMode: scenario.codexMode,
+    });
+    const rubricFile = writeAssuranceRubric("hardened");
+
+    const result = JSON.parse(runDispatch(repoRoot, [
+      "-b", scenario.branch,
+      "--prompt", "prove the gate-time runtime-root state",
+      "--rubric-file", rubricFile,
+      "--json",
+    ], env));
+    const stagedPath = ".antigravitycli/reviewable-runtime-config";
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.commitMode, "orchestrator-committed");
+    if (scenario.expectedContent === null) {
+      assert.notEqual(
+        spawnSync("git", ["cat-file", "-e", `${result.headSha}:${stagedPath}`], {
+          cwd: repoRoot,
+          encoding: "utf-8",
+          stdio: "pipe",
+        }).status,
+        0
+      );
+    } else {
+      assert.equal(
+        execFileSync("git", ["show", `${result.headSha}:${stagedPath}`], {
+          cwd: repoRoot,
+          encoding: "utf-8",
+          stdio: "pipe",
+        }),
+        scenario.expectedContent
+      );
+      assert.match(
+        execFileSync("git", ["ls-tree", result.headSha, stagedPath], {
+          cwd: repoRoot,
+          encoding: "utf-8",
+          stdio: "pipe",
+        }),
+        scenario.expectedMode
+      );
+    }
+
+    const evidence = readExecutionEvidence(result.runDir);
+    assert.equal(evidence.verification_runs.length, 1);
+    assert.equal(
+      evidence.verification_runs[0].verification_tree_sha,
+      revParse(repoRoot, `${result.headSha}^{tree}`)
+    );
+  });
+}
+
+for (const scenario of [
+  {
+    name: "content and mode mutation",
+    codexMode: "runtime-root-staged-addition-mutated-direct",
+    branch: "issue-1121-staged-runtime-mutated-direct",
+  },
+  {
+    name: "deletion",
+    codexMode: "runtime-root-staged-addition-deleted-direct",
+    branch: "issue-1121-staged-runtime-deleted-direct",
+  },
+]) {
+  test(`dispatch fails closed when an executor-direct commit ignores staged runtime-root ${scenario.name}`, () => {
+    const { repoRoot, relayHome } = setupRepoWithOrigin();
+    const { env } = createPushPrTestEnv({
+      relayHome,
+      codexMode: scenario.codexMode,
+    });
+    const rubricFile = writeAssuranceRubric("hardened");
+
+    const dispatched = spawnSync(process.execPath, [
+      SCRIPT,
+      repoRoot,
+      "-b", scenario.branch,
+      "--prompt", "prove the gate-time runtime-root state before a stale direct commit",
+      "--rubric-file", rubricFile,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env,
+    });
+    assert.equal(dispatched.status, 1, dispatched.stderr);
+    const result = JSON.parse(dispatched.stdout);
+    const evidence = readExecutionEvidence(result.runDir);
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.runState, STATES.ESCALATED);
+    assert.equal(result.commitMode, "committed in-sandbox");
+    assert.match(result.error, /verification_tree_mismatch/);
+    assert.equal(evidence.verification_runs, undefined);
+    assert.equal(evidence.test_exit_code, 1);
+  });
+}
+
+test("dispatch fails closed when an orchestrator-owned commit hook changes the verified tree", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   const { env } = createPushPrTestEnv({
     relayHome,
@@ -7157,6 +7748,67 @@ test("dispatch fails closed when a commit hook changes the tree after executor v
       stdio: "pipe",
     }),
     /mutated by pre-commit hook/
+  );
+  assert.equal(preflight.status, "blocked");
+  assert.equal(preflight.qualityExecutionStatus, "fail");
+  assert.match(preflight.reason, /verification gate went unrecorded: 'focused test'/);
+});
+
+test("dispatch fails closed when an executor-direct commit hook changes the verified tree", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    codexMode: "commit",
+  });
+  const hookPath = path.join(repoRoot, ".git", "hooks", "pre-commit");
+  fs.writeFileSync(hookPath, [
+    "#!/bin/sh",
+    "printf 'mutated in executor-direct pre-commit hook\\n' >> README.md",
+    "git add README.md",
+    "",
+  ].join("\n"), "utf-8");
+  fs.chmodSync(hookPath, 0o755);
+  const rubricFile = writeAssuranceRubric("hardened");
+
+  const dispatched = spawnSync(process.execPath, [
+    SCRIPT,
+    repoRoot,
+    "-b", "issue-1121-executor-tree-mutating-hook",
+    "--prompt", "verify work before the executor commits it",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+  const result = JSON.parse(dispatched.stdout);
+  const evidence = readExecutionEvidence(result.runDir);
+  const manifestData = readManifest(result.manifestPath).data;
+  const preflight = buildExecutionEvidencePreflight({
+    runDir: result.runDir,
+    reviewedHead: result.headSha,
+    strict: true,
+    manifestData,
+  });
+
+  assert.equal(dispatched.status, 1, dispatched.stderr);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.equal(result.commitMode, "committed in-sandbox");
+  assert.match(result.error, /verification_tree_mismatch/);
+  assert.match(result.error, /final HEAD\^\{tree\}/);
+  assert.match(result.error, /re-run the executor verification gates at the committed HEAD/);
+  assert.equal(evidence.head_sha, result.headSha);
+  assert.equal(evidence.verification_runs, undefined);
+  assert.equal(evidence.test_exit_code, 1);
+  assert.match(
+    execFileSync("git", ["show", `${result.headSha}:README.md`], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }),
+    /mutated in executor-direct pre-commit hook/
   );
   assert.equal(preflight.status, "blocked");
   assert.equal(preflight.qualityExecutionStatus, "fail");
@@ -7782,6 +8434,10 @@ test("dispatch seeds execution evidence test_command from structured verificatio
   assert.equal(evidence.verification_runs.length, 1);
   assert.equal(evidence.verification_runs[0].command, "node --version");
   assert.equal(evidence.verification_runs[0].head_sha, result.headSha);
+  assert.equal(
+    evidence.verification_runs[0].verification_tree_sha,
+    revParse(fixture.repoRoot, `${result.headSha}^{tree}`)
+  );
   assert.equal(evidence.verification_runs[0].exit_code, 0);
   assert.equal(
     evidence.verification_runs[0].recorded_by,

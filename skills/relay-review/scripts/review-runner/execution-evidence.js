@@ -7,6 +7,7 @@ const {
 const {
   getRubricAnchorStatus,
 } = require("../../../relay-dispatch/scripts/manifest/rubric");
+const { git } = require("./common");
 
 const EXECUTION_EVIDENCE_FILENAME = "execution-evidence.json";
 const REQUIRED_EXECUTION_EVIDENCE_FIELDS = [
@@ -22,6 +23,7 @@ const SHA40_PATTERN = /^[0-9a-f]{40}$/i;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const FORCE_FINALIZE_GUIDANCE = 'finalize-run --force-finalize-nonready --reason "pre-261 run, no artifact"';
 const VERIFICATION_HASH_FIELDS = ["output_hash", "stdout_hash", "stderr_hash"];
+const CONFIRMED_VERIFICATION_RECORDED_BY_SUFFIX = "-confirmed-verification-v1";
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -90,17 +92,17 @@ function missingVerificationGateReason(gates) {
   );
 }
 
-function rebrandVerificationGateReason(artifact, gates) {
+function rebrandVerificationGateReason(artifact, gates, policies = [
+  "removed_stale_after_rebrand",
+  "removed_malformed_after_rebrand",
+]) {
   const rebrands = [
     artifact.rebrand,
     ...(Array.isArray(artifact.rebrand_history)
       ? [...artifact.rebrand_history].reverse()
       : []),
   ].filter(isObject);
-  const rebrand = rebrands.find((entry) => (
-    entry.verification_runs?.policy === "removed_stale_after_rebrand"
-    || entry.verification_runs?.policy === "removed_malformed_after_rebrand"
-  ));
+  const rebrand = rebrands.find((entry) => policies.includes(entry.verification_runs?.policy));
   if (!rebrand) return null;
 
   const audit = rebrand.verification_runs;
@@ -108,16 +110,18 @@ function rebrandVerificationGateReason(artifact, gates) {
   const laterRebrand = rebrandHead !== artifact.head_sha
     ? `; evidence is now at ${artifact.head_sha}`
     : "";
-  const requiredGates = (
-    `Required verification ${gates.length === 1 ? "gate" : "gates"}: ` +
-    gates.map((gate) => `'${gate.name}'`).join(", ")
-  );
+  const requiredGates = gates.length > 0
+    ? (
+        ` Required verification ${gates.length === 1 ? "gate" : "gates"}: ` +
+        gates.map((gate) => `'${gate.name}'`).join(", ")
+      )
+    : "";
   if (audit.policy === "removed_malformed_after_rebrand") {
     return (
       "strict execution evidence rebrand removed malformed verification_runs after HEAD changed " +
       `from ${rebrand.previous_head_sha} to ${rebrandHead}${laterRebrand}; ` +
       `${audit.malformation_reason}. ` +
-      "Re-verify at the new HEAD or record audited operator evidence. " +
+      "Re-verify at the new HEAD or record audited operator evidence." +
       requiredGates
     );
   }
@@ -125,7 +129,7 @@ function rebrandVerificationGateReason(artifact, gates) {
     `strict execution evidence rebrand removed ${audit.removed_count} stale ` +
     `${audit.removed_count === 1 ? "verification_run" : "verification_runs"} after HEAD changed ` +
     `from ${rebrand.previous_head_sha} to ${rebrandHead}${laterRebrand}; ` +
-    "re-verify at the new HEAD or record audited operator evidence. " +
+    "re-verify at the new HEAD or record audited operator evidence." +
     requiredGates
   );
 }
@@ -138,6 +142,75 @@ function findMissingVerificationGates(gates, verificationRuns) {
     unmatchedRuns.splice(matchIndex, 1);
     return false;
   });
+}
+
+function isConfirmedVerificationRun(run) {
+  return (
+    typeof run.recorded_by === "string"
+    && run.recorded_by.endsWith(CONFIRMED_VERIFICATION_RECORDED_BY_SUFFIX)
+  );
+}
+
+function resolveReviewedTreeSha(artifact, reviewedHead, manifestData) {
+  const repoPaths = [
+    manifestData?.paths?.worktree,
+    ...artifact.verification_runs.filter(isConfirmedVerificationRun).map((run) => run.cwd),
+  ].filter(isNonEmptyString);
+  let lastError = null;
+
+  for (const repoPath of [...new Set(repoPaths)]) {
+    try {
+      const treeSha = git(repoPath, "rev-parse", `${reviewedHead}^{tree}`).trim();
+      if (SHA40_PATTERN.test(treeSha)) return treeSha.toLowerCase();
+      lastError = `git returned invalid tree SHA '${treeSha || "(empty)"}'`;
+    } catch (error) {
+      lastError = error.message;
+    }
+  }
+
+  throw new Error(
+    "strict confirmed verification evidence could not resolve the reviewed HEAD^{tree}" +
+    `${lastError ? `: ${lastError}` : ""}; restore the reviewed checkout and re-run verification`
+  );
+}
+
+function confirmedVerificationTreeReason(artifact, reviewedHead, manifestData) {
+  try {
+    artifact.verification_runs.forEach(validateVerificationRun);
+  } catch (error) {
+    return error.message;
+  }
+
+  const confirmedRuns = artifact.verification_runs
+    .map((run, index) => ({ run, index }))
+    .filter(({ run }) => isConfirmedVerificationRun(run));
+  if (confirmedRuns.length === 0) return null;
+
+  const missingProof = confirmedRuns.find(({ run }) => run.verification_tree_sha === undefined);
+  if (missingProof) {
+    return (
+      `strict execution evidence verification_runs[${missingProof.index}] recorded by ` +
+      `'${missingProof.run.recorded_by}' requires verification_tree_sha; ` +
+      "re-run the executor verification gates at the reviewed HEAD"
+    );
+  }
+
+  let reviewedTreeSha;
+  try {
+    reviewedTreeSha = resolveReviewedTreeSha(artifact, reviewedHead, manifestData);
+  } catch (error) {
+    return error.message;
+  }
+  const mismatch = confirmedRuns.find(({ run }) => (
+    run.verification_tree_sha.toLowerCase() !== reviewedTreeSha
+  ));
+  if (!mismatch) return null;
+
+  return (
+    `strict execution evidence verification_runs[${mismatch.index}].verification_tree_sha ` +
+    `${mismatch.run.verification_tree_sha} does not match reviewed HEAD ${reviewedHead}^{tree} ` +
+    `${reviewedTreeSha}; re-run the executor verification gates at the reviewed HEAD`
+  );
 }
 
 function validateVerificationHash(value, fieldName) {
@@ -158,6 +231,15 @@ function validateVerificationRun(run, index) {
   }
   if (!isNonEmptyString(run.head_sha) || !SHA40_PATTERN.test(run.head_sha)) {
     throw new Error(`execution evidence verification_runs[${index}].head_sha must be a 40-character hex SHA`);
+  }
+  if (
+    run.verification_tree_sha !== undefined
+    && (!isNonEmptyString(run.verification_tree_sha)
+      || !SHA40_PATTERN.test(run.verification_tree_sha))
+  ) {
+    throw new Error(
+      `execution evidence verification_runs[${index}].verification_tree_sha must be a 40-character hex Git tree SHA when present`
+    );
   }
   if (!Number.isInteger(run.exit_code) || run.exit_code < 0) {
     throw new Error(`execution evidence verification_runs[${index}].exit_code must be a non-negative integer`);
@@ -457,6 +539,17 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false, m
         reason: `strict execution evidence could not resolve verification gates: ${error.message}`,
       };
     }
+    const malformedRebrandReason = rebrandVerificationGateReason(
+      artifactLoad.artifact,
+      verificationGates,
+      ["removed_malformed_after_rebrand"]
+    );
+    if (malformedRebrandReason) {
+      return {
+        status: "fail",
+        reason: malformedRebrandReason,
+      };
+    }
     if (verificationGates.length > 0) {
       if (artifactLoad.artifact.verification_runs === undefined) {
         return {
@@ -482,6 +575,17 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false, m
         return {
           status: "fail",
           reason: `strict verification_runs evidence is stale: recorded at ${staleRun.head_sha}, reviewed at ${reviewedHead}`,
+        };
+      }
+      const verificationTreeReason = confirmedVerificationTreeReason(
+        artifactLoad.artifact,
+        reviewedHead,
+        manifestData
+      );
+      if (verificationTreeReason) {
+        return {
+          status: "fail",
+          reason: verificationTreeReason,
         };
       }
       const failedRun = artifactLoad.artifact.verification_runs.find((run) => run.exit_code !== 0);

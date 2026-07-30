@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -14,11 +15,23 @@ const {
   hashFileSha256,
   rebrandEvidence,
   resolveExecutionEvidenceTestCommand,
+  verificationTreeProofGitAddArgs,
+  verificationTreeProofStagedRuntimeAdditionsGitDiffArgs,
+  verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs,
+  verificationTreeProofTrackedGitAddArgs,
   writeExecutionEvidence,
 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
 const {
   buildExecutionEvidencePreflight,
 } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
+
+function git(repoPath, ...args) {
+  return execFileSync("git", args, {
+    cwd: repoPath,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
 
 test("verification gates seed the evidence command and identify malformed command gates", () => {
   const rubric = [
@@ -114,7 +127,189 @@ test("executor verification instructions keep gate execution inside the dispatch
   assert.match(instructions, /inside this same executor session/);
   assert.match(instructions, /current sandbox and network policy/);
   assert.match(instructions, /Do not delegate them back to the relay orchestrator/);
+  assert.match(instructions, /After all required gates finish/);
+  assert.match(instructions, /temporary Git index/);
+  assert.match(instructions, /GIT_INDEX_FILE/);
+  assert.match(instructions, /git write-tree/);
+  assert.match(instructions, /:\(exclude\)\.antigravitycli/);
+  assert.match(instructions, /intentionally staged runtime-root additions/);
+  assert.match(instructions, /tracked runtime-root modifications and deletions remain reviewable/);
+  assert.match(instructions, /gate-time worktree/);
+  assert.match(instructions, /update-index/);
+  assert.match(instructions, /--remove/);
+  assert.match(instructions, /before any later commit or commit hook can mutate the tree/);
+  assert.match(instructions, /verification_tree_sha/);
   assert.match(instructions, /"command":"node --test focused\.test\.js"/);
+});
+
+test("verification tree proof keeps tracked runtime changes and excludes adjacent metadata", (t) => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-verification-tree-"));
+  const verificationIndex = path.join(
+    os.tmpdir(),
+    `relay-verification-index-${process.pid}-${Date.now()}`
+  );
+  t.after(() => fs.rmSync(verificationIndex, { force: true }));
+
+  git(repoPath, "init");
+  git(repoPath, "config", "user.name", "Relay Test");
+  git(repoPath, "config", "user.email", "relay@example.com");
+  fs.writeFileSync(path.join(repoPath, "reviewable.txt"), "before\n", "utf-8");
+  fs.mkdirSync(path.join(repoPath, ".antigravitycli"), { recursive: true });
+  fs.writeFileSync(
+    path.join(repoPath, ".antigravitycli", "tracked-config"),
+    "tracked before\n",
+    "utf-8"
+  );
+  fs.writeFileSync(
+    path.join(repoPath, ".antigravitycli", "tracked-obsolete"),
+    "remove after verification\n",
+    "utf-8"
+  );
+  git(
+    repoPath,
+    "add",
+    "reviewable.txt",
+    ".antigravitycli/tracked-config",
+    ".antigravitycli/tracked-obsolete"
+  );
+  git(repoPath, "commit", "-m", "base");
+
+  fs.writeFileSync(path.join(repoPath, "reviewable.txt"), "after\n", "utf-8");
+  fs.writeFileSync(
+    path.join(repoPath, ".antigravitycli", "tracked-config"),
+    "tracked after\n",
+    "utf-8"
+  );
+  fs.unlinkSync(path.join(repoPath, ".antigravitycli", "tracked-obsolete"));
+  fs.writeFileSync(
+    path.join(repoPath, ".antigravitycli", "runtime-state.json"),
+    '{"session":"runtime-only"}\n',
+    "utf-8"
+  );
+  const stagedAdditionPath = path.join(
+    repoPath,
+    ".antigravitycli",
+    "staged-tool"
+  );
+  fs.writeFileSync(stagedAdditionPath, "staged addition\n", "utf-8");
+  fs.chmodSync(stagedAdditionPath, 0o755);
+  git(repoPath, "add", ".antigravitycli/staged-tool");
+  const stagedDeletedPath = path.join(
+    repoPath,
+    ".antigravitycli",
+    "staged-deleted"
+  );
+  fs.writeFileSync(stagedDeletedPath, "deleted after staging\n", "utf-8");
+  git(repoPath, "add", ".antigravitycli/staged-deleted");
+  const intentToAddPath = path.join(
+    repoPath,
+    ".antigravitycli",
+    "intent-to-add"
+  );
+  fs.writeFileSync(intentToAddPath, "intent-to-add content\n", "utf-8");
+  git(repoPath, "add", "-N", ".antigravitycli/intent-to-add");
+  fs.writeFileSync(stagedAdditionPath, "later unstaged content\n", "utf-8");
+  fs.chmodSync(stagedAdditionPath, 0o644);
+  fs.unlinkSync(stagedDeletedPath);
+
+  const proofEnv = {
+    ...process.env,
+    GIT_INDEX_FILE: verificationIndex,
+  };
+  execFileSync("git", ["read-tree", "HEAD"], {
+    cwd: repoPath,
+    env: proofEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  execFileSync("git", verificationTreeProofGitAddArgs(), {
+    cwd: repoPath,
+    env: proofEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  execFileSync("git", verificationTreeProofTrackedGitAddArgs(), {
+    cwd: repoPath,
+    env: proofEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stagedRuntimePaths = path.join(
+    os.tmpdir(),
+    `relay-verification-runtime-additions-${process.pid}-${Date.now()}.paths`
+  );
+  t.after(() => fs.rmSync(stagedRuntimePaths, { force: true }));
+  const realIndexPath = git(repoPath, "rev-parse", "--git-path", "index");
+  const stagedRuntimePathList = execFileSync(
+    "git",
+    verificationTreeProofStagedRuntimeAdditionsGitDiffArgs(),
+    {
+      cwd: repoPath,
+      env: {
+        ...process.env,
+        GIT_INDEX_FILE: realIndexPath,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
+  fs.writeFileSync(stagedRuntimePaths, stagedRuntimePathList);
+  execFileSync(
+    "git",
+    verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs(),
+    {
+      cwd: repoPath,
+      env: proofEnv,
+      input: stagedRuntimePathList,
+      stdio: ["pipe", "pipe", "pipe"],
+    }
+  );
+  const verificationTreeSha = execFileSync("git", ["write-tree"], {
+    cwd: repoPath,
+    env: proofEnv,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+  const realIndexTreeSha = git(repoPath, "write-tree");
+
+  assert.deepEqual(
+    git(repoPath, "ls-tree", "-r", "--name-only", verificationTreeSha).split("\n"),
+    [
+      ".antigravitycli/intent-to-add",
+      ".antigravitycli/staged-tool",
+      ".antigravitycli/tracked-config",
+      "reviewable.txt",
+    ]
+  );
+  assert.equal(
+    git(repoPath, "show", `${verificationTreeSha}:.antigravitycli/tracked-config`),
+    "tracked after"
+  );
+  assert.equal(
+    git(repoPath, "show", `${verificationTreeSha}:.antigravitycli/staged-tool`),
+    "later unstaged content"
+  );
+  assert.equal(
+    git(repoPath, "show", `${verificationTreeSha}:.antigravitycli/intent-to-add`),
+    "intent-to-add content"
+  );
+  assert.match(
+    git(repoPath, "ls-tree", verificationTreeSha, ".antigravitycli/staged-tool"),
+    /^100644 blob /
+  );
+  assert.match(
+    git(repoPath, "ls-tree", "-r", "--name-only", realIndexTreeSha),
+    /\.antigravitycli\/staged-tool/
+  );
+  assert.match(
+    git(repoPath, "ls-tree", "-r", "--name-only", verificationTreeSha),
+    /\.antigravitycli\/tracked-config/
+  );
+  assert.doesNotMatch(
+    git(repoPath, "ls-tree", "-r", "--name-only", verificationTreeSha),
+    /\.antigravitycli\/(?:runtime-state\.json|staged-deleted|tracked-obsolete)/
+  );
+  assert.doesNotMatch(
+    git(repoPath, "show", `${verificationTreeSha}:.antigravitycli/staged-tool`),
+    /staged addition/
+  );
+  assert.notEqual(verificationTreeSha, realIndexTreeSha);
 });
 
 test("executor-confirmed verification results persist SHA-bound output evidence without executing commands", () => {
@@ -128,6 +323,7 @@ test("executor-confirmed verification results persist SHA-bound output evidence 
     "RELAY_VERIFICATION_RESULT_BEGIN",
     JSON.stringify({
       schema_version: 1,
+      verification_tree_sha: "c".repeat(40),
       runs: [{
         command,
         exit_code: 1,
@@ -141,6 +337,7 @@ test("executor-confirmed verification results persist SHA-bound output evidence 
     gates: [{ name: "focused gate", type: "command", command }],
     cwd,
     headSha,
+    finalTreeSha: "c".repeat(40),
     runDir,
     resultText,
     executor: "codex",
@@ -153,6 +350,7 @@ test("executor-confirmed verification results persist SHA-bound output evidence 
   assert.equal(result.runs[0].command, command);
   assert.equal(result.runs[0].cwd, cwd);
   assert.equal(result.runs[0].head_sha, headSha);
+  assert.equal(result.runs[0].verification_tree_sha, "c".repeat(40));
   assert.equal(result.runs[0].exit_code, 1);
   assert.equal(result.runs[0].recorded_by, "codex-confirmed-verification-v1");
   assert.equal(result.runs[0].recorded_at, "2026-07-28T00:00:00.000Z");
@@ -161,6 +359,7 @@ test("executor-confirmed verification results persist SHA-bound output evidence 
     hashFileSha256(path.join(runDir, result.runs[0].output_path))
   );
   assert.equal(path.basename(result.outputPath), VERIFICATION_OUTPUT_FILENAME);
+  assert.equal(result.verificationTreeSha, "c".repeat(40));
   assert.match(fs.readFileSync(result.outputPath, "utf-8"), /sandbox policy denied write/);
   assert.equal(fs.existsSync(sentinelPath), false);
 });
@@ -170,6 +369,7 @@ test("executor verification evidence fails closed on missing or mismatched confi
     gates: [{ name: "focused gate", command: "node --test focused.test.js" }],
     cwd: "/repo",
     headSha: "b".repeat(40),
+    finalTreeSha: "c".repeat(40),
     runDir: fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-verification-invalid-")),
     executor: "codex",
   };
@@ -183,11 +383,54 @@ test("executor verification evidence fails closed on missing or mismatched confi
       ...options,
       resultText: [
         "RELAY_VERIFICATION_RESULT_BEGIN",
-        '{"schema_version":1,"runs":[{"command":"npm test","exit_code":0,"output":"ok"}]}',
+        `{"schema_version":1,"verification_tree_sha":"${"c".repeat(40)}","runs":[{"command":"npm test","exit_code":0,"output":"ok"}]}`,
         "RELAY_VERIFICATION_RESULT_END",
       ].join("\n"),
     }),
     /did not match required gate/
+  );
+
+  for (const verificationTreeSha of [undefined, "not-a-tree", "a".repeat(39)]) {
+    const envelope = {
+      schema_version: 1,
+      ...(verificationTreeSha === undefined ? {} : { verification_tree_sha: verificationTreeSha }),
+      runs: [{
+        command: "node --test focused.test.js",
+        exit_code: 0,
+        output: "ok",
+      }],
+    };
+    assert.throws(
+      () => collectExecutorVerificationEvidence({
+        ...options,
+        resultText: [
+          "RELAY_VERIFICATION_RESULT_BEGIN",
+          JSON.stringify(envelope),
+          "RELAY_VERIFICATION_RESULT_END",
+        ].join("\n"),
+      }),
+      /verification_tree_proof_invalid.*40-character hex Git tree SHA.*re-run the executor verification gates/
+    );
+  }
+
+  assert.throws(
+    () => collectExecutorVerificationEvidence({
+      ...options,
+      resultText: [
+        "RELAY_VERIFICATION_RESULT_BEGIN",
+        JSON.stringify({
+          schema_version: 1,
+          verification_tree_sha: "d".repeat(40),
+          runs: [{
+            command: "node --test focused.test.js",
+            exit_code: 0,
+            output: "ok",
+          }],
+        }),
+        "RELAY_VERIFICATION_RESULT_END",
+      ].join("\n"),
+    }),
+    /verification_tree_mismatch.*final HEAD\^\{tree\}.*re-run the executor verification gates/
   );
 });
 
@@ -455,6 +698,74 @@ test("rebrandEvidence safely audits malformed verification_runs and strict prefl
       entry.name
     );
   }
+});
+
+test("strict preflight blocks a malformed verification rebrand audit with zero command gates", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-rebrand-gateless-"));
+  const rubric = [
+    "evaluation:",
+    "  verification:",
+    "    checks:",
+    "      - name: inspect artifact",
+    "        type: observation",
+  ].join("\n");
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), rubric, "utf-8");
+  const legacyFields = {
+    schema_version: 1,
+    test_command: "node --test legacy.test.js",
+    test_result_hash: "c".repeat(64),
+    test_result_summary: "legacy gate passed",
+    test_exit_code: 0,
+    recorded_at: "2026-04-22T00:00:00.000Z",
+    recorded_by: "dispatch-orchestrator-v1",
+  };
+  writeExecutionEvidence(runDir, {
+    ...legacyFields,
+    head_sha: "a".repeat(40),
+    verification_runs: { command: "node --test malformed.test.js" },
+  });
+
+  rebrandEvidence(runDir, {
+    newHeadSha: "b".repeat(40),
+    reason: "recover malformed gateless evidence",
+  });
+  const blocked = buildExecutionEvidencePreflight({
+    runDir,
+    reviewedHead: "b".repeat(40),
+    strict: true,
+  });
+
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.qualityExecutionStatus, "fail");
+  assert.match(blocked.reason, /removed malformed verification_runs/);
+  assert.match(blocked.reason, /must be an array when present; found object/);
+  assert.match(blocked.reason, new RegExp(`from ${"a".repeat(40)} to ${"b".repeat(40)}`));
+  assert.match(blocked.reason, /Re-verify at the new HEAD or record audited operator evidence/);
+  assert.doesNotMatch(blocked.reason, /Required verification gates?:/);
+
+  const cleanRunDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-clean-gateless-"));
+  fs.writeFileSync(path.join(cleanRunDir, "rubric.yaml"), rubric, "utf-8");
+  writeExecutionEvidence(cleanRunDir, {
+    ...legacyFields,
+    head_sha: "b".repeat(40),
+  });
+  assert.deepEqual(
+    buildExecutionEvidencePreflight({
+      runDir: cleanRunDir,
+      reviewedHead: "b".repeat(40),
+      strict: true,
+    }),
+    {
+      status: "pass",
+      qualityExecutionStatus: "pass",
+      reason: null,
+      reviewedHeadSha: "b".repeat(40),
+      evidenceHeadSha: "b".repeat(40),
+      artifactPath: path.join(cleanRunDir, EXECUTION_EVIDENCE_FILENAME),
+      browserEvidence: { present: false },
+      nextAction: "invoke_primary_reviewer",
+    }
+  );
 });
 
 test("rebrandEvidence retains verification removal provenance across repeated rebrands", () => {

@@ -353,6 +353,7 @@ function writeNoOpCodex(binDir) {
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
+const { execFileSync } = require("child_process");
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
   process.stdout.write("codex-fake\\n");
@@ -362,6 +363,7 @@ if (args[0] !== "exec") {
   process.stderr.write("unsupported fake codex invocation");
   process.exit(1);
 }
+const cwd = args[args.indexOf("-C") + 1];
 const output = args[args.indexOf("-o") + 1];
 const prompt = String(args[args.length - 1] || "");
 const requestBegin = "RELAY_VERIFICATION_REQUEST_BEGIN";
@@ -377,6 +379,11 @@ if (requestStart !== -1) {
     "RELAY_VERIFICATION_RESULT_BEGIN",
     JSON.stringify({
       schema_version: 1,
+      verification_tree_sha: execFileSync(
+        "git",
+        ["-C", cwd, "write-tree"],
+        { encoding: "utf-8", stdio: "pipe" }
+      ).trim(),
       runs: request.gates.map((gate) => ({
         command: gate.command,
         exit_code: 0,

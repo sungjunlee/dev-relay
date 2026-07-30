@@ -1,6 +1,9 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const {
+  RUNTIME_METADATA_ROOTS,
+} = require("./runtime-dirt");
 
 const EXECUTION_EVIDENCE_FILENAME = "execution-evidence.json";
 const EXECUTION_EVIDENCE_SCHEMA_VERSION = 1;
@@ -40,6 +43,13 @@ function verificationRunsMalformation(verificationRuns) {
     }
     if (!isNonEmptyString(run.head_sha) || !SHA40_PATTERN.test(run.head_sha)) {
       return `verification_runs[${index}].head_sha must be a 40-character hex SHA`;
+    }
+    if (
+      run.verification_tree_sha !== undefined
+      && (!isNonEmptyString(run.verification_tree_sha)
+        || !SHA40_PATTERN.test(run.verification_tree_sha))
+    ) {
+      return `verification_runs[${index}].verification_tree_sha must be a 40-character hex Git tree SHA when present`;
     }
     if (!Number.isInteger(run.exit_code) || run.exit_code < 0) {
       return `verification_runs[${index}].exit_code must be a non-negative integer`;
@@ -223,18 +233,116 @@ function hashFileSha256(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
+function verificationTreeProofGitAddArgs() {
+  return [
+    "add",
+    "-A",
+    "--",
+    ".",
+    ...RUNTIME_METADATA_ROOTS.flatMap((root) => [
+      `:(exclude)${root}`,
+      `:(exclude)${root}/**`,
+    ]),
+  ];
+}
+
+function verificationTreeProofTrackedGitAddArgs() {
+  /*
+   * The first proof add deliberately excludes runtime roots so untracked
+   * executor metadata cannot enter the verification tree. Overlay every
+   * tracked worktree update afterward: `git add -u` records modifications and
+   * deletions beneath those roots without adding their untracked neighbors.
+   */
+  return ["add", "-u", "--", "."];
+}
+
+function verificationTreeProofStagedRuntimeAdditionsGitDiffArgs() {
+  /*
+   * A path added under a runtime root exists only in the repository's real
+   * index, so `git add -u` cannot discover it from the HEAD-seeded proof
+   * index. Use the real index only to identify those intentionally staged
+   * paths. The proof index must read their gate-time content, mode, or deletion
+   * from the worktree instead of trusting a possibly stale staged blob.
+   */
+  return [
+    "diff",
+    "--cached",
+    "--ita-visible-in-index",
+    "--name-only",
+    "-z",
+    "--no-renames",
+    "--no-ext-diff",
+    "--diff-filter=A",
+    "--",
+    ...RUNTIME_METADATA_ROOTS,
+  ];
+}
+
+function verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs() {
+  /*
+   * `update-index --stdin -z` consumes literal NUL-delimited repository paths,
+   * stages current worktree content and executable mode, and removes a listed
+   * path that disappeared after it was staged. That makes the proof describe
+   * what the gates observed while the real index remains read-only.
+   */
+  return ["update-index", "--add", "--remove", "-z", "--stdin"];
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
 function buildExecutorVerificationInstructions(gates) {
   if (!Array.isArray(gates) || gates.length === 0) return "";
   const request = {
     schema_version: 1,
     gates: gates.map(({ name, command }) => ({ name, command })),
   };
+  const reviewableGitAddCommand = [
+    'GIT_INDEX_FILE="$verification_index"',
+    "git",
+    ...verificationTreeProofGitAddArgs().map(shellQuote),
+  ].join(" ");
+  const trackedGitAddCommand = [
+    'GIT_INDEX_FILE="$verification_index"',
+    "git",
+    ...verificationTreeProofTrackedGitAddArgs().map(shellQuote),
+  ].join(" ");
+  const stagedRuntimeAdditionsCommand = [
+    'GIT_INDEX_FILE="$verification_real_index"',
+    "git",
+    ...verificationTreeProofStagedRuntimeAdditionsGitDiffArgs().map(shellQuote),
+    '> "$verification_runtime_paths"',
+  ].join(" ");
+  const stageGateTimeRuntimeAdditionsCommand = [
+    'GIT_INDEX_FILE="$verification_index"',
+    "git",
+    ...verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs().map(shellQuote),
+    '< "$verification_runtime_paths"',
+  ].join(" ");
   return [
     "## Required executor-side verification",
     "",
     "After completing the task, run every command below inside this same executor session.",
     "The commands must remain subject to the executor's current sandbox and network policy.",
     "Do not delegate them back to the relay orchestrator and do not expose credentials or secret environment values.",
+    "After all required gates finish, capture the exact reviewable repository state with the temporary Git index commands below.",
+    "Use the repository's real index only as a read-only source for intentionally staged runtime-root additions; untracked, unstaged executor runtime metadata must stay excluded, while tracked runtime-root modifications and deletions remain reviewable.",
+    "The staged-addition allowlist is refreshed from the gate-time worktree, so later content, mode, and deletion state are proven instead of a stale staged blob.",
+    "",
+    'verification_real_index="$(git rev-parse --git-path index)"',
+    'verification_index="$(mktemp)"',
+    'verification_runtime_paths="$(mktemp)"',
+    'rm -f "$verification_index"',
+    'GIT_INDEX_FILE="$verification_index" git read-tree HEAD',
+    reviewableGitAddCommand,
+    trackedGitAddCommand,
+    stagedRuntimeAdditionsCommand,
+    `if test -s "$verification_runtime_paths"; then ${stageGateTimeRuntimeAdditionsCommand} || { rm -f "$verification_runtime_paths" "$verification_index"; echo "failed to refresh staged runtime additions from the gate-time worktree" >&2; exit 1; }; fi`,
+    'verification_tree_sha="$(GIT_INDEX_FILE="$verification_index" git write-tree)"',
+    'rm -f "$verification_runtime_paths" "$verification_index"',
+    "",
+    "Capture this proof before any later commit or commit hook can mutate the tree, then report it as verification_tree_sha.",
     "",
     VERIFICATION_REQUEST_BEGIN,
     JSON.stringify(request),
@@ -242,7 +350,7 @@ function buildExecutorVerificationInstructions(gates) {
     "",
     "At the end of your final response, append exactly one result envelope using this shape:",
     VERIFICATION_RESULT_BEGIN,
-    '{"schema_version":1,"runs":[{"command":"exact command from request","exit_code":0,"output":"captured stdout/stderr"}]}',
+    '{"schema_version":1,"verification_tree_sha":"40-hex Git tree SHA captured after all gates and before commit","runs":[{"command":"exact command from request","exit_code":0,"output":"captured stdout/stderr"}]}',
     VERIFICATION_RESULT_END,
     "Preserve each command verbatim, keep request order, and report a nonzero exit_code when policy blocks a command.",
   ].join("\n");
@@ -289,10 +397,35 @@ function parseExecutorVerificationResult(resultText) {
   return result;
 }
 
+function validateVerificationTreeProof(verificationTreeSha, finalTreeSha) {
+  if (!isNonEmptyString(verificationTreeSha) || !SHA40_PATTERN.test(verificationTreeSha)) {
+    throw new Error(
+      "verification_tree_proof_invalid: executor verification result verification_tree_sha " +
+      "must be an exact 40-character hex Git tree SHA captured after all required gates and " +
+      "before any later commit or hook; re-run the executor verification gates at the committed HEAD"
+    );
+  }
+  if (!isNonEmptyString(finalTreeSha) || !SHA40_PATTERN.test(finalTreeSha)) {
+    throw new Error(
+      "verification_tree_proof_invalid: final HEAD^{tree} did not resolve to an exact " +
+      "40-character hex Git tree SHA; repair the commit and re-run the executor verification gates"
+    );
+  }
+  if (verificationTreeSha.toLowerCase() !== finalTreeSha.toLowerCase()) {
+    throw new Error(
+      "verification_tree_mismatch: executor verification ran against tree " +
+      `${verificationTreeSha}, but final HEAD^{tree} is ${finalTreeSha}; ` +
+      "re-run the executor verification gates at the committed HEAD and report a new tree proof"
+    );
+  }
+  return verificationTreeSha.toLowerCase();
+}
+
 function collectExecutorVerificationEvidence({
   gates,
   cwd,
   headSha,
+  finalTreeSha,
   runDir,
   resultText,
   executor,
@@ -301,11 +434,15 @@ function collectExecutorVerificationEvidence({
   if (!Array.isArray(gates) || gates.length === 0) {
     return { runs: [], outputPath: null, exitCode: undefined };
   }
-  if (!cwd || !headSha || !runDir) {
-    throw new Error("executor verification evidence requires cwd, headSha, and runDir");
+  if (!cwd || !headSha || !finalTreeSha || !runDir) {
+    throw new Error("executor verification evidence requires cwd, headSha, finalTreeSha, and runDir");
   }
 
   const result = parseExecutorVerificationResult(resultText);
+  const verificationTreeSha = validateVerificationTreeProof(
+    result.verification_tree_sha,
+    finalTreeSha
+  );
   if (result.runs.length !== gates.length) {
     throw new Error(
       `executor verification result recorded ${result.runs.length} runs for ${gates.length} required gates`
@@ -356,6 +493,7 @@ function collectExecutorVerificationEvidence({
       command: gate.command,
       cwd,
       head_sha: headSha,
+      verification_tree_sha: verificationTreeSha,
       exit_code: confirmed.exit_code,
       output_path: outputName,
       output_hash: hashFileSha256(outputPath),
@@ -370,6 +508,7 @@ function collectExecutorVerificationEvidence({
     runs,
     outputPath: aggregateOutputPath,
     exitCode: failedRun ? failedRun.exit_code : 0,
+    verificationTreeSha,
   };
 }
 
@@ -524,5 +663,9 @@ module.exports = {
   hashFileSha256,
   rebrandEvidence,
   resolveExecutionEvidenceTestCommand,
+  verificationTreeProofGitAddArgs,
+  verificationTreeProofStagedRuntimeAdditionsGitDiffArgs,
+  verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs,
+  verificationTreeProofTrackedGitAddArgs,
   writeExecutionEvidence,
 };
