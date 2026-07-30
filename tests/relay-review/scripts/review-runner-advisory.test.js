@@ -666,6 +666,16 @@ function waitForEvent(repoRoot, runId, predicate, { timeoutMs = 2000 } = {}) {
   return null;
 }
 
+function waitForManifest(manifestPath, predicate, { timeoutMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const manifest = readManifest(manifestPath).data;
+    if (predicate(manifest)) return manifest;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  return null;
+}
+
 function waitForFileText(filePath, expectedText, { timeoutMs = 2000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -2786,7 +2796,14 @@ test("standard review applies the primary verdict after advisory grace and recor
   assert.equal(event.frontier_step_replaced, false);
   assert.ok(event.elapsed_ms >= 3000);
   assert.ok(event.critical_path_wait_ms <= 75);
-  const manifest = readManifest(manifestPath).data;
+  // The audit event is durably appended before the manifest projection is
+  // written, so an unlocked reader can briefly observe the event first.
+  const manifest = waitForManifest(
+    manifestPath,
+    (candidate) => candidate.review.last_advisory.status === "findings",
+    { timeoutMs: 7000 },
+  );
+  assert.ok(manifest, "late advisory findings should be projected into the manifest");
   assert.equal(manifest.review.last_advisory.status, "findings");
   assert.equal(manifest.review.last_advisory.outcomes[0].status, "success");
   assert.equal(manifest.review.last_advisory.outcomes[0].outcome, "findings");
