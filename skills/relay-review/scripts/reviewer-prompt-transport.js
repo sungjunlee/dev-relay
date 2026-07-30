@@ -149,6 +149,11 @@ function createPromptFileReference({ adapter, prompt, promptFile }) {
     );
     const transportPromptPath = path.join(transportDir, "review-prompt.md");
     fs.writeFileSync(transportPromptPath, prompt, "utf-8");
+    if (adapter === "cline" && /["\r\n]/.test(transportPromptPath)) {
+      throw new Error(
+        "Cline prompt-file reference path cannot contain a double quote or line break"
+      );
+    }
     writeTransportEvidence({
       adapter,
       compatibilityFallback: true,
@@ -157,11 +162,14 @@ function createPromptFileReference({ adapter, prompt, promptFile }) {
       promptFile,
       reason,
     });
+    const promptFileMention = adapter === "cline"
+      ? `@"${transportPromptPath}"`
+      : `@${transportPromptPath}`;
     return {
       directory: transportDir,
       promptPath: transportPromptPath,
       argvReference:
-        `Read and follow the complete review instructions in @${transportPromptPath}. ` +
+        `Read and follow the complete review instructions in ${promptFileMention}. ` +
         "Return only the JSON requested by that file.",
       cleanup() {
         fs.rmSync(transportDir, { recursive: true, force: true });

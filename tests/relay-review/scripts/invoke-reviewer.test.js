@@ -1819,6 +1819,8 @@ test("cline adapter uses a cleaned evidence-recorded prompt-file reference and p
   const promptCapturePath = path.join(fakeDir, "cline-prompt.txt");
   const promptPathCapture = path.join(fakeDir, "cline-prompt-path.txt");
   const transportEvidencePath = path.join(fakeDir, "prompt-transport.json");
+  const clineTempDir = path.join(fakeDir, "cline temp with spaces");
+  fs.mkdirSync(clineTempDir);
   const sourcePrompt = "Return a passing review.\0Preserve the complete prompt bytes.";
   fs.writeFileSync(promptPath, `${sourcePrompt}\n`, "utf-8");
   const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
@@ -1826,7 +1828,7 @@ const fs = require("fs");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
 const reference = args.at(-1);
-const match = reference.match(/^Read and follow the complete review instructions in @(.+)\\. Return only the JSON requested by that file\\.$/);
+const match = reference.match(/^Read and follow the complete review instructions in @"((?:\\/|~\\/|\\.{1,2}\\/)[^"\\r\\n]+)"\\. Return only the JSON requested by that file\\.$/);
 if (!match) process.exit(2);
 fs.writeFileSync(${JSON.stringify(promptPathCapture)}, match[1], "utf-8");
 fs.copyFileSync(match[1], ${JSON.stringify(promptCapturePath)});
@@ -1860,6 +1862,7 @@ process.stdout.write(JSON.stringify({
       RELAY_CLINE_BIN: fakeCline,
       RELAY_CLINE_REVIEW_TIMEOUT: "120s",
       RELAY_REVIEW_PROMPT_TRANSPORT_EVIDENCE_PATH: transportEvidencePath,
+      TMPDIR: clineTempDir,
     },
   });
 
@@ -1875,7 +1878,10 @@ process.stdout.write(JSON.stringify({
     "--timeout", "60",
   ]);
   assert.equal(loggedArgs.length, 11);
-  assert.match(loggedArgs[10], /^Read and follow the complete review instructions in @.+review-prompt\.md\./);
+  assert.match(
+    loggedArgs[10],
+    /^Read and follow the complete review instructions in @"\/.+cline temp with spaces\/.+review-prompt\.md"\./
+  );
   assert.equal(loggedArgs.some((entry) => entry.includes(sourcePrompt)), false);
   assert.equal(loggedArgs.some((entry) => entry.includes("\0")), false);
   const expectedPrompt = [
@@ -1909,7 +1915,7 @@ test("cline adapter cleans its prompt-file reference on provider failure and pre
   const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
 const fs = require("fs");
 const reference = process.argv.at(-1);
-const match = reference.match(/^Read and follow the complete review instructions in @(.+)\\. Return only the JSON requested by that file\\.$/);
+const match = reference.match(/^Read and follow the complete review instructions in @"((?:\\/|~\\/|\\.{1,2}\\/)[^"\\r\\n]+)"\\. Return only the JSON requested by that file\\.$/);
 if (!match) process.exit(2);
 fs.writeFileSync(${JSON.stringify(promptPathCapture)}, match[1], "utf-8");
 process.stderr.write(${JSON.stringify(`${providerError}\n`)});
