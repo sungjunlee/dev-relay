@@ -5,6 +5,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const {
   bindCliArgs,
   modeLabel,
@@ -21,7 +22,8 @@ const {
 } = require("./reviewer-helpers");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
 const {
-  spawnSyncWithStdinPrompt,
+  assertControlSafeArgv,
+  createPromptFileReference,
 } = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
@@ -160,29 +162,40 @@ function main() {
 
   const promptText = fs.readFileSync(promptFile, "utf-8").trim();
   const fullPrompt = buildPrompt(promptText);
-
-  const execArgs = [
-    "--json",
-    "--yolo",
-    "-P", modelRoute?.provider || CLINE_PROVIDER,
-  ];
-  if (modelRoute) execArgs.push("-m", modelRoute.cliModel);
-  execArgs.push(
-    "--cwd", repoPath,
-    "--timeout", clineTimeoutSecondsFromParentMs(parentTimeoutMs)
-  );
-
-  const execResult = spawnSyncWithStdinPrompt(clineBin, execArgs, {
+  const clineTimeoutSeconds = clineTimeoutSecondsFromParentMs(parentTimeoutMs);
+  const promptTransport = createPromptFileReference({
     adapter: "cline",
     prompt: fullPrompt,
     promptFile,
     cwd: repoPath,
-    encoding: "utf-8",
-    stdio: "pipe",
-    timeout: parentTimeoutMs,
-    killSignal: "SIGKILL",
-    maxBuffer: 10 * 1024 * 1024,
   });
+
+  let execResult;
+  try {
+    const execArgs = [
+      "--json",
+      "--yolo",
+      "-P", modelRoute?.provider || CLINE_PROVIDER,
+    ];
+    if (modelRoute) execArgs.push("-m", modelRoute.cliModel);
+    execArgs.push(
+      "--cwd", repoPath,
+      "--timeout", clineTimeoutSeconds,
+      promptTransport.argvReference
+    );
+    assertControlSafeArgv(execArgs, { adapter: "cline", promptFile });
+
+    execResult = spawnSync(clineBin, execArgs, {
+      cwd: repoPath,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: parentTimeoutMs,
+      killSignal: "SIGKILL",
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } finally {
+    promptTransport.cleanup();
+  }
   const rawOutput = String(execResult.stdout || "").trim();
   const rawStderr = String(execResult.stderr || "");
   if (execResult.error || execResult.status !== 0) {
