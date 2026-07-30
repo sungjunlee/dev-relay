@@ -704,7 +704,7 @@ fs.writeFileSync(
 
 function writeStagedRuntimeRootAdditionCodex(
   binDir,
-  { directCommit = false, postStageMutation = "none" } = {}
+  { directCommit = false, intentToAdd = false, postStageMutation = "none" } = {}
 ) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -731,7 +731,7 @@ fs.writeFileSync(stagedAddition, "intentionally staged runtime config\\n", "utf-
 fs.chmodSync(stagedAddition, 0o755);
 execFileSync(
   "git",
-  ["-C", cwd, "add", ".antigravitycli/reviewable-runtime-config"],
+  ["-C", cwd, "add", ${JSON.stringify(intentToAdd ? "-N" : null)}, ".antigravitycli/reviewable-runtime-config"].filter(Boolean),
   { stdio: "pipe" }
 );
 fs.writeFileSync(
@@ -746,13 +746,16 @@ if (${JSON.stringify(postStageMutation)} === "content-mode") {
   fs.unlinkSync(stagedAddition);
   fs.appendFileSync(path.join(cwd, "README.md"), "gate-time sibling change\\n", "utf-8");
 }
-const verificationTreeSha = ${JSON.stringify(postStageMutation)} === "none"
+const verificationTreeSha = (
+  ${JSON.stringify(postStageMutation)} === "none"
+  && !${JSON.stringify(intentToAdd)}
+)
   ? captureVerificationTree(cwd)
   : captureGateTimeVerificationTree(cwd);
 if (${JSON.stringify(directCommit)}) {
   execFileSync(
     "git",
-    ["-C", cwd, "commit", "-m", "add staged runtime config"],
+    ["-C", cwd, "commit", ${JSON.stringify(intentToAdd ? "-a" : null)}, "-m", "add staged runtime config"].filter(Boolean),
     { stdio: "pipe" }
   );
 }
@@ -1050,6 +1053,15 @@ function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, cod
   } else if (codexMode === "runtime-root-staged-addition-deleted-uncommitted") {
     writeStagedRuntimeRootAdditionCodex(binDir, {
       postStageMutation: "delete",
+    });
+  } else if (codexMode === "runtime-root-intent-to-add-direct") {
+    writeStagedRuntimeRootAdditionCodex(binDir, {
+      directCommit: true,
+      intentToAdd: true,
+    });
+  } else if (codexMode === "runtime-root-intent-to-add-uncommitted") {
+    writeStagedRuntimeRootAdditionCodex(binDir, {
+      intentToAdd: true,
     });
   } else if (codexMode === "runtime-root-uncommitted") {
     writeUncommittedRuntimeRootCodex(binDir);
@@ -7491,6 +7503,68 @@ for (const scenario of [
       /^\?\? \.antigravitycli\/runtime-state\.json$/m
     );
 
+    const evidence = readExecutionEvidence(result.runDir);
+    assert.equal(evidence.verification_runs.length, 1);
+    assert.equal(
+      evidence.verification_runs[0].verification_tree_sha,
+      revParse(repoRoot, `${result.headSha}^{tree}`)
+    );
+  });
+}
+
+for (const scenario of [
+  {
+    name: "orchestrator commit",
+    codexMode: "runtime-root-intent-to-add-uncommitted",
+    branch: "issue-1121-runtime-intent-orchestrator",
+    commitMode: "orchestrator-committed",
+  },
+  {
+    name: "executor-direct commit -a",
+    codexMode: "runtime-root-intent-to-add-direct",
+    branch: "issue-1121-runtime-intent-direct",
+    commitMode: "committed in-sandbox",
+  },
+]) {
+  test(`dispatch ${scenario.name} proves an intent-to-add runtime-root path from the gate-time worktree`, () => {
+    const { repoRoot, relayHome } = setupRepoWithOrigin();
+    process.env.RELAY_HOME = relayHome;
+    const { env } = createPushPrTestEnv({
+      relayHome,
+      ghState: {
+        prCreateUrl: "https://github.com/acme/dev-relay/pull/1121",
+      },
+      codexMode: scenario.codexMode,
+    });
+    const rubricFile = writeAssuranceRubric("hardened");
+
+    const result = JSON.parse(runDispatch(repoRoot, [
+      "-b", scenario.branch,
+      "--prompt", "prove an intent-to-add runtime-root path beside executor metadata",
+      "--rubric-file", rubricFile,
+      "--json",
+    ], env));
+    const stagedPath = ".antigravitycli/reviewable-runtime-config";
+    const metadataPath = ".antigravitycli/runtime-state.json";
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.commitMode, scenario.commitMode);
+    assert.equal(
+      execFileSync("git", ["show", `${result.headSha}:${stagedPath}`], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }),
+      "intentionally staged runtime config\n"
+    );
+    assert.notEqual(
+      spawnSync("git", ["cat-file", "-e", `${result.headSha}:${metadataPath}`], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }).status,
+      0
+    );
     const evidence = readExecutionEvidence(result.runDir);
     assert.equal(evidence.verification_runs.length, 1);
     assert.equal(

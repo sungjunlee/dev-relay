@@ -267,6 +267,7 @@ function verificationTreeProofStagedRuntimeAdditionsGitDiffArgs() {
   return [
     "diff",
     "--cached",
+    "--ita-visible-in-index",
     "--name-only",
     "-z",
     "--no-renames",

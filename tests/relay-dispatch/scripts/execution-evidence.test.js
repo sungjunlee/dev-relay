@@ -201,6 +201,13 @@ test("verification tree proof keeps tracked runtime changes and excludes adjacen
   );
   fs.writeFileSync(stagedDeletedPath, "deleted after staging\n", "utf-8");
   git(repoPath, "add", ".antigravitycli/staged-deleted");
+  const intentToAddPath = path.join(
+    repoPath,
+    ".antigravitycli",
+    "intent-to-add"
+  );
+  fs.writeFileSync(intentToAddPath, "intent-to-add content\n", "utf-8");
+  git(repoPath, "add", "-N", ".antigravitycli/intent-to-add");
   fs.writeFileSync(stagedAdditionPath, "later unstaged content\n", "utf-8");
   fs.chmodSync(stagedAdditionPath, 0o644);
   fs.unlinkSync(stagedDeletedPath);
@@ -264,6 +271,7 @@ test("verification tree proof keeps tracked runtime changes and excludes adjacen
   assert.deepEqual(
     git(repoPath, "ls-tree", "-r", "--name-only", verificationTreeSha).split("\n"),
     [
+      ".antigravitycli/intent-to-add",
       ".antigravitycli/staged-tool",
       ".antigravitycli/tracked-config",
       "reviewable.txt",
@@ -276,6 +284,10 @@ test("verification tree proof keeps tracked runtime changes and excludes adjacen
   assert.equal(
     git(repoPath, "show", `${verificationTreeSha}:.antigravitycli/staged-tool`),
     "later unstaged content"
+  );
+  assert.equal(
+    git(repoPath, "show", `${verificationTreeSha}:.antigravitycli/intent-to-add`),
+    "intent-to-add content"
   );
   assert.match(
     git(repoPath, "ls-tree", verificationTreeSha, ".antigravitycli/staged-tool"),
