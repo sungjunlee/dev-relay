@@ -11,10 +11,10 @@ const AGY_FILE_REFERENCE_REASON =
 const CLINE_FILE_REFERENCE_REASON =
   "Cline JSON mode rejects relay's stdin-only prompt transport as interactive, so relay automatically passes only a control-safe prompt-file reference as the positional prompt argument.";
 
-const FILE_REFERENCE_REASONS = Object.freeze({
+const FILE_REFERENCE_REASONS = Object.freeze(Object.assign(Object.create(null), {
   antigravity: AGY_FILE_REFERENCE_REASON,
   cline: CLINE_FILE_REFERENCE_REASON,
-});
+}));
 
 function reviewedDiffPath(promptFile) {
   const resolved = path.resolve(promptFile);
@@ -58,7 +58,9 @@ function assertControlSafeArgv(args, { adapter, promptFile }) {
   throw new Error(
     `Reviewer prompt transport cannot invoke ${adapter} for diff ${reviewedDiffPath(promptFile)}: ` +
       `argv[${nulIndex}] contains a NUL byte. Remedy: keep the complete review prompt on stdin ` +
-      "or in a prompt file and pass only control-safe CLI options through argv."
+      `or in a prompt file and pass only control-safe CLI options through argv.${adapter === "cline"
+        ? " Cline must use the quoted positional @file reference; stdin-only JSON transport is unsupported."
+        : ""}`
   );
 }
 

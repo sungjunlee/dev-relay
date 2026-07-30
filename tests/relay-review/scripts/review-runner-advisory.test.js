@@ -501,7 +501,9 @@ function writeFakeAdvisoryCli(repoRoot, name, {
 const fs = require("fs");
 const path = require("path");
 const logPath = ${JSON.stringify(logPath)};
-if (${name === "cline" ? "false" : "true"}) process.stdin.resume();
+${name === "cline"
+  ? "// Cline receives the prompt through a positional file reference."
+  : "process.stdin.resume();"}
 if (logPath) fs.appendFileSync(logPath, "advisory-start " + Date.now() + "\\n");
 if (${mutate ? "true" : "false"}) fs.writeFileSync(path.join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
 setTimeout(() => {

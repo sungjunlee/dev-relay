@@ -1911,6 +1911,7 @@ test("cline adapter cleans its prompt-file reference on provider failure and pre
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-provider-fail-"));
   const promptPathCapture = path.join(fakeDir, "cline-prompt-path.txt");
+  const transportEvidencePath = path.join(fakeDir, "prompt-transport.json");
   const providerError = "Provider error: insufficient balance for z-ai/glm-5.2";
   const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
 const fs = require("fs");
@@ -1938,6 +1939,7 @@ process.exit(1);
         ...process.env,
         RELAY_CLINE_BIN: fakeCline,
         RELAY_CLINE_REVIEW_TIMEOUT: "120s",
+        RELAY_REVIEW_PROMPT_TRANSPORT_EVIDENCE_PATH: transportEvidencePath,
       },
     });
     assert.fail("expected invoke-reviewer-cline.js to fail");
@@ -1951,6 +1953,10 @@ process.exit(1);
   assert.match(String(error.stderr || ""), new RegExp(providerError.replaceAll(".", "\\.")));
   assert.match(String(error.stderr || ""), /Cline stderr:/);
   assert.doesNotMatch(String(error.stderr || ""), /stdin transport|interactive mode is unsupported/i);
+  const transportEvidence = JSON.parse(fs.readFileSync(transportEvidencePath, "utf-8"));
+  assert.equal(transportEvidence.adapter, "cline");
+  assert.equal(transportEvidence.mode, "prompt_file_reference");
+  assert.equal(transportEvidence.reason, CLINE_FILE_REFERENCE_REASON);
 });
 
 test("cline adapter normalizes omitted duplicate severity through the shared advisory schema", () => {
@@ -2294,7 +2300,13 @@ test("cline adapter rejects primary review phase until canary promotion", () => 
 test("cline adapter reports adapter and phase when run_result.text is invalid advisory JSON", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-invalid-json-"));
+  const promptPathCapture = path.join(fakeDir, "cline-prompt-path.txt");
   const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+const fs = require("fs");
+const reference = process.argv.at(-1);
+const match = reference.match(/^Read and follow the complete review instructions in @"((?:\\/|~\\/|\\.{1,2}\\/)[^"\\r\\n]+)"\\. Return only the JSON requested by that file\\.$/);
+if (!match) process.exit(2);
+fs.writeFileSync(${JSON.stringify(promptPathCapture)}, match[1], "utf-8");
 process.stdout.write(JSON.stringify({ type: "run_result", finishReason: "completed", text: "not-json" }) + "\\n");
 `);
 
@@ -2317,9 +2329,54 @@ process.stdout.write(JSON.stringify({ type: "run_result", finishReason: "complet
   }
 
   assert.ok(error);
+  const temporaryPromptPath = fs.readFileSync(promptPathCapture, "utf-8");
+  assert.equal(fs.existsSync(temporaryPromptPath), false);
   const stderr = String(error.stderr || "");
   assert.match(stderr, /adapter=cline phase=advisory_review/);
   assert.match(stderr, /advisory review must be valid JSON/);
+});
+
+test("cline adapter cleans its prompt-file reference after parent timeout", { timeout: 135000 }, () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-parent-timeout-"));
+  const promptPathCapture = path.join(fakeDir, "cline-prompt-path.txt");
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+const fs = require("fs");
+const reference = process.argv.at(-1);
+const match = reference.match(/^Read and follow the complete review instructions in @"((?:\\/|~\\/|\\.{1,2}\\/)[^"\\r\\n]+)"\\. Return only the JSON requested by that file\\.$/);
+if (!match) process.exit(2);
+fs.writeFileSync(${JSON.stringify(promptPathCapture)}, match[1], "utf-8");
+setInterval(() => {}, 1000);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CLINE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--model", "cline-pass/z-ai/glm-5.2",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 130000,
+      env: {
+        ...process.env,
+        RELAY_CLINE_BIN: fakeCline,
+        RELAY_CLINE_REVIEW_TIMEOUT: "120s",
+      },
+    });
+    assert.fail("expected invoke-reviewer-cline.js to time out");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  const temporaryPromptPath = fs.readFileSync(promptPathCapture, "utf-8");
+  assert.equal(fs.existsSync(temporaryPromptPath), false);
+  assert.match(String(error.stderr || ""), /timed out after 120s/);
 });
 
 test("cline adapter reports actionable diagnostics for empty JSONL output", () => {

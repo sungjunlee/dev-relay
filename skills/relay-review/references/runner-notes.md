@@ -77,6 +77,16 @@ Lane composition is operator/orchestrator judgment, not script policy. Low-risk 
 
 For `cline` advisory lanes, `executeAdvisoryRequest` exports the lane's effective `timeoutSeconds` into the adapter child as `RELAY_CLINE_REVIEW_TIMEOUT="<timeoutSeconds>s"`. That lane budget supersedes any inherited `RELAY_CLINE_REVIEW_TIMEOUT` in the review-runner process so one number governs both the parent `execFileSync` kill and the adapter's internal `--timeout` (env − 60s headroom). Operator knob: `--advisory-timeout`. Direct (non-advisory) invocations of `invoke-reviewer-cline.js` keep the existing env contract and default (`1800s`).
 
+### Cline prompt-file compatibility transport
+
+Cline JSON mode requires a positional prompt and rejects relay's stdin-only
+transport as interactive. Relay therefore writes the complete advisory prompt
+to a temporary file and passes only a short positional reference using Cline's
+quoted mention grammar, `@"<absolute-path>"`. This keeps prompt text and NUL
+bytes out of argv, supports spaces in the temporary path, records
+`prompt_file_reference` compatibility evidence, and removes the temporary
+directory after success, parse failure, provider failure, or parent timeout.
+
 ### Pi provider extension isolation
 
 Pi reviews disable automatic extension discovery so an operator's unrelated
