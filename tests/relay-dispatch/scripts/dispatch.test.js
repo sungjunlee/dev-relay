@@ -7607,10 +7607,10 @@ for (const scenario of [
       encoding: "utf-8",
       env,
     });
+    assert.equal(dispatched.status, 1, dispatched.stderr);
     const result = JSON.parse(dispatched.stdout);
     const evidence = readExecutionEvidence(result.runDir);
 
-    assert.equal(dispatched.status, 1, dispatched.stderr);
     assert.equal(result.status, "failed");
     assert.equal(result.runState, STATES.ESCALATED);
     assert.equal(result.commitMode, "committed in-sandbox");
