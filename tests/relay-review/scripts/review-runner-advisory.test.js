@@ -501,7 +501,7 @@ function writeFakeAdvisoryCli(repoRoot, name, {
 const fs = require("fs");
 const path = require("path");
 const logPath = ${JSON.stringify(logPath)};
-process.stdin.resume();
+if (${name === "cline" ? "false" : "true"}) process.stdin.resume();
 if (logPath) fs.appendFileSync(logPath, "advisory-start " + Date.now() + "\\n");
 if (${mutate ? "true" : "false"}) fs.writeFileSync(path.join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
 setTimeout(() => {
@@ -2274,6 +2274,18 @@ test("review-runner accepts cline advisory review when route policy allows the r
   assert.equal(event.reviewer_policy.adapter, "cline");
   assert.equal(event.reviewer_policy.phase, "advisory_review");
   assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
+  assert.equal(event.reviewer_policy.prompt_transport.mode, "prompt_file_reference");
+  assert.equal(event.reviewer_policy.prompt_transport.automatic, true);
+  assert.equal(event.reviewer_policy.prompt_transport.compatibility_fallback, true);
+  assert.equal(event.reviewer_policy.prompt_transport.evidence_paths.length, 1);
+  const transportEvidence = JSON.parse(fs.readFileSync(
+    event.reviewer_policy.prompt_transport.evidence_paths[0],
+    "utf-8"
+  ));
+  assert.equal(transportEvidence.adapter, "cline");
+  assert.equal(transportEvidence.mode, "prompt_file_reference");
+  assert.equal(transportEvidence.prompt_text_in_argv, false);
+  assert.equal(transportEvidence.compatibility_fallback, true);
 });
 
 test("review-runner persists raw cline JSONL and stderr after a successful exit fails to parse", () => {

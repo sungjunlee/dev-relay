@@ -8,6 +8,13 @@ const PROMPT_TRANSPORT_EVIDENCE_ENV =
   "RELAY_REVIEW_PROMPT_TRANSPORT_EVIDENCE_PATH";
 const AGY_FILE_REFERENCE_REASON =
   "Antigravity print mode requires a --prompt value, so relay automatically passes only a control-safe file reference through argv.";
+const CLINE_FILE_REFERENCE_REASON =
+  "Cline JSON mode rejects relay's stdin-only prompt transport as interactive, so relay automatically passes only a control-safe prompt-file reference as the positional prompt argument.";
+
+const FILE_REFERENCE_REASONS = Object.freeze({
+  antigravity: AGY_FILE_REFERENCE_REASON,
+  cline: CLINE_FILE_REFERENCE_REASON,
+});
 
 function reviewedDiffPath(promptFile) {
   const resolved = path.resolve(promptFile);
@@ -25,13 +32,14 @@ function reviewedDiffPath(promptFile) {
 }
 
 function promptTransportPolicy(adapter) {
-  if (adapter === "antigravity") {
+  const reason = FILE_REFERENCE_REASONS[adapter];
+  if (reason) {
     return {
       mode: "prompt_file_reference",
       prompt_text_in_argv: false,
       automatic: true,
       compatibility_fallback: true,
-      reason: AGY_FILE_REFERENCE_REASON,
+      reason,
     };
   }
   return {
@@ -127,33 +135,49 @@ function spawnSyncWithStdinPrompt(
 }
 
 function createPromptFileReference({ adapter, prompt, promptFile }) {
-  const transportDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), `relay-review-${adapter}-prompt-`)
-  );
-  const transportPromptPath = path.join(transportDir, "review-prompt.md");
-  fs.writeFileSync(transportPromptPath, prompt, "utf-8");
-  writeTransportEvidence({
-    adapter,
-    compatibilityFallback: true,
-    mode: "prompt_file_reference",
-    prompt,
-    promptFile,
-    reason: AGY_FILE_REFERENCE_REASON,
-  });
-  return {
-    directory: transportDir,
-    promptPath: transportPromptPath,
-    argvReference:
-      `Read and follow the complete review instructions in @${transportPromptPath}. ` +
-      "Return only the JSON requested by that file.",
-    cleanup() {
+  const reason = FILE_REFERENCE_REASONS[adapter];
+  if (!reason) {
+    throw new Error(
+      `Reviewer prompt-file reference transport has no compatibility reason for adapter ${JSON.stringify(adapter)}`
+    );
+  }
+
+  let transportDir = null;
+  try {
+    transportDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `relay-review-${adapter}-prompt-`)
+    );
+    const transportPromptPath = path.join(transportDir, "review-prompt.md");
+    fs.writeFileSync(transportPromptPath, prompt, "utf-8");
+    writeTransportEvidence({
+      adapter,
+      compatibilityFallback: true,
+      mode: "prompt_file_reference",
+      prompt,
+      promptFile,
+      reason,
+    });
+    return {
+      directory: transportDir,
+      promptPath: transportPromptPath,
+      argvReference:
+        `Read and follow the complete review instructions in @${transportPromptPath}. ` +
+        "Return only the JSON requested by that file.",
+      cleanup() {
+        fs.rmSync(transportDir, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    if (transportDir) {
       fs.rmSync(transportDir, { recursive: true, force: true });
-    },
-  };
+    }
+    throw error;
+  }
 }
 
 module.exports = {
   AGY_FILE_REFERENCE_REASON,
+  CLINE_FILE_REFERENCE_REASON,
   PROMPT_TRANSPORT_EVIDENCE_ENV,
   assertControlSafeArgv,
   createPromptFileReference,

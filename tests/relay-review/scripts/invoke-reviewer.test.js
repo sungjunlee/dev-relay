@@ -13,6 +13,7 @@ const ANTIGRAVITY_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "rel
 const CURSOR_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-cursor.js");
 const CLINE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-cline.js");
 const {
+  CLINE_FILE_REFERENCE_REASON,
   assertControlSafeArgv,
 } = require("../../../skills/relay-review/scripts/reviewer-prompt-transport");
 
@@ -1811,32 +1812,36 @@ test("cursor adapter rejects advisory review phase", () => {
   assert.match(String(error.stderr || ""), /primary_review only/);
 });
 
-test("cline adapter forwards options and parses run_result.text with the advisory prompt on stdin", () => {
+test("cline adapter uses a cleaned evidence-recorded prompt-file reference and parses run_result.text", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-"));
   const logPath = path.join(fakeDir, "cline-args.log");
-  const stdinPath = path.join(fakeDir, "cline-stdin.txt");
+  const promptCapturePath = path.join(fakeDir, "cline-prompt.txt");
+  const promptPathCapture = path.join(fakeDir, "cline-prompt-path.txt");
+  const transportEvidencePath = path.join(fakeDir, "prompt-transport.json");
+  const sourcePrompt = "Return a passing review.\0Preserve the complete prompt bytes.";
+  fs.writeFileSync(promptPath, `${sourcePrompt}\n`, "utf-8");
   const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
-const chunks = [];
-process.stdin.on("data", (chunk) => chunks.push(chunk));
-process.stdin.on("end", () => {
-  fs.writeFileSync(${JSON.stringify(stdinPath)}, Buffer.concat(chunks));
-  process.stdout.write(JSON.stringify({ type: "agent_event", event: { type: "content_start", text: "ignored" } }) + "\\n");
-  process.stdout.write(JSON.stringify({
-    type: "run_result",
-    finishReason: "completed",
-    text: JSON.stringify({
-      profile: "blindspot",
-      summary: "No blocking blind spots.",
-      required_findings: [],
-      advisory_findings: [],
-      duplicate_or_low_confidence: [],
-    }),
-  }) + "\\n");
-});
+const reference = args.at(-1);
+const match = reference.match(/^Read and follow the complete review instructions in @(.+)\\. Return only the JSON requested by that file\\.$/);
+if (!match) process.exit(2);
+fs.writeFileSync(${JSON.stringify(promptPathCapture)}, match[1], "utf-8");
+fs.copyFileSync(match[1], ${JSON.stringify(promptCapturePath)});
+process.stdout.write(JSON.stringify({ type: "agent_event", event: { type: "content_start", text: "ignored" } }) + "\\n");
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: JSON.stringify({
+    profile: "blindspot",
+    summary: "No blocking blind spots.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }),
+}) + "\\n");
 `);
 
   const stdout = execFileSync("node", [
@@ -1854,6 +1859,7 @@ process.stdin.on("end", () => {
       ...process.env,
       RELAY_CLINE_BIN: fakeCline,
       RELAY_CLINE_REVIEW_TIMEOUT: "120s",
+      RELAY_REVIEW_PROMPT_TRANSPORT_EVIDENCE_PATH: transportEvidencePath,
     },
   });
 
@@ -1868,12 +1874,77 @@ process.stdin.on("end", () => {
     "--cwd", repoRoot,
     "--timeout", "60",
   ]);
-  assert.equal(loggedArgs.length, 10);
-  const stdin = fs.readFileSync(stdinPath, "utf-8");
-  assert.match(stdin, /NON-INTERACTIVE ADVISORY REVIEW/);
-  assert.match(stdin, /Return a passing review\./);
-  assert.match(stdin, /Do not use cline --worktree; relay already selected the review checkout with --cwd\./);
+  assert.equal(loggedArgs.length, 11);
+  assert.match(loggedArgs[10], /^Read and follow the complete review instructions in @.+review-prompt\.md\./);
+  assert.equal(loggedArgs.some((entry) => entry.includes(sourcePrompt)), false);
+  assert.equal(loggedArgs.some((entry) => entry.includes("\0")), false);
+  const expectedPrompt = [
+    "[NON-INTERACTIVE ADVISORY REVIEW]",
+    "Return only JSON matching the advisory review shape in the prompt.",
+    "Do not wrap the response in markdown fences.",
+    "Do not modify files, create commits, or write comments. Treat the checkout as read-only.",
+    "Relay will check git status after this process and escalate any worktree mutation as a policy violation.",
+    "Do not use cline --worktree; relay already selected the review checkout with --cwd.",
+    "",
+    sourcePrompt,
+  ].join("\n");
+  assert.equal(fs.readFileSync(promptCapturePath, "utf-8"), expectedPrompt);
+  const temporaryPromptPath = fs.readFileSync(promptPathCapture, "utf-8");
+  assert.equal(fs.existsSync(temporaryPromptPath), false);
+  const transportEvidence = JSON.parse(fs.readFileSync(transportEvidencePath, "utf-8"));
+  assert.equal(transportEvidence.adapter, "cline");
+  assert.equal(transportEvidence.mode, "prompt_file_reference");
+  assert.equal(transportEvidence.compatibility_fallback, true);
+  assert.equal(transportEvidence.prompt_text_in_argv, false);
+  assert.equal(transportEvidence.prompt_contains_nul, true);
+  assert.equal(transportEvidence.reason, CLINE_FILE_REFERENCE_REASON);
   assert.equal(loggedArgs.includes("--worktree"), false);
+});
+
+test("cline adapter cleans its prompt-file reference on provider failure and preserves the provider error", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-provider-fail-"));
+  const promptPathCapture = path.join(fakeDir, "cline-prompt-path.txt");
+  const providerError = "Provider error: insufficient balance for z-ai/glm-5.2";
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+const fs = require("fs");
+const reference = process.argv.at(-1);
+const match = reference.match(/^Read and follow the complete review instructions in @(.+)\\. Return only the JSON requested by that file\\.$/);
+if (!match) process.exit(2);
+fs.writeFileSync(${JSON.stringify(promptPathCapture)}, match[1], "utf-8");
+process.stderr.write(${JSON.stringify(`${providerError}\n`)});
+process.exit(1);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CLINE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--model", "cline-pass/z-ai/glm-5.2",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        RELAY_CLINE_BIN: fakeCline,
+        RELAY_CLINE_REVIEW_TIMEOUT: "120s",
+      },
+    });
+    assert.fail("expected invoke-reviewer-cline.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  const temporaryPromptPath = fs.readFileSync(promptPathCapture, "utf-8");
+  assert.equal(fs.existsSync(temporaryPromptPath), false);
+  assert.match(String(error.stderr || ""), new RegExp(providerError.replaceAll(".", "\\.")));
+  assert.match(String(error.stderr || ""), /Cline stderr:/);
+  assert.doesNotMatch(String(error.stderr || ""), /stdin transport|interactive mode is unsupported/i);
 });
 
 test("cline adapter normalizes omitted duplicate severity through the shared advisory schema", () => {
