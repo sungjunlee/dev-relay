@@ -17,6 +17,7 @@ const {
   resolveExecutionEvidenceTestCommand,
   verificationTreeProofGitAddArgs,
   verificationTreeProofStagedRuntimeAdditionsGitDiffArgs,
+  verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs,
   verificationTreeProofTrackedGitAddArgs,
   writeExecutionEvidence,
 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
@@ -133,7 +134,9 @@ test("executor verification instructions keep gate execution inside the dispatch
   assert.match(instructions, /:\(exclude\)\.antigravitycli/);
   assert.match(instructions, /intentionally staged runtime-root additions/);
   assert.match(instructions, /tracked runtime-root modifications and deletions remain reviewable/);
-  assert.match(instructions, /exact staged blob and mode/);
+  assert.match(instructions, /gate-time worktree/);
+  assert.match(instructions, /update-index/);
+  assert.match(instructions, /--remove/);
   assert.match(instructions, /before any later commit or commit hook can mutate the tree/);
   assert.match(instructions, /verification_tree_sha/);
   assert.match(instructions, /"command":"node --test focused\.test\.js"/);
@@ -191,8 +194,16 @@ test("verification tree proof keeps tracked runtime changes and excludes adjacen
   fs.writeFileSync(stagedAdditionPath, "staged addition\n", "utf-8");
   fs.chmodSync(stagedAdditionPath, 0o755);
   git(repoPath, "add", ".antigravitycli/staged-tool");
+  const stagedDeletedPath = path.join(
+    repoPath,
+    ".antigravitycli",
+    "staged-deleted"
+  );
+  fs.writeFileSync(stagedDeletedPath, "deleted after staging\n", "utf-8");
+  git(repoPath, "add", ".antigravitycli/staged-deleted");
   fs.writeFileSync(stagedAdditionPath, "later unstaged content\n", "utf-8");
   fs.chmodSync(stagedAdditionPath, 0o644);
+  fs.unlinkSync(stagedDeletedPath);
 
   const proofEnv = {
     ...process.env,
@@ -213,13 +224,13 @@ test("verification tree proof keeps tracked runtime changes and excludes adjacen
     env: proofEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const stagedRuntimePatch = path.join(
+  const stagedRuntimePaths = path.join(
     os.tmpdir(),
-    `relay-verification-runtime-additions-${process.pid}-${Date.now()}.patch`
+    `relay-verification-runtime-additions-${process.pid}-${Date.now()}.paths`
   );
-  t.after(() => fs.rmSync(stagedRuntimePatch, { force: true }));
+  t.after(() => fs.rmSync(stagedRuntimePaths, { force: true }));
   const realIndexPath = git(repoPath, "rev-parse", "--git-path", "index");
-  const stagedRuntimeDiff = execFileSync(
+  const stagedRuntimePathList = execFileSync(
     "git",
     verificationTreeProofStagedRuntimeAdditionsGitDiffArgs(),
     {
@@ -231,14 +242,15 @@ test("verification tree proof keeps tracked runtime changes and excludes adjacen
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
-  fs.writeFileSync(stagedRuntimePatch, stagedRuntimeDiff);
+  fs.writeFileSync(stagedRuntimePaths, stagedRuntimePathList);
   execFileSync(
     "git",
-    ["apply", "--cached", "--whitespace=nowarn", stagedRuntimePatch],
+    verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs(),
     {
       cwd: repoPath,
       env: proofEnv,
-      stdio: ["ignore", "pipe", "pipe"],
+      input: stagedRuntimePathList,
+      stdio: ["pipe", "pipe", "pipe"],
     }
   );
   const verificationTreeSha = execFileSync("git", ["write-tree"], {
@@ -263,11 +275,11 @@ test("verification tree proof keeps tracked runtime changes and excludes adjacen
   );
   assert.equal(
     git(repoPath, "show", `${verificationTreeSha}:.antigravitycli/staged-tool`),
-    "staged addition"
+    "later unstaged content"
   );
   assert.match(
     git(repoPath, "ls-tree", verificationTreeSha, ".antigravitycli/staged-tool"),
-    /^100755 blob /
+    /^100644 blob /
   );
   assert.match(
     git(repoPath, "ls-tree", "-r", "--name-only", realIndexTreeSha),
@@ -279,11 +291,11 @@ test("verification tree proof keeps tracked runtime changes and excludes adjacen
   );
   assert.doesNotMatch(
     git(repoPath, "ls-tree", "-r", "--name-only", verificationTreeSha),
-    /\.antigravitycli\/(?:runtime-state\.json|tracked-obsolete)/
+    /\.antigravitycli\/(?:runtime-state\.json|staged-deleted|tracked-obsolete)/
   );
   assert.doesNotMatch(
     git(repoPath, "show", `${verificationTreeSha}:.antigravitycli/staged-tool`),
-    /later unstaged content/
+    /staged addition/
   );
   assert.notEqual(verificationTreeSha, realIndexTreeSha);
 });

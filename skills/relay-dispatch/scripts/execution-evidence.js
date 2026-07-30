@@ -260,20 +260,31 @@ function verificationTreeProofStagedRuntimeAdditionsGitDiffArgs() {
   /*
    * A path added under a runtime root exists only in the repository's real
    * index, so `git add -u` cannot discover it from the HEAD-seeded proof
-   * index. Export only staged additions as a binary/full-index patch. Applying
-   * that patch to the proof index preserves the staged blob and mode without
-   * reading later unstaged worktree content or adjacent untracked metadata.
+   * index. Use the real index only to identify those intentionally staged
+   * paths. The proof index must read their gate-time content, mode, or deletion
+   * from the worktree instead of trusting a possibly stale staged blob.
    */
   return [
     "diff",
     "--cached",
-    "--binary",
-    "--full-index",
+    "--name-only",
+    "-z",
+    "--no-renames",
     "--no-ext-diff",
     "--diff-filter=A",
     "--",
     ...RUNTIME_METADATA_ROOTS,
   ];
+}
+
+function verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs() {
+  /*
+   * `update-index --stdin -z` consumes literal NUL-delimited repository paths,
+   * stages current worktree content and executable mode, and removes a listed
+   * path that disappeared after it was staged. That makes the proof describe
+   * what the gates observed while the real index remains read-only.
+   */
+  return ["update-index", "--add", "--remove", "-z", "--stdin"];
 }
 
 function shellQuote(value) {
@@ -300,7 +311,13 @@ function buildExecutorVerificationInstructions(gates) {
     'GIT_INDEX_FILE="$verification_real_index"',
     "git",
     ...verificationTreeProofStagedRuntimeAdditionsGitDiffArgs().map(shellQuote),
-    '> "$verification_runtime_patch"',
+    '> "$verification_runtime_paths"',
+  ].join(" ");
+  const stageGateTimeRuntimeAdditionsCommand = [
+    'GIT_INDEX_FILE="$verification_index"',
+    "git",
+    ...verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs().map(shellQuote),
+    '< "$verification_runtime_paths"',
   ].join(" ");
   return [
     "## Required executor-side verification",
@@ -310,19 +327,19 @@ function buildExecutorVerificationInstructions(gates) {
     "Do not delegate them back to the relay orchestrator and do not expose credentials or secret environment values.",
     "After all required gates finish, capture the exact reviewable repository state with the temporary Git index commands below.",
     "Use the repository's real index only as a read-only source for intentionally staged runtime-root additions; untracked, unstaged executor runtime metadata must stay excluded, while tracked runtime-root modifications and deletions remain reviewable.",
-    "The staged-addition overlay preserves the exact staged blob and mode instead of later unstaged working-tree content.",
+    "The staged-addition allowlist is refreshed from the gate-time worktree, so later content, mode, and deletion state are proven instead of a stale staged blob.",
     "",
     'verification_real_index="$(git rev-parse --git-path index)"',
     'verification_index="$(mktemp)"',
-    'verification_runtime_patch="$(mktemp)"',
+    'verification_runtime_paths="$(mktemp)"',
     'rm -f "$verification_index"',
     'GIT_INDEX_FILE="$verification_index" git read-tree HEAD',
     reviewableGitAddCommand,
     trackedGitAddCommand,
     stagedRuntimeAdditionsCommand,
-    'if test -s "$verification_runtime_patch"; then GIT_INDEX_FILE="$verification_index" git apply --cached --whitespace=nowarn "$verification_runtime_patch"; fi',
+    `if test -s "$verification_runtime_paths"; then ${stageGateTimeRuntimeAdditionsCommand} || { rm -f "$verification_runtime_paths" "$verification_index"; echo "failed to refresh staged runtime additions from the gate-time worktree" >&2; exit 1; }; fi`,
     'verification_tree_sha="$(GIT_INDEX_FILE="$verification_index" git write-tree)"',
-    'rm -f "$verification_runtime_patch" "$verification_index"',
+    'rm -f "$verification_runtime_paths" "$verification_index"',
     "",
     "Capture this proof before any later commit or commit hook can mutate the tree, then report it as verification_tree_sha.",
     "",
@@ -647,6 +664,7 @@ module.exports = {
   resolveExecutionEvidenceTestCommand,
   verificationTreeProofGitAddArgs,
   verificationTreeProofStagedRuntimeAdditionsGitDiffArgs,
+  verificationTreeProofStagedRuntimeAdditionsGitUpdateIndexArgs,
   verificationTreeProofTrackedGitAddArgs,
   writeExecutionEvidence,
 };
