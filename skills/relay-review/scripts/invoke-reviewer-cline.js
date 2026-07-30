@@ -167,6 +167,7 @@ function main() {
     adapter: "cline",
     prompt: fullPrompt,
     promptFile,
+    cwd: repoPath,
   });
 
   let execResult;

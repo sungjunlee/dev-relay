@@ -59,7 +59,7 @@ function assertControlSafeArgv(args, { adapter, promptFile }) {
     `Reviewer prompt transport cannot invoke ${adapter} for diff ${reviewedDiffPath(promptFile)}: ` +
       `argv[${nulIndex}] contains a NUL byte. Remedy: keep the complete review prompt on stdin ` +
       `or in a prompt file and pass only control-safe CLI options through argv.${adapter === "cline"
-        ? " Cline must use the quoted positional @file reference; stdin-only JSON transport is unsupported."
+        ? " Cline must use a workspace-relative positional @file reference; stdin-only JSON transport is unsupported."
         : ""}`
   );
 }
@@ -136,7 +136,7 @@ function spawnSyncWithStdinPrompt(
   });
 }
 
-function createPromptFileReference({ adapter, prompt, promptFile }) {
+function createPromptFileReference({ adapter, prompt, promptFile, cwd }) {
   const reason = FILE_REFERENCE_REASONS[adapter];
   if (!reason) {
     throw new Error(
@@ -146,16 +146,22 @@ function createPromptFileReference({ adapter, prompt, promptFile }) {
 
   let transportDir = null;
   try {
+    if (adapter === "cline" && !cwd) {
+      throw new Error(
+        "Cline prompt-file reference transport requires the reviewer cwd"
+      );
+    }
+    const transportRoot = adapter === "cline"
+      ? path.resolve(cwd)
+      : os.tmpdir();
+    const transportPrefix = adapter === "cline"
+      ? `.relay-review-${adapter}-prompt-`
+      : `relay-review-${adapter}-prompt-`;
     transportDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), `relay-review-${adapter}-prompt-`)
+      path.join(transportRoot, transportPrefix)
     );
     const transportPromptPath = path.join(transportDir, "review-prompt.md");
     fs.writeFileSync(transportPromptPath, prompt, "utf-8");
-    if (adapter === "cline" && /["\r\n]/.test(transportPromptPath)) {
-      throw new Error(
-        "Cline prompt-file reference path cannot contain a double quote or line break"
-      );
-    }
     writeTransportEvidence({
       adapter,
       compatibilityFallback: true,
@@ -164,9 +170,23 @@ function createPromptFileReference({ adapter, prompt, promptFile }) {
       promptFile,
       reason,
     });
-    const promptFileMention = adapter === "cline"
-      ? `@"${transportPromptPath}"`
-      : `@${transportPromptPath}`;
+    let promptFileMention = `@${transportPromptPath}`;
+    if (adapter === "cline") {
+      const relativePromptPath = path.relative(transportRoot, transportPromptPath)
+        .split(path.sep)
+        .join("/");
+      if (
+        !relativePromptPath
+        || relativePromptPath.startsWith("../")
+        || path.isAbsolute(relativePromptPath)
+        || /[\s"'`\r\n]/.test(relativePromptPath)
+      ) {
+        throw new Error(
+          "Cline prompt-file reference must be a control-safe workspace-relative path without whitespace or quotes"
+        );
+      }
+      promptFileMention = `@${relativePromptPath}`;
+    }
     return {
       directory: transportDir,
       promptPath: transportPromptPath,

@@ -81,9 +81,10 @@ For `cline` advisory lanes, `executeAdvisoryRequest` exports the lane's effectiv
 
 Cline JSON mode requires a positional prompt and rejects relay's stdin-only
 transport as interactive. Relay therefore writes the complete advisory prompt
-to a temporary file and passes only a short positional reference using Cline's
-quoted mention grammar, `@"<absolute-path>"`. This keeps prompt text and NUL
-bytes out of argv, supports spaces in the temporary path, records
+to a temporary file under `--cwd` and passes only a short workspace-relative
+reference, `@.relay-review-cline-prompt-*/review-prompt.md`. Cline CLI 3.0.47
+ignores mentions outside that workspace and tokenizes mentions at whitespace.
+This keeps prompt text and NUL bytes out of argv, records
 `prompt_file_reference` compatibility evidence, and removes the temporary
 directory after success, parse failure, provider failure, or parent timeout.
 
