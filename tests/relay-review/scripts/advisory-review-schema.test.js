@@ -66,6 +66,24 @@ test("advisory schema still requires severity for actionable findings", () => {
   }
 });
 
+test("advisory schema treats explicit null low-confidence severity as invalid, not omitted", () => {
+  assert.throws(
+    () => parseAdvisoryReview(JSON.stringify(advisoryPayload({
+      advisory_findings: [],
+      duplicate_or_low_confidence: [{
+        title: "Explicitly malformed duplicate",
+        body: "Only an omitted severity is normalized; an explicit invalid value remains fail-closed.",
+        file: "README.md",
+        line: null,
+        severity: null,
+        category: "other",
+        confidence: 0.3,
+      }],
+    }))),
+    /duplicate_or_low_confidence\[0\]\.severity must be a non-empty string/
+  );
+});
+
 test("advisory schema defaults missing and empty profile echoes to the lane profile", () => {
   for (const profile of [undefined, null, "", "  \t\n"]) {
     const parsed = parseAdvisoryReview(JSON.stringify(advisoryPayload({ profile })), {

@@ -839,48 +839,37 @@ for (const adapter of ADVISORY_ADAPTERS) {
   });
 }
 
-test("opencode adapter emits the pre-validation model response on advisory schema failure", () => {
-  const { repoRoot, promptPath } = setupRepo();
-  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-schema-failure-"));
-  const rawPayload = {
-    ...advisoryPayload(),
-    summary: "raw-schema-failure-marker",
-    required_findings: [{
-      title: "Required finding without severity",
-      body: "This malformed actionable finding must fail closed.",
-      file: "README.md",
-      line: 1,
-      category: "other",
-      confidence: 0.95,
-    }],
-  };
-  const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
-process.stdout.write(${JSON.stringify(JSON.stringify(rawPayload))});
-`);
+// Cline has a separate raw-envelope preservation contract because it must
+// extract candidates from run_result/content_end output first. These direct
+// JSON adapters share writeAdvisorySchemaFailure and must stay in lockstep.
+for (const adapter of ADVISORY_ADAPTERS.filter(({ name }) => name !== "cline")) {
+  test(`${adapter.name} adapter emits the pre-validation model response on advisory schema failure`, () => {
+    const rawPayload = {
+      ...advisoryPayload(),
+      summary: `raw-schema-failure-marker-${adapter.name}`,
+      required_findings: [{
+        title: "Required finding without severity",
+        body: "This malformed actionable finding must fail closed.",
+        file: "README.md",
+        line: 1,
+        category: "other",
+        confidence: 0.95,
+      }],
+    };
 
-  assert.throws(
-    () => execFileSync("node", [
-      OPENCODE_SCRIPT,
-      "--repo", repoRoot,
-      "--prompt-file", promptPath,
-      "--phase", "advisory_review",
-      "--json",
-    ], {
-      cwd: repoRoot,
-      encoding: "utf-8",
-      stdio: "pipe",
-      env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
-    }),
-    (error) => {
-      const stderr = String(error.stderr || "");
-      assert.match(stderr, /advisory_schema_validation_failed/);
-      assert.match(stderr, /Raw advisory response before validation:/);
-      assert.match(stderr, /raw-schema-failure-marker/);
-      assert.match(stderr, /required_findings\[0\]\.severity/);
-      return true;
-    }
-  );
-});
+    assert.throws(
+      () => runAdvisoryAdapter(adapter, { payload: rawPayload }),
+      (error) => {
+        const stderr = String(error.stderr || "");
+        assert.match(stderr, /advisory_schema_validation_failed/);
+        assert.match(stderr, /Raw advisory response before validation:/);
+        assert.match(stderr, new RegExp(`raw-schema-failure-marker-${adapter.name}`));
+        assert.match(stderr, /required_findings\[0\]\.severity/);
+        return true;
+      }
+    );
+  });
+}
 
 test("opencode adapter reports actionable diagnostics for empty stdout", () => {
   const { repoRoot, promptPath } = setupRepo();
