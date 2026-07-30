@@ -39,6 +39,7 @@ const { installFakeGhOnPath } = require("../fixtures/fake-gh");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
 const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
+const OPENCODE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-opencode.js");
 
 function installDefaultGhFixture() {
   return installFakeGhOnPath({
@@ -112,6 +113,8 @@ test("advisory prompt uses adversarial challenge framing only for the adversaria
   assert.match(adversarial, /required_findings exactly as the schema defines/i);
   assert.doesNotMatch(blindspot, /attacker and a chaos engineer/i);
   assert.doesNotMatch(blindspot, /no compliments/i);
+  assert.match(blindspot, /omitted only in duplicate_or_low_confidence/i);
+  assert.match(blindspot, /without reclassifying that entry as required/i);
 });
 
 function changesRequestedVerdict() {
@@ -415,7 +418,17 @@ setTimeout(() => {
   return filePath;
 }
 
-function writeFakeOpencode(repoRoot, { clean = false, delayMs = 0, logPath = null, invalidJson = false, mutate = false, requiredFinding = false, primaryVerdict = null, profile = "blindspot" } = {}) {
+function writeFakeOpencode(repoRoot, {
+  clean = false,
+  delayMs = 0,
+  duplicateLowConfidenceMissingSeverity = false,
+  invalidJson = false,
+  logPath = null,
+  mutate = false,
+  primaryVerdict = null,
+  profile = "blindspot",
+  requiredFinding = false,
+} = {}) {
   const filePath = path.join(repoRoot, "fake-opencode.js");
   fs.writeFileSync(filePath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -443,7 +456,14 @@ setTimeout(() => {
         category: "test-gap",
         confidence: 0.8
       }]`},
-      duplicate_or_low_confidence: []
+      duplicate_or_low_confidence: ${duplicateLowConfidenceMissingSeverity ? `[{
+        title: "Speculative duplicate without severity",
+        body: "This must remain non-required after normalization.",
+        file: "README.md",
+        line: 1,
+        category: "other",
+        confidence: 0.3
+      }]` : "[]"}
     }));
   }
   if (logPath) fs.appendFileSync(logPath, "advisory-end " + Date.now() + "\\n");
@@ -1019,6 +1039,86 @@ function executeParseRetryRequest({
   return { repoRoot, runDir, runId, result, resultPath, counterPath };
 }
 
+function writeStatefulOpencodeSchemaProvider(repoRoot, counterPath, { failureCalls = 1 } = {}) {
+  const filePath = path.join(repoRoot, "stateful-opencode-schema-provider.js");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const fs = require("fs");
+const counterPath = ${JSON.stringify(counterPath)};
+const call = Number(fs.existsSync(counterPath) ? fs.readFileSync(counterPath, "utf-8") : "0") + 1;
+fs.writeFileSync(counterPath, String(call), "utf-8");
+if (call <= ${Number(failureCalls)}) {
+  process.stdout.write(JSON.stringify({
+    profile: "blindspot",
+    summary: "pre-validation-raw-attempt-marker-" + call,
+    required_findings: [{
+      title: "Malformed required finding",
+      body: "Missing severity must remain a fail-closed schema error.",
+      file: "README.md",
+      line: 1,
+      category: "other",
+      confidence: 0.95
+    }],
+    advisory_findings: [],
+    duplicate_or_low_confidence: []
+  }));
+} else {
+  process.stdout.write(JSON.stringify({
+    profile: "blindspot",
+    summary: "schema corrected on bounded retry",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: []
+  }));
+}
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function executeOpencodeAdapterSchemaRetryRequest({ failureCalls = 1 } = {}) {
+  const { repoRoot, runDir, runId } = setupRepo();
+  const resultPath = path.join(runDir, "opencode-schema-retry-result.json");
+  const promptPath = path.join(runDir, "opencode-schema-retry-prompt.md");
+  const counterPath = path.join(runDir, "opencode-schema-retry-counter.txt");
+  fs.writeFileSync(promptPath, "Advisory prompt\n", "utf-8");
+  const fakeProvider = writeStatefulOpencodeSchemaProvider(repoRoot, counterPath, { failureCalls });
+  const previousOpencodeBin = process.env.RELAY_OPENCODE_BIN;
+  process.env.RELAY_OPENCODE_BIN = fakeProvider;
+  try {
+    const result = executeAdvisoryRequest({
+      artifactReviewerName: "opencode-schema-retry",
+      decisionPath: path.join(runDir, "opencode-schema-retry-decision.json"),
+      gating: true,
+      headSha: "a".repeat(40),
+      laneIndex: 1,
+      profile: "blindspot",
+      promptPath,
+      requestPath: path.join(runDir, "opencode-schema-retry-request.json"),
+      resultPath,
+      reviewerModel: null,
+      reviewerName: "opencode",
+      reviewerPolicy: null,
+      policyDecision: null,
+      modelResolution: null,
+      reviewerScript: OPENCODE_SCRIPT,
+      reviewRepoPath: repoRoot,
+      round: 1,
+      runDir,
+      runId,
+      runRepoPath: repoRoot,
+      source: null,
+      startedAt: Date.now(),
+      state: STATES.REVIEW_PENDING,
+      timeoutSeconds: 30,
+      trigger: "every_round",
+    });
+    return { repoRoot, runDir, runId, result, counterPath };
+  } finally {
+    if (previousOpencodeBin === undefined) delete process.env.RELAY_OPENCODE_BIN;
+    else process.env.RELAY_OPENCODE_BIN = previousOpencodeBin;
+  }
+}
+
 test("executeAdvisoryRequest retries once after exit-0 parse failure and succeeds", () => {
   const { repoRoot, runDir, runId, result } = executeParseRetryRequest();
   const attempt1 = path.join(runDir, "review-round-1-advisory-retry-raw-response-attempt-1.txt");
@@ -1037,6 +1137,56 @@ test("executeAdvisoryRequest retries once after exit-0 parse failure and succeed
   assert.deepEqual(event.raw_response_paths, [attempt1, attempt2]);
   assert.ok(result.artifactPath);
   assert.ok(result.artifactHash);
+});
+
+test("adapter-side schema failure preserves the first raw model response before bounded recovery", () => {
+  const { repoRoot, runDir, runId, result, counterPath } = executeOpencodeAdapterSchemaRetryRequest();
+  const attempt1 = path.join(
+    runDir,
+    "review-round-1-advisory-opencode-schema-retry-raw-response-attempt-1.txt"
+  );
+  const attempt2 = path.join(
+    runDir,
+    "review-round-1-advisory-opencode-schema-retry-raw-response.txt"
+  );
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.ADVISORY_REVIEW);
+
+  assert.equal(result.status, "success");
+  assert.equal(result.attemptCount, 2);
+  assert.equal(fs.readFileSync(counterPath, "utf-8").trim(), "2");
+  assert.deepEqual(result.rawResponsePaths, [attempt1, attempt2]);
+  assert.match(fs.readFileSync(attempt1, "utf-8"), /advisory_schema_validation_failed/);
+  assert.match(fs.readFileSync(attempt1, "utf-8"), /Raw advisory response before validation:/);
+  assert.match(fs.readFileSync(attempt1, "utf-8"), /pre-validation-raw-attempt-marker/);
+  assert.match(fs.readFileSync(attempt2, "utf-8"), /schema corrected on bounded retry/);
+  assert.deepEqual(event.raw_response_paths, [attempt1, attempt2]);
+  assert.equal(event.attempt_count, 2);
+});
+
+test("adapter-side schema failure remains fail-closed after one bounded retry with both raw responses", () => {
+  const { repoRoot, runDir, runId, result, counterPath } =
+    executeOpencodeAdapterSchemaRetryRequest({ failureCalls: 99 });
+  const attempt1 = path.join(
+    runDir,
+    "review-round-1-advisory-opencode-schema-retry-raw-response-attempt-1.txt"
+  );
+  const attempt2 = path.join(
+    runDir,
+    "review-round-1-advisory-opencode-schema-retry-raw-response.txt"
+  );
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.ADVISORY_REVIEW);
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.attemptCount, 2);
+  assert.equal(fs.readFileSync(counterPath, "utf-8").trim(), "2");
+  assert.deepEqual(result.rawResponsePaths, [attempt1, attempt2]);
+  assert.match(fs.readFileSync(attempt1, "utf-8"), /advisory_schema_validation_failed/);
+  assert.match(fs.readFileSync(attempt1, "utf-8"), /pre-validation-raw-attempt-marker-1/);
+  assert.match(fs.readFileSync(attempt2, "utf-8"), /advisory_schema_validation_failed/);
+  assert.match(fs.readFileSync(attempt2, "utf-8"), /pre-validation-raw-attempt-marker-2/);
+  assert.equal(event.status, "failed");
+  assert.equal(event.attempt_count, 2);
+  assert.deepEqual(event.raw_response_paths, [attempt1, attempt2]);
 });
 
 test("executeAdvisoryRequest keeps both raw artifacts when parse retry also fails", () => {
@@ -3113,6 +3263,54 @@ test("advisory lane reap publishes lane_reap without exposing partial JSON to se
   );
 });
 
+test("configured final round preserves primary PASS for missing-severity low-confidence output", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({
+    reviewAssurance: "hardened",
+    strictEvidence: true,
+  });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    review: {
+      ...(record.data.review || {}),
+      max_rounds: 1,
+    },
+  }, record.body);
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, {
+    clean: true,
+    duplicateLowConfidenceMissingSeverity: true,
+  });
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    extraArgs: ["--advisory-grace", "30"],
+  });
+  const manifest = readManifest(manifestPath).data;
+  const artifact = JSON.parse(fs.readFileSync(result.advisoryReview.artifactPath, "utf-8"));
+  const events = readRunEvents(repoRoot, runId);
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.review.max_rounds, 1);
+  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 0);
+  assert.equal(result.advisoryReview.status, "success");
+  assert.equal(result.advisoryReview.attemptCount, 1);
+  assert.equal(result.advisoryReview.required_count, 0);
+  assert.equal(result.advisoryReview.duplicate_low_confidence_count, 1);
+  assert.deepEqual(artifact.required_findings, []);
+  assert.equal(artifact.duplicate_or_low_confidence[0].severity, "P3");
+  assert.equal(events.some((event) => (
+    event.event === EVENTS.ESCALATION_DECISION &&
+    (event.decision === "escalate" || event.state_to === STATES.ESCALATED)
+  )), false);
+});
+
 test("invalid advisory JSON is recorded as advisory failure while primary pass still applies", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
@@ -3602,6 +3800,14 @@ test("hardened review assurance blocks advisory failures and required findings",
       assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
       assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
       assert.match(fs.readFileSync(result.verdictPath, "utf-8"), entry.expected);
+      if (entry.options.invalidJson) {
+        assert.equal(result.advisoryReview.status, "failed");
+        assert.equal(result.advisoryReview.attemptCount, 2);
+        assert.equal(result.advisoryReview.rawResponsePaths.length, 2);
+      } else {
+        assert.equal(result.advisoryReview.status, "success");
+        assert.equal(result.advisoryReview.required_count, 1);
+      }
     });
   }
 });

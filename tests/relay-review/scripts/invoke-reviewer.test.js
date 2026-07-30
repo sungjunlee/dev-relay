@@ -116,11 +116,19 @@ process.stdout.write(JSON.stringify({
   },
 ];
 
-function runAdvisoryAdapter(adapter, { profileArg = null, payloadProfile = "blindspot" } = {}) {
+function runAdvisoryAdapter(adapter, {
+  payload = null,
+  profileArg = null,
+  payloadProfile = "blindspot",
+} = {}) {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), `relay-review-fake-${adapter.name}-profile-`));
   const markerPath = path.join(fakeDir, "spawned.txt");
-  const fakeBin = writeExecutable(fakeDir, adapter.fakeName, adapter.fakeBody(advisoryPayload(payloadProfile), markerPath));
+  const fakeBin = writeExecutable(
+    fakeDir,
+    adapter.fakeName,
+    adapter.fakeBody(payload || advisoryPayload(payloadProfile), markerPath)
+  );
   const args = [
     adapter.script,
     "--repo", repoRoot,
@@ -738,6 +746,23 @@ process.stdout.write("Sure, here is the advisory result:\\n" + JSON.stringify({
 });
 
 for (const adapter of ADVISORY_ADAPTERS) {
+  test(`${adapter.name} advisory adapter keeps omitted low-confidence severity non-required`, () => {
+    const payload = advisoryPayload();
+    payload.duplicate_or_low_confidence = [{
+      title: "Speculative duplicate",
+      body: "This remains in the non-required bucket.",
+      file: "README.md",
+      line: 1,
+      category: "other",
+      confidence: 0.3,
+    }];
+    const { stdout } = runAdvisoryAdapter(adapter, { payload });
+    const result = JSON.parse(stdout);
+
+    assert.deepEqual(result.required_findings, []);
+    assert.equal(result.duplicate_or_low_confidence[0].severity, "P3");
+  });
+
   test(`${adapter.name} advisory adapter accepts matching --profile adversarial payload`, () => {
     const { stdout } = runAdvisoryAdapter(adapter, {
       profileArg: "adversarial",
@@ -813,6 +838,49 @@ for (const adapter of ADVISORY_ADAPTERS) {
     assert.equal(fs.existsSync(markerPath), false);
   });
 }
+
+test("opencode adapter emits the pre-validation model response on advisory schema failure", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-schema-failure-"));
+  const rawPayload = {
+    ...advisoryPayload(),
+    summary: "raw-schema-failure-marker",
+    required_findings: [{
+      title: "Required finding without severity",
+      body: "This malformed actionable finding must fail closed.",
+      file: "README.md",
+      line: 1,
+      category: "other",
+      confidence: 0.95,
+    }],
+  };
+  const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
+process.stdout.write(${JSON.stringify(JSON.stringify(rawPayload))});
+`);
+
+  assert.throws(
+    () => execFileSync("node", [
+      OPENCODE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--phase", "advisory_review",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
+    }),
+    (error) => {
+      const stderr = String(error.stderr || "");
+      assert.match(stderr, /advisory_schema_validation_failed/);
+      assert.match(stderr, /Raw advisory response before validation:/);
+      assert.match(stderr, /raw-schema-failure-marker/);
+      assert.match(stderr, /required_findings\[0\]\.severity/);
+      return true;
+    }
+  );
+});
 
 test("opencode adapter reports actionable diagnostics for empty stdout", () => {
   const { repoRoot, promptPath } = setupRepo();

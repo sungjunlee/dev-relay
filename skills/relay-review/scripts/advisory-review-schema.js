@@ -8,6 +8,7 @@ const {
 const ADVISORY_PROFILES = Object.freeze(["blindspot", "adversarial"]);
 const ADVISORY_TERMINAL_STATUSES = new Set(["failed", "policy_violation", "success", "timeout"]);
 const ADVISORY_SEVERITIES = new Set(["P1", "P2", "P3"]);
+const ADVISORY_SCHEMA_VALIDATION_FAILURE_SIGNAL = "advisory_schema_validation_failed";
 const ADVISORY_CATEGORIES = new Set([
   "test-gap",
   "bypass",
@@ -24,11 +25,13 @@ function requireString(value, location) {
   return value.trim();
 }
 
-function requireFinding(value, location) {
+function requireFinding(value, location, { defaultSeverity = null } = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${location} must be an object`);
   }
-  const severity = requireString(value.severity, `${location}.severity`);
+  const severity = value.severity === undefined && defaultSeverity
+    ? defaultSeverity
+    : requireString(value.severity, `${location}.severity`);
   const category = requireString(value.category, `${location}.category`);
   const confidence = value.confidence;
   if (!ADVISORY_SEVERITIES.has(severity)) {
@@ -58,11 +61,11 @@ function requireFinding(value, location) {
   };
 }
 
-function normalizeFindingArray(value, location) {
+function normalizeFindingArray(value, location, options) {
   if (!Array.isArray(value)) {
     throw new Error(`${location} must be an array`);
   }
-  return value.map((finding, index) => requireFinding(finding, `${location}[${index}]`));
+  return value.map((finding, index) => requireFinding(finding, `${location}[${index}]`, options));
 }
 
 function validateAdvisoryProfile(profile) {
@@ -80,12 +83,25 @@ function normalizeAdvisoryJsonText(text) {
   return fenced ? fenced[1].trim() : raw;
 }
 
-function rethrowWithContext(error, context) {
+function rethrowWithContext(error, context, rawResponse) {
   const message = error?.message || String(error);
-  if (message.startsWith(`${context} `)) {
-    throw error;
-  }
-  throw new Error(`${context} ${message}`);
+  const contextualError = message.startsWith(`${context} `)
+    ? error
+    : new Error(`${context} ${message}`);
+  contextualError.code = ADVISORY_SCHEMA_VALIDATION_FAILURE_SIGNAL;
+  contextualError.rawAdvisoryResponse = String(rawResponse);
+  throw contextualError;
+}
+
+function writeAdvisorySchemaFailure(error, stream = process.stderr) {
+  if (error?.code !== ADVISORY_SCHEMA_VALIDATION_FAILURE_SIGNAL) return false;
+  stream.write([
+    ADVISORY_SCHEMA_VALIDATION_FAILURE_SIGNAL,
+    "Raw advisory response before validation:",
+    String(error.rawAdvisoryResponse || ""),
+    "",
+  ].join("\n"));
+  return true;
 }
 
 function parseAdvisoryReview(text, {
@@ -121,10 +137,17 @@ function parseAdvisoryReview(text, {
       summary: requireString(parsed.summary, "summary"),
       required_findings: normalizeFindingArray(parsed.required_findings, "required_findings"),
       advisory_findings: normalizeFindingArray(parsed.advisory_findings, "advisory_findings"),
-      duplicate_or_low_confidence: normalizeFindingArray(parsed.duplicate_or_low_confidence, "duplicate_or_low_confidence"),
+      // Bucket identity, not severity, makes these findings non-required.
+      // Preserve the historical persisted finding shape by normalizing an
+      // omitted severity to P3 without moving the entry between buckets.
+      duplicate_or_low_confidence: normalizeFindingArray(
+        parsed.duplicate_or_low_confidence,
+        "duplicate_or_low_confidence",
+        { defaultSeverity: "P3" }
+      ),
     };
   } catch (error) {
-    rethrowWithContext(error, context);
+    rethrowWithContext(error, context, text);
   }
 }
 
@@ -303,6 +326,7 @@ function formatAdvisoryRoundSummary(evidence) {
 
 module.exports = {
   ADVISORY_PROFILES,
+  ADVISORY_SCHEMA_VALIDATION_FAILURE_SIGNAL,
   buildAdvisoryRoundEvidence,
   formatAdvisoryRoundSummary,
   mergeAdvisoryRoundEvidence,
@@ -310,4 +334,5 @@ module.exports = {
   parseAdvisoryReview,
   toAdvisoryLaneEvidence,
   validateAdvisoryProfile,
+  writeAdvisorySchemaFailure,
 };
