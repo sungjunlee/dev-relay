@@ -206,6 +206,13 @@ function scalarFromVerificationCheck(block, key) {
 }
 
 function extractVerificationGates(rubricYaml) {
+  return extractVerificationGateDefinitions(rubricYaml).filter((gate) => gate.type === "command");
+}
+
+// Keep this separate from extractVerificationGates(): review's legacy strict
+// matching intentionally consumes command gates only, while an operator tool
+// also needs to resolve explicit observation gates without weakening it.
+function extractVerificationGateDefinitions(rubricYaml) {
   return verificationCheckBlocks(rubricYaml).map((block, index) => {
     const name = scalarFromVerificationCheck(block, "name") || `verification.checks[${index}]`;
     const type = scalarFromVerificationCheck(block, "type");
@@ -213,8 +220,11 @@ function extractVerificationGates(rubricYaml) {
     if (type === "command" && !command.trim()) {
       throw new Error(`verification gate '${name}' did not record a command for execution evidence`);
     }
+    if (type !== "command" && type !== "observation") {
+      throw new Error(`verification gate '${name}' has unsupported type '${type || "(missing)"}'`);
+    }
     return { name, type, command };
-  }).filter((gate) => gate.command.trim());
+  });
 }
 
 function resolveExecutionEvidenceTestCommand({ explicitTestCommand, rubricYaml } = {}) {
@@ -659,6 +669,7 @@ module.exports = {
   buildExecutionEvidence,
   buildExecutorVerificationInstructions,
   collectExecutorVerificationEvidence,
+  extractVerificationGateDefinitions,
   extractVerificationGates,
   hashFileSha256,
   rebrandEvidence,

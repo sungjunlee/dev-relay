@@ -113,6 +113,27 @@ node skills/relay-dispatch/scripts/recover-commit.js --repo . --run-id issue-788
 
 The resulting `execution-evidence.json` is bound to the post-recovery HEAD, preserves the test command verbatim, hashes the result file, records `test_exit_code: 0`, and uses `recorded_by: "recover-commit-operator-v1"`. The next step is the normal `review-runner.js` path. Do not use `finalize-run.js --force-finalize-nonready` when the goal is to supply real execution evidence for review.
 
+## Re-verify an unchanged retained worktree after evidence rebrand
+
+When `rebrand-evidence.js` removes stale `verification_runs`, do not edit the JSON by hand. On an `internal_review_pending` or `review_pending` run, `record-verification-evidence.js` reruns the frozen command gates at the retained worktree's exact HEAD and writes bounded run-directory logs. It only replaces an existing same-HEAD artifact when hardened preflight is currently blocked because gates are missing or unrecorded; dirty worktrees, terminal states, stale artifacts, and already-valid artifacts are rejected.
+
+```bash
+node skills/relay-dispatch/scripts/record-verification-evidence.js --repo . --run-id <id> \
+  --reason "re-verified exact rubric gates after rebase evidence invalidation" --dry-run --json
+node skills/relay-dispatch/scripts/record-verification-evidence.js --repo . --run-id <id> \
+  --reason "re-verified exact rubric gates after rebase evidence invalidation" --json
+```
+
+For every `type: observation` gate, supply a repeatable regular-file artifact. The source is never logged; it is limited to 1 MiB, rejected if it is a symlink, and copied into the run directory before its SHA-256 is recorded:
+
+```bash
+node skills/relay-dispatch/scripts/record-verification-evidence.js --repo . --run-id <id> \
+  --reason "operator inspected release surface" \
+  --observation-result "release-screenshot=/secure/path/screenshot.png"
+```
+
+The command does not publish, commit, or change state. It emits `operator_execution_evidence` with old/new evidence hashes, gate names, reason, and the verified `HEAD^{tree}` binding. Review the copied logs/artifacts before re-running the normal review path because an exit failure remains honest evidence and hardened preflight will block it.
+
 When `--pr-title` is omitted, the PR title defaults to the linked GitHub issue title as `<issue title> (#<N>)`, first from `manifest.issue.number`, then from an unambiguous `issue-N` branch name. If issue lookup fails or no issue is linked, it falls back to `Recover <branch> (<run-id>)`. `--pr-title` always wins exactly.
 
 If a PR already exists for the branch, the command no-ops the create step and stamps `pr_number` from the existing PR — safe to re-run after a partial failure. Use `--dry-run` first when uncertain.
