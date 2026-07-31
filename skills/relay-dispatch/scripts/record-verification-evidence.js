@@ -234,15 +234,30 @@ function main() {
         throw new Error(`verification gate '${failed.name}' exited ${failed.exit_code}; preserving existing evidence`);
       }
       const finalRuns = runs.map(({ staged_path, ...run }) => run);
-      for (const run of runs) writePrivateFile(path.join(runDir, run.output_path), readSafeArtifact(run.staged_path));
-      const evidence = { ...existing, head_sha: headSha, verification_runs: finalRuns, recorded_at: timestamp, recorded_by: "record-verification-evidence-operator-v1", operator_verification: { reason, replaced_evidence_hash: expectedEvidenceHash, head_tree_sha: treeSha, recorded_at: timestamp } };
-      const encoded = `${JSON.stringify(evidence, null, 2)}\n`;
-      const newHash = crypto.createHash("sha256").update(encoded).digest("hex");
-      // Journal first: a crash can leave an orphaned audit attempt, but never a
-      // valid replacement artifact without an audit record. Re-run remains safe.
-      appendRunEvent(paths.repoRoot, data.run_id, { event: EVENTS.OPERATOR_EXECUTION_EVIDENCE, state_from: current.state, state_to: current.state, head_sha: headSha, branch, reason, operator_initiated: true, execution_evidence_path: evidencePath, execution_evidence_hash: newHash, before: { evidence_hash: expectedEvidenceHash }, after: { evidence_hash: newHash, gate_names: gates.map((gate) => gate.name), head_tree_sha: treeSha } }, { lockHeld: true });
-      writeExecutionEvidence(runDir, evidence);
-      return { newHash, strictBefore: strictCurrent.reason };
+      const createdFinalPaths = [];
+      let evidenceWritten = false;
+      try {
+        for (const run of runs) {
+          const finalPath = path.join(runDir, run.output_path);
+          if (fs.existsSync(finalPath)) throw new Error("unique verification artifact destination already exists; refusing replacement");
+          writePrivateFile(finalPath, readSafeArtifact(run.staged_path));
+          createdFinalPaths.push(finalPath);
+        }
+        const evidence = { ...existing, head_sha: headSha, verification_runs: finalRuns, recorded_at: timestamp, recorded_by: "record-verification-evidence-operator-v1", operator_verification: { reason, replaced_evidence_hash: expectedEvidenceHash, head_tree_sha: treeSha, recorded_at: timestamp } };
+        const encoded = `${JSON.stringify(evidence, null, 2)}\n`;
+        const newHash = crypto.createHash("sha256").update(encoded).digest("hex");
+        // Journal first: a crash can leave an orphaned audit attempt, but never a
+        // valid replacement artifact without an audit record. Re-run remains safe.
+        appendRunEvent(paths.repoRoot, data.run_id, { event: EVENTS.OPERATOR_EXECUTION_EVIDENCE, state_from: current.state, state_to: current.state, head_sha: headSha, branch, reason, operator_initiated: true, execution_evidence_path: evidencePath, execution_evidence_hash: newHash, before: { evidence_hash: expectedEvidenceHash }, after: { evidence_hash: newHash, gate_names: gates.map((gate) => gate.name), head_tree_sha: treeSha } }, { lockHeld: true });
+        writeExecutionEvidence(runDir, evidence); evidenceWritten = true;
+        return { newHash, strictBefore: strictCurrent.reason };
+      } finally {
+        if (!evidenceWritten) {
+          for (const finalPath of createdFinalPaths) {
+            try { if (fs.lstatSync(finalPath).isFile()) fs.unlinkSync(finalPath); } catch {}
+          }
+        }
+      }
     });
     result.executionEvidenceHash = finalization.newHash; result.strictPreflightBefore = finalization.strictBefore;
     } finally {

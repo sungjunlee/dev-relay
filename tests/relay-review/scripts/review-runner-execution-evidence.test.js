@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -41,6 +42,10 @@ function writeArtifact(runDir, artifact) {
   const artifactPath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
   fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf-8");
   return artifactPath;
+}
+
+function sha256File(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
 test("execution-evidence parses a strict schema_version=1 artifact", () => {
@@ -215,6 +220,33 @@ test("strict verification preserves all frozen command gates, including observat
   const missingObservation = computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true });
   assert.equal(missingObservation.status, "fail");
   assert.match(missingObservation.reason, /mobile/);
+});
+
+test("operator evidence requires provenance-bound observation runs", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-operator-observation-"));
+  const head = "a".repeat(40);
+  const command = "node --test unit.test.js";
+  const observationCommand = "inspect screenshot artifact";
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "evaluation:", "  verification:", "    checks:",
+    "      - name: unit", "        type: command", `        command: ${command}`,
+    "      - name: screenshot", "        type: observation", `        command: ${observationCommand}`,
+  ].join("\n"));
+  const log = path.join(runDir, "unit.log"); const screenshot = path.join(runDir, "screenshot.artifact");
+  fs.writeFileSync(log, "unit\n"); fs.writeFileSync(screenshot, "screenshot\n");
+  const baseRuns = [{ command, cwd: "/repo", head_sha: head, exit_code: 0, output_path: "unit.log", output_hash: sha256File(log), recorded_by: "operator", recorded_at: "2026-08-01T00:00:00.000Z" }, {
+    command: observationCommand, cwd: "/repo", head_sha: head, exit_code: 0, gate_type: "observation", result_kind: "operator_observation_artifact", output_path: "screenshot.artifact", output_hash: sha256File(screenshot), recorded_by: "operator", recorded_at: "2026-08-01T00:00:00.000Z",
+  }];
+  const operatorArtifact = () => makeArtifact(head, { recorded_by: "record-verification-evidence-operator-v1", operator_verification: { reason: "test" }, verification_runs: JSON.parse(JSON.stringify(baseRuns)) });
+  writeArtifact(runDir, operatorArtifact());
+  assert.equal(computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true }).status, "pass");
+
+  for (const field of ["gate_type", "result_kind"]) {
+    const invalid = operatorArtifact(); delete invalid.verification_runs[1][field]; writeArtifact(runDir, invalid);
+    assert.equal(computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true }).status, "fail", field);
+  }
+  const substituted = operatorArtifact(); delete substituted.verification_runs[1].gate_type; delete substituted.verification_runs[1].result_kind; writeArtifact(runDir, substituted);
+  assert.equal(computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true }).status, "fail");
 });
 
 test("execution-evidence strict preflight binds confirmed verification proof to reviewed HEAD tree", () => {

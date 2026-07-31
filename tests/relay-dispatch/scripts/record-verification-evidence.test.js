@@ -159,6 +159,7 @@ test("event append failure preserves partial evidence and its referenced artifac
   const result = invoke(item, ["--observation-result", `screenshot=${item.observation}`]);
   assert.notEqual(result.status, 0); assert.equal(fs.readFileSync(evidencePath, "utf8"), partialBytes);
   assert.equal(fs.readFileSync(priorPath, "utf8"), "prior\n");
+  assert.equal(fs.readdirSync(item.runDir).some((name) => /^(operator-verification|operator-observation)-[0-9a-f]{16}-/.test(name)), false);
 });
 
 test("commandless observation is ignored rather than recorded as an empty command", () => {

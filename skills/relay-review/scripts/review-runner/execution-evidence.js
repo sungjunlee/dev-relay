@@ -134,10 +134,31 @@ function rebrandVerificationGateReason(artifact, gates, policies = [
   );
 }
 
-function findMissingVerificationGates(gates, verificationRuns) {
+function isOperatorRecordedEvidence(artifact) {
+  return artifact?.recorded_by === "record-verification-evidence-operator-v1"
+    || isObject(artifact?.operator_verification)
+    || (Array.isArray(artifact?.verification_runs) && artifact.verification_runs.some((run) => (
+      run?.recorded_by === "operator-confirmed-verification-v1"
+    )));
+}
+
+function observationRunMatches(gate, run, requireOperatorObservationProvenance) {
+  if (run.command !== gate.command) return false;
+  if (gate.type !== "observation" || !requireOperatorObservationProvenance) return true;
+  return run.gate_type === "observation"
+    && run.result_kind === "operator_observation_artifact"
+    && isNonEmptyString(run.output_path)
+    && isNonEmptyString(run.output_hash)
+    && SHA256_PATTERN.test(run.output_hash);
+}
+
+function findMissingVerificationGates(gates, verificationRuns, artifact) {
   const unmatchedRuns = [...verificationRuns];
+  const requireOperatorObservationProvenance = isOperatorRecordedEvidence(artifact);
   return gates.filter((gate) => {
-    const matchIndex = unmatchedRuns.findIndex((run) => run.command === gate.command);
+    const matchIndex = unmatchedRuns.findIndex((run) => (
+      observationRunMatches(gate, run, requireOperatorObservationProvenance)
+    ));
     if (matchIndex === -1) return true;
     unmatchedRuns.splice(matchIndex, 1);
     return false;
@@ -260,6 +281,14 @@ function validateVerificationRun(run, index) {
     throw new Error(
       `execution evidence verification_runs[${index}] requires at least one of ${VERIFICATION_HASH_FIELDS.join(", ")}`
     );
+  }
+  if (run.gate_type === "observation") {
+    if (run.result_kind !== "operator_observation_artifact") {
+      throw new Error(`execution evidence verification_runs[${index}].result_kind must be operator_observation_artifact for observation evidence`);
+    }
+    if (!isNonEmptyString(run.output_path) || !isNonEmptyString(run.output_hash)) {
+      throw new Error(`execution evidence verification_runs[${index}] observation evidence requires output_path and output_hash`);
+    }
   }
 }
 
@@ -560,7 +589,8 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false, m
       }
       const missingGates = findMissingVerificationGates(
         verificationGates,
-        artifactLoad.artifact.verification_runs
+        artifactLoad.artifact.verification_runs,
+        artifactLoad.artifact
       );
       if (missingGates.length > 0) {
         return {
