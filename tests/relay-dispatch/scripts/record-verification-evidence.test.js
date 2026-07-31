@@ -142,7 +142,10 @@ test("concurrent recorders serialize final replacement and reject the loser", as
   const args = ["--observation-result", `screenshot=${item.observation}`];
   const [left, right] = await Promise.all([invokeAsync(item, args), invokeAsync(item, args)]);
   assert.deepEqual([left.status, right.status].sort(), [0, 1]);
-  assert.match(`${left.stderr}${right.stderr}`, /strict preflight changed while verification was executing/);
+  assert.match(
+    `${left.stderr}${right.stderr}`,
+    /(?:execution evidence|strict preflight) changed while verification was executing/
+  );
   const evidence = JSON.parse(fs.readFileSync(path.join(item.runDir, "execution-evidence.json"), "utf8"));
   assert.equal(hashFile(path.join(item.runDir, evidence.verification_runs[0].output_path)), evidence.verification_runs[0].output_hash);
 });

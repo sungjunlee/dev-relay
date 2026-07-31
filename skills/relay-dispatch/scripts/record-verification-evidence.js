@@ -114,7 +114,6 @@ function writePrivateFile(destination, data) {
     fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
     fs.writeFileSync(fd, data); fs.fchmodSync(fd, 0o600); fs.fsyncSync(fd); fs.closeSync(fd); fd = null;
     fs.renameSync(temporary, destination);
-    fs.chmodSync(destination, 0o600);
   } catch (error) {
     if (fd !== undefined && fd !== null) try { fs.closeSync(fd); } catch {}
     try { fs.unlinkSync(temporary); } catch {}
@@ -216,6 +215,12 @@ function main() {
       const current = readManifest(record.manifestPath).data;
       if (![STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(current.state) || current.git?.head_sha !== headSha || current.git?.working_branch !== branch) {
         throw new Error("run changed while verification was executing; refusing evidence replacement");
+      }
+      if (execGit(paths.worktree, ["rev-parse", "--abbrev-ref", "HEAD"]) !== branch
+        || execGit(paths.worktree, ["rev-parse", "HEAD"]) !== headSha
+        || execGit(paths.worktree, ["rev-parse", "HEAD^{tree}"]) !== treeSha
+        || execGit(paths.worktree, ["status", "--porcelain"])) {
+        throw new Error("retained worktree changed while verification was executing; refusing evidence replacement");
       }
       if (hashFileSha256(evidencePath) !== expectedEvidenceHash) {
         throw new Error("execution evidence changed while verification was executing; refusing replacement");

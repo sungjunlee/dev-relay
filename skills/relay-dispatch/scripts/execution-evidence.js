@@ -575,7 +575,6 @@ function writeExecutionEvidence(runDir, evidence, options = {}) {
     fs.writeFileSync(tmpPath, `${JSON.stringify(evidence, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
     fs.chmodSync(tmpPath, 0o600);
     fs.renameSync(tmpPath, finalPath);
-    fs.chmodSync(finalPath, 0o600);
   } catch (error) {
     try { fs.unlinkSync(tmpPath); } catch {}
     throw error;
