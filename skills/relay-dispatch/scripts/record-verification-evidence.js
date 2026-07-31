@@ -7,6 +7,7 @@
  * does not recover commits, publish, or advance state.
  */
 
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
@@ -19,6 +20,7 @@ const { extractVerificationGateDefinitions, hashFileSha256, writeExecutionEviden
 const { computeQualityExecutionStatus } = require("../../relay-review/scripts/review-runner/execution-evidence");
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { execGit } = require("./exec");
+const { readManifest, withManifestTransaction } = require("./manifest/store");
 
 const args = process.argv.slice(2);
 const CLI_OPTIONS = { commandName: "record-verification-evidence", reservedFlags: ["-h"] };
@@ -71,6 +73,10 @@ function observationMap(values) {
 function readSafeArtifact(source) {
   const resolved = path.resolve(source);
   const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+  if (noFollow === 0) {
+    const initial = fs.lstatSync(resolved);
+    if (initial.isSymbolicLink() || !initial.isFile()) throw new Error("observation artifact must be a readable regular non-symlink file");
+  }
   let fd;
   try {
     fd = fs.openSync(resolved, fs.constants.O_RDONLY | noFollow);
@@ -92,11 +98,41 @@ function readSafeArtifact(source) {
 
 function safeArtifact(source, destination) {
   const data = readSafeArtifact(source);
-  fs.writeFileSync(destination, data, { mode: 0o600 });
+  writePrivateFile(destination, data);
   return hashFileSha256(destination);
 }
 
-function boundedLog(runDir, index, command, cwd) {
+function writePrivateFile(destination, data) {
+  let existing = null;
+  try { existing = fs.lstatSync(destination); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  if (existing?.isSymbolicLink() || (existing && !existing.isFile())) {
+    throw new Error("refusing non-regular or symlinked verification artifact destination");
+  }
+  const temporary = `${destination}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+  let fd;
+  try {
+    fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+    fs.writeFileSync(fd, data); fs.fchmodSync(fd, 0o600); fs.fsyncSync(fd); fs.closeSync(fd); fd = null;
+    fs.renameSync(temporary, destination);
+    fs.chmodSync(destination, 0o600);
+  } catch (error) {
+    if (fd !== undefined && fd !== null) try { fs.closeSync(fd); } catch {}
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+}
+
+function createStagingDir(runDir) {
+  const stageDir = path.join(runDir, `.operator-verification-${process.pid}-${crypto.randomBytes(8).toString("hex")}`);
+  fs.mkdirSync(stageDir, { mode: 0o700 }); fs.chmodSync(stageDir, 0o700);
+  return stageDir;
+}
+
+function discardStagingDir(stageDir) {
+  try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch {}
+}
+
+function boundedLog(stageDir, index, command, cwd) {
   let stdout = "";
   let stderr = "";
   let exitCode = 0;
@@ -111,9 +147,9 @@ function boundedLog(runDir, index, command, cwd) {
   }
   const body = Buffer.from(`${stdout}\n${stderr}`, "utf-8").subarray(0, MAX_ARTIFACT_BYTES);
   const outputName = `operator-verification-gate-${index + 1}.log`;
-  const outputPath = path.join(runDir, outputName);
-  fs.writeFileSync(outputPath, body, { mode: 0o600 });
-  return { exitCode, outputName, outputHash: hashFileSha256(outputPath) };
+  const outputPath = path.join(stageDir, outputName);
+  writePrivateFile(outputPath, body);
+  return { exitCode, outputName, outputPath, outputHash: hashFileSha256(outputPath) };
 }
 
 function resolveRecord(repoArg, runId, manifestArg) {
@@ -158,26 +194,56 @@ function main() {
   if (dryRun) observations.forEach((gate) => readSafeArtifact(observationResults.get(gate.name)));
   const result = { status: dryRun ? "dry_run" : "recorded", runId: data.run_id, headSha, gateNames: gates.map((gate) => gate.name), reason };
   if (!dryRun) {
+    const stageDir = createStagingDir(runDir);
+    let retainStaging = false;
+    try {
     const timestamp = new Date().toISOString();
     const runs = gates.map((gate, index) => {
       if (gate.type === "command") {
-        const output = boundedLog(runDir, index, gate.command, paths.worktree);
-        return { name: gate.name, command: gate.command, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: output.exitCode, output_path: output.outputName, output_hash: output.outputHash, recorded_by: RECORDED_BY, recorded_at: timestamp };
+        const output = boundedLog(stageDir, index, gate.command, paths.worktree);
+        return { name: gate.name, command: gate.command, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: output.exitCode, output_path: output.outputName, output_hash: output.outputHash, staged_path: output.outputPath, recorded_by: RECORDED_BY, recorded_at: timestamp };
       }
       const outputName = `operator-observation-gate-${index + 1}.artifact`;
-      const outputPath = path.join(runDir, outputName);
+      const outputPath = path.join(stageDir, outputName);
       const hash = safeArtifact(observationResults.get(gate.name), outputPath);
-      return { name: gate.name, gate_name: gate.name, gate_type: "observation", command: gate.command, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: 0, output_path: outputName, output_hash: hash, recorded_by: RECORDED_BY, recorded_at: timestamp };
+      return { name: gate.name, gate_name: gate.name, gate_type: "observation", command: gate.command, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: 0, output_path: outputName, output_hash: hash, staged_path: outputPath, recorded_by: RECORDED_BY, recorded_at: timestamp };
     });
     if (execGit(paths.worktree, ["status", "--porcelain"]) || execGit(paths.worktree, ["rev-parse", "HEAD"]) !== headSha || execGit(paths.worktree, ["rev-parse", "HEAD^{tree}"]) !== treeSha) {
       throw new Error("verification commands changed the retained worktree; refusing to write evidence");
     }
-    const previousHash = hashFileSha256(evidencePath);
-    const evidence = { ...existing, head_sha: headSha, verification_runs: runs, recorded_at: timestamp, recorded_by: "record-verification-evidence-operator-v1", operator_verification: { reason, replaced_evidence_hash: previousHash, head_tree_sha: treeSha, recorded_at: timestamp } };
-    writeExecutionEvidence(runDir, evidence);
-    const newHash = hashFileSha256(evidencePath);
-    appendRunEvent(paths.repoRoot, data.run_id, { event: EVENTS.OPERATOR_EXECUTION_EVIDENCE, state_from: data.state, state_to: data.state, head_sha: headSha, branch, reason, operator_initiated: true, execution_evidence_path: evidencePath, execution_evidence_hash: newHash, before: { evidence_hash: previousHash }, after: { evidence_hash: newHash, gate_names: gates.map((gate) => gate.name), head_tree_sha: treeSha } });
-    result.executionEvidenceHash = newHash; result.strictPreflightBefore = strictBefore.reason;
+    const expectedEvidenceHash = hashFileSha256(evidencePath);
+    const finalization = withManifestTransaction(record.manifestPath, () => {
+      const current = readManifest(record.manifestPath).data;
+      if (![STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(current.state) || current.git?.head_sha !== headSha || current.git?.working_branch !== branch) {
+        throw new Error("run changed while verification was executing; refusing evidence replacement");
+      }
+      if (hashFileSha256(evidencePath) !== expectedEvidenceHash) {
+        throw new Error("execution evidence changed while verification was executing; refusing replacement");
+      }
+      const strictCurrent = computeQualityExecutionStatus({ runDir, reviewedHead: headSha, strict: true, manifestData: current });
+      if (strictCurrent.status !== "fail" || !/went unrecorded/.test(strictCurrent.reason || "")) {
+        throw new Error("strict preflight changed while verification was executing; refusing replacement");
+      }
+      const failed = runs.find((run) => run.exit_code !== 0);
+      if (failed) {
+        retainStaging = true;
+        throw new Error(`verification gate '${failed.name}' exited ${failed.exit_code}; preserving existing evidence`);
+      }
+      const finalRuns = runs.map(({ staged_path, ...run }) => run);
+      for (const run of runs) writePrivateFile(path.join(runDir, run.output_path), readSafeArtifact(run.staged_path));
+      const evidence = { ...existing, head_sha: headSha, verification_runs: finalRuns, recorded_at: timestamp, recorded_by: "record-verification-evidence-operator-v1", operator_verification: { reason, replaced_evidence_hash: expectedEvidenceHash, head_tree_sha: treeSha, recorded_at: timestamp } };
+      const encoded = `${JSON.stringify(evidence, null, 2)}\n`;
+      const newHash = crypto.createHash("sha256").update(encoded).digest("hex");
+      // Journal first: a crash can leave an orphaned audit attempt, but never a
+      // valid replacement artifact without an audit record. Re-run remains safe.
+      appendRunEvent(paths.repoRoot, data.run_id, { event: EVENTS.OPERATOR_EXECUTION_EVIDENCE, state_from: current.state, state_to: current.state, head_sha: headSha, branch, reason, operator_initiated: true, execution_evidence_path: evidencePath, execution_evidence_hash: newHash, before: { evidence_hash: expectedEvidenceHash }, after: { evidence_hash: newHash, gate_names: gates.map((gate) => gate.name), head_tree_sha: treeSha } }, { lockHeld: true });
+      writeExecutionEvidence(runDir, evidence);
+      return { newHash, strictBefore: strictCurrent.reason };
+    });
+    result.executionEvidenceHash = finalization.newHash; result.strictPreflightBefore = finalization.strictBefore;
+    } finally {
+      if (!retainStaging) discardStagingDir(stageDir);
+    }
   }
   console.log(json ? JSON.stringify(result, null, 2) : `${result.status}: ${result.runId} (${result.gateNames.join(", ")})`);
 }

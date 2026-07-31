@@ -572,8 +572,10 @@ function writeExecutionEvidence(runDir, evidence, options = {}) {
     `${EXECUTION_EVIDENCE_FILENAME}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
   );
   try {
-    fs.writeFileSync(tmpPath, `${JSON.stringify(evidence, null, 2)}\n`, "utf-8");
+    fs.writeFileSync(tmpPath, `${JSON.stringify(evidence, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+    fs.chmodSync(tmpPath, 0o600);
     fs.renameSync(tmpPath, finalPath);
+    fs.chmodSync(finalPath, 0o600);
   } catch (error) {
     try { fs.unlinkSync(tmpPath); } catch {}
     throw error;

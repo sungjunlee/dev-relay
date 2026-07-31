@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync, spawnSync } = require("child_process");
+const { execFileSync, spawn, spawnSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -14,6 +15,10 @@ const { COMMAND_FLAGS } = require("../../../skills/relay-dispatch/scripts/cli-sc
 const { computeQualityExecutionStatus } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "record-verification-evidence.js");
+
+function hashFile(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
 
 function fixture() {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-record-evidence-")));
@@ -44,6 +49,14 @@ function fixture() {
 
 function invoke(item, extra = []) {
   return spawnSync(process.execPath, [SCRIPT, "--repo", item.repoRoot, "--run-id", item.runId, "--reason", "same-head audited re-verification", ...extra], { cwd: item.repoRoot, encoding: "utf8", env: { ...process.env, RELAY_HOME: item.relayHome } });
+}
+
+function invokeAsync(item, extra = []) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [SCRIPT, "--repo", item.repoRoot, "--run-id", item.runId, "--reason", "same-head audited re-verification", ...extra], { cwd: item.repoRoot, env: { ...process.env, RELAY_HOME: item.relayHome } });
+    let stderr = ""; child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("close", (status) => resolve({ status, stderr }));
+  });
 }
 
 test("CLI schema registers record-verification-evidence", () => {
@@ -89,4 +102,54 @@ test("copies binary observation artifacts without decoding them", () => {
   assert.equal(result.status, 0, result.stderr);
   const evidence = JSON.parse(fs.readFileSync(path.join(item.runDir, "execution-evidence.json"), "utf8"));
   assert.deepEqual(fs.readFileSync(path.join(item.runDir, evidence.verification_runs[1].output_path)), bytes);
+});
+
+test("nonzero command preserves the old evidence and leaves only bounded diagnostics", () => {
+  const item = fixture(); const evidencePath = path.join(item.runDir, "execution-evidence.json"); const before = fs.readFileSync(evidencePath, "utf8");
+  fs.writeFileSync(path.join(item.runDir, "rubric.yaml"), "evaluation:\n  verification:\n    checks:\n      - name: unit\n        type: command\n        command: node -e \"process.exit(7)\"\n");
+  const result = invoke(item);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /exited 7/);
+  assert.equal(fs.readFileSync(evidencePath, "utf8"), before);
+  const diagnosticDir = fs.readdirSync(item.runDir).find((name) => name.startsWith(".operator-verification-"));
+  assert.ok(diagnosticDir); assert.ok(fs.existsSync(path.join(item.runDir, diagnosticDir, "operator-verification-gate-1.log")));
+});
+
+test("refuses symlinked log destinations without touching their target", () => {
+  const item = fixture(); const victim = path.join(item.repoRoot, "victim.txt"); fs.writeFileSync(victim, "keep");
+  fs.symlinkSync(victim, path.join(item.runDir, "operator-verification-gate-1.log"));
+  const result = invoke(item, ["--observation-result", `screenshot=${item.observation}`]);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /symlinked verification artifact destination/);
+  assert.equal(fs.readFileSync(victim, "utf8"), "keep");
+});
+
+test("replaces stale regular destinations atomically and normalizes private mode", () => {
+  const item = fixture(); const stale = path.join(item.runDir, "operator-verification-gate-1.log");
+  fs.writeFileSync(stale, "stale"); fs.chmodSync(stale, 0o644);
+  const result = invoke(item, ["--observation-result", `screenshot=${item.observation}`]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.statSync(stale).mode & 0o777, 0o600);
+  assert.notEqual(fs.readFileSync(stale, "utf8"), "stale");
+});
+
+test("concurrent recorders serialize final replacement and reject the loser", async () => {
+  const item = fixture();
+  const rubricPath = path.join(item.runDir, "rubric.yaml");
+  fs.writeFileSync(rubricPath, [
+    "evaluation:", "  verification:", "    checks:", "      - name: unit", "        type: command",
+    "        command: node -e \"const fs=require('fs'); const p=process.env.RELAY_HOME + '/race'; if (!fs.existsSync(p)) { fs.writeFileSync(p, '1'); setTimeout(() => process.stdout.write('first'), 50); } else { setTimeout(() => process.stdout.write('second'), 500); }\"",
+    "      - name: screenshot", "        type: observation", "        command: node -e \"process.stdout.write('observed')\"",
+  ].join("\n"));
+  const args = ["--observation-result", `screenshot=${item.observation}`];
+  const [left, right] = await Promise.all([invokeAsync(item, args), invokeAsync(item, args)]);
+  assert.deepEqual([left.status, right.status].sort(), [0, 1]);
+  assert.match(`${left.stderr}${right.stderr}`, /strict preflight changed while verification was executing/);
+  const evidence = JSON.parse(fs.readFileSync(path.join(item.runDir, "execution-evidence.json"), "utf8"));
+  assert.equal(hashFile(path.join(item.runDir, evidence.verification_runs[0].output_path)), evidence.verification_runs[0].output_hash);
+});
+
+test("event append failure leaves old evidence in place", () => {
+  const item = fixture(); const evidencePath = path.join(item.runDir, "execution-evidence.json"); const before = fs.readFileSync(evidencePath, "utf8");
+  fs.symlinkSync(path.join(item.repoRoot, "events-target"), path.join(item.runDir, "events.jsonl"));
+  const result = invoke(item, ["--observation-result", `screenshot=${item.observation}`]);
+  assert.notEqual(result.status, 0); assert.equal(fs.readFileSync(evidencePath, "utf8"), before);
 });
