@@ -117,6 +117,19 @@ test("advisory prompt uses adversarial challenge framing only for the adversaria
   assert.match(blindspot, /without reclassifying that entry as required/i);
 });
 
+test("advisory prompt defines the finding line contract for every profile", () => {
+  for (const profile of ["blindspot", "adversarial"]) {
+    const prompt = advisoryPrompt(profile);
+
+    assert.match(prompt, /For every finding, line must be a positive integer or null\./);
+    assert.match(prompt, /Never use 0\./);
+    assert.match(prompt, /Use null only when the finding is genuinely file-wide or no single line accurately locates it/);
+    assert.match(prompt, /otherwise use the exact positive line number/);
+    assert.match(prompt, /null is only a location representation: it does not make a required finding advisory or optional/);
+    assert.match(prompt, /keep every merge-blocking finding in required_findings/);
+  }
+});
+
 function changesRequestedVerdict() {
   return {
     ...passVerdict(),
