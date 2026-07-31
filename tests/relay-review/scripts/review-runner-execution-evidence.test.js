@@ -222,31 +222,42 @@ test("strict verification preserves all frozen command gates, including observat
   assert.match(missingObservation.reason, /mobile/);
 });
 
-test("operator evidence requires provenance-bound observation runs", () => {
-  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-operator-observation-"));
-  const head = "a".repeat(40);
-  const command = "node --test unit.test.js";
-  const observationCommand = "inspect screenshot artifact";
-  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
-    "evaluation:", "  verification:", "    checks:",
-    "      - name: unit", "        type: command", `        command: ${command}`,
-    "      - name: screenshot", "        type: observation", `        command: ${observationCommand}`,
-  ].join("\n"));
-  const log = path.join(runDir, "unit.log"); const screenshot = path.join(runDir, "screenshot.artifact");
-  fs.writeFileSync(log, "unit\n"); fs.writeFileSync(screenshot, "screenshot\n");
-  const baseRuns = [{ command, cwd: "/repo", head_sha: head, exit_code: 0, output_path: "unit.log", output_hash: sha256File(log), recorded_by: "operator", recorded_at: "2026-08-01T00:00:00.000Z" }, {
-    command: observationCommand, cwd: "/repo", head_sha: head, exit_code: 0, gate_type: "observation", result_kind: "operator_observation_artifact", output_path: "screenshot.artifact", output_hash: sha256File(screenshot), recorded_by: "operator", recorded_at: "2026-08-01T00:00:00.000Z",
-  }];
-  const operatorArtifact = () => makeArtifact(head, { recorded_by: "record-verification-evidence-operator-v1", operator_verification: { reason: "test" }, verification_runs: JSON.parse(JSON.stringify(baseRuns)) });
-  writeArtifact(runDir, operatorArtifact());
-  assert.equal(computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true }).status, "pass");
+test("operator evidence binds observation identity and every run to the reviewed tree", () => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-operator-tree-repo-"));
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-operator-tree-run-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoPath });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repoPath });
+  fs.writeFileSync(path.join(repoPath, "README.md"), "tree\n"); execFileSync("git", ["add", "."], { cwd: repoPath }); execFileSync("git", ["commit", "-m", "tree"], { cwd: repoPath, stdio: "pipe" });
+  const head = git(repoPath, "rev-parse", "HEAD"); const tree = git(repoPath, "rev-parse", "HEAD^{tree}");
+  const command = "node --test unit.test.js"; const observationCommand = "inspect screenshot artifact";
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), ["evaluation:", "  verification:", "    checks:", "      - name: unit", "        type: command", `        command: ${command}`, "      - name: desktop", "        type: observation", `        command: ${observationCommand}`, "      - name: mobile", "        type: observation", `        command: ${observationCommand}`].join("\n"));
+  const buildRun = (name, commandText, outputName) => {
+    const outputPath = path.join(runDir, outputName); fs.writeFileSync(outputPath, `${name}\n`);
+    return { name, gate_name: name, ...(name === "unit" ? {} : { gate_type: "observation", result_kind: "operator_observation_artifact" }), command: commandText, cwd: repoPath, head_sha: head, verification_tree_sha: tree, exit_code: 0, output_path: outputName, output_hash: sha256File(outputPath), recorded_by: "operator-confirmed-verification-v1", recorded_at: "2026-08-01T00:00:00.000Z" };
+  };
+  const baseRuns = [buildRun("unit", command, "unit.log"), buildRun("desktop", observationCommand, "desktop.artifact"), buildRun("mobile", observationCommand, "mobile.artifact")];
+  const buildOperatorArtifact = () => makeArtifact(head, { recorded_by: "record-verification-evidence-operator-v1", operator_verification: { reason: "test" }, verification_runs: JSON.parse(JSON.stringify(baseRuns)) });
+  const compute = (artifact) => {
+    writeArtifact(runDir, artifact);
+    return computeQualityExecutionStatus({
+      runDir, reviewedHead: head, strict: true, manifestData: { paths: { worktree: repoPath } },
+    });
+  };
+  assert.equal(compute(buildOperatorArtifact()).status, "pass");
 
+  const swapped = buildOperatorArtifact(); [swapped.verification_runs[1].gate_name, swapped.verification_runs[2].gate_name] = [swapped.verification_runs[2].gate_name, swapped.verification_runs[1].gate_name];
+  assert.equal(compute(swapped).status, "fail");
   for (const field of ["gate_type", "result_kind"]) {
-    const invalid = operatorArtifact(); delete invalid.verification_runs[1][field]; writeArtifact(runDir, invalid);
-    assert.equal(computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true }).status, "fail", field);
+    const invalidObservation = buildOperatorArtifact(); delete invalidObservation.verification_runs[1][field];
+    assert.equal(compute(invalidObservation).status, "fail", field);
   }
-  const substituted = operatorArtifact(); delete substituted.verification_runs[1].gate_type; delete substituted.verification_runs[1].result_kind; writeArtifact(runDir, substituted);
-  assert.equal(computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true }).status, "fail");
+  const badRecorder = buildOperatorArtifact(); badRecorder.verification_runs.forEach((run) => { run.recorded_by = "operator"; });
+  assert.equal(compute(badRecorder).status, "fail");
+  const missingTree = buildOperatorArtifact(); missingTree.verification_runs.forEach((run) => { delete run.verification_tree_sha; });
+  assert.equal(compute(missingTree).status, "fail");
+  const mismatchedTree = buildOperatorArtifact(); mismatchedTree.verification_runs.forEach((run) => { run.verification_tree_sha = "b".repeat(40); });
+  assert.equal(compute(mismatchedTree).status, "fail");
 });
 
 test("execution-evidence strict preflight binds confirmed verification proof to reviewed HEAD tree", () => {

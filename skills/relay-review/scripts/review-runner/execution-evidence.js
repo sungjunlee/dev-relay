@@ -24,6 +24,7 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const FORCE_FINALIZE_GUIDANCE = 'finalize-run --force-finalize-nonready --reason "pre-261 run, no artifact"';
 const VERIFICATION_HASH_FIELDS = ["output_hash", "stdout_hash", "stderr_hash"];
 const CONFIRMED_VERIFICATION_RECORDED_BY_SUFFIX = "-confirmed-verification-v1";
+const OPERATOR_VERIFICATION_RECORDED_BY = "operator-confirmed-verification-v1";
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -147,6 +148,8 @@ function observationRunMatches(gate, run, requireOperatorObservationProvenance) 
   if (gate.type !== "observation" || !requireOperatorObservationProvenance) return true;
   return run.gate_type === "observation"
     && run.result_kind === "operator_observation_artifact"
+    && run.gate_name === gate.name
+    && run.name === gate.name
     && isNonEmptyString(run.output_path)
     && isNonEmptyString(run.output_hash)
     && SHA256_PATTERN.test(run.output_hash);
@@ -234,6 +237,23 @@ function confirmedVerificationTreeReason(artifact, reviewedHead, manifestData) {
   );
 }
 
+function operatorVerificationTreeReason(artifact, reviewedHead, manifestData) {
+  if (!isOperatorRecordedEvidence(artifact)) return null;
+  const invalidRecorder = artifact.verification_runs.find((run) => (
+    run.recorded_by !== OPERATOR_VERIFICATION_RECORDED_BY
+  ));
+  if (invalidRecorder) {
+    return "strict operator execution evidence requires every verification_run to be recorded_by operator-confirmed-verification-v1";
+  }
+  const missingTree = artifact.verification_runs.find((run) => (
+    !isNonEmptyString(run.verification_tree_sha) || !SHA40_PATTERN.test(run.verification_tree_sha)
+  ));
+  if (missingTree) {
+    return "strict operator execution evidence requires verification_tree_sha for every verification_run";
+  }
+  return confirmedVerificationTreeReason(artifact, reviewedHead, manifestData);
+}
+
 function validateVerificationHash(value, fieldName) {
   if (value !== undefined && (!isNonEmptyString(value) || !SHA256_PATTERN.test(value))) {
     throw new Error(`execution evidence verification_runs[].${fieldName} must be a sha256 hex digest when present`);
@@ -281,14 +301,6 @@ function validateVerificationRun(run, index) {
     throw new Error(
       `execution evidence verification_runs[${index}] requires at least one of ${VERIFICATION_HASH_FIELDS.join(", ")}`
     );
-  }
-  if (run.gate_type === "observation") {
-    if (run.result_kind !== "operator_observation_artifact") {
-      throw new Error(`execution evidence verification_runs[${index}].result_kind must be operator_observation_artifact for observation evidence`);
-    }
-    if (!isNonEmptyString(run.output_path) || !isNonEmptyString(run.output_hash)) {
-      throw new Error(`execution evidence verification_runs[${index}] observation evidence requires output_path and output_hash`);
-    }
   }
 }
 
@@ -612,6 +624,14 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false, m
         reviewedHead,
         manifestData
       );
+      const operatorTreeReason = operatorVerificationTreeReason(
+        artifactLoad.artifact,
+        reviewedHead,
+        manifestData
+      );
+      if (operatorTreeReason) {
+        return { status: "fail", reason: operatorTreeReason };
+      }
       if (verificationTreeReason) {
         return {
           status: "fail",
