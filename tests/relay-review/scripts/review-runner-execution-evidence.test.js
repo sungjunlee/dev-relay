@@ -185,6 +185,38 @@ test("execution-evidence strict mode prefers verification_runs when present", ()
   );
 });
 
+test("strict verification preserves all frozen command gates, including observation gates", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-observation-gates-"));
+  const head = "a".repeat(40);
+  const gates = [
+    ["unit", "command", "node --test unit.test.js"],
+    ["integration", "automated", "node --test integration.test.js"],
+    ["lint", "evaluated", "node --test lint.test.js"],
+    ["desktop", "observation", "node -e \"process.stdout.write('desktop')\""],
+    ["mobile", "observation", "node -e \"process.stdout.write('mobile')\""],
+    ["accessibility", "observation", "node -e \"process.stdout.write('a11y')\""],
+  ];
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "evaluation:", "  verification:", "    checks:",
+    ...gates.flatMap(([name, type, command]) => [
+      `      - name: ${name}`, `        type: ${type}`, `        command: ${command}`,
+    ]),
+  ].join("\n"));
+  const runs = gates.map(([name, type, command], index) => ({
+    name, gate_name: name, ...(type === "observation" ? { gate_type: "observation" } : {}), command,
+    cwd: "/repo", head_sha: head, exit_code: 0, output_hash: String(index).padStart(64, "a"),
+    recorded_by: "operator", recorded_at: "2026-07-31T00:00:00.000Z",
+  }));
+  writeArtifact(runDir, makeArtifact(head, { verification_runs: runs }));
+  assert.deepEqual(computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true }), { status: "pass", reason: null });
+
+  runs.splice(4, 1); // Removing a frozen observation command must not be silently accepted.
+  writeArtifact(runDir, makeArtifact(head, { verification_runs: runs }));
+  const missingObservation = computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true });
+  assert.equal(missingObservation.status, "fail");
+  assert.match(missingObservation.reason, /mobile/);
+});
+
 test("execution-evidence strict preflight binds confirmed verification proof to reviewed HEAD tree", () => {
   const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-confirmed-tree-"));
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-confirmed-tree-run-"));

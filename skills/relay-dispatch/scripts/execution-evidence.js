@@ -205,25 +205,39 @@ function scalarFromVerificationCheck(block, key) {
   return "";
 }
 
-function extractVerificationGates(rubricYaml) {
-  return extractVerificationGateDefinitions(rubricYaml).filter((gate) => gate.type === "command");
-}
-
-// Keep this separate from extractVerificationGates(): review's legacy strict
-// matching intentionally consumes command gates only, while an operator tool
-// also needs to resolve explicit observation gates without weakening it.
-function extractVerificationGateDefinitions(rubricYaml) {
+function parseVerificationGateFields(rubricYaml) {
   return verificationCheckBlocks(rubricYaml).map((block, index) => {
     const name = scalarFromVerificationCheck(block, "name") || `verification.checks[${index}]`;
     const type = scalarFromVerificationCheck(block, "type");
     const command = scalarFromVerificationCheck(block, "command");
+    return { name, type, command };
+  });
+}
+
+// Compatibility contract: existing callers treat every check with a command as
+// executable regardless of its rubric type. Only an explicitly command-typed
+// check without a command is malformed; all other commandless checks are ignored.
+function extractVerificationGates(rubricYaml) {
+  return parseVerificationGateFields(rubricYaml).map((gate) => {
+    const { name, type, command } = gate;
     if (type === "command" && !command.trim()) {
       throw new Error(`verification gate '${name}' did not record a command for execution evidence`);
     }
-    if (type !== "command" && type !== "observation") {
-      throw new Error(`verification gate '${name}' has unsupported type '${type || "(missing)"}'`);
+    return gate;
+  }).filter((gate) => gate.command.trim());
+}
+
+// The operator recorder additionally recognizes explicit observations. Legacy
+// non-command types remain command gates when they carry a command, matching
+// extractVerificationGates(), and are otherwise ignored.
+function extractVerificationGateDefinitions(rubricYaml) {
+  return parseVerificationGateFields(rubricYaml).flatMap((gate) => {
+    if (gate.type === "observation") return [{ ...gate, type: "observation" }];
+    if (gate.command.trim()) return [{ ...gate, type: "command" }];
+    if (gate.type === "command") {
+      throw new Error(`verification gate '${gate.name}' did not record a command for execution evidence`);
     }
-    return { name, type, command };
+    return [];
   });
 }
 

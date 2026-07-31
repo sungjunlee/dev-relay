@@ -167,7 +167,7 @@ function main() {
       const outputName = `operator-observation-gate-${index + 1}.artifact`;
       const outputPath = path.join(runDir, outputName);
       const hash = safeArtifact(observationResults.get(gate.name), outputPath);
-      return { name: gate.name, command: `observation:${gate.name}`, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: 0, output_path: outputName, output_hash: hash, recorded_by: RECORDED_BY, recorded_at: timestamp };
+      return { name: gate.name, gate_name: gate.name, gate_type: "observation", command: gate.command, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: 0, output_path: outputName, output_hash: hash, recorded_by: RECORDED_BY, recorded_at: timestamp };
     });
     if (execGit(paths.worktree, ["status", "--porcelain"]) || execGit(paths.worktree, ["rev-parse", "HEAD"]) !== headSha || execGit(paths.worktree, ["rev-parse", "HEAD^{tree}"]) !== treeSha) {
       throw new Error("verification commands changed the retained worktree; refusing to write evidence");

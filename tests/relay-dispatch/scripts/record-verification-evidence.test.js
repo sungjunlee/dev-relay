@@ -11,12 +11,14 @@ const {
 const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const { writeExecutionEvidence } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
 const { COMMAND_FLAGS } = require("../../../skills/relay-dispatch/scripts/cli-schema");
+const { computeQualityExecutionStatus } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "record-verification-evidence.js");
 
 function fixture() {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-record-evidence-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-record-home-")));
+  process.env.RELAY_HOME = relayHome;
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoRoot });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: repoRoot });
@@ -28,15 +30,16 @@ function fixture() {
   const layout = ensureRunLayout(repoRoot, runId);
   fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), [
     "evaluation:", "  verification:", "    checks:", "      - name: unit", "        type: command", "        command: node -e \"process.stdout.write('ok')\"",
-    "      - name: screenshot", "        type: observation",
+    "      - name: screenshot", "        type: observation", "        command: node -e \"process.stdout.write('observed')\"",
   ].join("\n"));
   let manifest = createManifestSkeleton({ repoRoot, runId, branch: "issue-1113", baseBranch: "main", issueNumber: 1113, worktreePath: worktree, orchestrator: "codex", executor: "codex", reviewer: "codex" });
+  manifest.anchor.rubric_path = "rubric.yaml";
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await");
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "review");
-  manifest.anchor.rubric_path = "rubric.yaml"; manifest.git.head_sha = head; writeManifest(layout.manifestPath, manifest);
+  manifest.git.head_sha = head; writeManifest(layout.manifestPath, manifest);
   writeExecutionEvidence(layout.runDir, { schema_version: 1, head_sha: head, test_command: "unspecified", test_result_hash: "unspecified", test_result_summary: "unspecified", recorded_at: "2026-07-31T00:00:00Z", recorded_by: "rebrand" });
   const observation = path.join(repoRoot, "observation.txt"); fs.writeFileSync(observation, "checked\n");
-  return { repoRoot, relayHome, runId, runDir: layout.runDir, head, observation };
+  return { repoRoot, relayHome, runId, runDir: layout.runDir, head, observation, manifest };
 }
 
 function invoke(item, extra = []) {
@@ -57,10 +60,14 @@ test("records exact command and hash-backed observation only for strict missing 
   assert.equal(evidence.head_sha, item.head); assert.equal(evidence.verification_runs.length, 2);
   assert.equal(evidence.verification_runs[0].command, "node -e \"process.stdout.write('ok')\"");
   assert.equal(evidence.verification_runs[0].verification_tree_sha.length, 40);
-  assert.equal(evidence.verification_runs[1].command, "observation:screenshot");
+  assert.equal(evidence.verification_runs[1].command, "node -e \"process.stdout.write('observed')\"");
+  assert.equal(evidence.verification_runs[1].gate_type, "observation");
   assert.ok(fs.existsSync(path.join(item.runDir, evidence.verification_runs[1].output_path)));
   const events = readRunEvents(item.repoRoot, item.runId).filter((entry) => entry.event === "operator_execution_evidence");
   assert.equal(events.length, 1); assert.deepEqual(events[0].after.gate_names, ["unit", "screenshot"]);
+  evidence.verification_runs.pop(); fs.writeFileSync(path.join(item.runDir, "execution-evidence.json"), `${JSON.stringify(evidence)}\n`);
+  const strict = computeQualityExecutionStatus({ runDir: item.runDir, reviewedHead: item.head, strict: true, manifestData: item.manifest });
+  assert.equal(strict.status, "fail"); assert.match(strict.reason, /screenshot/);
 });
 
 test("refuses arbitrary overwrite after the strict preflight is already satisfied", () => {
