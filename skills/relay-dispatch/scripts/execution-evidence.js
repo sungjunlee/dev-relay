@@ -232,7 +232,9 @@ function extractVerificationGates(rubricYaml) {
 // extractVerificationGates(), and are otherwise ignored.
 function extractVerificationGateDefinitions(rubricYaml) {
   return parseVerificationGateFields(rubricYaml).flatMap((gate) => {
-    if (gate.type === "observation") return [{ ...gate, type: "observation" }];
+    if (gate.type === "observation") return gate.command.trim()
+      ? [{ ...gate, type: "observation" }]
+      : [];
     if (gate.command.trim()) return [{ ...gate, type: "command" }];
     if (gate.type === "command") {
       throw new Error(`verification gate '${gate.name}' did not record a command for execution evidence`);

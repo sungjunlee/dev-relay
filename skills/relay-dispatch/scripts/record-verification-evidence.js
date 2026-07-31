@@ -194,18 +194,18 @@ function main() {
   const result = { status: dryRun ? "dry_run" : "recorded", runId: data.run_id, headSha, gateNames: gates.map((gate) => gate.name), reason };
   if (!dryRun) {
     const stageDir = createStagingDir(runDir);
-    let retainStaging = false;
+    const invocationNonce = crypto.randomBytes(8).toString("hex");
     try {
     const timestamp = new Date().toISOString();
     const runs = gates.map((gate, index) => {
       if (gate.type === "command") {
         const output = boundedLog(stageDir, index, gate.command, paths.worktree);
-        return { name: gate.name, command: gate.command, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: output.exitCode, output_path: output.outputName, output_hash: output.outputHash, staged_path: output.outputPath, recorded_by: RECORDED_BY, recorded_at: timestamp };
+        return { name: gate.name, command: gate.command, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: output.exitCode, output_path: `operator-verification-${invocationNonce}-gate-${index + 1}.log`, output_hash: output.outputHash, staged_path: output.outputPath, recorded_by: RECORDED_BY, recorded_at: timestamp };
       }
-      const outputName = `operator-observation-gate-${index + 1}.artifact`;
+      const outputName = `operator-observation-${invocationNonce}-gate-${index + 1}.artifact`;
       const outputPath = path.join(stageDir, outputName);
       const hash = safeArtifact(observationResults.get(gate.name), outputPath);
-      return { name: gate.name, gate_name: gate.name, gate_type: "observation", command: gate.command, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: 0, output_path: outputName, output_hash: hash, staged_path: outputPath, recorded_by: RECORDED_BY, recorded_at: timestamp };
+      return { name: gate.name, gate_name: gate.name, gate_type: "observation", result_kind: "operator_observation_artifact", command: gate.command, cwd: paths.worktree, head_sha: headSha, verification_tree_sha: treeSha, exit_code: 0, output_path: outputName, output_hash: hash, staged_path: outputPath, recorded_by: RECORDED_BY, recorded_at: timestamp };
     });
     if (execGit(paths.worktree, ["status", "--porcelain"]) || execGit(paths.worktree, ["rev-parse", "HEAD"]) !== headSha || execGit(paths.worktree, ["rev-parse", "HEAD^{tree}"]) !== treeSha) {
       throw new Error("verification commands changed the retained worktree; refusing to write evidence");
@@ -231,7 +231,6 @@ function main() {
       }
       const failed = runs.find((run) => run.exit_code !== 0);
       if (failed) {
-        retainStaging = true;
         throw new Error(`verification gate '${failed.name}' exited ${failed.exit_code}; preserving existing evidence`);
       }
       const finalRuns = runs.map(({ staged_path, ...run }) => run);
@@ -247,7 +246,7 @@ function main() {
     });
     result.executionEvidenceHash = finalization.newHash; result.strictPreflightBefore = finalization.strictBefore;
     } finally {
-      if (!retainStaging) discardStagingDir(stageDir);
+      discardStagingDir(stageDir);
     }
   }
   console.log(json ? JSON.stringify(result, null, 2) : `${result.status}: ${result.runId} (${result.gateNames.join(", ")})`);

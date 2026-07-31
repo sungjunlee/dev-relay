@@ -75,6 +75,7 @@ test("records exact command and hash-backed observation only for strict missing 
   assert.equal(evidence.verification_runs[0].verification_tree_sha.length, 40);
   assert.equal(evidence.verification_runs[1].command, "node -e \"process.stdout.write('observed')\"");
   assert.equal(evidence.verification_runs[1].gate_type, "observation");
+  assert.equal(evidence.verification_runs[1].result_kind, "operator_observation_artifact");
   assert.ok(fs.existsSync(path.join(item.runDir, evidence.verification_runs[1].output_path)));
   const events = readRunEvents(item.repoRoot, item.runId).filter((entry) => entry.event === "operator_execution_evidence");
   assert.equal(events.length, 1); assert.deepEqual(events[0].after.gate_names, ["unit", "screenshot"]);
@@ -104,31 +105,30 @@ test("copies binary observation artifacts without decoding them", () => {
   assert.deepEqual(fs.readFileSync(path.join(item.runDir, evidence.verification_runs[1].output_path)), bytes);
 });
 
-test("nonzero command preserves the old evidence and leaves only bounded diagnostics", () => {
+test("nonzero command preserves old evidence and cleans its private staging", () => {
   const item = fixture(); const evidencePath = path.join(item.runDir, "execution-evidence.json"); const before = fs.readFileSync(evidencePath, "utf8");
   fs.writeFileSync(path.join(item.runDir, "rubric.yaml"), "evaluation:\n  verification:\n    checks:\n      - name: unit\n        type: command\n        command: node -e \"process.exit(7)\"\n");
   const result = invoke(item);
   assert.notEqual(result.status, 0); assert.match(result.stderr, /exited 7/);
   assert.equal(fs.readFileSync(evidencePath, "utf8"), before);
-  const diagnosticDir = fs.readdirSync(item.runDir).find((name) => name.startsWith(".operator-verification-"));
-  assert.ok(diagnosticDir); assert.ok(fs.existsSync(path.join(item.runDir, diagnosticDir, "operator-verification-gate-1.log")));
+  assert.equal(fs.readdirSync(item.runDir).some((name) => name.startsWith(".operator-verification-")), false);
 });
 
-test("refuses symlinked log destinations without touching their target", () => {
+test("nonce-qualified final artifact names never touch legacy deterministic destinations", () => {
   const item = fixture(); const victim = path.join(item.repoRoot, "victim.txt"); fs.writeFileSync(victim, "keep");
   fs.symlinkSync(victim, path.join(item.runDir, "operator-verification-gate-1.log"));
   const result = invoke(item, ["--observation-result", `screenshot=${item.observation}`]);
-  assert.notEqual(result.status, 0); assert.match(result.stderr, /symlinked verification artifact destination/);
+  assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.readFileSync(victim, "utf8"), "keep");
 });
 
-test("replaces stale regular destinations atomically and normalizes private mode", () => {
+test("nonce-qualified final artifact names leave stale regular destinations untouched", () => {
   const item = fixture(); const stale = path.join(item.runDir, "operator-verification-gate-1.log");
   fs.writeFileSync(stale, "stale"); fs.chmodSync(stale, 0o644);
   const result = invoke(item, ["--observation-result", `screenshot=${item.observation}`]);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.statSync(stale).mode & 0o777, 0o600);
-  assert.notEqual(fs.readFileSync(stale, "utf8"), "stale");
+  assert.equal(fs.statSync(stale).mode & 0o777, 0o644);
+  assert.equal(fs.readFileSync(stale, "utf8"), "stale");
 });
 
 test("concurrent recorders serialize final replacement and reject the loser", async () => {
@@ -150,9 +150,21 @@ test("concurrent recorders serialize final replacement and reject the loser", as
   assert.equal(hashFile(path.join(item.runDir, evidence.verification_runs[0].output_path)), evidence.verification_runs[0].output_hash);
 });
 
-test("event append failure leaves old evidence in place", () => {
+test("event append failure preserves partial evidence and its referenced artifact", () => {
   const item = fixture(); const evidencePath = path.join(item.runDir, "execution-evidence.json"); const before = fs.readFileSync(evidencePath, "utf8");
+  const priorName = "prior-partial-gate-1.log"; const priorPath = path.join(item.runDir, priorName); fs.writeFileSync(priorPath, "prior\n", { mode: 0o600 });
+  const partial = { ...JSON.parse(before), verification_runs: [{ name: "unit", command: "node -e \"process.stdout.write('ok')\"", cwd: item.manifest.paths.worktree, head_sha: item.head, exit_code: 0, output_path: priorName, output_hash: hashFile(priorPath), recorded_by: "operator", recorded_at: "2026-07-31T00:00:00.000Z" }] };
+  fs.writeFileSync(evidencePath, `${JSON.stringify(partial)}\n`); const partialBytes = fs.readFileSync(evidencePath, "utf8");
   fs.symlinkSync(path.join(item.repoRoot, "events-target"), path.join(item.runDir, "events.jsonl"));
   const result = invoke(item, ["--observation-result", `screenshot=${item.observation}`]);
-  assert.notEqual(result.status, 0); assert.equal(fs.readFileSync(evidencePath, "utf8"), before);
+  assert.notEqual(result.status, 0); assert.equal(fs.readFileSync(evidencePath, "utf8"), partialBytes);
+  assert.equal(fs.readFileSync(priorPath, "utf8"), "prior\n");
+});
+
+test("commandless observation is ignored rather than recorded as an empty command", () => {
+  const item = fixture();
+  fs.writeFileSync(path.join(item.runDir, "rubric.yaml"), "evaluation:\n  verification:\n    checks:\n      - name: unit\n        type: command\n        command: node -e \"process.stdout.write('ok')\"\n      - name: visual note\n        type: observation\n");
+  const result = invoke(item); assert.equal(result.status, 0, result.stderr);
+  const evidence = JSON.parse(fs.readFileSync(path.join(item.runDir, "execution-evidence.json"), "utf8"));
+  assert.deepEqual(evidence.verification_runs.map((run) => run.command), ["node -e \"process.stdout.write('ok')\""]);
 });

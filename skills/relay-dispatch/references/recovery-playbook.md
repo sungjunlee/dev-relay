@@ -124,7 +124,7 @@ node skills/relay-dispatch/scripts/record-verification-evidence.js --repo . --ru
   --reason "re-verified exact rubric gates after rebase evidence invalidation" --json
 ```
 
-For every `type: observation` gate, supply a repeatable regular-file artifact. The source is never logged; it is limited to 1 MiB, rejected if it is a symlink, and copied into the run directory before its SHA-256 is recorded:
+For every `type: observation` gate with a frozen `command`, supply a repeatable regular-file artifact. That command is an observation instruction and is **not executed** by this CLI; `exit_code: 0` records successful artifact-boundary validation, not command execution. The source is never logged; it is limited to 1 MiB, rejected if it is a symlink, and copied into the run directory before its SHA-256 is recorded:
 
 ```bash
 node skills/relay-dispatch/scripts/record-verification-evidence.js --repo . --run-id <id> \
@@ -132,7 +132,7 @@ node skills/relay-dispatch/scripts/record-verification-evidence.js --repo . --ru
   --observation-result "release-screenshot=/secure/path/screenshot.png"
 ```
 
-The command does not publish, commit, or change state. It emits `operator_execution_evidence` with old/new evidence hashes, gate names, reason, and the verified `HEAD^{tree}` binding. Review the copied logs/artifacts before re-running the normal review path because an exit failure remains honest evidence and hardened preflight will block it.
+The command does not publish, commit, or change state. Every attempt uses nonce-qualified artifact names, so it never overwrites artifacts referenced by prior evidence; a failed attempt's private staging files are removed. It emits `operator_execution_evidence` with old/new evidence hashes, gate names, reason, and the verified `HEAD^{tree}` binding. Review the copied logs/artifacts before re-running the normal review path because an exit failure remains honest evidence and hardened preflight will block it.
 
 When `--pr-title` is omitted, the PR title defaults to the linked GitHub issue title as `<issue title> (#<N>)`, first from `manifest.issue.number`, then from an unambiguous `issue-N` branch name. If issue lookup fails or no issue is linked, it falls back to `Recover <branch> (<run-id>)`. `--pr-title` always wins exactly.
 
