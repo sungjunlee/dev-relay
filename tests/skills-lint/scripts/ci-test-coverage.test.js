@@ -18,10 +18,18 @@ function discoverTestSuites(testsDir = TESTS_DIR) {
     .filter((suite) => {
       const scriptsDir = path.join(testsDir, suite, "scripts");
       return fs.existsSync(scriptsDir)
-        && fs.readdirSync(scriptsDir, { withFileTypes: true })
-          .some((entry) => entry.isFile() && entry.name.endsWith(".test.js"));
+        && discoverTestsRecursively(scriptsDir).length > 0;
     })
     .sort();
+}
+
+function discoverTestsRecursively(root) {
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const absolute = path.join(root, entry.name);
+    if (entry.isDirectory()) return discoverTestsRecursively(absolute);
+    return entry.isFile() && entry.name.endsWith(".test.js") ? [absolute] : [];
+  });
 }
 
 function indentation(line) {
@@ -66,9 +74,10 @@ function assertMatrixRunsGuardedSuiteGlob(content) {
   assert.ok(runMatch, "workflow must declare a 'Run test suites' step");
   assert.match(
     guardMatch[1],
-    /tests\/\$\{\{\s*matrix\.suite\s*\}\}\/scripts\/\*\.test\.js/,
-    "empty-glob guard must resolve the current matrix.suite",
+    /tests\/\$\{\{\s*matrix\.suite\s*\}\}\/scripts\/\*\*\/\*\.test\.js/,
+    "empty-glob guard must recursively resolve the current matrix.suite",
   );
+  assert.match(runMatch[0], /shopt -s (?:nullglob globstar|globstar nullglob)/);
   assert.match(
     runMatch[0],
     /node --test --test-concurrency=1 "\$\{files\[@\]\}"/,
@@ -100,6 +109,7 @@ function writeFile(filePath, content) {
 function buildFixture({ wired }) {
   const testsDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-coverage-tests-"));
   writeFile(path.join(testsDir, "newskill", "scripts", "example.test.js"), "// fixture\n");
+  writeFile(path.join(testsDir, "newskill", "scripts", "nested", "example.test.js"), "// fixture\n");
   const matrixEntry = wired ? "\n          - newskill" : "";
   const workflow = [
     "    strategy:",
@@ -108,8 +118,9 @@ function buildFixture({ wired }) {
     "    steps:",
     "      - name: Run test suites (${{ matrix.suite }})",
     "        run: |",
+    "          shopt -s nullglob globstar",
     "          files=(",
-    "            tests/${{ matrix.suite }}/scripts/*.test.js",
+    "            tests/${{ matrix.suite }}/scripts/**/*.test.js",
     "          )",
     "          node --test --test-concurrency=1 \"${files[@]}\"",
     "",
@@ -143,4 +154,14 @@ test("coverage guard flags a filesystem suite omitted from the matrix", () => {
   } finally {
     fs.rmSync(testsDir, { recursive: true, force: true });
   }
+});
+
+test("workflow recursively includes nested test files", () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, "utf-8");
+  assertMatrixRunsGuardedSuiteGlob(workflow);
+  assert.equal(
+    discoverTestsRecursively(path.join(TESTS_DIR, "relay-dispatch", "scripts", "manifest")).length,
+    8,
+    "the eight nested manifest tests must stay visible to CI",
+  );
 });

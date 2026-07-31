@@ -16,7 +16,7 @@ Complete GitHub epic #1129 end to end without using Relay orchestration: preserv
 
 ### Batch 1 — Safety foundation
 
-- [~] #1130 — executable invariants, runtime inventory, and test deletion ledger (2–3 days) [branch:codex/relay-runtime-core-reset-vnext]
+- [x] #1130 — executable invariants, runtime inventory, and test deletion ledger (2–3 days) [branch:codex/relay-runtime-core-reset-vnext]
 
 ### Batch 2 — Parallel core replacements
 
@@ -87,3 +87,6 @@ For each issue, append:
 ## Progress
 
 - 2026-07-31 — Created the active sprint from #1129–#1136. `/goal` objective activated. Dedicated branch `codex/relay-runtime-core-reset-vnext` created. Batch 1 (#1130) marked in flight. Relay orchestration explicitly disabled for the experiment.
+- 2026-07-31 — Completed #1130. Terra high and Sol medium split the inventory, ledger, and executable-contract implementation. Six fresh-context native review rounds found and closed gaps in dynamic invocation discovery, per-registration ledger accounting, measured E2E baselines, semantic reader roles, behavioral no-op rejection, and closed event schemas. Claude Opus 5 high produced no verdict before its 30-minute hard timeout; Pi/Qwen 3.8 Max Preview returned LGTM with one non-blocking recommendation, which was implemented as an automated no-op rejection meta-test. Final native verdict: LGTM.
+- 2026-07-31 — #1130 evidence: 149 shipped artifacts, 156 cross-skill static imports, 22 dynamic invocation edges, 128 relay test files, and 2,179 registration sites are fail-closed and machine-accounted. Ten dispatch and ten recovery E2E samples observed zero failures; medians were 28,281 ms and 7,736 ms. The focused final gate passed 79 tests with 12 intentional vNext TODO gates and zero failures, including all eight nested manifest suites that CI previously omitted.
+- 2026-07-31 — Full-suite baseline remains independently red before production changes: an interrupted 37-minute serialized run and an isolated rerun reproduced four existing advisory-lane cleanup failures (`reap_failed` versus `reaped`) in `advisory-lane-pid-reuse-996.test.js` and `cleanup-worktrees.test.js`. #1130 changes no production lifecycle behavior; the failures are recorded rather than conflated with this foundation change. Direct-orchestration friction so far: long silent external-model calls, one 30-minute reviewer timeout, and a very slow legacy serialized suite made bounded supervision and explicit evidence bookkeeping necessary.

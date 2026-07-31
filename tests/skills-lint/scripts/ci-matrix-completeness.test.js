@@ -51,14 +51,21 @@ function extractSuiteMatrices(content) {
 }
 
 function discoverTestSuites(testsDir = TESTS_DIR) {
+  function containsTest(root) {
+    if (!fs.existsSync(root)) return false;
+    return fs.readdirSync(root, { withFileTypes: true }).some((entry) => {
+      const absolute = path.join(root, entry.name);
+      return entry.isDirectory()
+        ? containsTest(absolute)
+        : entry.isFile() && entry.name.endsWith(".test.js");
+    });
+  }
   return fs.readdirSync(testsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .filter((suite) => {
       const scriptsDir = path.join(testsDir, suite, "scripts");
-      return fs.existsSync(scriptsDir)
-        && fs.readdirSync(scriptsDir, { withFileTypes: true })
-          .some((entry) => entry.isFile() && entry.name.endsWith(".test.js"));
+      return containsTest(scriptsDir);
     })
     .sort();
 }
@@ -66,6 +73,8 @@ function discoverTestSuites(testsDir = TESTS_DIR) {
 test("CI suite matrix exactly covers every filesystem test suite", () => {
   assert.ok(fs.existsSync(WORKFLOW_PATH), `workflow file is missing: ${WORKFLOW_PATH}`);
   const workflow = fs.readFileSync(WORKFLOW_PATH, "utf-8");
+  assert.match(workflow, /shopt -s (?:nullglob globstar|globstar nullglob)/);
+  assert.match(workflow, /tests\/\$\{\{\s*matrix\.suite\s*\}\}\/scripts\/\*\*\/\*\.test\.js/);
   const matrices = extractSuiteMatrices(workflow);
   assert.equal(matrices.length, 1, "workflow must define exactly one matrix.suite list");
 
