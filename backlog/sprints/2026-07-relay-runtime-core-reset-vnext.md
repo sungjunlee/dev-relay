@@ -1,0 +1,89 @@
+---
+milestone: relay-runtime-core-reset-vnext
+status: active
+started: 2026-07-31
+due: TBD
+component: "dispatch-execution"
+---
+
+# Relay Runtime Core Reset vNext
+
+## Goal
+
+Complete GitHub epic #1129 end to end without using Relay orchestration: preserve every current executor, replace mutable lifecycle state with immutable facts and derived actions, converge recovery, retire unnecessary runtime policy, and finish with a verified 14–18-file / 4,000–6,000-line dispatch runtime.
+
+## Plan
+
+### Batch 1 — Safety foundation
+
+- [~] #1130 — executable invariants, runtime inventory, and test deletion ledger (2–3 days) [branch:codex/relay-runtime-core-reset-vnext]
+
+### Batch 2 — Parallel core replacements
+
+- [ ] #1131 — durable host/exclusion contract and crash drills (3–5 days; depends on #1130)
+- [ ] #1132 — immutable fact store and shadow lifecycle fold (4–6 days; depends on #1130)
+- [ ] #1133 — universal executor adapter protocol and migration of all current executors (4–6 days; depends on #1130)
+- [ ] #1134 — delete routing, assurance, analytics, and CLI runtime accretion (3–5 days; depends on #1130)
+
+### Batch 3 — Recovery convergence
+
+- [ ] #1135 — read-only `inspect` and idempotent `recover` (4–6 days; depends on #1131 and #1132)
+
+### Batch 4 — Cutover and retirement
+
+- [ ] #1136 — vNext cutover, dispatch rewrite, and legacy runtime retirement (5–8 days; depends on #1131–#1135)
+
+### Batch 5 — Program closure
+
+- [ ] #1129 — full serialized verification, issue closure evidence, sprint close, and Relay-versus-direct-orchestration retrospective
+
+## Direct Orchestration Protocol
+
+This sprint deliberately does not invoke `relay`, `relay-plan`, `relay-dispatch`, `relay-review`, `relay-merge`, or `relay-fleet` as orchestration tools.
+
+For every implementation issue:
+
+1. Freeze the issue acceptance criteria and relevant repository invariants before editing.
+2. Assign one implementation owner and explicit file boundaries.
+3. Require executable verification and a concise evidence summary.
+4. Review with a fresh-context model family that did not implement the change.
+5. Classify every finding as blocking, non-blocking, or incorrect with file/line evidence.
+6. Fix all blocking findings and repeat independent review.
+7. Mark the issue complete only after the reviewer returns LGTM and all acceptance checks pass.
+8. Re-read live GitHub and repository state before beginning a dependent issue.
+
+### Model allocation
+
+- Bounded inventory, fixtures, and mechanical edits: Terra `high`; Luna `xhigh` only when available through a verified route.
+- Cross-component implementation and migration: Sol `medium` or Terra `high`, selected by blast radius and test feedback.
+- Architecture-sensitive or long-horizon implementation: Sol `high` when medium effort cannot close a concrete evidence gap.
+- Independent review: a different family, preferring Claude Opus 5 `high`/`xhigh`; use Pi with Qwen 3.8 Max Preview or OpenCode with GLM 5.2 as additional adversarial review when their live route is available.
+- External preview-model output never overrides tests or repository evidence and cannot be the sole LGTM.
+
+### Review loop record
+
+For each issue, append:
+
+- implementation model and effort;
+- reviewer model and effort;
+- review round count;
+- blocking findings found/fixed;
+- tests and measurements;
+- final LGTM evidence;
+- elapsed time and notable orchestration friction.
+
+## Running Context
+
+- The detailed contract is `docs/plans/2026-07-31-relay-runtime-core-reset-vnext.md`.
+- Batch 2 tasks may begin only after #1130 is LGTM. They are conceptually parallel, but shared-file ownership must be assigned before concurrent edits.
+- GitHub #1129 is the umbrella; #1130–#1136 are canonical work items.
+- Executor diversity is a preserved platform capability, not a simplification target.
+- Current supported executors: Codex, Claude, Cursor, OpenCode, Pi, Antigravity, and Cline.
+- Do not count code moved to another installed skill as deletion.
+- Do not remove legacy detach behavior before the replacement passes survival and crash gates.
+- Do not rewrite terminal historical runs.
+- This sprint itself is the experiment log for comparing direct model orchestration with Relay.
+
+## Progress
+
+- 2026-07-31 — Created the active sprint from #1129–#1136. `/goal` objective activated. Dedicated branch `codex/relay-runtime-core-reset-vnext` created. Batch 1 (#1130) marked in flight. Relay orchestration explicitly disabled for the experiment.
