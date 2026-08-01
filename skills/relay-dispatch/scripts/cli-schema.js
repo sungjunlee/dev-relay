@@ -90,6 +90,7 @@ const FLAGS = [
   { flag: "--prompt-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied prompt path; keep the literal argv token." },
   { flag: "--publish-policy", kind: VALUE, mode: MODE_PARSED, valueName: "<mode>", allowedValues: ["immediate", "after-internal-review"], rationale: "Closed PR publication policy for dispatch; flag-like following tokens should mean the value is missing." },
   { flag: "--reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Audit reason text must be recorded exactly and must not be blank." },
+  { flag: "--observation-result", kind: VALUE, mode: MODE_VERBATIM, valueName: "<gate=file>", rationale: "Repeatable operator-supplied observation artifact mapping; preserve the literal token." },
   { flag: "--reasoning", kind: VALUE, mode: MODE_PARSED, valueName: "<level>",
     allowedValues: ["none", "minimal", "low", "medium", "high", "xhigh"],
     rationale: "Codex reasoning_effort override; closed selector over codex CLI levels." },
@@ -214,6 +215,9 @@ const COMMAND_FLAGS = {
     "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
     "--test-command", "--test-result-file", "--test-exit-code", "--replace-placeholder-evidence",
     "--dry-run", "--json", "--help",
+  ],
+  "record-verification-evidence": [
+    "--repo", "--run-id", "--manifest", "--reason", "--observation-result", "--dry-run", "--json", "--help",
   ],
   "reconcile-run": [
     "--repo", "--run-id", "--test-result-file", "--dry-run", "--json", "--help",

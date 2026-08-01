@@ -24,6 +24,7 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const FORCE_FINALIZE_GUIDANCE = 'finalize-run --force-finalize-nonready --reason "pre-261 run, no artifact"';
 const VERIFICATION_HASH_FIELDS = ["output_hash", "stdout_hash", "stderr_hash"];
 const CONFIRMED_VERIFICATION_RECORDED_BY_SUFFIX = "-confirmed-verification-v1";
+const OPERATOR_VERIFICATION_RECORDED_BY = "operator-confirmed-verification-v1";
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -134,10 +135,33 @@ function rebrandVerificationGateReason(artifact, gates, policies = [
   );
 }
 
-function findMissingVerificationGates(gates, verificationRuns) {
+function isOperatorRecordedEvidence(artifact) {
+  return artifact?.recorded_by === "record-verification-evidence-operator-v1"
+    || isObject(artifact?.operator_verification)
+    || (Array.isArray(artifact?.verification_runs) && artifact.verification_runs.some((run) => (
+      run?.recorded_by === "operator-confirmed-verification-v1"
+    )));
+}
+
+function observationRunMatches(gate, run, requireOperatorObservationProvenance) {
+  if (run.command !== gate.command) return false;
+  if (gate.type !== "observation" || !requireOperatorObservationProvenance) return true;
+  return run.gate_type === "observation"
+    && run.result_kind === "operator_observation_artifact"
+    && run.gate_name === gate.name
+    && run.name === gate.name
+    && isNonEmptyString(run.output_path)
+    && isNonEmptyString(run.output_hash)
+    && SHA256_PATTERN.test(run.output_hash);
+}
+
+function findMissingVerificationGates(gates, verificationRuns, artifact) {
   const unmatchedRuns = [...verificationRuns];
+  const requireOperatorObservationProvenance = isOperatorRecordedEvidence(artifact);
   return gates.filter((gate) => {
-    const matchIndex = unmatchedRuns.findIndex((run) => run.command === gate.command);
+    const matchIndex = unmatchedRuns.findIndex((run) => (
+      observationRunMatches(gate, run, requireOperatorObservationProvenance)
+    ));
     if (matchIndex === -1) return true;
     unmatchedRuns.splice(matchIndex, 1);
     return false;
@@ -211,6 +235,23 @@ function confirmedVerificationTreeReason(artifact, reviewedHead, manifestData) {
     `${mismatch.run.verification_tree_sha} does not match reviewed HEAD ${reviewedHead}^{tree} ` +
     `${reviewedTreeSha}; re-run the executor verification gates at the reviewed HEAD`
   );
+}
+
+function operatorVerificationTreeReason(artifact, reviewedHead, manifestData) {
+  if (!isOperatorRecordedEvidence(artifact)) return null;
+  const invalidRecorder = artifact.verification_runs.find((run) => (
+    run.recorded_by !== OPERATOR_VERIFICATION_RECORDED_BY
+  ));
+  if (invalidRecorder) {
+    return "strict operator execution evidence requires every verification_run to be recorded_by operator-confirmed-verification-v1";
+  }
+  const missingTree = artifact.verification_runs.find((run) => (
+    !isNonEmptyString(run.verification_tree_sha) || !SHA40_PATTERN.test(run.verification_tree_sha)
+  ));
+  if (missingTree) {
+    return "strict operator execution evidence requires verification_tree_sha for every verification_run";
+  }
+  return confirmedVerificationTreeReason(artifact, reviewedHead, manifestData);
 }
 
 function validateVerificationHash(value, fieldName) {
@@ -560,7 +601,8 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false, m
       }
       const missingGates = findMissingVerificationGates(
         verificationGates,
-        artifactLoad.artifact.verification_runs
+        artifactLoad.artifact.verification_runs,
+        artifactLoad.artifact
       );
       if (missingGates.length > 0) {
         return {
@@ -582,6 +624,14 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false, m
         reviewedHead,
         manifestData
       );
+      const operatorTreeReason = operatorVerificationTreeReason(
+        artifactLoad.artifact,
+        reviewedHead,
+        manifestData
+      );
+      if (operatorTreeReason) {
+        return { status: "fail", reason: operatorTreeReason };
+      }
       if (verificationTreeReason) {
         return {
           status: "fail",

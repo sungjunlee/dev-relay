@@ -187,6 +187,7 @@ const HELP_COMMANDS = [
   ["persist-request", path.join(__dirname, "..", "..", "..", "skills", "relay-ready", "scripts", "persist-request.js")],
   ["probe-executor-env", path.join(__dirname, "..", "..", "..", "skills", "relay-plan", "scripts", "probe-executor-env.js")],
   ["recover-commit", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "recover-commit.js")],
+  ["record-verification-evidence", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "record-verification-evidence.js")],
   ["reconcile-run", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "reconcile-run.js")],
   ["relay-config", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "relay-config.js")],
   ["rebrand-evidence", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "rebrand-evidence.js")],

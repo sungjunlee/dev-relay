@@ -80,6 +80,25 @@ test("verification gates seed the evidence command and identify malformed comman
   );
 });
 
+test("verification gate extraction preserves legacy typed command and ignores manual checks without commands", () => {
+  const rubric = [
+    "evaluation:", "  verification:", "    checks:",
+    "      - name: legacy automated suite", "        type: automated", "        command: node --test legacy.test.js",
+    "      - name: manual release inspection", "        type: manual", "        target: inspect release",
+    "      - name: contract check", "        type: contract", "        command: node --test contract.test.js",
+  ].join("\n");
+
+  assert.deepEqual(extractVerificationGates(rubric), [{
+    name: "legacy automated suite", type: "automated", command: "node --test legacy.test.js",
+  }, {
+    name: "contract check", type: "contract", command: "node --test contract.test.js",
+  }]);
+  assert.equal(
+    resolveExecutionEvidenceTestCommand({ rubricYaml: rubric }),
+    "node --test legacy.test.js && node --test contract.test.js"
+  );
+});
+
 test("dispatch execution evidence records all fields and uses an atomic rename in the run dir", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-execution-"));
   const resultFile = path.join(runDir, "result.txt");

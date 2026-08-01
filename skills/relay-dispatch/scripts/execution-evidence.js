@@ -205,16 +205,42 @@ function scalarFromVerificationCheck(block, key) {
   return "";
 }
 
-function extractVerificationGates(rubricYaml) {
+function parseVerificationGateFields(rubricYaml) {
   return verificationCheckBlocks(rubricYaml).map((block, index) => {
     const name = scalarFromVerificationCheck(block, "name") || `verification.checks[${index}]`;
     const type = scalarFromVerificationCheck(block, "type");
     const command = scalarFromVerificationCheck(block, "command");
+    return { name, type, command };
+  });
+}
+
+// Compatibility contract: existing callers treat every check with a command as
+// executable regardless of its rubric type. Only an explicitly command-typed
+// check without a command is malformed; all other commandless checks are ignored.
+function extractVerificationGates(rubricYaml) {
+  return parseVerificationGateFields(rubricYaml).map((gate) => {
+    const { name, type, command } = gate;
     if (type === "command" && !command.trim()) {
       throw new Error(`verification gate '${name}' did not record a command for execution evidence`);
     }
-    return { name, type, command };
+    return gate;
   }).filter((gate) => gate.command.trim());
+}
+
+// The operator recorder additionally recognizes explicit observations. Legacy
+// non-command types remain command gates when they carry a command, matching
+// extractVerificationGates(), and are otherwise ignored.
+function extractVerificationGateDefinitions(rubricYaml) {
+  return parseVerificationGateFields(rubricYaml).flatMap((gate) => {
+    if (gate.type === "observation") return gate.command.trim()
+      ? [{ ...gate, type: "observation" }]
+      : [];
+    if (gate.command.trim()) return [{ ...gate, type: "command" }];
+    if (gate.type === "command") {
+      throw new Error(`verification gate '${gate.name}' did not record a command for execution evidence`);
+    }
+    return [];
+  });
 }
 
 function resolveExecutionEvidenceTestCommand({ explicitTestCommand, rubricYaml } = {}) {
@@ -548,7 +574,8 @@ function writeExecutionEvidence(runDir, evidence, options = {}) {
     `${EXECUTION_EVIDENCE_FILENAME}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
   );
   try {
-    fs.writeFileSync(tmpPath, `${JSON.stringify(evidence, null, 2)}\n`, "utf-8");
+    fs.writeFileSync(tmpPath, `${JSON.stringify(evidence, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+    fs.chmodSync(tmpPath, 0o600);
     fs.renameSync(tmpPath, finalPath);
   } catch (error) {
     try { fs.unlinkSync(tmpPath); } catch {}
@@ -659,6 +686,7 @@ module.exports = {
   buildExecutionEvidence,
   buildExecutorVerificationInstructions,
   collectExecutorVerificationEvidence,
+  extractVerificationGateDefinitions,
   extractVerificationGates,
   hashFileSha256,
   rebrandEvidence,

@@ -94,6 +94,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--next-action` | `verbatim` | Operator-supplied manifest text; keep the literal argv token. |
 | `--no-comment` | `parsed` | Presence flag; no value is consumed. |
 | `--no-issue-close` | `parsed` | Presence flag; no value is consumed. |
+| `--observation-result` | `verbatim` | Repeatable operator-supplied observation artifact mapping; preserve the literal token. |
 | `--older-than` | `parsed` | Numeric threshold; flag-like following tokens should mean the value is missing. |
 | `--ownership-json` | `verbatim` | Typed fleet ownership object; preserve the JSON token for strict parsing. |
 | `--pin` | `parsed` | Presence flag; no value is consumed. |

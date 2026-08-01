@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -41,6 +42,10 @@ function writeArtifact(runDir, artifact) {
   const artifactPath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
   fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf-8");
   return artifactPath;
+}
+
+function sha256File(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
 test("execution-evidence parses a strict schema_version=1 artifact", () => {
@@ -183,6 +188,76 @@ test("execution-evidence strict mode prefers verification_runs when present", ()
     computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40), strict: true }),
     { status: "pass", reason: null }
   );
+});
+
+test("strict verification preserves all frozen command gates, including observation gates", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-observation-gates-"));
+  const head = "a".repeat(40);
+  const gates = [
+    ["unit", "command", "node --test unit.test.js"],
+    ["integration", "automated", "node --test integration.test.js"],
+    ["lint", "evaluated", "node --test lint.test.js"],
+    ["desktop", "observation", "node -e \"process.stdout.write('desktop')\""],
+    ["mobile", "observation", "node -e \"process.stdout.write('mobile')\""],
+    ["accessibility", "observation", "node -e \"process.stdout.write('a11y')\""],
+  ];
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "evaluation:", "  verification:", "    checks:",
+    ...gates.flatMap(([name, type, command]) => [
+      `      - name: ${name}`, `        type: ${type}`, `        command: ${command}`,
+    ]),
+  ].join("\n"));
+  const runs = gates.map(([name, type, command], index) => ({
+    name, gate_name: name, ...(type === "observation" ? { gate_type: "observation" } : {}), command,
+    cwd: "/repo", head_sha: head, exit_code: 0, output_hash: String(index).padStart(64, "a"),
+    recorded_by: "operator", recorded_at: "2026-07-31T00:00:00.000Z",
+  }));
+  writeArtifact(runDir, makeArtifact(head, { verification_runs: runs }));
+  assert.deepEqual(computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true }), { status: "pass", reason: null });
+
+  runs.splice(4, 1); // Removing a frozen observation command must not be silently accepted.
+  writeArtifact(runDir, makeArtifact(head, { verification_runs: runs }));
+  const missingObservation = computeQualityExecutionStatus({ runDir, reviewedHead: head, strict: true });
+  assert.equal(missingObservation.status, "fail");
+  assert.match(missingObservation.reason, /mobile/);
+});
+
+test("operator evidence binds observation identity and every run to the reviewed tree", () => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-operator-tree-repo-"));
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-operator-tree-run-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoPath });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repoPath });
+  fs.writeFileSync(path.join(repoPath, "README.md"), "tree\n"); execFileSync("git", ["add", "."], { cwd: repoPath }); execFileSync("git", ["commit", "-m", "tree"], { cwd: repoPath, stdio: "pipe" });
+  const head = git(repoPath, "rev-parse", "HEAD"); const tree = git(repoPath, "rev-parse", "HEAD^{tree}");
+  const command = "node --test unit.test.js"; const observationCommand = "inspect screenshot artifact";
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), ["evaluation:", "  verification:", "    checks:", "      - name: unit", "        type: command", `        command: ${command}`, "      - name: desktop", "        type: observation", `        command: ${observationCommand}`, "      - name: mobile", "        type: observation", `        command: ${observationCommand}`].join("\n"));
+  const buildRun = (name, commandText, outputName) => {
+    const outputPath = path.join(runDir, outputName); fs.writeFileSync(outputPath, `${name}\n`);
+    return { name, gate_name: name, ...(name === "unit" ? {} : { gate_type: "observation", result_kind: "operator_observation_artifact" }), command: commandText, cwd: repoPath, head_sha: head, verification_tree_sha: tree, exit_code: 0, output_path: outputName, output_hash: sha256File(outputPath), recorded_by: "operator-confirmed-verification-v1", recorded_at: "2026-08-01T00:00:00.000Z" };
+  };
+  const baseRuns = [buildRun("unit", command, "unit.log"), buildRun("desktop", observationCommand, "desktop.artifact"), buildRun("mobile", observationCommand, "mobile.artifact")];
+  const buildOperatorArtifact = () => makeArtifact(head, { recorded_by: "record-verification-evidence-operator-v1", operator_verification: { reason: "test" }, verification_runs: JSON.parse(JSON.stringify(baseRuns)) });
+  const compute = (artifact) => {
+    writeArtifact(runDir, artifact);
+    return computeQualityExecutionStatus({
+      runDir, reviewedHead: head, strict: true, manifestData: { paths: { worktree: repoPath } },
+    });
+  };
+  assert.equal(compute(buildOperatorArtifact()).status, "pass");
+
+  const swapped = buildOperatorArtifact(); [swapped.verification_runs[1].gate_name, swapped.verification_runs[2].gate_name] = [swapped.verification_runs[2].gate_name, swapped.verification_runs[1].gate_name];
+  assert.equal(compute(swapped).status, "fail");
+  for (const field of ["gate_type", "result_kind"]) {
+    const invalidObservation = buildOperatorArtifact(); delete invalidObservation.verification_runs[1][field];
+    assert.equal(compute(invalidObservation).status, "fail", field);
+  }
+  const badRecorder = buildOperatorArtifact(); badRecorder.verification_runs.forEach((run) => { run.recorded_by = "operator"; });
+  assert.equal(compute(badRecorder).status, "fail");
+  const missingTree = buildOperatorArtifact(); missingTree.verification_runs.forEach((run) => { delete run.verification_tree_sha; });
+  assert.equal(compute(missingTree).status, "fail");
+  const mismatchedTree = buildOperatorArtifact(); mismatchedTree.verification_runs.forEach((run) => { run.verification_tree_sha = "b".repeat(40); });
+  assert.equal(compute(mismatchedTree).status, "fail");
 });
 
 test("execution-evidence strict preflight binds confirmed verification proof to reviewed HEAD tree", () => {
