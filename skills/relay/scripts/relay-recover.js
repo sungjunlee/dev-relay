@@ -1,185 +1,135 @@
 #!/usr/bin/env node
 "use strict";
 
-const { execFileSync } = require("child_process");
 const path = require("path");
+const { execFileSync } = require("child_process");
 
+const runStore = require("../../relay-dispatch/scripts/run-store");
+const { inspectProductionRun, recoverProductionRun } = require("../../relay-dispatch/scripts/recover");
 const {
-  bindCliArgs,
-  findUnknownFlags,
-  modeLabel: formatCliModeLabel,
-} = require("../../relay-dispatch/scripts/cli-args");
-const { getCanonicalRepoRoot } = require("../../relay-dispatch/scripts/manifest/paths");
-const { observeRun } = require("../../relay-dispatch/scripts/run-observer");
-const { selectIssueRuns } = require("./relay-status");
+  COMMANDS: LEGACY_COMMANDS,
+  translateLegacyRecovery,
+  usage: legacyUsage,
+} = require("../../relay-dispatch/scripts/legacy-recovery-shim");
 
-const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--run-id", "--issue", "--apply", "--dry-run", "--json", "--help", "-h"];
-const CLI_ARG_OPTIONS = {
+const KNOWN_FLAGS = [
+  "--repo", "--run-id", "--run-dir", "--reason", "--actor",
+  "--expected-action-key", "--verification-file", "--break-lock", "--json", "--help", "-h",
+];
+const CLI_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-  booleanFlags: ["--apply", "--dry-run", "--json", "--help", "-h"],
-  verbatimValueFlags: ["--repo"],
+  booleanFlags: ["--break-lock", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--run-dir", "--reason", "--actor", "--verification-file"],
 };
-const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
-
-function hasCliFlag(flag) {
-  return cliArgs.hasFlag(flag);
+function parseCli(argv) {
+  const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_OPTIONS.booleanFlags), verbatim = new Set(CLI_OPTIONS.verbatimValueFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (flag, value) => value !== undefined && (verbatim.has(flag) || (!String(value).startsWith("--") && !known.has(String(value))));
+  argv.forEach((token, index) => { const flag = name(token); if (known.has(flag) && !bool.has(flag) && !String(token).includes("=") && accepts(flag, argv[index + 1])) consumed.add(index + 1); });
+  const unknown = argv.filter((token, index) => !consumed.has(index) && String(token).startsWith("-") && !known.has(name(token))); if (unknown.length) throw new Error(`unknown flags: ${unknown.join(", ")}`);
+  const variants = (flag) => Array.isArray(flag) ? flag : [flag]; return { hasFlag: (flags) => variants(flags).some((flag) => argv.some((token, index) => !consumed.has(index) && (token === flag || String(token).startsWith(`${flag}=`)))), getArg: (flags, fallback) => { for (const flag of variants(flags)) for (let index = 0; index < argv.length; index += 1) { if (consumed.has(index)) continue; const token = String(argv[index]); if (token === flag || token.startsWith(`${flag}=`)) { const value = token === flag ? argv[index + 1] : token.slice(flag.length + 1); if (!accepts(flag, value)) return fallback; if (verbatim.has(flag) && !String(value).trim()) throw new Error(`${flag} requires a non-empty value`); return value; } } return fallback; } };
 }
 
 function usage() {
   return [
-    "Usage: relay-recover.js --repo <path> (--run-id <id> | --issue <number>) [--dry-run | --apply] [--json]",
+    "Usage:",
+    "  relay-recover.js inspect (--repo <path> --run-id <id> | --run-dir <path>) [--json]",
+    "  relay-recover.js recover (--repo <path> --run-id <id> | --run-dir <path>) --reason <text> [--actor <name>] [--expected-action-key <sha256>] [--verification-file <path>] [--break-lock] [--json]",
     "",
-    "Choose the safe existing recovery command for a relay run. Defaults to dry-run.",
-    "",
-    "Options:",
-    `  --repo <path>  ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root (default: .)`,
-    `  --run-id <id>  ${formatCliModeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier`,
-    `  --issue <n>    ${formatCliModeLabel("--issue", CLI_ARG_OPTIONS)} GitHub issue number`,
-    `  --dry-run      ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Print planned command without mutating (default)`,
-    `  --apply        ${formatCliModeLabel("--apply", CLI_ARG_OPTIONS)} Execute safe delegated recovery`,
-    `  --json         ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`,
-    `  --help, -h     ${formatCliModeLabel("--help", CLI_ARG_OPTIONS)} Show help`,
+    "inspect is strictly read-only. recover is the sole idempotent mutation operation.",
   ].join("\n");
 }
 
-function shellCommand(argv) {
-  return argv.map((part) => JSON.stringify(String(part))).join(" ");
+function getActorName(repoRoot) {
+  if (process.env.RELAY_ACTOR?.trim()) return process.env.RELAY_ACTOR.trim();
+  try {
+    const value = execFileSync("git", ["-C", repoRoot, "config", "user.name"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (value) return value;
+  } catch {}
+  return String(process.env.USER || "relay-operator").trim() || "relay-operator";
 }
 
-function planFor(row, repoRoot) {
-  const reconcile = [
-    process.execPath,
-    "skills/relay-dispatch/scripts/reconcile-run.js",
-    "--repo", repoRoot,
-    "--run-id", row.run_id,
-    "--json",
-  ];
-  const reconcileDryRun = [...reconcile, "--dry-run"];
-  if ([
-    "running_with_output",
-    "running_silent",
-    "timed_out_live",
-    "dead_with_work",
-    "dead_no_work",
-  ].includes(row.classification)) {
-    return {
-      action: "delegate_reconcile",
-      safe_to_apply: row.classification !== "running_with_output" && row.classification !== "running_silent",
-      command: reconcile,
-      dry_run_command: reconcileDryRun,
-      reason: row.classification,
-    };
+function resolveRunDir(cli) {
+  const explicit = cli.getArg("--run-dir");
+  const runId = cli.getArg("--run-id");
+  const repoArg = cli.getArg("--repo");
+  if (explicit) {
+    if (runId || repoArg) throw new Error("--run-dir is mutually exclusive with --repo/--run-id");
+    return path.resolve(explicit);
   }
-  return {
-    action: "manual_guidance",
-    safe_to_apply: false,
-    command: null,
-    dry_run_command: null,
-    reason: row.classification,
-    guidance: row.next_action.command,
-  };
-}
-
-function resolveRun({ repoRoot, runId, issueArg }) {
-  if (runId) return runId;
-  const issueNumber = Number(issueArg);
-  if (!Number.isInteger(issueNumber) || issueNumber <= 0) throw new Error("--issue must be a positive integer");
-  const selection = selectIssueRuns(repoRoot, issueNumber);
-  if (selection.selection_reason === "multiple_active_runs") {
-    const error = new Error(`multiple active relay runs found for issue #${issueNumber}; pass --run-id`);
-    error.selection = selection;
-    throw error;
-  }
-  if (!selection.selected_run_id) {
-    const error = new Error(`no relay run found for issue #${issueNumber}`);
-    error.selection = selection;
-    throw error;
-  }
-  return selection.selected_run_id;
-}
-
-function runCommand(argv, repoRoot) {
-  const stdout = execFileSync(argv[0], argv.slice(1), {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return stdout.trim() ? JSON.parse(stdout) : null;
+  if (!runId) throw new Error("--run-id is required with --repo");
+  return runStore.resolveRunDirectory(path.resolve(repoArg || "."), runId);
 }
 
 function formatText(result) {
   const lines = [
     `Run: ${result.run_id}`,
-    `Classification: ${result.classification}`,
-    `Action: ${result.plan.action}`,
-    `Safe to apply: ${result.plan.safe_to_apply}`,
+    `Operation: ${result.operation}`,
   ];
-  if (result.plan.dry_run_command) {
-    lines.push(`Dry-run: ${shellCommand(result.plan.dry_run_command)}`);
-  }
-  if (result.plan.command) {
-    lines.push(`Apply: ${shellCommand(result.plan.command)}`);
-  }
-  if (result.plan.guidance) {
-    lines.push(`Guidance: ${result.plan.guidance}`);
-  }
-  if (result.applied) {
-    lines.push("Applied: yes");
-  }
+  if (result.status) lines.push(`Status: ${result.status}`);
+  const action = result.recommended_action || result.after?.recommended_action;
+  if (action) lines.push(`Next: ${action.kind} (${action.reason})`);
+  for (const item of result.blockers || []) lines.push(`Blocker: ${item.code}: ${item.message}`);
   return lines.join("\n");
 }
 
-function main() {
-  if (!args.length || hasCliFlag(["--help", "-h"])) {
+async function main(argv = process.argv.slice(2)) {
+  let command = argv[0];
+  let rest = argv.slice(1);
+  if (command === "--help" || command === "-h") {
     console.log(usage());
-    process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
+    return 0;
   }
-  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
-  if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
-  const repo = cliArgs.getArg("--repo", ".");
-  const runIdArg = cliArgs.getArg("--run-id");
-  const issueArg = cliArgs.getArg("--issue");
-  if (hasCliFlag("--dry-run") && hasCliFlag("--apply")) {
-    throw new Error("--dry-run and --apply are mutually exclusive");
-  }
-  const apply = hasCliFlag("--apply");
-  if ((runIdArg && issueArg) || (!runIdArg && !issueArg)) {
-    throw new Error("exactly one of --run-id or --issue is required");
-  }
-  const repoRoot = getCanonicalRepoRoot(path.resolve(repo));
-  const runId = resolveRun({ repoRoot, runId: runIdArg, issueArg });
-  const row = observeRun({ repo: repoRoot, runId });
-  const plan = planFor(row, repoRoot);
-  const result = {
-    ok: true,
-    dry_run: !apply,
-    applied: false,
-    run_id: row.run_id,
-    classification: row.classification,
-    row,
-    plan,
-    result: null,
-  };
-  if (apply) {
-    if (!plan.safe_to_apply || !plan.command) {
-      throw new Error(`refusing to apply unsafe recovery for ${row.classification}; inspect guidance first`);
+  if (Object.prototype.hasOwnProperty.call(LEGACY_COMMANDS, command)) {
+    if (rest.length === 0 || rest.some((value) => value === "--help" || value === "-h")) {
+      console.log(legacyUsage(command));
+      return rest.length === 0 ? 1 : 0;
     }
-    result.result = runCommand(plan.command, repoRoot);
-    result.applied = true;
+    const translated = translateLegacyRecovery(command, rest);
+    command = translated.argv[0];
+    rest = translated.argv.slice(1);
   }
-  console.log(hasCliFlag("--json") ? JSON.stringify(result, null, 2) : formatText(result));
+  const cli = parseCli(rest);
+  if (!command || cli.hasFlag(["--help", "-h"])) {
+    console.log(usage());
+    return command ? 0 : 1;
+  }
+  if (!new Set(["inspect", "recover"]).has(command)) {
+    throw new Error(`unknown operation ${command}; expected inspect or recover`);
+  }
+  const runDir = resolveRunDir(cli);
+  let result;
+  if (command === "inspect") {
+    for (const flag of ["--reason", "--actor", "--expected-action-key", "--verification-file", "--break-lock"]) {
+      if (cli.hasFlag(flag)) throw new Error(`${flag} is only valid for recover`);
+    }
+    result = await inspectProductionRun({ runDir });
+  } else {
+    const reason = String(cli.getArg("--reason") || "").trim();
+    if (!reason) throw new Error("recover requires --reason <text>");
+    const record = runStore.readRunRecord({ runDir });
+    const actor = String(cli.getArg("--actor") || getActorName(record.repo.root)).trim();
+    result = await recoverProductionRun({
+      runDir,
+      actor,
+      reason,
+      expectedActionKey: cli.getArg("--expected-action-key") || null,
+      verificationFile: cli.getArg("--verification-file") || null,
+      breakLock: cli.hasFlag("--break-lock"),
+    });
+  }
+  console.log(cli.hasFlag("--json") ? JSON.stringify(result, null, 2) : formatText(result));
+  return 0;
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
+  main().then((code) => {
+    process.exitCode = code;
+  }).catch((error) => {
     console.error(`relay-recover: ${error.message}`);
-    process.exit(1);
-  }
+    process.exitCode = 1;
+  });
 }
 
-module.exports = {
-  planFor,
-};
+module.exports = { getActorName, main, resolveRunDir };

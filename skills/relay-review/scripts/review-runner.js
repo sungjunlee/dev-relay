@@ -1,223 +1,487 @@
 #!/usr/bin/env node
+"use strict";
+
+/** vNext review: immutable inputs -> one independent verdict -> one durable fact. */
+
+const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
-const { STATES } = require("../../relay-dispatch/scripts/manifest/lifecycle");
-const { ensureRunLayout, getRunDir } = require("../../relay-dispatch/scripts/manifest/paths");
-const { buildReviewRunnerRubricGateFailure, loadRubricFromRunDir } = require("../../relay-dispatch/scripts/manifest/rubric");
-const { git } = require("./review-runner/common");
-const { getGhLogin, parseRemoteHost, resolveContext, resolveIssueNumber, resolveRemoteHost } = require("./review-runner/context");
-const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
-const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
-const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
-const {
-  applyQualityExecutionStatus,
-  buildExecutionEvidenceFailureVerdict,
-  buildMissingExecutionEvidenceVerdict,
-  computeQualityExecutionStatus,
-} = require("./review-runner/execution-evidence");
-const { printFailureAndExit } = require("./review-runner/failure-output");
-const { buildRedispatchPrompt, detectChurnGrowth } = require("./review-runner/redispatch");
-const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
-const { passNextActionsFor, reviewPhaseFor, writeRoundArtifacts } = require("./review-runner/round-artifacts");
-const { maybeBlockForBehindBasePreflight, maybeBlockForExecutionEvidencePreflight } = require("./review-runner/preflight");
-const { preflightResolvedPrimaryReviewer } = require("./review-runner/entry-preflight");
-const { buildPrimaryReviewerPreflight, loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
-const { printResult, printUsage } = require("./review-runner/output");
-const { maybeWaitForChecks } = require("./review-runner/check-wait");
-const { finalizeRound } = require("./review-runner/finalize-round");
-const { CLI_ARG_OPTIONS, assertKnownReviewRunnerFlags, parseReviewRunnerCliArgs } = require("./review-runner/cli");
-const { beginDetachSupervisorIfRequested, dispatchReviewEntry } = require("./review-runner/detach");
-const { args, cliArgs, options } = parseReviewRunnerCliArgs(process.argv.slice(2));
-if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
-  printUsage(CLI_ARG_OPTIONS);
-  process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
+const { parseArgs } = require("util");
+
+const { getAdapter } = require("../../relay-dispatch/scripts/adapters");
+const { credentialRequest, validateCapabilities } = require("../../relay-dispatch/scripts/adapter-contract");
+const facts = require("../../relay-dispatch/scripts/facts");
+const host = require("../../relay-dispatch/scripts/host");
+const { inspectProductionRun } = require("../../relay-dispatch/scripts/recover");
+const generation = require("../../relay-dispatch/scripts/runtime-generation");
+const runStore = require("../../relay-dispatch/scripts/run-store");
+
+const SHA1_RE = /^[0-9a-f]{40}$/;
+const RUN_ID_RE = /^[a-z0-9][a-z0-9-]{0,126}$/;
+const VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
+const OPTIONS = Object.freeze({
+  repo: { type: "string" },
+  "run-dir": { type: "string" },
+  "run-id": { type: "string" },
+  reviewer: { type: "string" },
+  model: { type: "string" },
+  timeout: { type: "string" },
+  "credential-env": { type: "string", multiple: true, default: [] },
+  "credential-file": { type: "string", multiple: true, default: [] },
+  json: { type: "boolean", default: false },
+  help: { type: "boolean", short: "h", default: false },
+});
+
+const REVIEW_RESULT_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: ["verdict", "summary", "issues"],
+  properties: {
+    verdict: { type: "string", enum: [...VERDICTS] },
+    summary: { type: "string", minLength: 1 },
+    issues: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "body", "file", "line", "severity"],
+        properties: {
+          title: { type: "string", minLength: 1 },
+          body: { type: "string", minLength: 1 },
+          file: { type: ["string", "null"] },
+          line: { type: ["integer", "null"], minimum: 1 },
+          severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
+        },
+      },
+    },
+  },
+});
+
+function fail(message, code = "REVIEW_INVALID") {
+  const error = new Error(message);
+  error.code = code;
+  throw error;
 }
-async function run() {
-  assertKnownReviewRunnerFlags(args);
-  const {
-    allowBehindBase, branchArg, diffFile, doneCriteriaFile,
-    jsonOut, manifestPathArg, manualReviewReason, noComment, prArg, prepareOnly, repoArg,
-    repoPath, reviewFile, reviewerArg, reviewerModel, reviewerScriptArg, runIdArg, waitForChecksArg,
-  } = options;
-  if (manualReviewReason && !reviewFile) throw new Error("--manual-review-reason requires --review-file");
-  const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFile);
-  const { body, manifestPath } = manifest;
-  const { data } = manifest;
 
-  const internalReview = data.state === STATES.INTERNAL_REVIEW_PENDING;
-  if (![STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(data.state)) {
-    throw new Error(`Review runner requires state=internal_review_pending or review_pending, got '${data.state}'`);
-  }
-  if (data.next_action === "recover_commit_before_internal_review") throw new Error("Review runner requires recover-commit before internal review because the retained worktree has uncommitted reviewable changes.");
-  if (!fs.existsSync(reviewRepoPath)) {
-    throw new Error(`Retained review checkout does not exist: ${reviewRepoPath}`);
-  }
+function usage() {
+  return [
+    "Usage: review-runner.js --repo <path> (--run-id <id> | --run-dir <path>) [options]",
+    "",
+    "Options:",
+    "  --reviewer <name>  Must equal the immutable run reviewer binding.",
+    "  --model <name>     Optional opaque model selection for that adapter.",
+    "  --timeout <sec>    Reviewer timeout in seconds.",
+    "  --credential-env <name>       Explicit credential environment name (repeatable).",
+    "  --credential-file <id=path>   Declared private credential-file mapping (repeatable).",
+    "  --json             Emit one JSON object.",
+  ].join("\n");
+}
 
-  const round = Number(data.review?.rounds || 0) + 1;
-  const runDir = getRunDir(runRepoPath, data.run_id);
-  ensureRunLayout(runRepoPath, data.run_id);
-  // Detached child only (no-op in the foreground): write the run-dir lease + receipt
-  // before the long-running reviewer invocation so the parent can return and the round
-  // survives the invoker's death.
-  beginDetachSupervisorIfRequested({ runRepoPath, runId: data.run_id, round, runDir, manifestPath });
-  let reviewedHeadSha = null;
+function git(repo, args) {
+  return gitRaw(repo, args).trim();
+}
+
+function gitRaw(repo, args) {
+  return execFileSync("git", ["-C", repo, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 16 * 1024 * 1024,
+  });
+}
+
+function canonicalRepository(input) {
+  const checkout = fs.realpathSync(path.resolve(input));
+  if (fs.realpathSync(git(checkout, ["rev-parse", "--show-toplevel"])) !== checkout) {
+    fail("--repo must be a canonical Git checkout root");
+  }
+  const commonDir = fs.realpathSync(path.resolve(checkout, git(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"])));
+  const repoRoot = fs.realpathSync(path.dirname(commonDir));
+  let remote;
+  try { remote = git(checkout, ["remote", "get-url", "origin"]); }
+  catch { remote = `local/${path.basename(repoRoot)}`; }
+  const github = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remote);
+  return { checkout, commonDir, repoRoot, remote: github ? `${github[1]}/${github[2]}` : remote };
+}
+
+function relayHome() {
+  return path.resolve(process.env.RELAY_HOME || path.join(os.homedir(), ".relay"));
+}
+
+function repoSlug(repoRoot) {
+  const base = path.basename(repoRoot).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+  return `${base}-${crypto.createHash("sha256").update(repoRoot).digest("hex").slice(0, 8)}`;
+}
+
+function parseCli(argv) {
+  let parsed;
+  try { parsed = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true }); }
+  catch (error) { fail(error.message, "REVIEW_USAGE"); }
+  if (parsed.values.help) return { help: true, values: parsed.values };
+  if (parsed.positionals.length > 1) fail("at most one positional repo path is allowed", "REVIEW_USAGE");
+  if (parsed.values.repo && parsed.positionals.length) fail("use either positional repo or --repo, not both", "REVIEW_USAGE");
+  const repo = parsed.values.repo || parsed.positionals[0] || ".";
+  if (Boolean(parsed.values["run-dir"]) === Boolean(parsed.values["run-id"])) {
+    fail("supply exactly one of --run-dir or --run-id", "REVIEW_USAGE");
+  }
+  if (parsed.values["run-id"] && !RUN_ID_RE.test(parsed.values["run-id"])) fail("--run-id is invalid", "REVIEW_USAGE");
+  const timeoutSeconds = parsed.values.timeout === undefined ? null : Number(parsed.values.timeout);
+  if (timeoutSeconds !== null && (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0)) fail("--timeout must be a positive integer", "REVIEW_USAGE");
+  return { help: false, values: parsed.values, repo, timeoutSeconds };
+}
+
+function resolveRun(cli) {
+  const identity = canonicalRepository(cli.repo);
+  const runDir = cli.values["run-dir"]
+    ? fs.realpathSync(path.resolve(cli.values["run-dir"]))
+    : fs.realpathSync(path.join(process.env.RELAY_RUNS_BASE || path.join(relayHome(), "runs"), repoSlug(identity.repoRoot), cli.values["run-id"]));
+  const record = runStore.readRunRecord({ runDir });
+  if (record.repo.root !== identity.repoRoot || record.repo.remote !== identity.remote) {
+    fail("run.json repository identity does not match --repo", "RUN_REPOSITORY_MISMATCH");
+  }
+  if (cli.values["run-id"] && record.run_id !== cli.values["run-id"]) fail("run.json identity does not match --run-id", "RUN_ID_MISMATCH");
+  return { identity, runDir, record };
+}
+
+function requireReviewAction(inspection, record) {
+  if (inspection.blockers?.length) fail(`review is blocked: ${inspection.blockers[0].code}`, "REVIEW_BLOCKED");
+  if (inspection.recommended_action?.kind !== "review" || inspection.derived?.action !== "review") {
+    fail(`derived lifecycle action is '${inspection.recommended_action?.kind || "unknown"}', not 'review'`, "REVIEW_ACTION_MISMATCH");
+  }
+  const head = inspection.observations?.github?.pr_head_sha;
+  const prNumber = inspection.observations?.github?.pr_number;
+  if (!SHA1_RE.test(String(head || "")) || head !== inspection.derived.head_sha) {
+    fail("live PR head must exactly equal the derived current head", "REVIEW_HEAD_MISMATCH");
+  }
+  if (!Number.isInteger(prNumber) || prNumber < 1 || prNumber !== inspection.derived.pr_number) {
+    fail("live PR identity must exactly equal the durable derived PR", "REVIEW_PR_MISMATCH");
+  }
+  const durablePr = inspection.facts.filter((fact) => fact.type === "pull_request_recorded").at(-1);
+  if (!durablePr || durablePr.payload.pr_number !== prNumber || durablePr.payload.head_sha !== head) {
+    fail("review requires a durable PR fact for the exact live head", "REVIEW_PR_FACT_MISMATCH");
+  }
+  const verification = inspection.facts.filter((fact) => fact.type === "verification_recorded").findLast((fact) => (
+    fact.payload.status === "passed"
+    && fact.payload.head_sha === head
+    && fact.payload.done_criteria_sha256 === record.contract.done_criteria_sha256
+  ));
+  if (!verification) fail("review requires passed verification for the exact head and Done Criteria", "REVIEW_VERIFICATION_MISSING");
+  return { head, prNumber, verification };
+}
+
+function reviewPrompt({ record, binding, criteria, diff }) {
+  return [
+    "[RELAY INDEPENDENT PRIMARY REVIEW]",
+    "Return only one JSON object matching this schema:",
+    JSON.stringify(REVIEW_RESULT_SCHEMA),
+    "No markdown fences or text outside the object.",
+    "A pass verdict means every frozen Done Criterion is satisfied at the exact reviewed commit.",
+    "Any substantive issue must return changes_requested. Invocation or evidence uncertainty must return escalated.",
+    "Do not modify files, create commits, post comments, or infer state outside this bundle.",
+    "",
+    `Run: ${record.run_id}`,
+    `Repository: ${record.repo.remote}`,
+    `Branch: ${record.git.branch} -> ${record.git.base_branch}`,
+    `PR: #${binding.prNumber}`,
+    `Reviewed SHA: ${binding.head}`,
+    `Done Criteria SHA-256: ${record.contract.done_criteria_sha256}`,
+    `Verification fact: ${JSON.stringify(binding.verification)}`,
+    "",
+    "## Frozen Done Criteria",
+    criteria,
+    "",
+    "## Exact review diff",
+    diff || "(empty diff)",
+    "",
+  ].join("\n");
+}
+
+function immutableBytes(filePath, bytes) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   try {
-    reviewedHeadSha = git(reviewRepoPath, "rev-parse", "HEAD").trim();
-  } catch {}
-
-  const reviewPhase = reviewPhaseFor(internalReview);
-  const checkWait = maybeWaitForChecks({ internalReview, prepareOnly, prNumber, round, runDir, runRepoPath, waitForChecksArg });
-
-  const {
-    diffPath, diffText, doneCriteria, doneCriteriaPath,
-    doneCriteriaSource, prBodyPath, prBodySnapshot, prReviewSignals,
-    promptPath, rubricLoad,
-  } = writeRoundArtifacts({
-    branch,
-    data,
-    diffFile,
-    doneCriteriaFile,
-    internalReview,
-    issueNumber,
-    prNumber,
-    reviewRepoPath,
-    round,
-    runDir,
-    runRepoPath,
-  });
-
-  const churnGrowth = detectChurnGrowth(runDir, round);
-  if (churnGrowth && !jsonOut) {
-    const growth = Math.round(((churnGrowth.curLines - churnGrowth.prevPrevLines) / churnGrowth.prevPrevLines) * 100);
-    console.log(`  Warning: diff growing without convergence (${churnGrowth.prevPrevLines} → ${churnGrowth.prevLines} → ${churnGrowth.curLines} lines, +${growth}%)`);
+    const fd = fs.openSync(filePath, "wx", 0o600);
+    try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    runStore.fsyncDirectory(path.dirname(filePath));
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+    let existing;
+    try {
+      const before = fs.fstatSync(fd);
+      if (!before.isFile()) fail(`immutable review artifact must be a regular file: ${filePath}`, "REVIEW_ARTIFACT_UNTRUSTED");
+      existing = fs.readFileSync(fd);
+      const after = fs.fstatSync(fd);
+      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size) {
+        fail(`immutable review artifact changed while read: ${filePath}`, "REVIEW_ARTIFACT_UNTRUSTED");
+      }
+    } finally { fs.closeSync(fd); }
+    if (!existing.equals(bytes)) fail(`immutable review artifact conflict: ${filePath}`, "REVIEW_ARTIFACT_CONFLICT");
   }
+  return filePath;
+}
 
-  const reviewerName = resolveReviewerName(data, reviewerArg);
-  const reviewerScript = reviewFile ? null : resolveReviewerScript(reviewerName, reviewerScriptArg);
-  const result = {
-    branch,
-    commentPosted: false,
-    diffPath,
-    doneCriteriaPath,
-    issueNumber,
-    manifestPath,
-    nextState: null,
-    prBodyPath,
-    prBodySnapshot,
-    prNumber,
-    prepareOnly,
-    promptPath,
-    rawResponsePath: null,
-    redispatchPath: null,
-    reviewFile: reviewFile || null,
-    reviewHeadSha: reviewedHeadSha,
-    reviewRepoPath,
-    reviewPhase,
-    prReviewSignals,
-    manualReviewReason: manualReviewReason || null,
-    reviewer: reviewerName,
-    reviewerScript,
-    round,
-    rubricLoaded: rubricLoad.state,
-    rubricStatus: rubricLoad.status,
-    rubricWarning: rubricLoad.warning || null,
-    runId: data.run_id,
-    state: data.state, convergenceSummary: null, verdictPath: null,
+function secureDigest(filePath, label) {
+  const fd = fs.openSync(
+    filePath,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0),
+  );
+  try {
+    const before = fs.fstatSync(fd);
+    if (!before.isFile()) fail(`${label} must be a regular non-symlink file`, "REVIEW_ARTIFACT_UNTRUSTED");
+    const bytes = fs.readFileSync(fd);
+    const after = fs.fstatSync(fd);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || bytes.length !== after.size) {
+      fail(`${label} changed while being read`, "REVIEW_ARTIFACT_UNTRUSTED");
+    }
+    return crypto.createHash("sha256").update(bytes).digest("hex");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readFrozenCriteria(record) {
+  const filePath = record.contract.done_criteria_path;
+  const fd = fs.openSync(
+    filePath,
+    fs.constants.O_RDONLY
+      | (fs.constants.O_NOFOLLOW || 0)
+      | (fs.constants.O_NONBLOCK || 0),
+  );
+  try {
+    const before = fs.fstatSync(fd);
+    if (!before.isFile()) fail("frozen Done Criteria must be a regular non-symlink file", "DONE_CRITERIA_UNTRUSTED");
+    const bytes = fs.readFileSync(fd);
+    const after = fs.fstatSync(fd);
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || bytes.length !== after.size
+    ) {
+      fail("frozen Done Criteria changed while being read", "DONE_CRITERIA_UNTRUSTED");
+    }
+    const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+    if (digest !== record.contract.done_criteria_sha256) {
+      fail("frozen Done Criteria bytes do not match the immutable run contract", "DONE_CRITERIA_HASH_MISMATCH");
+    }
+    return bytes;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function normalizeVerdict(output) {
+  let value = output;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); }
+    catch (error) { fail(`reviewer result is not JSON: ${error.message}`, "REVIEW_RESULT_INVALID"); }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail("reviewer result must be an object", "REVIEW_RESULT_INVALID");
+  if (Object.keys(value).sort().join(",") !== "issues,summary,verdict") fail("reviewer result has an unknown or missing field", "REVIEW_RESULT_INVALID");
+  if (!VERDICTS.has(value.verdict)) fail("reviewer verdict must be pass, changes_requested, or escalated", "REVIEW_RESULT_INVALID");
+  if (typeof value.summary !== "string" || !value.summary.trim()) fail("reviewer summary is required", "REVIEW_RESULT_INVALID");
+  if (!Array.isArray(value.issues)) fail("reviewer issues must be an array", "REVIEW_RESULT_INVALID");
+  const issues = value.issues.map((issue, index) => {
+    if (!issue || typeof issue !== "object" || Array.isArray(issue) || Object.keys(issue).sort().join(",") !== "body,file,line,severity,title") {
+      fail(`reviewer issues[${index}] has an invalid shape`, "REVIEW_RESULT_INVALID");
+    }
+    if (typeof issue.title !== "string" || !issue.title.trim() || typeof issue.body !== "string" || !issue.body.trim()) {
+      fail(`reviewer issues[${index}] requires title and body`, "REVIEW_RESULT_INVALID");
+    }
+    if (issue.file !== null && typeof issue.file !== "string") fail(`reviewer issues[${index}].file is invalid`, "REVIEW_RESULT_INVALID");
+    if (issue.line !== null && (!Number.isInteger(issue.line) || issue.line < 1)) fail(`reviewer issues[${index}].line is invalid`, "REVIEW_RESULT_INVALID");
+    if (!new Set(["low", "medium", "high", "critical"]).has(issue.severity)) fail(`reviewer issues[${index}].severity is invalid`, "REVIEW_RESULT_INVALID");
+    return { title: issue.title.trim(), body: issue.body.trim(), file: issue.file, line: issue.line, severity: issue.severity };
+  });
+  if (value.verdict === "pass" && issues.length) fail("pass verdict cannot contain issues", "REVIEW_RESULT_INVALID");
+  if (value.verdict === "changes_requested" && !issues.length) fail("changes_requested requires at least one issue", "REVIEW_RESULT_INVALID");
+  return { verdict: value.verdict, summary: value.summary.trim(), issues };
+}
+
+function productionServices() {
+  function withRunLock(runDir, callback) {
+    const canonical = fs.realpathSync(runDir);
+    return host.withRunLock({ runDir: canonical, attemptId: `review-${crypto.randomUUID()}`, operation: "review",
+      hostKind: "local_supervisor", hostHandle: `review:${process.pid}`, worktreeDir: canonical }, callback);
+  }
+  return {
+    inspectRun: (input) => inspectProductionRun(input),
+    invokeReviewer({ runDir, request, adapter, model, timeoutMs, credentialRequest: requestedCredentials }) {
+      return runStore.invokeIndependentReviewer({
+        runDir,
+        request,
+        timeoutMs,
+        credentialRequest: requestedCredentials,
+        buildInvocation: ({ cwd, promptPath, promptBytes, resultPath, schemaPath }) => adapter.buildInvocation({
+          phase: "primary_review", cwd, promptPath, promptBytes, resultPath, schemaPath, model,
+          timeoutMs, sandbox: "read-only", networkAccess: "disabled",
+        }),
+        parseOutcome: (input) => adapter.parseOutcome(input),
+      });
+    },
+    withGenerationAdmission: generation.withGenerationAdmission,
+    assertGenerationWrite: generation.assertGenerationWrite,
+    withRunLock,
+    appendFact: facts.appendFact,
   };
-  if (checkWait) result.checkWait = checkWait.summary;
-  let primaryReviewerPreflight = null;
+}
 
-  if (prepareOnly) {
-    printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath: null, result, updatedManifest: null, verdictPath: null });
-    return;
+async function runReview(cli, overrides = {}) {
+  const services = { ...productionServices(), ...overrides };
+  const { identity, runDir, record } = resolveRun(cli);
+  const reviewer = cli.values.reviewer || record.roles.reviewer;
+  if (reviewer !== record.roles.reviewer) {
+    fail(`reviewer override is not part of the vNext contract; immutable binding is '${record.roles.reviewer}'`, "REVIEWER_BINDING_MISMATCH");
   }
-  if (maybeBlockForBehindBasePreflight({ allowBehindBase, data, jsonOut, result, reviewRepoPath, reviewedHeadSha, round, runRepoPath })) return;
-  if (maybeBlockForExecutionEvidencePreflight({ data, jsonOut, result, reviewFile, runRepoPath, reviewedHeadSha, round, runDir, strict: false })) return;
-  if (!reviewFile) {
-    primaryReviewerPreflight = buildPrimaryReviewerPreflight({
-      data,
-      reviewerModel,
-      reviewerName,
-      reviewerScript,
-      runRepoPath,
+  const adapter = getAdapter(reviewer);
+  validateCapabilities(adapter, "primary_review", { readOnly: true, networkAccess: "disabled" });
+  let requestedCredentials;
+  try { requestedCredentials = credentialRequest(adapter.metadata.credentials, { envNames: cli.values["credential-env"], fileSpecs: cli.values["credential-file"] }); }
+  catch (error) { fail(error.message, "INVALID_CREDENTIAL"); }
+  const credentialEnv = Object.fromEntries(requestedCredentials.envNames.map((name) => [name, process.env[name]]));
+  const store = generation.initializeStore({ checkoutRoot: identity.repoRoot, remote: identity.remote });
+  if (generation.readGeneration(store)?.writer_generation !== "vnext") {
+    fail("vNext is not the active writer generation", "GENERATION_NOT_ACTIVE");
+  }
+  const initial = await services.inspectRun({ runDir });
+  const binding = requireReviewAction(initial, record);
+  const criteriaBytes = readFrozenCriteria(record);
+  const criteria = criteriaBytes.toString("utf8");
+  const diff = gitRaw(record.git.worktree, ["diff", "--binary", "--no-ext-diff", `${record.git.start_sha}..${binding.head}`, "--"]);
+  const inputDir = path.join(runDir, "review-inputs");
+  const diffBytes = Buffer.from(`${diff}${diff.endsWith("\n") || !diff ? "" : "\n"}`, "utf8");
+  const diffDigest = crypto.createHash("sha256").update(diffBytes).digest("hex");
+  const diffPath = immutableBytes(path.join(inputDir, `diff-${binding.head}-${diffDigest}.patch`), diffBytes);
+  const promptBytes = Buffer.from(reviewPrompt({ record, binding, criteria, diff }), "utf8");
+  const promptDigest = crypto.createHash("sha256").update(promptBytes).digest("hex");
+  const promptPath = immutableBytes(path.join(inputDir, `prompt-${binding.head}-${promptDigest}.md`), promptBytes);
+  const timeoutMs = (cli.timeoutSeconds || Math.ceil(adapter.defaults.timeoutMs / 1000)) * 1000;
+  let verdict;
+  let stagedBinding;
+  try {
+    const outcome = await services.invokeReviewer({
+      runDir,
+      adapter,
+      model: cli.values.model || null,
+      timeoutMs,
+      credentialRequest: { ...requestedCredentials, env: credentialEnv },
+      request: {
+        diff_path: diffPath,
+        prompt_path: promptPath,
+        done_criteria_path: record.contract.done_criteria_path,
+        reviewed_sha: binding.head,
+        current_sha: binding.head,
+        diff_sha256: diffDigest,
+        prompt_sha256: promptDigest,
+        schema: REVIEW_RESULT_SCHEMA,
+      },
     });
+    stagedBinding = outcome.review_binding;
+    verdict = normalizeVerdict(outcome.output);
+  } catch (error) {
+    stagedBinding = error.review_binding || null;
+    verdict = { verdict: "escalated", summary: `Reviewer invocation failed: ${error.message}`, issues: [] };
   }
-  const { rawResponsePath, reviewText } = loadReviewText({
-    body,
-    data,
-    manifestPath,
-    prNumber,
-    promptPath,
-    reviewFile,
-    reviewRepoPath,
-    reviewedHeadSha,
-    reviewerModel,
-    reviewerName,
-    reviewerScript,
-    round,
-    runDir,
-    runRepoPath,
-    reviewerPreflight: primaryReviewerPreflight,
+  const written = await services.withGenerationAdmission({ store, generation: "vnext", mode: "write" }, async (admission) => {
+    services.assertGenerationWrite({ store, admission, generation: "vnext" });
+    return services.withRunLock(runDir, async (lockContext) => {
+      const freshRecord = runStore.readRunRecord({ runDir });
+      if (freshRecord.contract.done_criteria_sha256 !== record.contract.done_criteria_sha256) {
+        fail("immutable Done Criteria contract changed during independent review", "DONE_CRITERIA_CONTRACT_CHANGED");
+      }
+      readFrozenCriteria(freshRecord);
+      const currentDiffDigest = secureDigest(diffPath, "immutable review diff");
+      const currentPromptDigest = secureDigest(promptPath, "immutable review prompt");
+      if (
+        currentDiffDigest !== diffDigest
+        || currentPromptDigest !== promptDigest
+        || !stagedBinding
+        || stagedBinding.diff_sha256 !== diffDigest
+        || stagedBinding.prompt_sha256 !== promptDigest
+        || stagedBinding.staged_diff_sha256 !== diffDigest
+        || stagedBinding.staged_prompt_sha256 !== promptDigest
+        || stagedBinding.staged_done_criteria_sha256 !== record.contract.done_criteria_sha256
+      ) {
+        fail("reviewer result is not bound to the exact staged prompt and diff", "REVIEW_INPUT_BINDING_CHANGED");
+      }
+      const fresh = await services.inspectRun({ runDir });
+      const freshBinding = requireReviewAction(fresh, freshRecord);
+      if (freshBinding.head !== binding.head || freshBinding.prNumber !== binding.prNumber) {
+        fail("review binding changed during independent review", "REVIEW_BINDING_CHANGED");
+      }
+      const round = Math.max(0, ...fresh.facts.filter((fact) => fact.type === "review_recorded").map((fact) => fact.payload.round)) + 1;
+      const artifact = {
+        schema_version: 1,
+        run_id: record.run_id,
+        round,
+        reviewer,
+        reviewed_sha: binding.head,
+        done_criteria_sha256: record.contract.done_criteria_sha256,
+        diff_sha256: diffDigest,
+        prompt_sha256: promptDigest,
+        staging_request_sha256: stagedBinding.request_sha256,
+        verdict,
+      };
+      const artifactBytes = Buffer.from(`${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+      const artifactDigest = crypto.createHash("sha256").update(artifactBytes).digest("hex");
+      const artifactPath = immutableBytes(path.join(runDir, `review-${round}-${artifactDigest}.json`), artifactBytes);
+      const fact = {
+        event_id: crypto.createHash("sha256").update(`review:${record.run_id}:${round}:${artifactDigest}`).digest("hex"),
+        run_id: record.run_id,
+        type: "review_recorded",
+        at: new Date().toISOString(),
+        actor: reviewer,
+        payload: {
+          round,
+          verdict: verdict.verdict === "pass" ? "lgtm" : verdict.verdict,
+          reviewed_sha: binding.head,
+          done_criteria_sha256: record.contract.done_criteria_sha256,
+          reviewer,
+          review_artifact: artifactPath,
+          override: null,
+        },
+      };
+      services.appendFact({ eventsPath: path.join(runDir, "events.jsonl"), fact, lockContext });
+      return { round, artifactPath, fact };
+    });
   });
-  result.rawResponsePath = rawResponsePath;
-  const prSignalsPassBlockReason = !internalReview && prReviewSignals?.status === "failed"
-    ? `GitHub PR signals failed to load: ${prReviewSignals.reason || "unknown error"}`
-    : null;
+  const inspection = await services.inspectRun({ runDir });
+  return {
+    run_id: record.run_id,
+    reviewer,
+    round: written.round,
+    verdict: written.fact.payload.verdict,
+    reviewed_sha: binding.head,
+    done_criteria_sha256: record.contract.done_criteria_sha256,
+    pr_number: binding.prNumber,
+    review_artifact: written.artifactPath,
+    recommended_action: inspection.recommended_action,
+  };
+}
 
-  let verdict = parseReviewVerdict(reviewText, {
-    adapter: reviewerName,
-    phase: "primary_review",
-    passNextActions: passNextActionsFor(internalReview),
-    requireExecutionStatus: false,
-    disallowPassReason: prSignalsPassBlockReason,
-  });
-  const executionStatus = computeQualityExecutionStatus({
-    runDir,
-    reviewedHead: reviewedHeadSha,
-    strict: false,
-    manifestData: data,
-  });
-  verdict = applyQualityExecutionStatus(verdict, executionStatus);
-  if (verdict.verdict === "pass" && executionStatus.status !== "pass") {
-    verdict = executionStatus.status === "missing"
-      ? buildMissingExecutionEvidenceVerdict(verdict)
-      : buildExecutionEvidenceFailureVerdict(verdict);
-  }
-  validateReviewVerdict(verdict, {
-    passNextActions: passNextActionsFor(internalReview),
-    disallowPassReason: prSignalsPassBlockReason,
-  });
-
-  finalizeRound({
-    body,
-    checkWait,
-    churnGrowth,
-    data,
-    diffPath,
-    doneCriteria,
-    doneCriteriaPath,
-    doneCriteriaSource,
-    internalReview,
-    jsonOut,
-    manifestPath,
-    manualReviewReason,
-    noComment,
-    prepareOnly,
-    prNumber,
-    promptPath,
-    primaryReviewerVerdict: verdict,
-    result,
-    reviewedHeadSha,
-    reviewerName,
-    round,
-    rubricLoad,
-    runDir,
-    runRepoPath,
-    verdict,
-  });
+async function main(argv = process.argv.slice(2)) {
+  const cli = parseCli(argv);
+  if (cli.help) { console.log(usage()); return 0; }
+  const result = await runReview(cli);
+  console.log(cli.values.json ? JSON.stringify(result) : JSON.stringify(result, null, 2));
+  return 0;
 }
 
 if (require.main === module) {
-  dispatchReviewEntry({ options, args, entryPath: __filename, jsonOut: cliArgs.hasFlag("--json"), preflight: () => { assertKnownReviewRunnerFlags(args); preflightResolvedPrimaryReviewer(options); }, run, printFailureAndExit });
+  main().catch((error) => {
+    const payload = { ok: false, code: error.code || "REVIEW_FAILED", error: error.message };
+    console.error(process.argv.includes("--json") ? JSON.stringify(payload) : `Error: ${error.message}`);
+    process.exitCode = 1;
+  });
 }
-module.exports = { applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt, buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList, formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir, parseRemoteHost, parseReviewVerdict, resolveIssueNumber, resolveRemoteHost, validateReviewVerdict, validateScopeDrift };
+
+module.exports = {
+  REVIEW_RESULT_SCHEMA,
+  main,
+  normalizeVerdict,
+  parseCli,
+  readFrozenCriteria,
+  requireReviewAction,
+  runReview,
+};

@@ -2,72 +2,40 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
 const host = require("../../../skills/relay-dispatch/scripts/host");
+const LAUNCHER = path.join(__dirname, "../fixtures/host-launch-and-exit.js");
 
-function launchdSnapshot() {
-  if (process.platform !== "darwin") return null;
-  const output = execFileSync("/bin/launchctl", ["print", `gui/${process.getuid()}`], {
-    encoding: "utf8",
-  });
-  return {
-    service_count: Number(output.match(/service count = (\d+)/)?.[1]),
-    relay_labels: output.split("\n").filter((line) => line.includes("dev.relay.")).length,
-  };
+async function waitFor(filePath, timeoutMs = 15_000) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    if (fs.existsSync(filePath)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${filePath}`);
 }
 
-test("OS-owned supervisor preserves 20/20 worker results after launcher exit", { timeout: 600_000 }, async () => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-vnext-host-survival-")));
-  const outcomes = [];
+test("20 independent detached attempts publish terminal proof after launcher exit", { timeout: 180_000 }, async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-host-survival-")));
+  const runDir = path.join(root, "run"), worktree = path.join(root, "worktree"); fs.mkdirSync(runDir); fs.mkdirSync(worktree);
+  const handles = new Set(), resultDigests = new Set();
   for (let index = 0; index < 20; index += 1) {
-    const runDir = path.join(root, `run-${index}`);
-    fs.mkdirSync(runDir);
-    const outcome = host.runSurvivalTrial({
-      runDir,
-      trialId: `survival-${index}`,
-      timeoutMs: 15_000,
-    });
-    assert.equal(outcome.status, "completed", `trial ${index + 1}`);
-    outcomes.push(outcome);
+    const attemptId = `survival-${index}`, marker = path.join(worktree, `${attemptId}.marker`);
+    const launcher = spawnSync(process.execPath, [LAUNCHER, runDir, worktree, attemptId, marker], { encoding: "utf8", timeout: 30_000 });
+    assert.equal(launcher.status, 0, launcher.stderr);
+    const receipt = JSON.parse(launcher.stdout);
+    await waitFor(receipt.result_path); await waitFor(marker);
+    const inspection = host.inspectOwnership({ runDir });
+    assert.equal(inspection.status, "stale");
+    await host.breakStaleRunLock({ inspection, reason: "qualification terminal proof", resultPath: receipt.result_path });
+    handles.add(receipt.host_handle);
+    resultDigests.add(require("crypto").createHash("sha256").update(fs.readFileSync(receipt.result_path)).digest("hex"));
   }
-  assert.throws(
-    () => host.issueSurvivalMeasurement(Array(20).fill(outcomes[0])),
-    (error) => error.code === "SURVIVAL_GATE_FAILED",
-  );
-  const measurement = host.issueSurvivalMeasurement(outcomes);
-  assert.equal(measurement.trials, 20);
-  assert.equal(measurement.losses, 0);
-  assert.equal(host.selectHost({ runDir: root, survivalMeasurement: measurement }).supported, true);
-});
-
-test("100 detached attempts add zero launchd services", { timeout: 600_000 }, async () => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-vnext-host-volume-")));
-  const before = launchdSnapshot();
-  for (let index = 0; index < 100; index += 1) {
-    const runDir = path.join(root, `run-${index}`);
-    fs.mkdirSync(runDir);
-    const attemptId = `volume-${index}`;
-    try {
-      const receipt = host.launchLocalSupervisor({
-        runDir,
-        attemptId,
-        command: "/usr/bin/true",
-        cwd: runDir,
-        timeoutMs: 10_000,
-      });
-      assert.equal((await host.waitForTerminalResult(receipt)).status, "completed", attemptId);
-    } catch (error) {
-      error.message = `${attemptId}: ${error.message}`;
-      throw error;
-    }
-  }
-  const after = launchdSnapshot();
-  if (before && after) {
-    assert.equal(after.relay_labels, before.relay_labels);
-    assert.equal(after.service_count <= before.service_count, true);
-  }
+  assert.equal(handles.size, 20);
+  assert.equal(resultDigests.size, 20);
+  assert.equal(host.inspectOwnership({ runDir }).status, "absent");
 });

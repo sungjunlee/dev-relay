@@ -37,7 +37,7 @@ function execGh(repoPath, args, opts = {}) {
 }
 
 // Resolve the remote a branch actually tracks, falling back to "origin".
-// Mirrors dispatch-publish.js's resolveBranchRemote (#229) for the recovery and
+// Mirrors the canonical branch-remote resolution rule (#229) for recovery and
 // correction scripts, which drive git through execGit rather than an injected
 // execFile. Without this they hardcode "origin" and target the wrong remote in a
 // repo whose branch remote is named otherwise (#1083).

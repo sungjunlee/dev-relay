@@ -3,7 +3,6 @@ const noop = () => undefined;
 module.exports = {
   appendFact: noop,
   assertTrustedWorktree: noop,
-  createRunRecord: noop,
   foldRun: noop,
   freezeDoneCriteria: noop,
   hashDoneCriteria: noop,

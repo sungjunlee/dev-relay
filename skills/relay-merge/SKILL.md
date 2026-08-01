@@ -1,112 +1,95 @@
 ---
 name: relay-merge
-argument-hint: "[run-id or PR-number]"
-description: Merge a reviewed PR, clean up worktree/branch, and close GitHub issues. Use after relay-review returns LGTM.
-compatibility: Requires gh CLI and git.
+argument-hint: "[run-id]"
+description: Explicitly merge a vNext run after exact-SHA independent review, record provenance, and clean up its retained worktree.
+compatibility: Requires gh CLI, git, and Node.js 22+.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-review, dev-backlog"
   keywords: "머지, 병합, merge, finalize, cleanup"
 ---
-## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
-- Files: reviewed PR, retained run manifest/worktree, optional sprint file, and follow-up issue text.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/append-learnings.js`.
 
 # Relay Merge
 
-## Use when
+Use only after `relay-review` records a passing verdict. Merge remains an
+explicit operator action; review bypasses and mutable-state overrides are not
+part of the vNext contract.
 
-- Merging a PR after `relay-review` returns LGTM/pass
-- Finalizing the retained run manifest, worktree, and branch cleanup
-- Recording sprint-file and follow-up issue updates after merge
+## Inputs
 
-## Do not use when
-
-- Reviewing executor output — use `relay-review`
-- Delegating implementation or review fixes — use `relay-dispatch`
-- Authoring rubrics or dispatch prompts — use `relay-plan`
-- Shaping an ambiguous task before planning — use `relay-ready`
-
-Explicitly merge a ready-to-merge PR and close the loop. **Requires relay-review PR comment.**
+- An immutable vNext `run.json` and append-only `events.jsonl`.
+- The retained run worktree and its exact open PR.
+- `--run-id` or an explicit `--run-dir`.
+- Optional opaque operator identity, merge method, and operation id.
 
 ## Process
 
-### 0. Gate check — verify relay-review completed
-
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js" $PR_NUM
-```
-
-- Exit 0 (LGTM) → PR is ready to merge; proceed only if the user wants to land it now
-- Exit 1 (no comment) → **STOP.** Run relay-review first
-- Exit 1 (stale LGTM) → **STOP.** Run relay-review again for the latest commit
-- Exit 1 (CHANGES_REQUESTED) → **STOP.** Re-dispatch or fix the branch first
-- Exit 1 (ESCALATED) → **STOP.** Show unresolved issues to user
-
-**Intentional skip** (hotfix, manual PR, trivial change):
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js" $PR_NUM --skip "reason here"
-```
-This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining audit trail even when review is bypassed. The skip reason is recorded on the PR for future reference.
-`gate-check.js --skip` does not invoke any executor or reviewer, so it does not consume manifest `model_hints`.
-
-**Do NOT merge without running gate-check.** This is the audit trail that review actually happened (or was intentionally skipped with documented reason).
-
-### 1. Merge + finalize cleanup
+### 1. Read-only gate
 
 ```bash
 RUN_ID=<run-id-from-dispatch>
-node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js" --repo . --run-id "$RUN_ID" --merge-method squash --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js" \
+  --repo . --run-id "$RUN_ID" --json
 ```
 
-This script:
-- re-checks the latest PR audit trail and blocks merge if `review.last_reviewed_sha` is stale for the current HEAD
-- merges the PR and only advances the manifest after GitHub reports the PR as `MERGED`
-- best-effort deletes the remote branch after the merge is confirmed
-- marks the manifest `merged`
-- best-effort closes the linked issue
-- removes the retained worktree, deletes the local merged branch, and runs `git worktree prune`
-- records `cleanup.status` in the manifest
+The gate calls canonical vNext `inspect` and fails closed unless all of these
+identify the same commit:
 
-### Merge-time freshness gate
-- After fetching `origin`, finalize refuses behind-main PRs only when main and the PR touch overlapping files.
-- Refusal leaves state unchanged and reports `next_action: rebase_and_rerun`.
-- `--allow-behind-main --reason "..."` is the audited operator escape hatch.
-- If the remote PR head cannot be resolved (`ls-remote` fails), the gate is skipped fail-open and finalize records `freshness: { skipped: true, reason: "unresolvable_remote_head" }`.
-- Finalize never auto-rebases: a rebase changes the reviewed head and re-enters the existing stale-review path (#884).
-- The gate sources the PR head from the tracked remote's branch tip (`ls-remote`), not GitHub's `headRefOid`. Relay pushes every PR branch to that remote, so the tip is the exact commit GitHub merges. Fork and non-origin-head PRs are outside the gate's domain by design (#966): on such PRs the gate degrades to the fail-open skip above rather than validating a head relay never pushed.
-- Accepted residual risk: cross-file semantic coupling is not detected.
+- live GitHub PR head and remote branch;
+- retained worktree HEAD and Git tree;
+- durable PR fact;
+- passing verification fact;
+- independent review fact and frozen Done Criteria hash.
 
-If the retained worktree is dirty, merge still succeeds but cleanup is recorded as `failed` and the manifest moves to `next_action=manual_cleanup_required`.
+If the derived action is not `merge`, follow that action. Never synthesize a
+merge override from a PR comment, old manifest state, or missing evidence.
 
-After the merge is confirmed, `finalize-run.js` invokes `append-learnings.js` to record a one-line learning in the target repo's `spec/capabilities.md`. Learning failures are recorded under `result.learnings` and never block cleanup. No-op/fail-loud conditions and durability semantics: [`references/append-learnings.md`](references/append-learnings.md).
-
-Emergency, force-finalize, and bootstrap reconciliation paths: see [`references/operator-emergencies.md`](references/operator-emergencies.md).
-Serialized detached full-suite gate and kill discipline: see [`references/full-gate.md`](references/full-gate.md).
-
-### 2. Sprint file update (if available)
-
-Before any Plan, Progress, or Running Context write, derive the ownership selector from the linked issue/task's `track:` or `component:` metadata (or reuse `finalize-run`'s resolved `learnings.owner`), then invoke the resolved dev-backlog `sprint-state.js --track <track> --json backlog` or `sprint-state.js --component <component> --json backlog`; use its `active_sprint.path` as the sole write target. If no selector exists, use `sprint-state.js --json backlog` only when exactly one sprint is active; if selector lookup is unavailable or unresolved, the same fallback is allowed only when that sprint's corresponding track/component matches. Never choose an arbitrary/global active sprint or add relay-side track/component markdown parsing. If no owner resolves, skip this step.
-
-**Plan section in that resolved sprint** — mark completed (was `[~]` during review):
-```markdown
-- [x] #38 OAuth2 flow → PR #87 (merged)
-```
-
-**Progress section in that same sprint** — structured log entry with review round count:
-```markdown
-- 2026-03-25 10:50: #38 dispatched → PR #87 → reviewed (LGTM, round 1) → merged
-```
-
-**Running Context section in that same sprint** — capture learnings for remaining tasks:
-```markdown
-- OAuth2: PKCE flow using jose library. Tokens in httpOnly cookies.
-```
-
-### 3. Follow-up (if needed)
+### 2. Explicit merge and cleanup
 
 ```bash
-gh issue create --title "Follow-up: ..." --body "..."
+node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js" \
+  --repo . --run-id "$RUN_ID" --merge-method squash --json
 ```
 
-Task file cleanup (move to `backlog/completed/`) happens at sprint end, not per-issue. Sprint checkbox states are `[ ]` not started → `[~]` reviewing → `[x]` merged, exactly as shown in the section 2 examples; sprint-file semantics belong to `dev-backlog`.
+`finalize-run.js` repeats inspection after generation admission and run-lock
+acquisition, issues a durable merge authorization, invokes GitHub, revalidates
+the exact merged PR, and appends one `merge_recorded` fact. It then removes the
+clean linked worktree. A dirty, changed, unregistered, or repository-mismatched
+worktree is retained rather than forced away.
+
+The authorization and merge receipt make retries idempotent across crashes.
+Re-run the same command, with the same actor and method, after an interruption.
+Durable authorization values are authoritative; changing either value fails
+before another GitHub merge request. Use `--operation-id <id>` when
+an operator needs a stable externally recorded correlation id. `--no-cleanup`
+retains the worktree intentionally; a later ordinary rerun performs terminal
+cleanup without merging again.
+
+GitHub may accept the request into a merge queue while the PR remains open.
+That returns `status: merge_pending`; reruns observe the durable pending
+request without submitting it again, and record the merge only after GitHub
+reports the exact reviewed head as merged.
+
+Immediately before the external call, finalize fsyncs an immutable request
+intent. If a crash leaves that intent but GitHub proves neither the exact merge
+nor a queued request, finalize fails with an ambiguous-outcome error and
+requires canonical recovery instead of risking a duplicate call.
+
+The final preflight rechecks the immutable configured base and source SHA. The
+GitHub merge API provides an atomic expected-source-SHA guard
+(`--match-head-commit`) but no expected-base compare-and-swap. Therefore a base
+retarget detected before the request fails closed, while the remaining
+post-check/pre-request base nanorace—in which an external collaborator changes
+PR metadata—is a documented GitHub platform threat boundary, not a weakened
+source-SHA or configured-base invariant.
+
+### 3. Optional post-merge project updates
+
+`append-learnings.js` and dev-backlog sprint updates are separate project
+mutations. Run them explicitly after `finalize-run.js` returns `status: merged`;
+they are not part of the merge transaction.
+
+See [`references/append-learnings.md`](references/append-learnings.md) for the
+marker-bounded learning writer and
+[`references/operator-emergencies.md`](references/operator-emergencies.md) for
+recovery guidance. Serialized full-suite gate guidance lives in
+[`references/full-gate.md`](references/full-gate.md).

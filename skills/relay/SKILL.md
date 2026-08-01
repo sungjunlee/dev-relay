@@ -2,7 +2,7 @@
 name: relay
 argument-hint: "[task, issue, or natural-language handoff]"
 description: Use when a GitHub issue, sprint item, task description, or natural-language handoff should be implemented through autonomous executor dispatch; stops at ready_to_merge — merge only on explicit request.
-compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+.
+compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+; Linux independent isolation requires Node.js 22+.
 metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, relay-fleet, dev-backlog"
   keywords: "릴레이, 자동 실행, plan, dispatch, review, merge, relay cycle"
@@ -22,7 +22,7 @@ Execute the plan -> dispatch -> review cycle. Stop at `ready_to_merge` unless th
 - Executor: Codex by default; override with dispatch `--executor`.
 - Reviewer: `unknown` until explicitly stamped; override with `--reviewer` or `RELAY_REVIEWER`.
 
-Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and review through `review-runner --reviewer codex`. Assigned manifest roles stay immutable; acting reviewer data is recorded separately.
+Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and review through `review-runner --reviewer codex`. Assigned `run.json` roles stay immutable; acting reviewer data is recorded separately.
 
 ## Step 1: Re-Anchor
 
@@ -55,76 +55,39 @@ For actor+model wording such as "opencode glm-5.2", pass both values explicitly.
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \
-  --publish-policy after-internal-review --timeout 3600 --detach --json
-# If relay-ready ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
+  --done-criteria-file <done-criteria-path> --timeout 3600 --detach --json
 # To pin dispatch selection, append: --executor <name> --model <provider/model>
 ```
 
-`--detach` prints a launch receipt with `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and `reconcileCommand`; the supervisor continues if the calling shell dies. Poll the run until it leaves `dispatched`:
+If the rubric itself is the frozen Done Criteria, omit `--done-criteria-file`. `--detach` returns a snake_case launch receipt containing `status`, `run_id`, `run_dir`, `worktree`, `attempt_id`, `host_handle`, `dispatcher_pid`, and `inspection`; attempt log paths are durable facts. The dispatcher continues if the calling shell dies. Poll read-only inspection while the recommendation is `wait`:
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reconcile-run.js" --repo . --run-id "$RUN_ID" --dry-run --json
-node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/relay-recover.js" --repo . --run-id "$RUN_ID" --dry-run --json
+node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/relay-recover.js" inspect --repo . --run-id "$RUN_ID" --json
 node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage review --repo . --run-id "$RUN_ID" --json
 ```
 
-Check the manifest/result:
-- `status: "completed"`/`"completed-with-warning"` and `runState: "internal_review_pending"` → proceed to Step 4 (on warning, the executor timed out but made progress; check the worktree)
-- `status: "failed"` and `runState: "escalated"` → inspect the dispatch error / manifest, fix and re-dispatch
+Follow `inspection.recommended_action` exactly:
+- `recover` → run canonical `relay-recover recover` with the returned action key; it alone commits, pushes, and records or creates the exact PR.
+- `review` → proceed to Step 4.
+- `redispatch` → call dispatch with the immutable `run_id`; all other resume attempts fail before writing.
+- `wait` → keep polling; `operator_attention` or `none` → stop and resolve the blocker.
 
-Capture `runId`, `manifestPath`, `runState`; do not create or look up a PR yet (publication happens only after internal review LGTM). The manifest is under `~/.relay/runs/<repo-slug>/`. Before an in-flight write, resolve the owner through the same dev-backlog `sprint-state.js --track/--component --json` contract and matching-selector N==1 failure fallback, then update only its `active_sprint.path`; skip when no owner resolves.
+Capture `run_id`, `run_dir`, and the current action key. The immutable record is `~/.relay/runs/<repo-slug>/<run-id>/run.json`; lifecycle state is folded from `events.jsonl` plus live observations, not mutated in a manifest. Before an in-flight write, resolve the owner through the same dev-backlog `sprint-state.js --track/--component --json` contract and matching-selector N==1 failure fallback, then update only its `active_sprint.path`; skip when no owner resolves.
 
 ## Step 4: Review (relay-review)
 
 **MANDATORY. Do NOT skip this step.**
 
-If the run is `internal_review_pending`, invoke relay-review without `--pr`. A PASS verdict advances only to `publish_pending`, not `ready_to_merge`:
+Invoke relay-review only when inspection recommends `review`:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
   --repo . --run-id "$RUN_ID" --reviewer codex --json
 ```
 
-If review requests changes, re-dispatch and repeat Step 4. If review returns `publish_pending`, publish the branch:
+Invoke **relay-review** in an isolated context. It records immutable review evidence and facts while keeping frozen Done Criteria as the review anchor. A requested change remains blocking until the corrected HEAD receives a passing primary review. Do NOT review inline.
 
-```bash
-PUBLISH_RESULT=$(node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/publish-run.js" \
-  --repo . --run-id "$RUN_ID" --json)
-PR_NUM=$(node -e 'const r=JSON.parse(process.argv[1]); process.stdout.write(String(r.prNumber || ""));' "$PUBLISH_RESULT")
-```
-
-Now run the post-publication review — the round that can advance to `ready_to_merge` (it folds in PR CI/actions, GitHub review, and comment signals). Snapshot review state first:
-```bash
-REVIEW_BEFORE=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
-  --stage review --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --json)
-```
-
-If `REVIEW_BEFORE.ready_status.status == "stale_ready"`, do not invoke relay-review yet. Recover the audited stale-ready transition first, then review the recovered run:
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/recover-state.js" \
-  --repo . --run-id "$RUN_ID" --to review_pending \
-  --reason "PR HEAD advanced after ready_to_merge; rerun review for the live head" --json
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
-  --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
-```
-If `REVIEW_BEFORE.ready_status.status == "merge_ready"`, skip the review invocation and continue to Step 5.
-
-Invoke **relay-review** in an isolated context. It runs Spec Compliance then Code Quality, re-dispatches on issues, updates manifest state, and keeps the relay-plan rubric fixed as the review anchor. A requested change remains blocking until the corrected HEAD receives a passing primary review. Do NOT review inline.
-
-After review returns, compare against the snapshot:
-```bash
-PREVIOUS_ROUNDS=<rounds>
-PREVIOUS_VERDICT=<verdict>
-REVIEW_AFTER=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
-  --stage review --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
-  --previous-rounds "$PREVIOUS_ROUNDS" --previous-verdict "$PREVIOUS_VERDICT" --json)
-```
-
-If `.comparison.stale == true`, treat review as stalled and recover by running the runner directly in the foreground:
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
-```
-Wait for exit, then repeat the same preflight comparison before Step 5.
+The runner returns `verdict` and a fresh `recommended_action`. `lgtm` must recommend `merge` before Step 5. `changes_requested` must recommend `redispatch`; send a new prompt through `dispatch --run-id`, follow any recovery needed to republish the corrected HEAD, then review again. `escalated`, `operator_attention`, or a mismatched action stops the loop for investigation.
 
 ## Step 5: Ready to Merge
 

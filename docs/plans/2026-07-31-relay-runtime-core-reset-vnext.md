@@ -1,6 +1,6 @@
 # Relay Runtime Core Reset vNext
 
-**Status:** proposed implementation spec
+**Status:** implementation complete; rollout evidence pending
 **Date:** 2026-07-31
 **Scope:** `relay-dispatch` runtime and the shared run contracts consumed by
 `relay`, `relay-review`, `relay-merge`, `relay-fleet`, and `relay-config`
@@ -75,6 +75,22 @@ theoretical. Detached execution recovered killed-but-complete work, Cursor
 served as a quota fallback, and stale evidence / recovered SHA errors occurred
 in real runs. Those contracts must be replaced before their current
 implementations are removed.
+
+## Implementation Snapshot (2026-08-02)
+
+- Installed dispatch runtime: 18 JavaScript files / 6,985 LOC.
+- Retained core after excluding the two migration-only shims: 16 files / 5,836 LOC.
+- All seven native executors remain registered; the unused generic argv-template
+  framework was removed so native descriptors are the only extension path.
+- The final serialized repository gate passed 638 tests with zero failures and
+  two platform/fixture-conditional skips.
+- Independent lifecycle re-review is LGTM after PID-reuse, zombie, quarantine,
+  signed-close, and reviewer-cleanup regressions were closed.
+- The exact live-canary release matrix remains intentionally incomplete at
+  0/13. Missing credentials, CLIs, skips, and fallbacks do not satisfy a cell.
+- Migration shims remain installed until both 30 days and 30 vNext terminal
+  runs show zero legacy reads. This calendar/operational gate is not a code
+  defect and is not self-attested by `--bootstrap-vnext`.
 
 ## Durable Invariants
 
@@ -168,6 +184,7 @@ Required vNext event types:
 - `attempt_started`
 - `attempt_finished`
 - `attempt_interrupted`
+- `verification_recorded`
 - `lock_acquired`
 - `lock_released`
 - `pull_request_recorded`
@@ -190,6 +207,7 @@ schemas: unknown fields fail writes and are preserved by historical reads.
 | `attempt_started` | `executor`, nullable `model`, `start_sha`, `host_kind`, `host_handle`, `stdout_path`, `stderr_path`, `result_path`, `timeout_ms` |
 | `attempt_finished` | `status`, `start_sha`, `final_sha`, `tree_sha`, `result_path`, `exit_code`, `verification_status` |
 | `attempt_interrupted` | `last_known_sha`, `reason`, `host_liveness`, `reviewable_work` |
+| `verification_recorded` | `head_sha`, `tree_sha`, `done_criteria_sha256`, `command`, `verification_request_sha256`, `declared_command_count`, `completed_command_count`, `result_path`, `result_sha256`, `exit_code`, `status`, `operator` |
 | `lock_acquired` | `lock_id`, `operation`, `host`, nullable `pid`, nullable `process_started_at` |
 | `lock_released` | `lock_id`, `operation`, `outcome` |
 | `pull_request_recorded` | `pr_number`, `repo`, `head_ref`, `base_ref`, `head_sha`, `created_by_relay` |
@@ -201,6 +219,16 @@ schemas: unknown fields fail writes and are preserved by historical reads.
 `verification_status` is `passed | failed | incomplete | not_declared`. An
 executor process exit code never implies that a declared verification command
 passed.
+
+`verification_recorded` is the independently auditable proof used by the
+review/merge gate. Its envelope `at` is the recording time and its actor must
+equal `payload.operator`; `passed` requires `exit_code: 0` and completion of
+every declared command, while incomplete verification records `exit_code: null`
+and fewer completed than declared commands. A proof for another commit, Git
+tree, or frozen Done Criteria is stale and cannot authorize review completion
+or merge. vNext runs fail closed when a declared verification has no proof;
+the legacy shadow reader is the only explicit compatibility projection allowed
+to model pre-proof historical rows.
 
 ### Atomic append
 
@@ -343,38 +371,10 @@ Rules:
 - Adding a new adapter requires one file and conformance fixtures; it does not
   change dispatch, review, recovery, routing, or manifest code.
 
-The generic adapter accepts a validated argv template and a registered output
-protocol. It never evaluates arbitrary JavaScript or a shell fragment.
-
-### Generic adapter schema
-
-The generic adapter configuration has exactly these fields:
-
-```json
-{
-  "name": "future-agent",
-  "command": "future-agent",
-  "args": ["run", "--json", "--model", "{model}", "--prompt-file", "{promptPath}"],
-  "cwd": "{cwd}",
-  "output_protocol": "jsonl_run_result",
-  "capabilities": {
-    "write": true,
-    "readOnly": false,
-    "networkControl": "informational",
-    "cancellation": "process",
-    "structuredOutput": "jsonl"
-  }
-}
-```
-
-Allowed placeholders are `{cwd}`, `{promptPath}`, `{resultPath}`, `{model}`, and
-`{timeoutMs}`. Each placeholder must occupy a whole argv item except a missing
-optional `{model}` removes that item and the immediately preceding registered
-model flag. `command` contains no path separators unless it is an absolute path
-inside an operator-approved adapter directory. No value may begin with `-`
-unless it comes from the static template. Registered output protocols are:
-`text_stdout`, `json_result`, and `jsonl_run_result`. Adding a protocol requires
-a core parser and conformance tests; config cannot name code.
+The registry intentionally contains only native descriptors for supported
+executors. Adding a future executor means adding one reviewed four-method
+descriptor and its conformance fixtures; it does not admit operator-provided
+argv templates, executable paths, or dynamically configured code.
 
 ## Host, Exclusion, and Survival Contract
 
@@ -543,7 +543,6 @@ skills/relay-dispatch/scripts/
     pi.js
     antigravity.js
     cline.js
-    generic.js
 ```
 
 The exact file count may vary within 14-18. The concept budget is binding:

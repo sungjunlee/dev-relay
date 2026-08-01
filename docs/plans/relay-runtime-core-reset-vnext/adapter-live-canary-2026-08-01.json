@@ -1,0 +1,192 @@
+{
+  "evidence_status": "superseded_incomplete",
+  "superseded_by": "adapter-live-canary-2026-08-02.json",
+  "non_release_reason": "Historical one-phase policy allowed skip and fallback and did not cover the required 13-cell dispatch/review matrix.",
+  "generated_at": "2026-08-01T14:46:13.429Z",
+  "timeout_ms": 120000,
+  "results": [
+    {
+      "adapter": "claude",
+      "command": "claude",
+      "model": "default",
+      "provider": "anthropic",
+      "redaction": "production isolation receives no caller HOME, raw environment, credentials, prompt, result, stdout, or stderr evidence",
+      "phase": "primary_review",
+      "status": "failed",
+      "reason": "cli_nonzero_exit",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "version": "2.1.220 (Claude Code)"
+      },
+      "diagnostic_signals": [
+        "output_protocol"
+      ],
+      "checks": {
+        "boundary": "passed",
+        "exact_verdict": "failed",
+        "process_group_absent": "unknown",
+        "elapsed_ms": 2912
+      }
+    },
+    {
+      "adapter": "codex",
+      "command": "codex",
+      "model": "default",
+      "provider": "openai",
+      "redaction": "production isolation receives no caller HOME, raw environment, credentials, prompt, result, stdout, or stderr evidence",
+      "phase": "primary_review",
+      "status": "failed",
+      "reason": "cli_nonzero_exit",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "version": "codex-cli 0.146.0"
+      },
+      "diagnostic_signals": [
+        "home_or_config",
+        "output_protocol"
+      ],
+      "checks": {
+        "boundary": "passed",
+        "exact_verdict": "failed",
+        "process_group_absent": "unknown",
+        "elapsed_ms": 1048
+      }
+    },
+    {
+      "adapter": "opencode",
+      "command": "opencode",
+      "model": "opencode/north-mini-code-free",
+      "provider": "opencode",
+      "redaction": "production isolation receives no caller HOME, raw environment, credentials, prompt, result, stdout, or stderr evidence",
+      "fallback": {
+        "model": "opencode/north-mini-code-free",
+        "timeout_ms": 60000,
+        "primary": {
+          "status": "failed",
+          "reason": "cli_nonzero_exit",
+          "timeout_ms": 120000,
+          "elapsed_ms": 4786
+        }
+      },
+      "phase": "primary_review",
+      "status": "pass_with_fallback",
+      "reason": "fallback_production_path_passed",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "version": "1.18.10"
+      },
+      "checks": {
+        "boundary": "passed",
+        "exact_verdict": "passed",
+        "process_group_absent": "passed",
+        "elapsed_ms": 18557
+      }
+    },
+    {
+      "adapter": "pi",
+      "command": "pi",
+      "model": "default",
+      "provider": "pi",
+      "redaction": "production isolation receives no caller HOME, raw environment, credentials, prompt, result, stdout, or stderr evidence",
+      "phase": "primary_review",
+      "status": "failed",
+      "reason": "cli_nonzero_exit",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "version": "0.83.0"
+      },
+      "diagnostic_signals": [
+        "authentication",
+        "output_protocol"
+      ],
+      "checks": {
+        "boundary": "passed",
+        "exact_verdict": "failed",
+        "process_group_absent": "unknown",
+        "elapsed_ms": 1817
+      }
+    },
+    {
+      "adapter": "antigravity",
+      "command": "agy",
+      "model": "default",
+      "provider": "google",
+      "redaction": "production isolation receives no caller HOME, raw environment, credentials, prompt, result, stdout, or stderr evidence",
+      "phase": "primary_review",
+      "status": "skipped",
+      "reason": "credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "version": "1.1.9"
+      },
+      "diagnostic_signals": [
+        "authentication",
+        "output_protocol"
+      ],
+      "checks": {
+        "boundary": "passed",
+        "exact_verdict": "failed",
+        "process_group_absent": "unknown",
+        "elapsed_ms": 694
+      }
+    },
+    {
+      "adapter": "cursor",
+      "command": "agent",
+      "model": "default",
+      "provider": "cursor",
+      "redaction": "production isolation receives no caller HOME, raw environment, credentials, prompt, result, stdout, or stderr evidence",
+      "phase": "primary_review",
+      "status": "skipped",
+      "reason": "execution_environment_unavailable",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "version": "2026.07.23-e383d2b"
+      },
+      "diagnostic_signals": [
+        "filesystem_denied",
+        "output_protocol"
+      ],
+      "checks": {
+        "boundary": "passed",
+        "exact_verdict": "failed",
+        "process_group_absent": "unknown",
+        "elapsed_ms": 2293
+      }
+    },
+    {
+      "adapter": "cline",
+      "command": "cline",
+      "model": "default",
+      "provider": "cline-pass",
+      "redaction": "production isolation receives no caller HOME, raw environment, credentials, prompt, result, stdout, or stderr evidence",
+      "phase": "dispatch",
+      "status": "failed",
+      "reason": "invocation_failed",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "version": "3.0.47"
+      },
+      "diagnostic_signals": [],
+      "checks": {
+        "boundary": "passed",
+        "exact_verdict": "failed",
+        "process_group_absent": "passed",
+        "elapsed_ms": 2777
+      }
+    }
+  ],
+  "summary": {
+    "passed": 1,
+    "skipped": 2,
+    "failed": 4
+  },
+  "generated_by": "tests/relay-dispatch/scripts/adapter-live-canary-runner.js"
+}

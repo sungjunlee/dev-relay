@@ -44,6 +44,7 @@ single primary-review path.
 
 | Deleted production file | Test/doc/import evidence |
 | --- | --- |
+| `relay-dispatch/scripts/adapters/generic.js` | operator-provided argv-template execution and its absolute-command identity machinery were removed; only registered native descriptors remain |
 | `relay-dispatch/scripts/advisory-timing.js` | advisory timing tests and route-policy documentation removed; runtime inventory has no import edge |
 | `relay-dispatch/scripts/evaluation-contract.js` | evaluation-contract tests now assert direct closed-shape validation |
 | `relay-dispatch/scripts/extend-review-policy.js` | policy-extension tests now assert dispatch/review-only policy |
@@ -70,6 +71,12 @@ single primary-review path.
 | `relay-dispatch/scripts/route-failure-hints.js` | route-specific recovery hints removed with the routes they described |
 | `relay-dispatch/scripts/project-config.js` | project metadata writer/reader and its tests removed; no shipped runtime imports the deleted project configuration surface |
 | `relay-dispatch/scripts/cli-schema.js` | `cli-schema.test.js`, its reader fixture, and `references/cli-schema.md` were deleted; each command now declares a closed local flag taxonomy and the runtime inventory has no import edge |
+| `relay-dispatch/scripts/cli-args.js` | Every former consumer now owns its closed argv parser; command-local tests preserve unknown-flag, reserved-value, and verbatim-value behavior. The shared-parser unit test was deleted rather than relocated. |
+| `relay-dispatch/scripts/dispatch-publish.js` | Static-import, dynamic-invocation, and installed-operator-doc scans found no live consumer; its stale inventory row was removed. |
+| `relay-dispatch/scripts/manifest/inflight-runs.js` | No live import or invocation remained; its dedicated implementation test and obsolete semantic inventory seed were removed. |
+| `relay-dispatch/scripts/manifest/pr-number-stamp.js` | No live import or invocation remained; the obsolete inventory edge was removed without moving the helper. |
+| `relay-dispatch/scripts/wait-for-check.js` | No live import or operator command remained; its implementation test was removed with the script. |
+| `relay-dispatch/scripts/relay-config.js` | This was an unreachable duplicate of the public `skills/relay-config/scripts/relay-config.js`; only the public operator path remains. |
 | `relay-dispatch/scripts/reliability-report.js` | `reliability-report.test.js` and the installed reliability-report operator guidance were deleted; raw facts remain available for offline analysis without a shipped aggregation command |
 | `relay-plan/scripts/rubric-validation.js` | dead ready-light runtime validator and its test were deleted; rubric authoring remains a human-readable planning checklist |
 | `relay-plan/scripts/earned-rubric.js` | unreachable runtime rubric synthesis and its unit test were deleted; Done Criteria and rubric reference contracts retain RR-02 coverage |

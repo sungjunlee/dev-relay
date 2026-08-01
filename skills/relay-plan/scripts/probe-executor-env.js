@@ -16,13 +16,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const {
-  bindCliArgs,
-  findUnknownFlags,
-  getPositionals,
-  modeLabel: formatCliModeLabel,
-} = require("../../relay-dispatch/scripts/cli-args");
-const { getExecutor, listExecutors } = require("../../relay-dispatch/scripts/executors");
+const { getAdapter, listAdapters } = require("../../relay-dispatch/scripts/adapters");
 
 // ---------------------------------------------------------------------------
 // CLI (only when run directly)
@@ -38,13 +32,16 @@ function parseCli(argv) {
     booleanFlags: ["--project-only", "--json", "--help", "-h"],
     verbatimValueFlags: [],
   };
-  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
-  if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
-  const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
+  const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_ARG_OPTIONS.booleanFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (value) => value !== undefined && !String(value).startsWith("--") && !known.has(String(value));
+  args.forEach((token, index) => { const flag = name(token); if (known.has(flag) && !bool.has(flag) && !String(token).includes("=") && accepts(args[index + 1])) consumed.add(index + 1); });
+  const unknownFlags = args.filter((token, index) => !consumed.has(index) && String(token).startsWith("-") && !known.has(name(token))); if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+  const variants = (flag) => Array.isArray(flag) ? flag : [flag];
+  const cliArgs = { hasFlag: (flags) => variants(flags).some((flag) => args.some((token, index) => !consumed.has(index) && (token === flag || String(token).startsWith(`${flag}=`)))), getArg: (flags, fallback) => { for (const flag of variants(flags)) for (let index = 0; index < args.length; index += 1) { if (consumed.has(index)) continue; const token = String(args[index]); if (token === flag || token.startsWith(`${flag}=`)) { const value = token === flag ? args[index + 1] : token.slice(flag.length + 1); if (!accepts(value)) return fallback; return value; } } return fallback; } };
+  const formatCliModeLabel = (flag) => CLI_ARG_OPTIONS.booleanFlags.includes(flag) ? "[boolean]" : "[value]";
   if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
-    console.log(`Usage: probe-executor-env.js <repo-path> --executor <${listExecutors().join("|")}> [options]`);
+    console.log(`Usage: probe-executor-env.js <repo-path> --executor <${listAdapters().join("|")}> [options]`);
     console.log("\nOptions:");
-    console.log(`  --executor, -e   ${formatCliModeLabel("--executor", CLI_ARG_OPTIONS)} Executor to probe (${listExecutors().join(", ")})`);
+    console.log(`  --executor, -e   ${formatCliModeLabel("--executor", CLI_ARG_OPTIONS)} Executor to probe (${listAdapters().join(", ")})`);
     console.log(`  --model, -m      ${formatCliModeLabel("--model", CLI_ARG_OPTIONS)} Explicit provider/model selection`);
     console.log(`  --timeout        ${formatCliModeLabel("--timeout", CLI_ARG_OPTIONS)} Probe timeout in seconds (default: 30)`);
     console.log(`  --project-only   ${formatCliModeLabel("--project-only", CLI_ARG_OPTIONS)} Skip agent probe, only scan project tools`);
@@ -52,7 +49,7 @@ function parseCli(argv) {
     process.exit(0);
   }
 
-  const repoPathRaw = getPositionals(args, CLI_ARG_OPTIONS)[0];
+  const repoPathRaw = args.find((token, index) => !consumed.has(index) && !String(token).startsWith("-"));
 
   return {
     repoPath: path.resolve(repoPathRaw || "."),
@@ -194,11 +191,12 @@ function deriveTestInfra(projectTools) {
 function probeAgent(executor, timeout) {
   let adapter;
   try {
-    adapter = getExecutor(executor);
+    adapter = getAdapter(executor);
   } catch {
-    return { error: `unknown executor: ${executor}`, raw: null };
+    return { status: "unknown", error: `unknown executor: ${executor}`, version: null };
   }
-  return adapter.probe({ timeout });
+  const probe = adapter.probe({ timeoutMs: timeout * 1000 });
+  return { status: probe.status, error: probe.error, version: probe.raw };
 }
 
 // ---------------------------------------------------------------------------
@@ -208,17 +206,16 @@ function probeAgent(executor, timeout) {
 function run({ repoPath, executor, model, timeout, projectOnly, jsonOut }) {
   const projectTools = scanProjectTools(repoPath);
 
-  let agentProbe = { error: null, raw: null };
+  let executorAvailability = { status: "not_requested", error: null, version: null };
   if (!projectOnly) {
-    agentProbe = probeAgent(executor, timeout);
+    executorAvailability = probeAgent(executor, timeout);
   }
 
   const result = {
     executor: executor || null,
     model: typeof model === "string" && model.trim() ? model.trim() : null,
     repo: repoPath,
-    agent_tools_raw: agentProbe.raw,
-    agent_probe_error: agentProbe.error || null,
+    executor_availability: executorAvailability,
     test_infra: deriveTestInfra(projectTools),
     project_tools: projectTools,
   };
@@ -229,12 +226,12 @@ function run({ repoPath, executor, model, timeout, projectOnly, jsonOut }) {
     console.log(`Executor environment probe: ${executor || "(project-only)"}`);
     console.log(`Repo: ${repoPath}\n`);
 
-    if (agentProbe.error) {
-      console.log(`Agent probe: ${agentProbe.error}`);
-    } else if (agentProbe.raw) {
-      console.log(`Agent tools:\n${agentProbe.raw}`);
+    if (executorAvailability.error) {
+      console.log(`Executor availability: ${executorAvailability.error}`);
+    } else if (executorAvailability.version) {
+      console.log(`Executor version: ${executorAvailability.version}`);
     } else if (!projectOnly) {
-      console.log("Agent tools: none discovered");
+      console.log("Executor version: unavailable");
     }
 
     if (projectTools.frameworks.length > 0) {

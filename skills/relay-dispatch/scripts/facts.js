@@ -1,8 +1,11 @@
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { isDeepStrictEqual } = require("util");
 const { assertRunLockHeld } = require("./host");
 const {
   fsyncDirectory,
+  invokeExternalObserver,
   readRunRecord,
 } = require("./run-store");
 
@@ -27,6 +30,13 @@ const PAYLOAD_SCHEMAS = Object.freeze({
   },
   attempt_interrupted: {
     required: ["last_known_sha", "reason", "host_liveness", "reviewable_work"],
+  },
+  verification_recorded: {
+    required: [
+      "head_sha", "tree_sha", "done_criteria_sha256", "command",
+      "verification_request_sha256", "declared_command_count", "completed_command_count",
+      "result_path", "result_sha256", "exit_code", "status", "operator",
+    ],
   },
   lock_acquired: {
     required: ["lock_id", "operation", "host", "pid", "process_started_at"],
@@ -165,6 +175,40 @@ function validatePayload(type, payload, { allowFutureFields = false } = {}) {
       }
       boolean(payload.reviewable_work, "payload.reviewable_work");
       break;
+    case "verification_recorded":
+      sha(payload.head_sha, "payload.head_sha");
+      sha(payload.tree_sha, "payload.tree_sha");
+      sha(payload.done_criteria_sha256, "payload.done_criteria_sha256", { sha256: true });
+      string(payload.command, "payload.command");
+      sha(payload.verification_request_sha256, "payload.verification_request_sha256", { sha256: true });
+      integer(payload.declared_command_count, "payload.declared_command_count", { minimum: 1 });
+      integer(payload.completed_command_count, "payload.completed_command_count", { minimum: 0 });
+      if (payload.completed_command_count > payload.declared_command_count) {
+        fail("INVALID_FACT", "completed_command_count must not exceed declared_command_count");
+      }
+      string(payload.result_path, "payload.result_path");
+      sha(payload.result_sha256, "payload.result_sha256", { sha256: true });
+      integer(payload.exit_code, "payload.exit_code", { minimum: 0, nullable: true });
+      if (!new Set(["passed", "failed", "incomplete"]).has(payload.status)) {
+        fail("INVALID_FACT", "payload.status is invalid");
+      }
+      if (
+        payload.status === "passed"
+        && (payload.exit_code !== 0 || payload.completed_command_count !== payload.declared_command_count)
+      ) {
+        fail("INVALID_FACT", "passed verification requires exit_code=0 and all declared commands completed");
+      }
+      if (payload.status === "failed" && (payload.exit_code === null || payload.exit_code === 0)) {
+        fail("INVALID_FACT", "failed verification requires a nonzero exit_code");
+      }
+      if (
+        payload.status === "incomplete"
+        && (payload.exit_code !== null || payload.completed_command_count >= payload.declared_command_count)
+      ) {
+        fail("INVALID_FACT", "incomplete verification requires exit_code=null and incomplete command execution");
+      }
+      string(payload.operator, "payload.operator");
+      break;
     case "lock_acquired":
       string(payload.lock_id, "payload.lock_id");
       string(payload.operation, "payload.operation");
@@ -212,7 +256,7 @@ function validatePayload(type, payload, { allowFutureFields = false } = {}) {
       sha(payload.reviewed_source_sha, "payload.reviewed_source_sha");
       sha(payload.pr_head_sha, "payload.pr_head_sha");
       sha(payload.result_target_sha, "payload.result_target_sha");
-      if (!new Set(["squash", "merge", "rebase"]).has(payload.method)) {
+      if (!new Set(["squash", "merge", "rebase", "external"]).has(payload.method)) {
         fail("INVALID_FACT", "payload.method is invalid");
       }
       string(payload.operator, "payload.operator");
@@ -252,6 +296,9 @@ function validateFact(fact, { allowUnknown = false, allowFutureFields = false } 
     fail("INVALID_FACT", "fact.at must be an ISO-8601 timestamp");
   }
   validatePayload(type, fact.payload, { allowFutureFields });
+  if (type === "verification_recorded" && fact.actor !== fact.payload.operator) {
+    fail("INVALID_FACT", "verification_recorded actor must equal payload.operator");
+  }
   return { known: true, fact };
 }
 
@@ -373,21 +420,23 @@ function appendFact({ eventsPath, fact, lockContext, fsModule = fs }) {
   return fact;
 }
 
-function readFacts({ eventsPath }) {
+function readFacts({ eventsPath, fsModule = fs }) {
   const journal = canonicalJournal(eventsPath);
   let bytes;
   let fd;
   try {
-    fd = fs.openSync(
+    fd = fsModule.openSync(
       journal.eventsPath,
-      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
+      fs.constants.O_RDONLY
+        | (fs.constants.O_NOFOLLOW || 0)
+        | (fs.constants.O_NONBLOCK || 0),
     );
-    const before = fs.fstatSync(fd);
+    const before = fsModule.fstatSync(fd);
     if (!before.isFile()) {
       fail("UNTRUSTED_FACT_JOURNAL", `${eventsPath} must be a regular non-symlink file`);
     }
-    bytes = fs.readFileSync(fd);
-    const after = fs.fstatSync(fd);
+    bytes = fsModule.readFileSync(fd);
+    const after = fsModule.fstatSync(fd);
     if (before.dev !== after.dev || before.ino !== after.ino) {
       fail("UNTRUSTED_FACT_JOURNAL", `${eventsPath} changed identity while being read`);
     }
@@ -398,7 +447,7 @@ function readFacts({ eventsPath }) {
     }
     throw error;
   } finally {
-    if (fd !== undefined) fs.closeSync(fd);
+    if (fd !== undefined) fsModule.closeSync(fd);
   }
   const finalNewline = bytes.lastIndexOf(0x0a);
   const tailIncomplete = bytes.length > 0 && finalNewline !== bytes.length - 1;
@@ -451,7 +500,7 @@ function repairTornTail({
 }) {
   const journal = canonicalJournal(eventsPath);
   requireLockHeld(lockContext, journal.eventsPath);
-  const read = readFacts({ eventsPath: journal.eventsPath });
+  const read = readFacts({ eventsPath: journal.eventsPath, fsModule });
   if (!read.tailIncomplete) return { repaired: false, quarantinePath: null };
   const prefix = `${journal.eventsPath}.corrupt-tail.${safeTimestamp(at)}`;
   let quarantinePath;
@@ -485,11 +534,20 @@ function repairTornTail({
   }
   fsyncDirectory(journal.runDir, fsModule);
   fault?.("quarantine_dir_fsync");
-  const bytes = fsModule.readFileSync(journal.eventsPath);
-  fault?.("journal_read");
-  const truncateAt = bytes.lastIndexOf(0x0a) + 1;
-  const fd = fsModule.openSync(journal.eventsPath, fs.constants.O_RDWR);
+  const fd = fsModule.openSync(
+    journal.eventsPath,
+    fs.constants.O_RDWR
+      | (fs.constants.O_NOFOLLOW || 0)
+      | (fs.constants.O_NONBLOCK || 0),
+  );
   try {
+    const opened = fsModule.fstatSync(fd);
+    if (!opened.isFile()) {
+      fail("UNTRUSTED_FACT_JOURNAL", `${eventsPath} must remain a regular non-symlink file`);
+    }
+    const bytes = fsModule.readFileSync(fd);
+    fault?.("journal_read");
+    const truncateAt = bytes.lastIndexOf(0x0a) + 1;
     fsModule.ftruncateSync(fd, truncateAt);
     fault?.("journal_truncate");
     fsModule.fsyncSync(fd);
@@ -502,6 +560,145 @@ function repairTornTail({
   return { repaired: true, quarantinePath };
 }
 
+const issuedAuthorizations = new WeakSet(), issuedObservations = new WeakSet();
+function validateReviewBinding({ verdict, currentSha, doneCriteriaSha256 }) {
+  const valid = Boolean(verdict && verdict.reviewed_sha === currentSha && verdict.done_criteria_sha256 === doneCriteriaSha256);
+  return { valid, reason: valid ? null : "review_binding_mismatch" };
+}
+function safeOperationId(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) throw new Error("merge operation id must be a safe path-independent identifier");
+  return value;
+}
+function regularBytes(filePath, label) {
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+  try {
+    const before = fs.fstatSync(fd);
+    if (!before.isFile()) throw new Error(`${label} must be a regular non-symlink file`);
+    const bytes = fs.readFileSync(fd);
+    const after = fs.fstatSync(fd);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size) {
+      throw new Error(`${label} changed identity while being read`);
+    }
+    return { bytes, stat: after };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+function immutableJson(filePath, value) {
+  const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
+  try { fs.writeFileSync(filePath, bytes, { flag: "wx", mode: 0o600 }); fsyncDirectory(path.dirname(filePath)); }
+  catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const existing = regularBytes(filePath, "immutable merge artifact").bytes;
+    if (!existing.equals(bytes)) throw new Error("immutable merge artifact conflict");
+  }
+}
+function authKey(runDir, lockContext) {
+  assertRunLockHeld(lockContext, { runDir });
+  const file = path.join(runDir, ".merge-authorization.key");
+  try { fs.writeFileSync(file, crypto.randomBytes(32), { flag: "wx", mode: 0o600 }); fsyncDirectory(runDir); } catch (error) { if (error.code !== "EEXIST") throw error; }
+  const opened = regularBytes(file, "merge authorization key"), stat = opened.stat, key = opened.bytes;
+  if ((stat.mode & 0o077) || key.length !== 32) throw new Error("merge authorization key permissions are unsafe");
+  return key;
+}
+function authFields(value) {
+  return { schema_version: value.schema_version, run_id: value.run_id, operation_id: value.operation_id,
+    authorization_id: value.authorization_id, observation_nonce: value.observation_nonce, issued_lock_id: value.issued_lock_id,
+    pr_number: value.pr_number, pr_head_sha: value.pr_head_sha, done_criteria_sha256: value.done_criteria_sha256,
+    operator: value.operator, github_login: value.github_login, method: value.method, override_reason: value.override_reason };
+}
+function readAuthorization(runDir, operationId, lockContext) {
+  safeOperationId(operationId);
+  const durable = JSON.parse(regularBytes(
+    path.join(runDir, `merge-authorization-${operationId}.json`),
+    "merge authorization",
+  ).bytes.toString("utf8"));
+  const expected = crypto.createHmac("sha256", authKey(runDir, lockContext)).update(JSON.stringify(authFields(durable))).digest("hex");
+  if (!/^[0-9a-f]{64}$/.test(durable.hmac_sha256 || "") || !crypto.timingSafeEqual(Buffer.from(durable.hmac_sha256), Buffer.from(expected))) throw new Error("durable merge authorization HMAC is invalid");
+  return durable;
+}
+async function revalidateExternalFacts({ runDir, lockContext, observer, request, authorize }) {
+  const canonical = fs.realpathSync(runDir); assertRunLockHeld(lockContext, { runDir: canonical });
+  if (!observer?.command) throw new Error("a fresh external observer argv process is required");
+  const input = Object.freeze({ schema_version: 1, run_id: readRunRecord({ runDir: canonical }).run_id, nonce: crypto.randomUUID(), request });
+  const observed = invokeExternalObserver({ observer, request: input, timeoutMs: observer.timeoutMs });
+  if (!observed || typeof observed !== "object" || observed.nonce !== input.nonce) throw new Error("fresh external observer nonce does not match its immutable request");
+  const observationCapability = Object.freeze({ kind: "relay-vnext-fresh-observation", nonce: input.nonce,
+    facts: Object.freeze({ ...observed }), runDir: canonical, lockContext });
+  issuedObservations.add(observationCapability);
+  return { decision: await authorize(observed, { lockContext, request: input }), facts: observed, observationCapability };
+}
+function requireObservation(runDir, lockContext, fresh) {
+  const canonical = fs.realpathSync(runDir); assertRunLockHeld(lockContext, { runDir: canonical });
+  if (!issuedObservations.has(fresh) || fresh.lockContext !== lockContext || fresh.runDir !== canonical) throw new Error("an issued fresh observation under the current run lock is required");
+  return canonical;
+}
+function issueAuthorization(canonical, lockContext, fresh, durable) {
+  const authorization = Object.freeze({ kind: "relay-vnext-merge-authorization", authorized: true, actor: durable.operator,
+    method: durable.method, headSha: durable.pr_head_sha, doneCriteriaSha256: durable.done_criteria_sha256,
+    prNumber: durable.pr_number, operationId: durable.operation_id, observationNonce: fresh.nonce, runDir: canonical,
+    lockContext, authorizationId: durable.authorization_id, githubLogin: durable.github_login,
+    overrideReason: durable.override_reason });
+  issuedAuthorizations.add(authorization); return authorization;
+}
+function planOperatorMerge({ runDir, lockContext, freshObservation, operatorAction, currentHead, currentDoneCriteriaSha256, verdict, prNumber }) {
+  const canonical = requireObservation(runDir, lockContext, freshObservation);
+  if (!operatorAction?.actor || !["squash", "merge", "rebase", "external"].includes(operatorAction.method)) throw new Error("an explicit operator merge action is required");
+  const external = operatorAction.method === "external";
+  const githubLogin = external ? null : String(operatorAction.githubLogin || "").trim();
+  if (!external && (!githubLogin || githubLogin.length > 255 || githubLogin.includes("\0") || /[\r\n]/.test(githubLogin))) {
+    throw new Error("an authenticated GitHub login is required for a requested merge");
+  }
+  if (external ? freshObservation.facts.pr_state !== "MERGED" || !operatorAction.overrideReason?.trim()
+    : !validateReviewBinding({ verdict, currentSha: currentHead, doneCriteriaSha256: currentDoneCriteriaSha256 }).valid || !["lgtm", "pass"].includes(verdict?.verdict)) throw new Error("merge review binding is not current");
+  if (!Number.isInteger(prNumber) || freshObservation.facts.pr_number !== prNumber || freshObservation.facts.pr_head_sha !== currentHead) throw new Error("merge inputs do not match the fresh locked observation");
+  const operationId = operatorAction.operationId === undefined ? crypto.randomUUID() : safeOperationId(operatorAction.operationId);
+  const durable = { schema_version: 1, run_id: readRunRecord({ runDir: canonical }).run_id, operation_id: operationId,
+    authorization_id: crypto.randomUUID(), observation_nonce: freshObservation.nonce, issued_lock_id: lockContext.lock_id,
+    pr_number: prNumber, pr_head_sha: currentHead, done_criteria_sha256: currentDoneCriteriaSha256,
+    operator: operatorAction.actor, github_login: githubLogin, method: operatorAction.method,
+    override_reason: external ? operatorAction.overrideReason.trim() : null };
+  immutableJson(path.join(canonical, `merge-authorization-${operationId}.json`), { ...durable,
+    hmac_sha256: crypto.createHmac("sha256", authKey(canonical, lockContext)).update(JSON.stringify(durable)).digest("hex") });
+  return issueAuthorization(canonical, lockContext, freshObservation, durable);
+}
+function resumeOperatorMerge({ runDir, lockContext, operationId, freshObservation }) {
+  const canonical = requireObservation(runDir, lockContext, freshObservation), durable = readAuthorization(canonical, operationId, lockContext);
+  const record = readRunRecord({ runDir: canonical });
+  if (durable.run_id !== record.run_id || durable.done_criteria_sha256 !== record.contract.done_criteria_sha256
+    || durable.pr_number !== freshObservation.facts.pr_number || durable.pr_head_sha !== freshObservation.facts.pr_head_sha) throw new Error("durable merge authorization does not match fresh locked observations");
+  return issueAuthorization(canonical, lockContext, freshObservation, durable);
+}
+async function recordMerge({ eventsPath, at = new Date().toISOString(), provenance, authorization, lockContext, observer, fault = null }) {
+  if (!issuedAuthorizations.has(authorization) || authorization.lockContext !== lockContext) throw new Error("an issued explicit merge authorization capability is required");
+  if (authorization.actor !== provenance.operator || authorization.method !== provenance.method || authorization.overrideReason !== provenance.override_reason
+    || authorization.prNumber !== provenance.pr_number || authorization.headSha !== provenance.reviewed_source_sha || authorization.headSha !== provenance.pr_head_sha) throw new Error("merge provenance does not match its explicit authorization");
+  const record = readRunRecord({ runDir: path.dirname(path.resolve(eventsPath)) });
+  const durable = readAuthorization(authorization.runDir, authorization.operationId, lockContext);
+  if (durable.authorization_id !== authorization.authorizationId || durable.github_login !== authorization.githubLogin
+    || durable.run_id !== record.run_id || authorization.doneCriteriaSha256 !== record.contract.done_criteria_sha256) throw new Error("issued merge capability does not match its durable authorization");
+  const fresh = await revalidateExternalFacts({ runDir: authorization.runDir, lockContext, observer,
+    request: { operation_id: authorization.operationId, pr_number: authorization.prNumber, expected_pr_head_sha: authorization.headSha,
+      expected_result_target_sha: provenance.result_target_sha, required_state: "MERGED" }, authorize: (seen) => {
+      if (seen.pr_number !== authorization.prNumber || seen.pr_head_sha !== authorization.headSha || seen.pr_state !== "MERGED" || seen.merge_sha !== provenance.result_target_sha) throw new Error("record-time observer did not prove the exact merged PR and target SHA");
+      return { authorized: true };
+    } });
+  const payload = { ...provenance, operation_id: authorization.operationId, authorization_id: authorization.authorizationId,
+    observation_nonce: fresh.observationCapability.nonce, done_criteria_sha256: authorization.doneCriteriaSha256 };
+  const existing = readFacts({ eventsPath }).facts.filter((fact) => fact.type === "merge_recorded");
+  const converged = existing.find((fact) => fact.payload.operation_id === authorization.operationId);
+  if (converged) {
+    if (!isDeepStrictEqual({ ...converged.payload, observation_nonce: null }, { ...payload, observation_nonce: null })) throw new Error("merge operation already exists with conflicting provenance");
+    immutableJson(path.join(authorization.runDir, `merge-receipt-${authorization.operationId}.json`), { schema_version: 1,
+      operation_id: authorization.operationId, authorization_id: authorization.authorizationId, event_id: converged.event_id, payload: converged.payload }); return converged;
+  }
+  if (existing.length) throw new Error("a different merge operation is already recorded");
+  const fact = { event_id: crypto.randomUUID(), run_id: record.run_id, type: "merge_recorded", at, actor: provenance.operator, payload };
+  appendFact({ eventsPath, fact, lockContext }); fault?.("after_fact_append");
+  immutableJson(path.join(authorization.runDir, `merge-receipt-${authorization.operationId}.json`), { schema_version: 1,
+    operation_id: authorization.operationId, authorization_id: authorization.authorizationId, event_id: fact.event_id, payload }); return fact;
+}
+
 module.exports = {
   ATTEMPT_TYPES,
   MAX_FACT_BYTES,
@@ -509,7 +706,12 @@ module.exports = {
   appendFact,
   canonicalFactLine,
   factFromHostAudit,
+  planOperatorMerge,
   readFacts,
+  recordMerge,
   repairTornTail,
+  resumeOperatorMerge,
+  revalidateExternalFacts,
+  validateReviewBinding,
   validateFact,
 };

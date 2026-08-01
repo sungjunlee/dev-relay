@@ -12,21 +12,19 @@ node skills/relay-dispatch/scripts/dispatch.js . \
   --rubric-file /tmp/issue-42-rubric.yaml
 ```
 
-`relay-config check` is read-only: it reports whether a selected adapter and
-model can serve the requested phase. It does not write project configuration,
+`relay-config check` is read-only: it reports adapter capability for the
+selected model and requested phase. It does not write project configuration,
 presets, or selection state.
 
 ```bash
 node skills/relay-config/scripts/relay-config.js \
-  check dispatch opencode example/opencode-model-fast --json
+  check --phase dispatch --executor opencode --model example/opencode-model-fast --json
 node skills/relay-config/scripts/relay-config.js \
-  check review pi example/pi-model-fast --json
+  check --phase review --reviewer pi --model example/pi-model-fast --json
 node skills/relay-config/scripts/relay-config.js \
-  check review antigravity google/antigravity-cli --json
+  check --phase review --reviewer antigravity --model google/antigravity-cli --json
 ```
 
 On resume, the executor and model are immutable. A run with a null model
-binding continues to use its adapter default; a legacy run without a model
-binding rejects a newly supplied `--model` unless it is migrated through an
-explicit audited operation. Persisted historical `model_hints`, `routes`, and
-`routing` fields are inert audit data.
+binding continues to use its adapter default. `relay-config` has no commands
+that mutate routes, presets, policy state, or defaults.

@@ -27,6 +27,7 @@ test("pi live canary is opt-in and records explicit adapter/model capability", {
   const output = JSON.parse(probe.stdout);
   assert.equal(output.executor, "pi");
   assert.equal(output.model, model);
-  assert.equal(output.agent_probe_error, null);
+  assert.equal(output.executor_availability.status, "available");
+  assert.equal(output.executor_availability.error, null);
   assert.equal(Object.hasOwn(output, "policy_decision"), false);
 });

@@ -2,9 +2,16 @@
 
 const fs = require("fs");
 const path = require("path");
-const {
-  readTextFileWithoutFollowingSymlinks,
-} = require("../../relay-dispatch/scripts/manifest/rubric");
+
+function readTextFileWithoutFollowingSymlinks(filePath) {
+  const descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) throw new Error(`not a regular file: ${filePath}`);
+    return fs.readFileSync(descriptor, "utf8");
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
 
 const SIGNAL_KEYS = ["test_infra", "type_check", "lint_format"];
 const TEST_RUNNERS = new Set([

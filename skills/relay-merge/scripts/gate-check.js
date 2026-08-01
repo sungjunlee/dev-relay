@@ -1,441 +1,82 @@
 #!/usr/bin/env node
-/**
- * Verify relay-review audit trail before merge.
- *
- * Checks that a PR has a <!-- relay-review --> comment with a verdict.
- * Hard gate by default; --skip <reason> provides a documented escape hatch.
- *
- * Usage:
- *   ./gate-check.js <PR-number> [options]
- *
- * Options:
- *   --skip <reason>   Skip review gate with documented reason (writes PR comment)
- *   --dry-run         Parse from stdin instead of calling gh CLI
- *   --json            Output result as JSON
- *   --help, -h        Show usage
- *
- * Exit codes:
- *   0  LGTM or skip (with audit trail)
- *   1  No review comment, stale review, CHANGES_REQUESTED, ESCALATED, or error
- *
- * Examples:
- *   ./gate-check.js 42                        # Check PR #42 for review
- *   ./gate-check.js 42 --skip "hotfix"        # Skip with documented reason
- *   echo '<json>' | ./gate-check.js 42 --dry-run  # Test with mock data
- */
+"use strict";
 
-const fs = require("fs");
-const path = require("path");
-const {
-  buildSkipReviewGateFailure,
-  buildSkipComment,
-  evaluateReviewGate,
-  summarizeRubricAuditForSkip,
-} = require("./review-gate");
-const {
-  buildReviewRunnerRubricGateFailure,
-  loadRubricFromRunDir,
-} = require("../../relay-dispatch/scripts/manifest/rubric");
-const {
-  getCanonicalRepoRoot,
-  getRunDir,
-  validateManifestPaths,
-} = require("../../relay-dispatch/scripts/manifest/paths");
-const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
-const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
-const { stampPrNumberUnderLock } = require("../../relay-dispatch/scripts/manifest/pr-number-stamp");
-const {
-  findUnknownFlags,
-  getPositionals,
-  modeLabel: formatCliModeLabel,
-  readArg,
-  schemaHasFlag,
-} = require("../../relay-dispatch/scripts/cli-args");
-const { execGh } = require("../../relay-dispatch/scripts/exec");
+/** Read-only vNext merge gate. It never records an override or mutates a run. */
 
-function getGateCheckRepoRoot() {
-  return getCanonicalRepoRoot(process.cwd());
+const { parseArgs } = require("util");
+
+const { inspectProductionRun } = require("../../relay-dispatch/scripts/recover");
+const { requireMergeAction, resolveRun } = require("./review-gate");
+
+const OPTIONS = Object.freeze({
+  repo: { type: "string" },
+  "run-dir": { type: "string" },
+  "run-id": { type: "string" },
+  json: { type: "boolean", default: false },
+  help: { type: "boolean", short: "h", default: false },
+});
+
+function usage() {
+  return [
+    "Usage: gate-check.js --repo <path> (--run-id <id> | --run-dir <path>) [--json]",
+    "",
+    "Read the canonical vNext inspection and require an exact-SHA passing review.",
+    "This command is read-only. Review bypasses are not part of the vNext merge contract.",
+  ].join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Args
-// ---------------------------------------------------------------------------
-
-const args = process.argv.slice(2);
-const CLI_ARG_OPTIONS = {
-  reservedFlags: ["--skip", "--dry-run", "--json", "--help", "-h"],
-  booleanFlags: ["--dry-run", "--json", "--help", "-h"],
-  verbatimValueFlags: ["--skip"],
-};
-const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
-
-if (!args.length || hasCliFlag("--help") || hasCliFlag("-h")) {
-  console.log("Usage: gate-check.js <PR-number> [--skip <reason>] [--dry-run] [--json]");
-  console.log("\nVerify relay-review audit trail before merge.");
-  console.log("\nOptions:");
-  console.log(`  --skip <reason>   ${formatCliModeLabel("--skip", CLI_ARG_OPTIONS)} Skip review with documented reason (writes PR comment)`);
-  console.log(`  --dry-run         ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Read comment JSON from stdin instead of gh CLI`);
-  console.log(`  --json            ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output as JSON`);
-  process.exit(hasCliFlag("--help") || hasCliFlag("-h") ? 0 : 1);
-}
-
-const UNKNOWN_FLAGS = findUnknownFlags(args, CLI_ARG_OPTIONS);
-if (UNKNOWN_FLAGS.length) {
-  console.error(`Error: unknown flags: ${UNKNOWN_FLAGS.join(", ")}`);
-  process.exit(1);
-}
-
-const PR_NUM = getPositionals(args, CLI_ARG_OPTIONS)[0];
-if (!PR_NUM || !/^\d+$/.test(PR_NUM)) {
-  console.error("Error: PR number is required (positive integer)");
-  process.exit(1);
-}
-
-const DRY_RUN = hasCliFlag("--dry-run");
-const JSON_OUT = hasCliFlag("--json");
-
-const SKIP = hasCliFlag("--skip");
-const SKIP_REASON = readArg(args, "--skip", null, CLI_ARG_OPTIONS);
-
-if (SKIP && !SKIP_REASON) {
-  console.error("Error: --skip requires a reason. Example: --skip \"hotfix for production outage\"");
-  process.exit(1);
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function tryResolveManifestForPr(prNumber, headRefName) {
-  try {
-    // gate-check runs before merge finalization, so it must never resolve merged/closed manifests.
-    const manifestRecord = resolveManifestRecord({
-      repoRoot: getGateCheckRepoRoot(),
-      prNumber,
-      branch: headRefName || undefined,
-    });
-    const numericPrNumber = Number(prNumber);
-    if (
-      Number.isInteger(numericPrNumber)
-      && numericPrNumber >= 0
-      && (manifestRecord.data?.git?.pr_number === undefined || manifestRecord.data?.git?.pr_number === null)
-    ) {
-      return stampPrNumberUnderLock(manifestRecord, numericPrNumber, {
-        expectedRepoRoot: getGateCheckRepoRoot(),
-        caller: "gate-check PR stamping",
-        reason: `Stamped git.pr_number=${numericPrNumber} during gate-check PR resolution`,
-      });
-    }
-    return manifestRecord;
-  } catch (error) {
-    return { error };
+function parseCli(argv) {
+  let parsed;
+  try { parsed = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true }); }
+  catch (error) {
+    const unknown = /^Unknown option ['\"]?([^'\"]+)['\"]?/.exec(error.message);
+    if (unknown) error.message = `unknown flag: ${unknown[1]}`;
+    error.code = "MERGE_USAGE";
+    throw error;
   }
+  if (parsed.values.help) return { help: true, values: parsed.values, repo: "." };
+  if (parsed.positionals.length > 1) throw Object.assign(new Error("at most one positional repo is allowed"), { code: "MERGE_USAGE" });
+  if (parsed.values.repo && parsed.positionals.length) throw Object.assign(new Error("use positional repo or --repo, not both"), { code: "MERGE_USAGE" });
+  return { help: false, values: parsed.values, repo: parsed.values.repo || parsed.positionals[0] || "." };
 }
 
-function resolveSkipAuditContext(prNumber) {
-  try {
-    const raw = execGh(null, ["pr", "view", String(prNumber), "--json", "headRefName"]);
-    const parsed = JSON.parse(raw);
-    const manifestRecord = tryResolveManifestForPr(prNumber, parsed.headRefName || null);
-    if (manifestRecord.error || !manifestRecord.data) {
-      return {
-        rubricStatus: "unresolved-manifest",
-        manifestData: null,
-        runDir: null,
-      };
-    }
-
-    let manifestData = manifestRecord.data;
-    const validatedPaths = validateManifestPaths(manifestData.paths, {
-      expectedRepoRoot: getGateCheckRepoRoot(),
-      manifestPath: manifestRecord.manifestPath,
-      runId: manifestData.run_id,
-      caller: "gate-check skip audit",
-    });
-    manifestData = {
-      ...manifestData,
-      paths: {
-        ...(manifestData.paths || {}),
-        repo_root: validatedPaths.repoRoot,
-        worktree: validatedPaths.worktree,
-      },
-    };
-
-    const runDir = getRunDir(validatedPaths.repoRoot, manifestData.run_id);
-    const rubricAudit = summarizeRubricAuditForSkip(manifestData, { runDir });
-    return {
-      ...rubricAudit,
-      manifestData,
-      runDir,
-    };
-  } catch {
-    return {
-      rubricStatus: "unresolved-manifest",
-      readyToMerge: true,
-      manifestData: null,
-      runDir: null,
-    };
-  }
-}
-
-function deriveReviewRunnerRubricGate(manifestData, runDir) {
-  if (!manifestData || !runDir) {
-    return null;
-  }
-
-  const rubricLoad = loadRubricFromRunDir(runDir, manifestData);
-  const gateFailure = buildReviewRunnerRubricGateFailure(
-    manifestData.run_id,
-    path.join(runDir, ".gate-check-rubric-recovery.md"),
-    rubricLoad
-  );
-  if (!gateFailure) {
-    return null;
-  }
-
+async function checkGate(cli, overrides = {}) {
+  const inspectRun = overrides.inspectRun || inspectProductionRun;
+  const resolved = resolveRun({
+    repo: cli.repo,
+    runDir: cli.values["run-dir"] || null,
+    runId: cli.values["run-id"] || null,
+  });
+  const inspection = await inspectRun({ runDir: resolved.runDir });
+  const binding = requireMergeAction(inspection, resolved.record);
   return {
-    status: gateFailure.status,
-    layer: gateFailure.layer,
-    rubricState: gateFailure.rubricState,
-    rubricStatus: gateFailure.rubricStatus,
+    ready_to_merge: true,
+    run_id: resolved.record.run_id,
+    pr_number: binding.prNumber,
+    reviewed_sha: binding.head,
+    done_criteria_sha256: resolved.record.contract.done_criteria_sha256,
+    reviewer: binding.review.payload.reviewer,
+    action_key: inspection.recommended_action.key,
   };
 }
 
-const STATUS_RENDERERS = {
-  lgtm(result, prNumber) {
-    console.log(`✓ PR #${prNumber}: relay-review LGTM (round ${result.round || "?"}) — ready to merge`);
-  },
-  skipped(result, prNumber) {
-    console.log(`⊘ PR #${prNumber}: review skipped — ${result.reason} — merge explicitly if appropriate`);
-  },
-  escalated(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: relay-review ESCALATED — resolve issues before merge`);
-    if (result.issues) console.log(`  ${result.issues}`);
-  },
-  changes_requested(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: relay-review requested changes — re-dispatch or fix the branch before merge`);
-    if (result.issues) console.log(`  ${result.issues}`);
-  },
-  missing_rubric_path(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: run is missing anchor.rubric_path — merge blocked`);
-    console.log("  Run relay-plan re-dispatch with --rubric-file before rerunning relay-review.");
-  },
-  missing_rubric_file(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: anchored rubric file is missing from the run directory — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
-    console.log("  Restore the anchored rubric file, or re-dispatch with a persisted rubric before rerunning relay-review.");
-  },
-  empty_rubric_file(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: anchored rubric file is empty — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
-    console.log("  Regenerate the rubric with relay-plan and re-dispatch before rerunning relay-review.");
-  },
-  invalid_rubric_path(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: anchor.rubric_path escapes the run directory — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
-    console.log("  Fix anchor.rubric_path to stay inside the run directory, then re-dispatch before rerunning relay-review.");
-  },
-  invalid_rubric_file(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: anchor.rubric_path does not point to a readable rubric file — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
-    console.log("  Fix or restore the anchored rubric file, then re-dispatch before rerunning relay-review.");
-  },
-  unsupported_grandfather_field(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: manifest still carries anchor.rubric_grandfathered — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
-    console.log("  Remove anchor.rubric_grandfathered and persist a valid anchor.rubric_path before rerunning relay-review.");
-  },
-  manifest_resolution_failed(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: unable to resolve relay manifest — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
-  },
-  reviewer_login_required(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: reviewer_login was required for this run but could not be recorded — merge blocked`);
-    console.log("  Origin resolved to a non-default GitHub host but gh api user --hostname <host> failed during relay-review.");
-    console.log("  Fix the host auth (export GH_HOST=<host> or gh auth switch --hostname <host>), rerun relay-review, then retry.");
-  },
-  hardened_execution_evidence_failed(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: hardened execution evidence failed — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
-  },
-  unauthorized_reviewer(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: relay-review comment found but from unauthorized author (expected: ${result.expectedReviewerLogin})`);
-  },
-  stale(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: relay-review is stale — run review again for the latest commit before merge`);
-    if (result.latestCommit) console.log(`  Latest commit: ${result.latestCommit}`);
-    if (result.reviewedAt) console.log(`  Review time:   ${result.reviewedAt}`);
-  },
-};
-
-function defaultStatusRenderer(result, prNumber) {
-  console.log(`✗ PR #${prNumber}: no relay-review comment found`);
-  console.log("  Run /relay-review first, or use --skip <reason> to bypass with audit trail.");
+async function main(argv = process.argv.slice(2)) {
+  const cli = parseCli(argv);
+  if (cli.help) {
+    console.log(usage());
+    return 0;
+  }
+  const result = await checkGate(cli);
+  console.log(cli.values.json ? JSON.stringify(result) : JSON.stringify(result, null, 2));
+  return 0;
 }
 
-function output(result) {
-  if (JSON_OUT) {
-    console.log(JSON.stringify(result, null, 2));
-  } else {
-    (STATUS_RENDERERS[result.status] || defaultStatusRenderer)(result, PR_NUM);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
-function main() {
-  // --- Skip path: write audit comment and exit ---
-  if (SKIP) {
-    const skipAudit = DRY_RUN
-      ? {
-          rubricStatus: "unresolved-manifest",
-          readyToMerge: true,
-          manifestData: null,
-          runDir: null,
-        }
-      : resolveSkipAuditContext(PR_NUM);
-    const skipGateFailure = buildSkipReviewGateFailure(PR_NUM, skipAudit);
-    if (skipGateFailure) {
-      output(skipGateFailure);
-      process.exit(1);
-    }
-    const skipComment = buildSkipComment(SKIP_REASON, skipAudit);
-
-    if (DRY_RUN) {
-      output({
-        status: "skipped",
-        pr: PR_NUM,
-        reason: SKIP_REASON,
-        comment: skipComment,
-        rubricStatus: skipAudit.rubricStatus,
-        readyToMerge: true,
-      });
-    } else {
-      execGh(null, ["pr", "comment", PR_NUM, "--body", skipComment]);
-      output({
-        status: "skipped",
-        pr: PR_NUM,
-        reason: SKIP_REASON,
-        rubricStatus: skipAudit.rubricStatus,
-        readyToMerge: true,
-      });
-    }
-    return;
-  }
-
-  // --- Check path: look for relay-review comment ---
-  let comments;
-  let commits;
-  let manifestData = null;
-  let runDir = null;
-  let headRefOid = null;
-  if (DRY_RUN) {
-    // Dry-run: read JSON object/array from stdin, or plain text as single comment
-    const stdin = require("fs").readFileSync(0, "utf-8").trim();
-    try {
-      const parsed = JSON.parse(stdin);
-      // Accept {comments:[...], commits:[...]} or [{body:...}] or [string]
-      comments = parsed.comments || parsed;
-      commits = Array.isArray(parsed.commits) ? parsed.commits : [];
-      manifestData = parsed.manifest || null;
-      runDir = typeof parsed.runDir === "string" ? parsed.runDir : null;
-      headRefOid = typeof parsed.headRefOid === "string" ? parsed.headRefOid : null;
-    } catch {
-      // Plain text: treat entire stdin as one comment body
-      comments = [{ body: stdin, createdAt: null }];
-      commits = [];
-    }
-  } else {
-    const raw = execGh(null, ["pr", "view", PR_NUM, "--json", "comments,commits,headRefName,headRefOid"]);
-    const parsed = JSON.parse(raw);
-    comments = parsed.comments || [];
-    commits = parsed.commits || [];
-    headRefOid = parsed.headRefOid || null;
-    const manifestRecord = tryResolveManifestForPr(PR_NUM, parsed.headRefName || null);
-    if (manifestRecord.error || !manifestRecord.data) {
-      output({
-        status: "manifest_resolution_failed",
-        pr: PR_NUM,
-        readyToMerge: false,
-        reason: manifestRecord.error
-          ? manifestRecord.error.message
-          : `resolveManifestRecord returned no manifest data for PR #${PR_NUM}`,
-      });
-      process.exit(1);
-    }
-    manifestData = manifestRecord.data;
-    try {
-      const validatedPaths = validateManifestPaths(manifestData.paths, {
-        expectedRepoRoot: getGateCheckRepoRoot(),
-        manifestPath: manifestRecord.manifestPath,
-        runId: manifestData.run_id,
-        caller: "gate-check",
-      });
-      manifestData = {
-        ...manifestData,
-        paths: {
-          ...(manifestData.paths || {}),
-          repo_root: validatedPaths.repoRoot,
-          worktree: validatedPaths.worktree,
-        },
-      };
-      runDir = getRunDir(validatedPaths.repoRoot, manifestData.run_id);
-    } catch (error) {
-      output({
-        status: "manifest_resolution_failed",
-        pr: PR_NUM,
-        readyToMerge: false,
-        reason: error.message,
-      });
-      process.exit(1);
-    }
-  }
-
-  const expectedReviewerLogin = manifestData?.review?.reviewer_login || null;
-  // review.reviewer_login_required is set by review-runner.js when the origin
-  // host was resolvable but gh could not return a host-scoped login. Without
-  // this hard-stop, fail-closed in getGhLogin would silently degrade into a
-  // skipped verification gate on non-default GitHub hosts (issue #199).
-  //
-  // Gate on the flag regardless of reviewer_login presence: review-runner
-  // clears reviewer_login when setting the flag, but if a manifest arrives
-  // with both fields populated (older code, manual edit), the flag is
-  // authoritative — the operator explicitly signaled that any previously
-  // recorded login is no longer trustworthy.
-  if (manifestData?.review?.reviewer_login_required === true) {
-    output({
-      status: "reviewer_login_required",
-      pr: PR_NUM,
-      readyToMerge: false,
-      reason: "host-scoped gh api user failed during review-runner; manifest.review.reviewer_login_required is set; fix host auth (GH_HOST / gh auth switch --hostname <host>) and rerun the review command",
-    });
-    process.exit(1);
-  }
-  if (!DRY_RUN && !expectedReviewerLogin && manifestData) {
-    console.error("Note: reviewer author verification skipped — manifest is missing review.reviewer_login. Use finalize-run.js for full verification.");
-  }
-  const result = evaluateReviewGate({
-    prNumber: PR_NUM,
-    comments,
-    commits,
-    manifestData,
-    expectedReviewerLogin,
-    runDir,
-    headRefOid,
+if (require.main === module) {
+  main().catch((error) => {
+    const payload = { ok: false, code: error.code || "MERGE_GATE_FAILED", error: error.message };
+    console.error(process.argv.includes("--json") ? JSON.stringify(payload) : `Error: ${error.message}`);
+    process.exitCode = 1;
   });
-  const reviewRunnerRubricGate = deriveReviewRunnerRubricGate(manifestData, runDir);
-  const enrichedResult = reviewRunnerRubricGate
-    ? { ...result, reviewRunnerRubricGate }
-    : result;
-  if (enrichedResult.note) {
-    console.error(`Note: ${enrichedResult.note}`);
-  }
-  output(enrichedResult);
-  if (!enrichedResult.readyToMerge) {
-    process.exit(1);
-  }
 }
 
-main();
+module.exports = { checkGate, main, parseCli, usage };

@@ -1,567 +1,174 @@
+"use strict";
+
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
 const {
   buildReadinessDecision,
   checkInflightRuns,
   routeFromInflight,
 } = require("../../../skills/relay/scripts/run-preflight");
 
-const {
-  STATES,
-  createManifestSkeleton,
-  createRunId,
-  ensureRunLayout,
-  getManifestPath,
-  getRunDir,
-  readManifest,
-  updateManifestState,
-  writeManifest,
-} = require("../../../skills/relay-dispatch/scripts/relay-manifest");
+const ROOT = path.resolve(__dirname, "../../..");
+const SCRIPT = path.join(ROOT, "skills/relay/scripts/run-preflight.js");
 
-const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay", "scripts", "run-preflight.js");
+function git(repo, args) {
+  return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
 
-const EXPECTED_BRANCH_INSTRUCTIONS = {
-  bypass: "Proceed to Step 2 using the bypass route and keep the readiness_probe event as the readiness evidence.",
-  "ready-light": "Proceed to Step 2 with S-size quick planning and compact rubric guidance while preserving the readiness_probe event payload.",
-  "chain-y": "Ask the operator in plain text to choose y to invoke relay-ready before Step 2, n to emit bypass_override_by_user and proceed to Step 2, or abort to emit readiness_check_failed and close the run after the readiness_probe.",
-  "proposal-first": "Run proposal-first relay-ready shaping after the readiness_probe, require an accepted handoff, and use that handoff as the relay-plan source of truth before dispatch.",
-  "chain-n": "If the operator answers n, emit bypass_override_by_user with the supplied payload and proceed to Step 2.",
-  "chain-abort": "If the operator answers abort, emit readiness_check_failed with the supplied payload and close the run.",
-  "noninteractive-fail": "Emit readiness_check_failed_nontty with the supplied payload and close the run because no prompt is allowed.",
-};
+function fixture() {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-preflight-vnext-")));
+  const repo = path.join(root, "repo");
+  const remote = path.join(root, "remote.git");
+  const relayHome = path.join(root, "relay-home");
+  fs.mkdirSync(repo);
+  execFileSync("git", ["init", "--bare", remote], { stdio: "ignore" });
+  execFileSync("git", ["init", "-b", "main", repo], { stdio: "ignore" });
+  git(repo, ["config", "user.name", "Preflight Test"]);
+  git(repo, ["config", "user.email", "preflight@example.test"]);
+  fs.writeFileSync(path.join(repo, "README.md"), "base\n");
+  git(repo, ["add", "README.md"]);
+  git(repo, ["commit", "-m", "base"]);
+  git(repo, ["remote", "add", "origin", remote]);
+  git(repo, ["push", "-u", "origin", "main"]);
+  const canonical = fs.realpathSync(repo);
+  const slug = `${path.basename(canonical)}-${crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 8)}`;
+  const runs = path.join(relayHome, "runs", slug);
+  const worktreeBase = path.join(relayHome, "worktrees");
+  fs.mkdirSync(worktreeBase, { recursive: true });
+  const gh = path.join(root, "gh.js");
+  fs.writeFileSync(gh, "#!/usr/bin/env node\nprocess.stdout.write('[]')\n");
+  fs.chmodSync(gh, 0o755);
+  return { root, repo: canonical, remote, relayHome, runs, worktreeBase, gh };
+}
 
-const EXPECTED_INFLIGHT_INSTRUCTIONS = {
-  "existing-open-pr": "Review the existing open PR instead of planning or dispatching a new run.",
-  "existing-merged-pr": "Mark the sprint item done if present and stop because the PR is already merged.",
-  "inflight-run": "Resume or inspect the existing inflight run and continue from its manifest state.",
-  attention: "Stop before planning or dispatch and inspect the inflight-run scanner failure.",
-  continue: "Continue to readiness handling before planning or dispatch.",
-};
+function createRun(value, issue = 802) {
+  const runId = `issue-${issue}-20260801000000001`;
+  const runDir = path.join(value.runs, runId);
+  const worktree = path.join(value.worktreeBase, runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  execFileSync("git", ["-C", value.repo, "worktree", "add", "-b", `issue-${issue}`, worktree, "main"], { stdio: "ignore" });
+  const source = path.join(runDir, "source.md");
+  fs.writeFileSync(source, "- preflight uses canonical inspect\n");
+  const frozen = runStore.freezeDoneCriteria({ sourcePath: source, runDir });
+  fs.unlinkSync(source);
+  runStore.createRunRecord({ runDir, record: {
+    version: 3,
+    run_id: runId,
+    repo: { root: value.repo, remote: value.remote },
+    git: { branch: `issue-${issue}`, base_branch: "main", worktree, start_sha: git(worktree, ["rev-parse", "HEAD"]) },
+    contract: { done_criteria_path: frozen.path, done_criteria_sha256: frozen.sha256 },
+    roles: { orchestrator: "codex", executor: "codex", reviewer: "claude" },
+    parent: null,
+    ownership_digest: null,
+    created_at: "2026-08-01T00:00:00.000Z",
+  } });
+  return { runId, runDir };
+}
+
+function run(value, args) {
+  return spawnSync(process.execPath, [SCRIPT, ...args, "--json"], {
+    encoding: "utf8",
+    env: { ...process.env, RELAY_HOME: value.relayHome, RELAY_GH_BIN: value.gh },
+  });
+}
 
 function readyEnvelope(overrides = {}) {
   return {
     readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
     bypass: true,
     next_action: "proceed",
-    signals_summary: "Ready: bypass conditions passed.",
-    task_shape: { strength: "none", strong: false, signals: [] },
+    signals_summary: "Ready.",
+    task_shape: { strong: false },
     risk: { high: false, signals: [] },
     ...overrides,
   };
 }
 
-test("route branch_labels entries all carry non-empty instruction", () => {
-  const decision = buildReadinessDecision(readyEnvelope(), { promptAllowed: true });
-  const branchKeys = Object.keys(decision.branch_labels);
-
-  assert.deepEqual(branchKeys.sort(), Object.keys(EXPECTED_BRANCH_INSTRUCTIONS).sort());
-  branchKeys.forEach((key) => {
-    assert.equal(typeof decision.branch_labels[key].instruction, "string");
-    assert.ok(decision.branch_labels[key].instruction.length > 0);
-    assert.equal(decision.branch_labels[key].instruction, EXPECTED_BRANCH_INSTRUCTIONS[key]);
-  });
+test("readiness routing remains deterministic and host-neutral", () => {
+  const bypass = buildReadinessDecision(readyEnvelope(), { promptAllowed: false });
+  assert.equal(bypass.route_decision, "ready_single");
+  assert.equal(bypass.recommended_branch, "bypass");
+  const prompt = buildReadinessDecision(readyEnvelope({ bypass: false, next_action: "qa_needed" }), { promptAllowed: true });
+  assert.equal(prompt.recommended_branch, "prompt");
+  assert.match(prompt.instruction, /y, n, or abort/);
 });
 
-test("route readiness decision instruction follows the recommended branch instruction for branch routes", () => {
-  const cases = [
-    buildReadinessDecision(readyEnvelope(), { promptAllowed: false }),
-    buildReadinessDecision(readyEnvelope({ bypass: false }), { promptAllowed: false }),
-    buildReadinessDecision(readyEnvelope({
-      bypass: false,
-      next_action: "qa_needed",
-      task_shape: {
-        strength: "strong",
-        strong: true,
-        signals: [{ condition: "broad_scope_language", evidence: "foundation" }],
-      },
-    }), { promptAllowed: true }),
-    buildReadinessDecision(readyEnvelope({
-      bypass: false,
-      next_action: "qa_needed",
-      signals_summary: "Gaps: verifiability=low.",
-      risk: { high: true, signals: ["high_risk_keyword"] },
-    }), { promptAllowed: false }),
-  ];
-
-  cases.forEach((decision) => {
-    assert.equal(
-      decision.instruction,
-      decision.branch_labels[decision.recommended_branch].instruction
-    );
-  });
+test("inflight scanner failures remain fail-closed", async () => {
+  const runCheck = await checkInflightRuns("/repo", 404, async () => { throw new Error("invalid vNext ledger"); });
+  const route = routeFromInflight({ prCheck: { status: "not_found", pr: null }, runCheck });
+  assert.equal(route.route, "attention");
+  assert.equal(route.reason, "invalid vNext ledger");
 });
 
-test("route prompt instruction offers host-neutral y n abort choices", () => {
-  const decision = buildReadinessDecision(readyEnvelope({
-    bypass: false,
-    next_action: "qa_needed",
-    signals_summary: "Gaps: verifiability=low.",
-    risk: { high: true, signals: ["high_risk_keyword"] },
-  }), { promptAllowed: true });
-
-  assert.equal(decision.recommended_branch, "prompt");
-  assert.notEqual(decision.instruction, EXPECTED_BRANCH_INSTRUCTIONS["chain-y"]);
-  assert.match(decision.instruction, /^Readiness gaps detected: Gaps: verifiability=low\./);
-  assert.match(decision.instruction, /\?$/);
-  assert.match(decision.instruction, /\by\b/);
-  assert.match(decision.instruction, /\bn\b/);
-  assert.match(decision.instruction, /\babort\b/);
+test("review preflight black box consumes the same canonical inspect action", () => {
+  const value = fixture();
+  const created = createRun(value);
+  const result = run(value, ["--stage", "review", "--repo", value.repo, "--run-id", created.runId]);
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.snapshot.phase, "reviewable");
+  assert.equal(payload.snapshot.action, payload.inspection.action.kind);
+  assert.equal(payload.ready_status.next_action, payload.inspection.action.kind);
+  assert.match(payload.snapshot.run_path, /run\.json$/);
+  assert.equal(payload.recovery, null);
 });
 
-test("route inflight routes all carry next-step instruction", () => {
-  const cases = [
-    {
-      expectedRoute: "existing-open-pr",
-      prCheck: { status: "open", pr: { number: 12 } },
-      runCheck: { runs: [{ runId: "run-open" }] },
-    },
-    {
-      expectedRoute: "existing-merged-pr",
-      prCheck: { status: "merged", pr: { number: 13 } },
-      runCheck: { runs: [{ runId: "run-merged" }] },
-    },
-    {
-      expectedRoute: "inflight-run",
-      prCheck: { status: "not_found", pr: null },
-      runCheck: { runs: [{ runId: "run-active" }] },
-    },
-    {
-      expectedRoute: "attention",
-      prCheck: { status: "not_found", pr: null },
-      runCheck: { status: "unknown", reason: "corrupt run store", runs: [] },
-    },
-    {
-      expectedRoute: "continue",
-      prCheck: { status: "not_found", pr: null },
-      runCheck: { status: "not_found", runs: [] },
-    },
-  ];
-
-  cases.forEach(({ expectedRoute, prCheck, runCheck }) => {
-    const result = routeFromInflight({ prCheck, runCheck });
-    assert.equal(result.route, expectedRoute);
-    assert.equal(result.instruction, EXPECTED_INFLIGHT_INSTRUCTIONS[expectedRoute]);
-  });
+test("merge preflight consumes the identical canonical inspect action", () => {
+  const value = fixture();
+  const created = createRun(value, 803);
+  const result = run(value, ["--stage", "merge", "--repo", value.repo, "--run-id", created.runId]);
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.stage, "merge");
+  assert.equal(payload.snapshot.action, payload.inspection.action.kind);
+  assert.deepEqual(payload.snapshot.blockers, payload.inspection.blockers);
 });
 
-test("route blocks when the inflight scanner cannot establish whether an owner exists", () => {
-  const runCheck = checkInflightRuns("/repo", 404, () => {
-    throw new Error("invalid run ledger");
-  });
-  const result = routeFromInflight({
-    prCheck: { status: "not_found", pr: null },
-    runCheck,
-  });
-  assert.deepEqual(runCheck, { status: "unknown", reason: "invalid run ledger", runs: [] });
-  assert.equal(result.route, "attention");
-  assert.equal(result.next_action, "inspect_inflight_scanner_failure");
-  assert.equal(result.reason, "invalid run ledger");
-  assert.notEqual(result.route, "continue");
+test("legacy manifest paths are explicitly retired", () => {
+  const value = fixture();
+  createRun(value);
+  const legacy = path.join(value.root, "run.md");
+  fs.writeFileSync(legacy, "---\nstate: dispatched\n---\n");
+  const result = run(value, ["--stage", "review", "--repo", value.repo, "--manifest", legacy]);
+  assert.equal(result.status, 1);
+  assert.match(JSON.parse(result.stdout).error, /--manifest is retired/);
 });
 
-function setupRouteGhFixture({ prCandidates = [] } = {}) {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-preflight-"));
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-gh-"));
-  const ghPath = path.join(binDir, "gh");
-  fs.writeFileSync(ghPath, `#!/usr/bin/env node
-const args = process.argv.slice(2);
-if (args[0] === "pr" && args[1] === "list") {
-  process.stdout.write(${JSON.stringify(JSON.stringify(prCandidates))});
-  process.exit(0);
-}
-process.stderr.write("unexpected gh args: " + args.join(" "));
-process.exit(2);
-`, "utf-8");
-  fs.chmodSync(ghPath, 0o755);
-
-  return { repoRoot, env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` } };
-}
-
-function runRoutePreflight(fixture, args = []) {
-  return JSON.parse(execFileSync(process.execPath, [
-    SCRIPT,
-    "--stage", "route",
-    "--repo", fixture.repoRoot,
-    ...args,
-    "--json",
-  ], {
-    encoding: "utf-8",
-    env: fixture.env,
-  }));
-}
-
-function setupReviewRepo(prefix = "relay-review-preflight-") {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["config", "user.name", "Relay Preflight Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["config", "user.email", "relay-preflight@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
-  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  return { repoRoot, relayHome };
-}
-
-function writeDispatchedRun(repoRoot, relayHome, runId = createRunId({ issueNumber: 802, branch: "issue-802-preflight" })) {
-  const previousRelayHome = process.env.RELAY_HOME;
-  process.env.RELAY_HOME = relayHome;
-  const runDir = getRunDir(repoRoot, runId);
-  try {
-    ensureRunLayout(repoRoot, runId);
-    const worktreePath = path.join(repoRoot, "worktrees", runId);
-    let manifest = createManifestSkeleton({
-      repoRoot,
-      runId,
-      branch: "issue-802-preflight",
-      baseBranch: "main",
-      issueNumber: 802,
-      worktreePath,
-    });
-    manifest = {
-      ...manifest,
-      anchor: {
-        ...(manifest.anchor || {}),
-        rubric_path: "rubric.yaml",
-      },
-    };
-    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  size_class: S\n", "utf-8");
-    manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
-    writeManifest(getManifestPath(repoRoot, runId), manifest);
-    return { runId, runDir, manifestPath: getManifestPath(repoRoot, runId) };
-  } finally {
-    if (previousRelayHome === undefined) delete process.env.RELAY_HOME;
-    else process.env.RELAY_HOME = previousRelayHome;
+test("reconcile and recover require an explicit audit reason before mutation", () => {
+  const value = fixture();
+  const created = createRun(value);
+  for (const flag of ["--reconcile", "--recover"]) {
+    const result = run(value, ["--stage", "review", "--repo", value.repo, "--run-id", created.runId, flag]);
+    assert.equal(result.status, 1);
+    assert.match(JSON.parse(result.stdout).error, /requires --reason/);
   }
-}
-
-function runDeadReviewPreflight({ repoRoot, relayHome, runId, extraArgs = [] }) {
-  return JSON.parse(execFileSync(process.execPath, [
-    SCRIPT,
-    "--stage", "review",
-    "--repo", repoRoot,
-    "--run-id", runId,
-    ...extraArgs,
-    "--json",
-  ], {
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      RELAY_HOME: relayHome,
-    },
-  }));
-}
-
-test("route inflight readiness decision carries a non-empty instruction", () => {
-  const fixture = setupRouteGhFixture({
-    prCandidates: [{
-      number: 404,
-      state: "OPEN",
-      mergedAt: null,
-      headRefName: "issue-404",
-      url: "https://example.test/pull/404",
-    }],
-  });
-
-  const result = runRoutePreflight(fixture, ["--branch", "issue-404"]);
-
-  assert.equal(result.inflight.route, "existing-open-pr");
-  assert.equal(typeof result.readiness.decision.instruction, "string");
-  assert.ok(result.readiness.decision.instruction.length > 0);
-  assert.equal(result.readiness.decision.instruction, result.inflight.instruction);
 });
 
-test("review preflight surfaces dead dispatched lease reconcile verdict without mutating by default", () => {
-  const fixture = setupReviewRepo();
-  const { runId, manifestPath } = writeDispatchedRun(fixture.repoRoot, fixture.relayHome);
-
-  const result = runDeadReviewPreflight({ ...fixture, runId });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.stage, "review");
-  assert.equal(result.snapshot.state, STATES.DISPATCHED);
-  assert.equal(result.reconcile.required, true);
-  assert.equal(result.reconcile.mutated, false);
-  assert.equal(result.reconcile.verdict.rowName, "dead_no_result_no_work");
-  assert.equal(result.reconcile.verdict.row, 5);
-  assert.equal(result.reconcile.verdict.dryRun, true);
-  assert.deepEqual(result.reconcile.verdict.plannedActions, [
-    "journal_dispatch_interrupted_if_needed",
-    "remove_lease_if_present",
+test("recover delegates to canonical runtime recovery with the inspected action key", () => {
+  const value = fixture();
+  const created = createRun(value, 804);
+  const result = run(value, [
+    "--stage", "review", "--repo", value.repo, "--run-id", created.runId,
+    "--recover", "--reason", "operator-audited preflight recovery",
   ]);
-  assert.match(result.reconcile.verdict.resumeCommand, /dispatch\.js --manifest /);
-  assert.equal(result.reconcile.verdict.manifestPath, manifestPath);
-
-  const record = JSON.parse(execFileSync(process.execPath, [
-    SCRIPT,
-    "--stage", "review",
-    "--repo", fixture.repoRoot,
-    "--run-id", runId,
-    "--json",
-  ], {
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      RELAY_HOME: fixture.relayHome,
-    },
-  }));
-  assert.equal(record.snapshot.state, STATES.DISPATCHED);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.recovery.operation, "recover");
+  assert.match(payload.recovery.action_key, /^[0-9a-f]{64}$/);
+  assert.equal(payload.recovery.action_key, payload.recovery.before.recommended_action.key);
 });
 
-test("review preflight reports fresh status after mutating reconcile advances the run", () => {
-  const fixture = setupReviewRepo();
-  const { runId, runDir, manifestPath } = writeDispatchedRun(fixture.repoRoot, fixture.relayHome);
-  fs.writeFileSync(path.join(runDir, "dispatch-result.txt"), "executor completed\n", "utf-8");
-
-  const result = runDeadReviewPreflight({
-    ...fixture,
-    runId,
-    extraArgs: ["--reconcile", "--previous-rounds", "0"],
-  });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.reconcile.required, true);
-  assert.equal(result.reconcile.mutated, true);
-  assert.equal(result.reconcile.verdict.rowName, "dead_with_result_or_work");
-  assert.equal(result.reconcile.verdict.dryRun, false);
-  assert.equal(result.reconcile.verdict.state, STATES.REVIEW_PENDING);
-  assert.equal(result.snapshot.state, STATES.REVIEW_PENDING);
-  assert.equal(result.ready_status.status, "not_ready");
-  assert.equal(result.ready_status.reason, "state_review_pending");
-  assert.equal(result.comparison.current.state, STATES.REVIEW_PENDING);
-  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
-});
-
-test("run-preflight source does not reference AskUserQuestion", () => {
-  const source = fs.readFileSync(SCRIPT, "utf-8");
-  assert.doesNotMatch(source, /AskUserQuestion/);
-});
-
-test("route decision treats bypass as ready_single without changing the bypass branch", () => {
-  const decision = buildReadinessDecision(readyEnvelope(), { promptAllowed: false });
-
-  assert.equal(decision.route_decision, "ready_single");
-  assert.equal(decision.recommended_branch, "bypass");
-  assert.equal(decision.branch_labels.bypass.action, "proceed_to_step_2");
-});
-
-test("route decision treats proceed without bypass as ready_light in non-interactive mode", () => {
-  const decision = buildReadinessDecision({
-    readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
-    bypass: false,
-    next_action: "proceed",
-    signals_summary: "Not bypassed: next action proceed.",
-    task_shape: { strength: "none", strong: false, signals: [] },
-  }, { promptAllowed: false });
-
-  assert.equal(decision.route_decision, "ready_light");
-  assert.equal(decision.recommended_branch, "ready-light");
-  assert.equal(decision.prompt_summary, null);
-  assert.equal(decision.branch_labels["ready-light"].action, "proceed_to_step_2_light_planning");
-});
-
-test("route decision keeps high-risk proceed without bypass on readiness prompt path", () => {
-  const decision = buildReadinessDecision({
-    readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
-    bypass: false,
-    next_action: "proceed",
-    signals_summary: "Gaps: high-risk keyword.",
-    task_shape: { strength: "none", strong: false, signals: [] },
-    risk: { high: true, signals: ["high_risk_keyword"] },
-  }, { promptAllowed: false });
-
-  assert.equal(decision.route_decision, "readiness_prompt");
-  assert.equal(decision.recommended_branch, "noninteractive-fail");
-  assert.equal(decision.branch_labels["noninteractive-fail"].event_payload.risk.high, true);
-});
-
-test("route decision fails closed when bypass is missing from proceed envelope", () => {
-  const decision = buildReadinessDecision({
-    readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
-    next_action: "proceed",
-    signals_summary: "Not bypassed: next action proceed.",
-    task_shape: { strength: "none", strong: false, signals: [] },
-    risk: { high: false, signals: [] },
-  }, { promptAllowed: false });
-
-  assert.equal(decision.route_decision, "readiness_prompt");
-  assert.equal(decision.recommended_branch, "noninteractive-fail");
-});
-
-test("route decision keeps qa_needed on the existing prompt or noninteractive-fail path", () => {
-  const interactive = buildReadinessDecision({
-    readiness_score: { clarity: "medium", granularity: "medium", verifiability: "low" },
-    bypass: false,
-    next_action: "qa_needed",
-    signals_summary: "Gaps: verifiability=low.",
-    task_shape: { strength: "none", strong: false, signals: [] },
-  }, { promptAllowed: true });
-  const noninteractive = buildReadinessDecision({
-    readiness_score: { clarity: "medium", granularity: "medium", verifiability: "low" },
-    bypass: false,
-    next_action: "qa_needed",
-    signals_summary: "Gaps: verifiability=low.",
-    task_shape: { strength: "none", strong: false, signals: [] },
-  }, { promptAllowed: false });
-
-  assert.equal(interactive.route_decision, "readiness_prompt");
-  assert.equal(interactive.recommended_branch, "prompt");
-  assert.equal(interactive.prompt_summary, "Gaps: verifiability=low.");
-  assert.equal(noninteractive.route_decision, "readiness_prompt");
-  assert.equal(noninteractive.recommended_branch, "noninteractive-fail");
-});
-
-test("route decision exposes needs_split for strong task-shape signals", () => {
-  const decision = buildReadinessDecision({
-    readiness_score: { clarity: "medium", granularity: "low", verifiability: "high" },
-    bypass: false,
-    next_action: "qa_needed",
-    signals_summary: "Gaps: granularity=low, task-shape decomposition.",
-    task_shape: {
-      strength: "strong",
-      strong: true,
-      signals: [{ condition: "broad_scope_language", evidence: "foundation" }],
-    },
-  }, { promptAllowed: false });
-
-  assert.equal(decision.route_decision, "needs_split");
-  assert.equal(decision.recommended_branch, "noninteractive-fail");
-  assert.equal(decision.branch_labels["noninteractive-fail"].event_payload.route_decision, "needs_split");
-});
-
-test("route decision directs prompt-allowed needs_split to proposal-first shaping", () => {
-  const decision = buildReadinessDecision({
-    readiness_score: { clarity: "medium", granularity: "low", verifiability: "high" },
-    bypass: false,
-    next_action: "qa_needed",
-    signals_summary: "Gaps: granularity=low, task-shape decomposition.",
-    task_shape: {
-      strength: "strong",
-      strong: true,
-      signals: [{ condition: "broad_scope_language", evidence: "foundation" }],
-    },
-  }, { promptAllowed: true });
-
-  assert.equal(decision.route_decision, "needs_split");
-  assert.equal(decision.recommended_branch, "proposal-first");
-  assert.equal(decision.prompt_summary, "Gaps: granularity=low, task-shape decomposition.");
-  assert.equal(
-    decision.branch_labels["proposal-first"].action,
-    "invoke_relay_ready_proposal_first_then_resume_step_2"
-  );
-  assert.equal(decision.branch_labels["proposal-first"].relay_ready_mode, "proposal_first");
-  assert.equal(decision.branch_labels["proposal-first"].requires_accepted_handoff, true);
-  assert.equal(decision.branch_labels["proposal-first"].source_of_truth, "accepted_relay_ready_handoff");
-  assert.equal(decision.branch_labels["chain-n"].event, "bypass_override_by_user");
-  assert.equal(decision.branch_labels["chain-n"].event_payload.route_decision, "needs_split");
-  assert.equal(
-    decision.branch_labels["chain-n"].event_payload.reason,
-    "operator_bypass_after_readiness_prompt"
-  );
-});
-
-function setupReadyRun({ liveHead = "abc123", reviewedSha = "abc123", manifestHead = "abc123" } = {}) {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-preflight-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
-
-  const runId = createRunId({
-    branch: "issue-691",
-    timestamp: new Date("2026-06-08T00:00:00.000Z"),
-  });
-  const { manifestPath } = ensureRunLayout(repoRoot, runId);
-  let manifest = createManifestSkeleton({
-    repoRoot,
-    runId,
-    branch: "issue-691",
-    baseBranch: "main",
-    issueNumber: 691,
-    worktreePath: repoRoot,
-    orchestrator: "codex",
-    executor: "codex",
-    reviewer: "codex",
-  });
-  manifest.git.pr_number = 691;
-  manifest.git.head_sha = manifestHead;
-  manifest.anchor.rubric_path = "rubric.yaml";
-  fs.writeFileSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: ready drift\n", "utf-8");
-  manifest.review = {
-    ...(manifest.review || {}),
-    rounds: 1,
-    latest_verdict: "lgtm",
-    last_reviewed_sha: reviewedSha,
-  };
-  manifest = updateManifestState(
-    updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result"),
-    STATES.REVIEW_PENDING,
-    "run_review"
-  );
-  manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
-  writeManifest(manifestPath, manifest);
-
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-preflight-gh-"));
-  const ghPath = path.join(binDir, "gh");
-  fs.writeFileSync(ghPath, `#!/usr/bin/env node
-const args = process.argv.slice(2);
-if (args[0] === "pr" && args[1] === "view") {
-  process.stdout.write(JSON.stringify({
-    number: 691,
-    headRefName: "issue-691",
-    headRefOid: ${JSON.stringify(liveHead)}
-  }));
-  process.exit(0);
-}
-process.stderr.write("unexpected gh args: " + args.join(" "));
-process.exit(2);
-`, "utf-8");
-  fs.chmodSync(ghPath, 0o755);
-
-  return { repoRoot, runId, manifestPath, env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` } };
-}
-
-function runReviewPreflight(fixture) {
-  return JSON.parse(execFileSync("node", [
-    SCRIPT,
-    "--stage", "review",
-    "--repo", fixture.repoRoot,
-    "--run-id", fixture.runId,
-    "--pr", "691",
-    "--json",
-  ], {
-    encoding: "utf-8",
-    env: fixture.env,
-  }));
-}
-
-test("review preflight reports unchanged ready_to_merge PR as merge-ready", () => {
-  const fixture = setupReadyRun({ liveHead: "abc123", reviewedSha: "abc123", manifestHead: "abc123" });
-
-  const result = runReviewPreflight(fixture);
-
-  assert.equal(result.snapshot.state, STATES.READY_TO_MERGE);
-  assert.equal(result.ready_status.status, "merge_ready");
-  assert.equal(result.ready_status.pr_number, 691);
-  assert.equal(result.ready_status.old_sha, "abc123");
-  assert.equal(result.ready_status.new_sha, "abc123");
-  assert.equal(result.ready_status.next_action, "proceed_to_merge");
-});
-
-test("review preflight reports ready_to_merge PR with live HEAD drift as stale-ready", () => {
-  const fixture = setupReadyRun({ liveHead: "def456", reviewedSha: "abc123", manifestHead: "abc123" });
-
-  const result = runReviewPreflight(fixture);
-
-  assert.equal(result.snapshot.state, STATES.READY_TO_MERGE);
-  assert.equal(result.ready_status.status, "stale_ready");
-  assert.equal(result.ready_status.pr_number, 691);
-  assert.equal(result.ready_status.old_sha, "abc123");
-  assert.equal(result.ready_status.new_sha, "def456");
-  assert.equal(result.ready_status.reviewed_sha, "abc123");
-  assert.equal(result.ready_status.manifest_head_sha, "abc123");
-  assert.equal(result.ready_status.next_action, "recover_ready_to_review_pending_then_rerun_review");
+test("production sources no longer import legacy observation or mutation modules", () => {
+  const sources = [
+    fs.readFileSync(SCRIPT, "utf8"),
+    fs.readFileSync(path.join(ROOT, "skills/relay/scripts/relay-status.js"), "utf8"),
+  ].join("\n");
+  assert.doesNotMatch(sources, /manifest\/(?:lifecycle|store)|relay-events|relay-resolver|run-observer|reconcile-findings/);
 });

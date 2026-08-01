@@ -6,7 +6,7 @@ const [runDir, attemptId, releasePath] = process.argv.slice(2);
 
 try {
   const lock = host.acquireRunLock({ runDir: fs.realpathSync(runDir), attemptId, operation: "concurrency", processStartedAt: "2026-07-31T00:00:00.000Z" });
-  process.stdout.write(JSON.stringify({ status: "owner", lock_id: lock.lock_id }) + "\n");
+  fs.writeSync(1, `${JSON.stringify({ status: "owner", lock_id: lock.lock_id })}\n`);
   const release = () => {
     if (!releasePath || fs.existsSync(releasePath)) {
       host.releaseRunLock(lock);
@@ -18,6 +18,6 @@ try {
   release();
 } catch (error) {
   const held = error.code === "LOCK_HELD";
-  process.stdout.write(JSON.stringify({ status: held ? "held" : "error", code: error.code || null }) + "\n");
+  fs.writeSync(1, `${JSON.stringify({ status: held ? "held" : "error", code: error.code || null })}\n`);
   process.exit(held ? 0 : 1);
 }

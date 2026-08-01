@@ -6,29 +6,25 @@
     {
       "id": "RR-01",
       "name": "worktree_containment",
-      "status": "legacy_black_box_evidence",
-      "evidence": ["tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js#RR-01 worktree containment"],
+      "status": "vnext_gate",
       "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-01 vNext worktree containment"
     },
     {
       "id": "RR-02",
       "name": "frozen_outcome_contract",
-      "status": "legacy_black_box_evidence",
-      "evidence": ["tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js#RR-02 frozen outcome contract"],
+      "status": "vnext_gate",
       "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-02 vNext frozen outcome contract"
     },
     {
       "id": "RR-03",
       "name": "immutable_identity",
-      "status": "legacy_black_box_evidence",
-      "evidence": ["tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js#RR-03 immutable identity"],
+      "status": "vnext_gate",
       "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-03 vNext immutable identity"
     },
     {
       "id": "RR-04",
       "name": "single_actor",
-      "status": "legacy_black_box_evidence",
-      "evidence": ["tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js#RR-04 single actor exclusion"],
+      "status": "vnext_gate",
       "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-04 vNext single actor"
     },
     {
@@ -52,8 +48,7 @@
     {
       "id": "RR-08",
       "name": "explicit_merge",
-      "status": "legacy_black_box_evidence",
-      "evidence": ["tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js#RR-08 explicit merge boundary"],
+      "status": "vnext_gate",
       "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-08 vNext explicit merge"
     },
     {
@@ -65,15 +60,13 @@
     {
       "id": "RR-10",
       "name": "crash_safe_idempotency",
-      "status": "legacy_black_box_evidence",
-      "evidence": ["tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js#RR-10 crash-safe idempotent recovery publication"],
-      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-10 vNext crash-safe idempotency"
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/recover-scenario-matrix.test.js##1135 recovery crash matrix is idempotent before and after every emitted durable fact"
     },
     {
       "id": "RR-11",
       "name": "terminal_irreversibility",
-      "status": "legacy_black_box_evidence",
-      "evidence": ["tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js#RR-11 terminal irreversibility and selector fail closed"],
+      "status": "vnext_gate",
       "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-11 vNext terminal irreversibility"
     },
     {

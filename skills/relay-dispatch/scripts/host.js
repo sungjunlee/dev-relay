@@ -1,2592 +1,1113 @@
 "use strict";
 
-/**
- * Shadow-only vNext host and exclusion contract.
- *
- * It intentionally imports no legacy manifest, lease, or event module. Facts
- * integrate through an audit callback that receives an unforgeable lock
- * capability while ownership is still exclusive.
- */
-
-const { execFileSync, spawn, spawnSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const LOCK_FILENAME = "ownership";
-const OWNER_FILE_RE = /^(\d{12})\.owner\.json$/;
-const MIN_BREAK_PROBE_INTERVAL_MS = 10_000;
-const HOST_KINDS = new Set(["local_supervisor", "ci", "codex_app"]);
-const TERMINAL_HOST_STATUSES = new Set(["completed", "failed", "cancelled", "timed_out", "spawn_error"]);
-const ATTEMPT_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,126}[A-Za-z0-9])?$/;
-const GIT_IDENTITY_TIMEOUT_MS = 10_000;
-const GIT_CONTENT_TIMEOUT_MS = 30_000;
-const PROCESS_IDENTITY_PROBE_TIMEOUT_MS = 5_000;
-
+const OWNERSHIP = "ownership";
+const OWNER_RE = /^(\d{12})\.owner\.json$/;
+const ATTEMPT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,126}[A-Za-z0-9])?$/;
+const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out", "spawn_error"]);
+const BREAK_PROBE_MS = 10_000;
+const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+const PROCESS_SCOPE_KEY = "RELAY_PROCESS_SCOPE";
+const PROCESS_CONTRACT = "inherited_scope_no_daemon";
+const PS_ROW_RE = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/;
+const SCOPE_RE = new RegExp(`(?:^|\\s)${PROCESS_SCOPE_KEY}=([0-9a-f]{64})(?=\\s|$)`);
 const issuedLocks = new WeakSet();
 const lockStates = new WeakMap();
-const issuedInspections = new WeakSet();
-const inspectionStates = new WeakMap();
-const issuedWorktreeFacts = new WeakSet();
-const worktreeFactStates = new WeakMap();
-const issuedBreakProofs = new WeakSet();
-const breakProofStates = new WeakMap();
 const issuedReceipts = new WeakSet();
 const receiptStates = new WeakMap();
-const issuedMeasurements = new WeakSet();
-const issuedSurvivalOutcomes = new WeakSet();
+const issuedInspections = new WeakSet();
+const inspectionStates = new WeakMap();
+const issuedProcessScopes = new WeakSet();
+const processScopeStates = new WeakMap();
+const issuedCredentialBundles = new WeakSet();
+const credentialBundleStates = new WeakMap();
 
 class HostError extends Error {
   constructor(message, code, details = {}) {
-    super(message);
-    this.name = "HostError";
-    this.code = code;
-    Object.assign(this, details);
+    super(message); this.name = "HostError"; this.code = code; Object.assign(this, details);
   }
 }
-
-function fail(message, code, details) {
-  throw new HostError(message, code, details);
+function fail(message, code, details) { throw new HostError(message, code, details); }
+function sha256(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
+function hmac(value, secret) { return crypto.createHmac("sha256", secret).update(JSON.stringify(value)).digest("hex"); }
+function equalHex(left, right) {
+  return typeof left === "string" && typeof right === "string" && left.length === right.length
+    && /^[0-9a-f]+$/i.test(left) && crypto.timingSafeEqual(Buffer.from(left), Buffer.from(right));
 }
-
-function sha256(value) {
-  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value), "utf8");
-  return crypto.createHash("sha256").update(bytes).digest("hex");
+function signed(value, secret, field = "auth_sha256") { return { ...value, [field]: hmac(value, secret) }; }
+function verifySigned(value, secret, field = "auth_sha256") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const { [field]: signature, ...body } = value;
+  return equalHex(signature, hmac(body, secret));
 }
-
-function resultAuthKey(owner) {
-  return crypto.createHmac("sha256", owner.token)
-    .update(`relay-host-result\0${owner.lock_id}\0${owner.attempt_id}`)
-    .digest("hex");
-}
-
-function signResult(result, key) {
-  return crypto.createHmac("sha256", key).update(JSON.stringify(result)).digest("hex");
-}
-
-function readSecureJsonArtifact(filePath, label) {
-  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-  try {
-    const stat = fs.fstatSync(fd);
-    const pathStat = fs.lstatSync(filePath);
-    if (
-      !stat.isFile()
-      || pathStat.isSymbolicLink()
-      || stat.dev !== pathStat.dev
-      || stat.ino !== pathStat.ino
-      || (typeof process.getuid === "function" && stat.uid !== process.getuid())
-      || (stat.mode & 0o077) !== 0
-    ) {
-      fail(`${label} is not a trusted owner-only regular file`, "UNTRUSTED_HOST_ARTIFACT", {
-        artifactPath: filePath,
-      });
-    }
-    return JSON.parse(fs.readFileSync(fd, "utf8"));
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function verifySignedArtifact(record, signatureField, key) {
-  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
-  const { [signatureField]: signature, ...unsigned } = record;
-  const expected = signResult(unsigned, key);
-  return typeof signature === "string"
-    && signature.length === expected.length
-    && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-}
-
-
-function isContained(root, candidate) {
-  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
-}
-
-function requireDirectory(directory, label) {
-  if (typeof directory !== "string" || !directory.trim()) fail(`${label} is required`, "INVALID_PATH");
-  const resolved = path.resolve(directory);
-  let stat;
-  try {
-    stat = fs.lstatSync(resolved);
-  } catch (error) {
-    fail(`${label} does not exist: ${resolved}`, "INVALID_PATH", { cause: error });
-  }
-  if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} must be a real directory: ${resolved}`, "UNTRUSTED_PATH");
-  const real = fs.realpathSync(resolved);
-  if (real !== resolved) fail(`${label} must use its canonical real path: ${resolved}`, "UNTRUSTED_PATH");
-  return real;
-}
-
-function nearestExistingParent(candidate) {
-  let current = candidate;
-  while (true) {
-    try {
-      return fs.realpathSync(current);
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      const parent = path.dirname(current);
-      if (parent === current) throw error;
-      current = parent;
-    }
-  }
-}
-
-function containedPath(root, candidate, label, { mustExist = false, file = true, directChild = false } = {}) {
-  if (typeof candidate !== "string" || !candidate.trim()) fail(`${label} is required`, "INVALID_PATH");
-  const canonicalRoot = requireDirectory(root, `${label} root`);
-  const resolved = path.resolve(candidate);
-  if (!isContained(canonicalRoot, resolved)) fail(`${label} escapes trusted root`, "UNTRUSTED_PATH", { path: resolved });
-  if (directChild && path.dirname(resolved) !== canonicalRoot) {
-    fail(`${label} must be a direct child of its trusted root`, "UNTRUSTED_PATH", { path: resolved });
-  }
-  const relative = path.relative(canonicalRoot, resolved);
-  let cursor = canonicalRoot;
-  for (const component of relative.split(path.sep).filter(Boolean)) {
-    cursor = path.join(cursor, component);
-    try {
-      if (fs.lstatSync(cursor).isSymbolicLink()) {
-        fail(`${label} contains a symlink component`, "UNTRUSTED_PATH", { path: cursor });
-      }
-    } catch (error) {
-      if (error.code === "ENOENT") break;
-      throw error;
-    }
-  }
-  try {
-    const stat = fs.lstatSync(resolved);
-    if (stat.isSymbolicLink()) fail(`${label} must not be a symlink`, "UNTRUSTED_PATH", { path: resolved });
-    if (file && !stat.isFile()) fail(`${label} must be a regular file`, "UNTRUSTED_PATH", { path: resolved });
-    if (!file && !stat.isDirectory()) fail(`${label} must be a directory`, "UNTRUSTED_PATH", { path: resolved });
-    const real = fs.realpathSync(resolved);
-    if (!isContained(canonicalRoot, real)) fail(`${label} real path escapes trusted root`, "UNTRUSTED_PATH", { path: resolved });
-    return real;
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-    if (mustExist) fail(`${label} does not exist`, "INVALID_PATH", { path: resolved });
-    const realParent = nearestExistingParent(path.dirname(resolved));
-    if (!isContained(canonicalRoot, realParent)) fail(`${label} parent escapes trusted root`, "UNTRUSTED_PATH", { path: resolved });
-    return path.join(realParent, path.basename(resolved));
-  }
-}
-
-function safeAttemptId(attemptId) {
-  if (typeof attemptId !== "string" || !ATTEMPT_ID_RE.test(attemptId)) {
-    fail("attemptId must contain only bounded alphanumeric, underscore, or hyphen characters", "INVALID_ATTEMPT_ID");
-  }
+function safeAttempt(attemptId) {
+  if (typeof attemptId !== "string" || !ATTEMPT_RE.test(attemptId)) fail("invalid attempt id", "INVALID_ATTEMPT_ID");
   return attemptId;
 }
-
-function syncDirectory(directory) {
-  let fd;
+function canonicalDir(value, label) {
+  if (typeof value !== "string" || !path.isAbsolute(value)) fail(`${label} must be absolute`, "INVALID_PATH");
+  let stat;
+  try { stat = fs.lstatSync(value); } catch (cause) { fail(`${label} does not exist`, "INVALID_PATH", { cause }); }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} must be a real directory`, "UNTRUSTED_PATH");
+  const real = fs.realpathSync(value);
+  if (real !== path.resolve(value)) fail(`${label} must be canonical`, "UNTRUSTED_PATH");
+  return real;
+}
+function directChild(root, value, label, { exists = false, directory = false } = {}) {
+  const canonical = canonicalDir(root, `${label} root`);
+  if (typeof value !== "string" || !path.isAbsolute(value)) fail(`${label} must be absolute`, "INVALID_PATH");
+  const resolved = path.resolve(value);
+  if (path.dirname(resolved) !== canonical) fail(`${label} must be a direct child of its root`, "UNTRUSTED_PATH");
   try {
-    fd = fs.openSync(directory, "r");
-    fs.fsyncSync(fd);
+    const stat = fs.lstatSync(resolved);
+    if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) fail(`${label} has an unsafe type`, "UNTRUSTED_PATH");
+    if (fs.realpathSync(resolved) !== resolved) fail(`${label} must be canonical`, "UNTRUSTED_PATH");
   } catch (error) {
-    if (!["EINVAL", "EPERM", "EISDIR", "ENOTSUP"].includes(error?.code)) throw error;
-  } finally {
-    if (fd !== undefined) {
-      try { fs.closeSync(fd); } catch {}
-    }
-  }
-}
-
-function atomicWriteFile(target, content, { mode = 0o600, fault } = {}) {
-  const directory = path.dirname(target);
-  const tmp = `${target}.tmp.${process.pid}.${crypto.randomBytes(6).toString("hex")}`;
-  let fd;
-  try {
-    fd = fs.openSync(tmp, "wx", mode);
-    fs.writeFileSync(fd, content, "utf8");
-    fs.fsyncSync(fd);
-    fault?.("after_file_fsync");
-    fs.closeSync(fd);
-    fd = undefined;
-    fs.renameSync(tmp, target);
-    syncDirectory(directory);
-  } catch (error) {
-    if (fd !== undefined) {
-      try { fs.closeSync(fd); } catch {}
-    }
-    try { fs.unlinkSync(tmp); } catch {}
-    throw error;
-  }
-}
-
-function processFingerprint(pid) {
-  if (!Number.isInteger(pid) || pid <= 0 || process.platform === "win32") return null;
-  try {
-    const value = execFileSync("/bin/ps", [
-      "-p", String(pid),
-      "-o", "ppid=",
-      "-o", "pgid=",
-      "-o", "state=",
-      "-o", "lstart=",
-      "-o", "comm=",
-    ], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: PROCESS_IDENTITY_PROBE_TIMEOUT_MS,
-    }).trim();
-    const match = value.match(
-      /^(\d+)\s+(\d+)\s+(\S+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/,
-    );
-    if (!match) return null;
-    const parsed = Date.parse(match[4].replace(/\s+/g, " "));
-    if (!Number.isFinite(parsed)) return null;
-    const command = match[5].trim();
-    return Object.freeze({
-      pid,
-      ppid: Number(match[1]),
-      pgid: Number(match[2]),
-      state: match[3],
-      started_at: new Date(parsed).toISOString(),
-      command_sha256: sha256(command),
-      command_terminalized: /^\(.+\)$/.test(command),
-    });
-  } catch {
-    return null;
-  }
-}
-
-function processStartAt(pid) {
-  return processFingerprint(pid)?.started_at || null;
-}
-
-function bootIdentity() {
-  try {
-    if (process.platform === "linux") {
-      return fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-    }
-    if (process.platform === "darwin") {
-      return sha256(execFileSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8" }).trim());
-    }
-  } catch {}
-  return null;
-}
-
-function captureLocalProcessIdentity(pid = process.pid) {
-  const processFingerprintValue = processFingerprint(pid);
-  return {
-    host: os.hostname(),
-    pid,
-    process_started_at: processFingerprintValue?.started_at || null,
-    process_fingerprint: processFingerprintValue,
-    boot_id: bootIdentity(),
-  };
-}
-
-function fingerprintsEqual(left, right) {
-  return Boolean(
-    left
-    && right
-    && left.pid === right.pid
-    && left.pgid === right.pgid
-    && left.started_at === right.started_at
-  );
-}
-
-function waitForFingerprint(pid, timeoutMs = PROCESS_IDENTITY_PROBE_TIMEOUT_MS) {
-  const deadline = Date.now() + timeoutMs;
-  const waiter = new Int32Array(new SharedArrayBuffer(4));
-  while (Date.now() < deadline) {
-    const fingerprint = processFingerprint(pid);
-    if (fingerprint) return fingerprint;
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if (error.code === "ESRCH") return null;
-    }
-    Atomics.wait(waiter, 0, 0, 25);
-  }
-  return null;
-}
-
-function probeLocalProcess(owner) {
-  if (owner.host !== os.hostname()) return { status: "unknown", reason: "foreign_host" };
-  if (!Number.isInteger(owner.pid) || owner.pid <= 0) return { status: "unknown", reason: "missing_pid" };
-  try {
-    process.kill(owner.pid, 0);
-  } catch (error) {
-    if (error.code === "ESRCH") return { status: "dead", reason: "pid_missing", identity_matches: false };
-    if (error.code !== "EPERM") return { status: "unknown", reason: "pid_probe_failed" };
-  }
-  const fingerprint = processFingerprint(owner.pid);
-  if (owner.process_fingerprint) {
-    if (!fingerprint) return { status: "unknown", reason: "process_fingerprint_unavailable" };
-    if (!fingerprintsEqual(fingerprint, owner.process_fingerprint)) {
-      return { status: "dead", reason: "pid_reused", identity_matches: false, process_fingerprint: fingerprint };
-    }
-    return { status: "live", identity_matches: true, process_fingerprint: fingerprint };
-  }
-  const startedAt = fingerprint?.started_at || null;
-  if (!startedAt || !owner.process_started_at) return { status: "unknown", reason: "process_start_unavailable" };
-  if (startedAt !== owner.process_started_at) {
-    return { status: "dead", reason: "pid_reused", identity_matches: false, process_started_at: startedAt };
-  }
-  return { status: "live", identity_matches: true, process_started_at: startedAt };
-}
-
-function probeProcessIdentity({
-  pid,
-  processStartedAt: expectedStart,
-  processFingerprint: expectedFingerprint,
-}) {
-  if (!Number.isInteger(pid) || pid <= 0) return { status: "unknown", reason: "missing_pid" };
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    if (error.code === "ESRCH") return { status: "dead", reason: "pid_missing", identity_matches: false };
-    if (error.code !== "EPERM") return { status: "unknown", reason: "pid_probe_failed" };
-  }
-  const observedFingerprint = processFingerprint(pid);
-  if (expectedFingerprint) {
-    if (!observedFingerprint) return { status: "unknown", reason: "process_fingerprint_unavailable" };
-    if (!fingerprintsEqual(observedFingerprint, expectedFingerprint)) {
-      return {
-        status: "dead",
-        reason: "pid_reused",
-        identity_matches: false,
-        process_fingerprint: observedFingerprint,
-      };
-    }
-    return { status: "live", identity_matches: true, process_fingerprint: observedFingerprint };
-  }
-  const observedStart = observedFingerprint?.started_at || null;
-  if (!observedStart || !expectedStart) return { status: "unknown", reason: "process_start_unavailable" };
-  if (observedStart !== expectedStart) {
-    return { status: "dead", reason: "pid_reused", identity_matches: false, process_started_at: observedStart };
-  }
-  return { status: "live", identity_matches: true, process_started_at: observedStart };
-}
-
-function probeExecutorArtifact(owner, runDir) {
-  const executorPath = path.join(runDir, `host-attempt-${owner.attempt_id}.executor.json`);
-  let executor;
-  try {
-    executor = readSecureJsonArtifact(executorPath, "executor identity artifact");
-  } catch (error) {
-    return {
-      status: "unknown",
-      reason: error.code === "ENOENT" ? "executor_identity_missing" : "executor_identity_unreadable",
-    };
-  }
-  if (
-    executor.attempt_id !== owner.attempt_id
-    || executor.host_kind !== owner.host_kind
-    || executor.host_handle !== owner.host_handle
-    || executor.executor_pgid !== executor.executor_pid
-    || typeof executor.executor_nonce !== "string"
-    || executor.executor_nonce.length < 32
-    || !executor.executor_fingerprint
-    || executor.executor_fingerprint.pid !== executor.executor_pid
-    || executor.executor_fingerprint.pgid !== executor.executor_pgid
-    || !verifySignedArtifact(executor, "executor_auth_sha256", resultAuthKey(owner))
-  ) {
-    return { status: "unknown", reason: "executor_identity_unauthenticated" };
-  }
-  const probe = probeProcessIdentity({
-    pid: executor.executor_pid,
-    processStartedAt: executor.executor_started_at,
-    processFingerprint: executor.executor_fingerprint,
-  });
-  if (probe.status === "live") return { ...probe, reason: "detached_executor_identity" };
-  return probe;
-}
-
-function probeDurableHost(owner, runDir) {
-  if (owner.host_kind !== "local_supervisor") return { status: "unknown", reason: "unsupported_host_kind" };
-  if (owner.host !== os.hostname()) return { status: "unknown", reason: "foreign_host" };
-  if (runDir) {
-    const readyPath = path.join(runDir, `host-attempt-${owner.attempt_id}.ready.json`);
-    try {
-      const ready = readSecureJsonArtifact(readyPath, "supervisor ready artifact");
-      if (
-        ready.attempt_id !== owner.attempt_id
-        || ready.host_kind !== owner.host_kind
-        || ready.host_handle !== owner.host_handle
-      ) {
-        return { status: "unknown", reason: "supervisor_identity_mismatch" };
-      }
-      if (!verifySignedArtifact(ready, "ready_auth_sha256", resultAuthKey(owner))) {
-        return { status: "unknown", reason: "supervisor_identity_unauthenticated" };
-      }
-      const supervisor = probeProcessIdentity({
-        pid: ready.supervisor_pid,
-        processStartedAt: ready.supervisor_started_at,
-        processFingerprint: ready.supervisor_fingerprint,
-      });
-      if (supervisor.status === "live" || supervisor.status === "unknown") {
-        return { ...supervisor, reason: "detached_supervisor_identity" };
-      }
-      const executorProbe = probeExecutorArtifact(owner, runDir);
-      if (executorProbe.status === "live") {
-        return executorProbe;
-      }
-      if (executorProbe.status === "unknown") return executorProbe;
-      return {
-        status: "dead",
-        identity_matches: false,
-        reason: "detached_supervisor_and_executor_dead",
-      };
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        return { status: "unknown", reason: "supervisor_identity_unreadable" };
-      }
-      const launchClaimPath = path.join(runDir, `host-attempt-${owner.attempt_id}.launch-claim`);
-      if (fs.existsSync(launchClaimPath)) {
-        const executorProbe = probeExecutorArtifact(owner, runDir);
-        if (executorProbe.status !== "unknown" || executorProbe.reason !== "executor_identity_missing") {
-          return executorProbe;
-        }
-        return { status: "unknown", reason: "ready_artifact_missing_after_launch" };
-      }
-    }
-  }
-  return probeLocalProcess(owner);
-}
-
-function lockPathFor(runDir) {
-  const observed = readOwner(runDir);
-  return observed.exists
-    ? observed.lockPath
-    : path.join(ownershipDirectory(runDir), "none.owner.json");
-}
-
-function normalizeOwner(owner) {
-  const stringFields = ["lock_id", "token", "attempt_id", "operation", "host", "host_kind", "host_handle", "acquired_at", "worktree_dir"];
-  for (const field of stringFields) {
-    if (typeof owner?.[field] !== "string" || !owner[field]) fail(`lock owner ${field} is required`, "INVALID_LOCK_OWNER");
-  }
-  safeAttemptId(owner.attempt_id);
-  if (!HOST_KINDS.has(owner.host_kind)) fail("lock owner host_kind is invalid", "INVALID_LOCK_OWNER");
-  if (owner.pid !== null && (!Number.isInteger(owner.pid) || owner.pid <= 0)) fail("lock owner pid is invalid", "INVALID_LOCK_OWNER");
-  if (owner.process_started_at !== null && Number.isNaN(Date.parse(owner.process_started_at))) {
-    fail("lock owner process_started_at is invalid", "INVALID_LOCK_OWNER");
-  }
-  if (Number.isNaN(Date.parse(owner.acquired_at))) fail("lock owner acquired_at is invalid", "INVALID_LOCK_OWNER");
-  if (!Number.isInteger(owner.worktree_dev) || !Number.isInteger(owner.worktree_ino)) {
-    fail("lock owner worktree identity is invalid", "INVALID_LOCK_OWNER");
-  }
-  if (!Number.isInteger(owner.generation) || owner.generation <= 0) {
-    fail("lock owner generation is invalid", "INVALID_LOCK_OWNER");
-  }
-  if (owner.process_fingerprint) {
-    const fingerprint = owner.process_fingerprint;
-    if (
-      fingerprint.pid !== owner.pid
-      || !Number.isInteger(fingerprint.ppid)
-      || !Number.isInteger(fingerprint.pgid)
-      || fingerprint.started_at !== owner.process_started_at
-      || typeof fingerprint.command_sha256 !== "string"
-      || !/^[0-9a-f]{64}$/.test(fingerprint.command_sha256)
-    ) fail("lock owner process fingerprint is invalid", "INVALID_LOCK_OWNER");
-  }
-  return owner;
-}
-
-function ownershipDirectory(runDir) {
-  const canonicalRunDir = requireDirectory(runDir, "runDir");
-  const directory = path.join(canonicalRunDir, LOCK_FILENAME);
-  try {
-    fs.mkdirSync(directory, { mode: 0o700 });
-    syncDirectory(canonicalRunDir);
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
-  }
-  const stat = fs.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
-    fail("ownership ledger must be an owner-only real directory", "LOCK_LEDGER_INVALID", { directory });
-  }
-  return directory;
-}
-
-function generationBase(generation) {
-  return String(generation).padStart(12, "0");
-}
-
-function immutablePublish(target, record) {
-  const directory = path.dirname(target);
-  const tmp = path.join(
-    directory,
-    `.${path.basename(target)}.tmp.${process.pid}.${crypto.randomBytes(6).toString("hex")}`,
-  );
-  let fd;
-  try {
-    fd = fs.openSync(tmp, "wx", 0o600);
-    fs.writeFileSync(fd, `${JSON.stringify(record)}\n`, "utf8");
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = undefined;
-    fs.linkSync(tmp, target);
-    syncDirectory(directory);
-    return true;
-  } catch (error) {
-    if (error.code === "EEXIST") return false;
-    fail("immutable ownership artifact publication failed", "LOCK_STORAGE_FAILED", {
-      target,
-      cause: error,
-    });
-  } finally {
-    if (fd !== undefined) {
-      try { fs.closeSync(fd); } catch {}
-    }
-    try { fs.unlinkSync(tmp); } catch {}
-  }
-}
-
-function hasValidTerminalMarker(markerPath, owner, outcome) {
-  if (!fs.existsSync(markerPath)) return false;
-  let marker;
-  try {
-    marker = readSecureJsonArtifact(markerPath, `${outcome} ownership marker`);
-  } catch (error) {
-    fail("ownership terminal marker is unreadable", "LOCK_LEDGER_INVALID", {
-      markerPath,
-      cause: error,
-    });
-  }
-  if (
-    marker.generation !== owner.generation
-    || marker.lock_id !== owner.lock_id
-    || marker.outcome !== outcome
-    || !verifySignedArtifact(marker, "marker_auth_sha256", resultAuthKey(owner))
-  ) {
-    fail("ownership terminal marker is unauthenticated", "LOCK_LEDGER_INVALID", { markerPath });
-  }
-  return true;
-}
-
-function terminalMarkerRecord(markerPath, owner) {
-  if (!fs.existsSync(markerPath)) return null;
-  const marker = readSecureJsonArtifact(markerPath, "ownership terminal marker");
-  if (!["released", "broken"].includes(marker.outcome)) {
-    fail("ownership terminal marker outcome is invalid", "LOCK_LEDGER_INVALID", { markerPath });
-  }
-  hasValidTerminalMarker(markerPath, owner, marker.outcome);
-  return marker;
-}
-
-function hasValidTerminalAudit(markerPath, owner, terminal) {
-  if (!fs.existsSync(markerPath)) return false;
-  const marker = readSecureJsonArtifact(markerPath, "ownership terminal audit marker");
-  if (
-    marker.generation !== owner.generation
-    || marker.lock_id !== owner.lock_id
-    || marker.outcome !== terminal.outcome
-    || marker.terminal_sha256 !== sha256(JSON.stringify(terminal))
-    || marker.audit_key !== terminalAuditKey(owner, terminal)
-    || !verifySignedArtifact(marker, "marker_auth_sha256", resultAuthKey(owner))
-  ) {
-    fail("ownership terminal audit marker is unauthenticated", "LOCK_LEDGER_INVALID", {
-      markerPath,
-    });
-  }
-  return true;
-}
-
-function terminalAuditKey(owner, terminal) {
-  if (terminal.reason === "acquisition_audit_failed") {
-    return sha256(`acquisition_failure_recorded\0${owner.lock_id}`);
-  }
-  const auditOutcome = terminal.outcome === "broken"
-    ? "broken"
-    : terminal.release_outcome || "released";
-  return auditFragment("lock_released", owner, auditOutcome).audit_key;
-}
-
-function signedTerminalRecord(owner, unsigned) {
-  return {
-    ...unsigned,
-    marker_auth_sha256: signResult(unsigned, resultAuthKey(owner)),
-  };
-}
-
-function terminalDecisionMatches(existing, requested) {
-  if (
-    existing.generation !== requested.generation
-    || existing.lock_id !== requested.lock_id
-    || existing.outcome !== requested.outcome
-  ) return false;
-  if (requested.outcome === "released") {
-    return (
-      existing.release_outcome === requested.release_outcome
-      && existing.audit_required === requested.audit_required
-    );
-  }
-  return (
-    existing.attempt_id === requested.attempt_id
-    && existing.reason === requested.reason
-    && existing.evidence_digest === requested.evidence_digest
-    && existing.worktree_digest === requested.worktree_digest
-    && existing.audit_required === requested.audit_required
-  );
-}
-
-function publishTerminalDecision(markerPath, owner, unsigned) {
-  const requested = signedTerminalRecord(owner, unsigned);
-  if (immutablePublish(markerPath, requested)) {
-    return { record: requested, published: true };
-  }
-  const existing = terminalMarkerRecord(markerPath, owner);
-  if (!terminalDecisionMatches(existing, requested)) {
-    fail("conflicting terminal decision already exists", "LOCK_CHANGED", { markerPath });
-  }
-  return { record: existing, published: false };
-}
-
-function publishTerminalAudit(markerPath, owner, terminal, metadata = {}) {
-  const unsigned = {
-    generation: owner.generation,
-    lock_id: owner.lock_id,
-    outcome: terminal.outcome,
-    terminal_sha256: sha256(JSON.stringify(terminal)),
-    audit_key: terminalAuditKey(owner, terminal),
-    ...metadata,
-    audit_completed_at: new Date().toISOString(),
-  };
-  const requested = signedTerminalRecord(owner, unsigned);
-  if (immutablePublish(markerPath, requested)) return { record: requested, published: true };
-  if (!hasValidTerminalAudit(markerPath, owner, terminal)) {
-    fail("terminal audit marker conflicts with the elected decision", "LOCK_CHANGED", {
-      markerPath,
-    });
-  }
-  return {
-    record: readSecureJsonArtifact(markerPath, "ownership terminal audit marker"),
-    published: false,
-  };
-}
-
-function ledgerSnapshot(runDir) {
-  const directory = ownershipDirectory(runDir);
-  const ownerNames = fs.readdirSync(directory)
-    .filter((name) => OWNER_FILE_RE.test(name))
-    .sort();
-  const entries = ownerNames.map((name) => {
-    const generation = Number(name.match(OWNER_FILE_RE)[1]);
-    const ownerPath = path.join(directory, name);
-    const base = generationBase(generation);
-    const ownerFd = fs.openSync(ownerPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-    let raw;
-    try {
-      const ownerStat = fs.fstatSync(ownerFd);
-      const pathStat = fs.lstatSync(ownerPath);
-      if (
-        !ownerStat.isFile()
-        || pathStat.isSymbolicLink()
-        || ownerStat.dev !== pathStat.dev
-        || ownerStat.ino !== pathStat.ino
-        || (typeof process.getuid === "function" && ownerStat.uid !== process.getuid())
-        || (ownerStat.mode & 0o077) !== 0
-      ) {
-        fail("ownership candidate is not a trusted owner-only regular file", "LOCK_LEDGER_INVALID", {
-          ownerPath,
-        });
-      }
-      raw = fs.readFileSync(ownerFd);
-    } finally {
-      fs.closeSync(ownerFd);
-    }
-    const owner = normalizeOwner(JSON.parse(raw.toString("utf8")));
-    if (owner.generation !== generation) {
-      fail("owner generation does not match its immutable path", "LOCK_LEDGER_INVALID");
-    }
-    const entry = {
-      generation,
-      ownerPath,
-      owner,
-      raw,
-      terminalPath: path.join(directory, `${base}.terminal.json`),
-      terminalAuditPath: path.join(directory, `${base}.terminal-audit.json`),
-      releasedPath: path.join(directory, `${base}.released.json`),
-      brokenPath: path.join(directory, `${base}.broken.json`),
-    };
-    entry.released = hasValidTerminalMarker(entry.releasedPath, owner, "released");
-    entry.broken = hasValidTerminalMarker(entry.brokenPath, owner, "broken");
-    entry.terminal = terminalMarkerRecord(entry.terminalPath, owner);
-    entry.terminalAudit = entry.terminal
-      ? hasValidTerminalAudit(entry.terminalAuditPath, owner, entry.terminal)
-      : false;
-    if (!entry.terminal && fs.existsSync(entry.terminalAuditPath)) {
-      fail("terminal audit marker exists without a terminal decision", "LOCK_LEDGER_INVALID");
-    }
-    const terminalCount = Number(entry.released) + Number(entry.broken) + Number(Boolean(entry.terminal));
-    if (terminalCount > 1) {
-      fail("ownership generation has conflicting terminal markers", "LEDGER_TERMINAL_CONFLICT", {
-        generation,
-      });
-    }
-    return entry;
-  });
-  const unresolved = entries.filter(
-    (entry) => !entry.released && !entry.broken && !(entry.terminal && entry.terminalAudit),
-  );
-  if (unresolved.length > 1) {
-    fail("ownership ledger has multiple unresolved generations", "LOCK_LEDGER_INVALID", {
-      generations: unresolved.map((entry) => entry.generation),
-    });
-  }
-  return {
-    directory,
-    entries,
-    active: unresolved[0] || null,
-    nextGeneration: (entries.at(-1)?.generation || 0) + 1,
-  };
-}
-
-function readOwner(runDir) {
-  let snapshot;
-  try {
-    snapshot = ledgerSnapshot(runDir);
-    if (!snapshot.active) {
-      return {
-        exists: false,
-        lockPath: path.join(snapshot.directory, "none.owner.json"),
-        owner: null,
-        raw: null,
-      };
-    }
-    return {
-      exists: true,
-      lockPath: snapshot.active.ownerPath,
-      raw: snapshot.active.raw,
-      owner: snapshot.active.owner,
-      generation: snapshot.active.generation,
-      releasedPath: snapshot.active.releasedPath,
-      brokenPath: snapshot.active.brokenPath,
-      terminalPath: snapshot.active.terminalPath,
-      terminalAuditPath: snapshot.active.terminalAuditPath,
-    };
-  } catch (error) {
-    return {
-      exists: true,
-      lockPath: snapshot?.active?.ownerPath || path.join(ownershipDirectory(runDir), "invalid.owner.json"),
-      owner: null,
-      raw: null,
-      error,
-    };
-  }
-}
-
-function readOwnerPublic(runDir) {
-  const observed = readOwner(runDir);
-  return Object.freeze({
-    exists: observed.exists,
-    lockPath: observed.lockPath,
-    owner: observed.owner ? Object.freeze({
-      ...observed.owner,
-      token: undefined,
-      break_transaction: undefined,
-    }) : null,
-    error: observed.error,
-  });
-}
-
-function auditFragment(type, owner, outcome) {
-  return Object.freeze({
-    audit_key: sha256(`${type}\0${owner.lock_id}\0${outcome || ""}`),
-    type,
-    attempt_id: owner.attempt_id,
-    payload: Object.freeze(type === "lock_acquired" ? {
-      lock_id: owner.lock_id,
-      operation: owner.operation,
-      host: owner.host,
-      pid: owner.pid,
-      process_started_at: owner.process_started_at,
-    } : {
-      lock_id: owner.lock_id,
-      operation: owner.operation,
-      outcome,
-    }),
-  });
-}
-
-function emitAudit(audit, type, state, outcome) {
-  const fragment = auditFragment(type, state.owner, outcome);
-  if (typeof audit === "function") return audit(fragment, state.capability);
-  return undefined;
-}
-
-function ensureCanonicalBreakAudit(state, outcome) {
-  const factsApi = require("./facts");
-  const eventsPath = containedPath(
-    state.runDir,
-    path.join(state.runDir, "events.jsonl"),
-    "break audit journal",
-    { mustExist: true, directChild: true },
-  );
-  const journal = factsApi.readFacts({ eventsPath }).facts;
-  const runIds = new Set(journal.map((fact) => fact.run_id).filter(Boolean));
-  if (runIds.size !== 1) fail("break audit journal has no unique run identity", "LOCK_AUDIT_REQUIRED");
-  const audit = auditFragment("lock_released", state.owner, outcome);
-  const eventId = `host-${audit.audit_key}`;
-  const existing = journal.find((fact) => fact.event_id === eventId);
-  if (existing) {
-    if (
-      existing.type !== "lock_released"
-      || existing.attempt_id !== state.owner.attempt_id
-      || existing.payload?.lock_id !== state.owner.lock_id
-      || existing.payload?.outcome !== outcome
-    ) fail("deterministic break audit event conflicts with canonical journal", "LOCK_AUDIT_REQUIRED");
-    return { durable: true, audit_key: audit.audit_key };
-  }
-  factsApi.appendFact({
-    eventsPath,
-    lockContext: state.capability,
-    fact: factsApi.factFromHostAudit({
-      runId: [...runIds][0],
-      eventId,
-      at: state.terminalDecision?.broken_at || state.owner.acquired_at,
-      actor: "relay-host",
-      audit,
-    }),
-  });
-  return { durable: true, audit_key: audit.audit_key };
-}
-
-function acquireRunLock({
-  runDir,
-  attemptId,
-  operation,
-  host = os.hostname(),
-  hostKind = "local_supervisor",
-  hostHandle,
-  pid = process.pid,
-  processStartedAt,
-  worktreeDir = process.cwd(),
-  audit,
-  fault,
-} = {}) {
-  const canonicalRunDir = requireDirectory(runDir, "runDir");
-  const canonicalWorktree = requireDirectory(worktreeDir, "worktreeDir");
-  const worktreeStat = fs.statSync(canonicalWorktree);
-  safeAttemptId(attemptId);
-  if (typeof operation !== "string" || !operation.trim()) fail("operation is required", "INVALID_OPERATION");
-  if (!HOST_KINDS.has(hostKind)) fail("hostKind is invalid", "INVALID_HOST_KIND");
-  const observedFingerprint = processStartedAt === undefined && pid
-    ? processFingerprint(pid)
-    : null;
-  const effectiveProcessStartedAt = processStartedAt === undefined
-    ? observedFingerprint?.started_at || null
-    : processStartedAt;
-  if (hostKind === "local_supervisor" && pid && !effectiveProcessStartedAt) {
-    fail("kernel-stable owner identity is unavailable", "HOST_IDENTITY_UNAVAILABLE", {
-      pid,
-      recommended_action: "inspect",
-    });
-  }
-  const effectiveHandle = hostHandle || (
-    hostKind === "local_supervisor" && process.platform === "darwin"
-      ? `dev.relay.host.${process.pid}.${crypto.randomBytes(8).toString("hex")}`
-      : `${host}:${crypto.randomUUID()}`
-  );
-  let owner;
-  let lockPath;
-  while (true) {
-    const snapshot = ledgerSnapshot(canonicalRunDir);
-    if (snapshot.active) {
-      fail(`run lock is already held: ${snapshot.active.ownerPath}`, "LOCK_HELD", {
-        lockPath: snapshot.active.ownerPath,
-      });
-    }
-    const generation = snapshot.nextGeneration;
-    lockPath = path.join(snapshot.directory, `${generationBase(generation)}.owner.json`);
-    owner = normalizeOwner({
-      generation,
-      lock_id: crypto.randomUUID(),
-      token: crypto.randomBytes(32).toString("hex"),
-      attempt_id: attemptId,
-      operation,
-      host,
-      host_kind: hostKind,
-      host_handle: effectiveHandle,
-      pid: pid ?? null,
-      process_started_at: effectiveProcessStartedAt,
-      process_fingerprint: observedFingerprint,
-      acquired_at: new Date().toISOString(),
-      worktree_dir: canonicalWorktree,
-      worktree_dev: worktreeStat.dev,
-      worktree_ino: worktreeStat.ino,
-    });
-    if (immutablePublish(lockPath, owner)) break;
-  }
-  const fd = fs.openSync(lockPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-  const inode = fs.fstatSync(fd);
-  const capability = Object.freeze({
-    lock_id: owner.lock_id,
-    attempt_id: owner.attempt_id,
-    operation: owner.operation,
-    run_dir: canonicalRunDir,
-    host_kind: owner.host_kind,
-    host_handle: owner.host_handle,
-  });
-  const state = {
-    capability,
-    runDir: canonicalRunDir,
-    lockPath,
-    fd,
-    inode: { dev: inode.dev, ino: inode.ino },
-    owner,
-    released: false,
-  };
-  issuedLocks.add(capability);
-  lockStates.set(capability, state);
-  fault?.("after_lock_fsync");
-  try {
-    emitAudit(audit, "lock_acquired", state);
-  } catch (error) {
-    const markerPath = path.join(path.dirname(lockPath), `${generationBase(owner.generation)}.terminal.json`);
-    const auditMarkerPath = path.join(path.dirname(lockPath), `${generationBase(owner.generation)}.terminal-audit.json`);
-    const unsignedMarker = {
-      generation: owner.generation,
-      lock_id: owner.lock_id,
-      outcome: "broken",
-      reason: "acquisition_audit_failed",
-      audit_required: false,
-      at: new Date().toISOString(),
-    };
-    const terminal = publishTerminalDecision(markerPath, owner, unsignedMarker).record;
-    publishTerminalAudit(auditMarkerPath, owner, terminal, {
-      audit_kind: "acquisition_failure_recorded",
-    });
-    try { fs.closeSync(fd); } catch {}
-    state.released = true;
-    fail(`lock acquisition audit failed: ${error.message}`, "LOCK_AUDIT_FAILED", { cause: error });
-  }
-  return capability;
-}
-
-function stateForLock(capability) {
-  if (!issuedLocks.has(capability)) fail("an issued run-lock capability is required", "LOCK_CAPABILITY_INVALID");
-  const state = lockStates.get(capability);
-  if (!state) fail("run-lock capability state is unavailable", "LOCK_CAPABILITY_INVALID");
-  return state;
-}
-
-function targetRunDir(target) {
-  const requested = typeof target === "string" ? target : target?.runDir || target?.eventsPath;
-  if (typeof requested !== "string" || !requested) fail("runDir or eventsPath is required", "INVALID_LOCK_TARGET");
-  const resolved = path.resolve(requested);
-  if (typeof target === "object" && target?.eventsPath && !target?.runDir) return path.dirname(resolved);
-  try {
-    if (fs.lstatSync(resolved).isFile()) return path.dirname(resolved);
-  } catch {
-    if (path.basename(resolved) === "events.jsonl") return path.dirname(resolved);
+    if (error.code !== "ENOENT") throw error;
+    if (exists) fail(`${label} does not exist`, "INVALID_PATH");
   }
   return resolved;
 }
-
-function assertRunLockHeld(capability, target) {
-  const state = stateForLock(capability);
-  if (state.released) fail("run lock is not held", "LOCK_NOT_HELD");
-  const expectedRunDir = targetRunDir(target);
-  if (expectedRunDir !== state.runDir) fail("run-lock capability belongs to a different run", "LOCK_RUN_MISMATCH");
-  let fdStat;
-  let pathStat;
+function syncDir(directory) {
+  let fd;
+  try { fd = fs.openSync(directory, "r"); fs.fsyncSync(fd); }
+  catch (error) { if (!["EINVAL", "EPERM", "EISDIR", "ENOTSUP"].includes(error.code)) throw error; }
+  finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
+}
+function secureRead(filePath, label) {
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
   try {
-    fdStat = fs.fstatSync(state.fd);
-    pathStat = fs.statSync(state.lockPath);
-  } catch (error) {
-    fail("run-lock inode is unavailable", "LOCK_NOT_HELD", { cause: error });
-  }
-  if (fdStat.dev !== state.inode.dev || fdStat.ino !== state.inode.ino || pathStat.dev !== state.inode.dev || pathStat.ino !== state.inode.ino) {
-    fail("run-lock inode no longer matches the issued capability", "LOCK_INODE_MISMATCH");
-  }
-  const base = generationBase(state.owner.generation);
-  const terminalPath = path.join(path.dirname(state.lockPath), `${base}.terminal.json`);
-  const terminalAuditPath = path.join(path.dirname(state.lockPath), `${base}.terminal-audit.json`);
-  const legacyTerminal = (
-    fs.existsSync(path.join(path.dirname(state.lockPath), `${base}.released.json`))
-    || fs.existsSync(path.join(path.dirname(state.lockPath), `${base}.broken.json`))
-  );
-  if (legacyTerminal || fs.existsSync(terminalAuditPath)) {
-    fail("run-lock generation is already terminal", "LOCK_NOT_HELD");
-  }
-  if (fs.existsSync(terminalPath)) {
-    const observedDecision = terminalMarkerRecord(terminalPath, state.owner);
-    if (
-      !state.terminalDecision
-      || JSON.stringify(observedDecision) !== JSON.stringify(state.terminalDecision)
-    ) {
-      fail("run-lock generation has an unissued terminal decision", "LOCK_NOT_HELD");
+    const stat = fs.fstatSync(fd), pathStat = fs.lstatSync(filePath);
+    if (!stat.isFile() || pathStat.isSymbolicLink() || stat.dev !== pathStat.dev || stat.ino !== pathStat.ino
+      || (typeof process.getuid === "function" && stat.uid !== process.getuid()) || (stat.mode & 0o077) !== 0) {
+      fail(`${label} is not an owner-only regular file`, "UNTRUSTED_HOST_ARTIFACT", { artifactPath: filePath });
     }
-  } else if (state.terminalDecision) {
-    fail("issued terminal decision is no longer present", "LOCK_NOT_HELD");
+    const bytes = fs.readFileSync(fd);
+    return { value: JSON.parse(bytes.toString("utf8")), bytes, stat };
+  } finally { fs.closeSync(fd); }
+}
+function publishOnce(target, value) {
+  const directory = path.dirname(target), bytes = Buffer.isBuffer(value) ? value : Buffer.from(`${JSON.stringify(value)}\n`);
+  const temporary = path.join(directory, `.${path.basename(target)}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`);
+  let fd;
+  try {
+    fd = fs.openSync(temporary, "wx", 0o600); fs.writeFileSync(fd, bytes); fs.fsyncSync(fd);
+    fs.closeSync(fd); fd = undefined; fs.linkSync(temporary, target); syncDir(directory); return true;
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    fail("immutable artifact publication failed", "HOST_STORAGE_FAILED", { target, cause: error });
+  } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {}; try { fs.unlinkSync(temporary); } catch {} }
+}
+function atomicWrite(target, value) {
+  const directory = path.dirname(target);
+  const temporary = `${target}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  let fd;
+  try {
+    fd = fs.openSync(temporary, "wx", 0o600); fs.writeFileSync(fd, value); fs.fsyncSync(fd);
+    fs.closeSync(fd); fd = undefined; fs.renameSync(temporary, target); syncDir(directory);
+  } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {}; try { fs.unlinkSync(temporary); } catch {} }
+}
+function quote(value) { return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"'); }
+function resolveExecutable(command, env = process.env) {
+  if (typeof command !== "string" || !command || command.includes("\0") || (!path.isAbsolute(command) && command.includes(path.sep))) {
+    fail("command must be a bare name or absolute path", "INVALID_INVOCATION");
   }
-  const raw = fs.readFileSync(state.lockPath);
-  const owner = normalizeOwner(JSON.parse(raw.toString("utf8")));
-  if (owner.lock_id !== state.owner.lock_id || owner.token !== state.owner.token) {
-    fail("run-lock owner no longer matches the issued capability", "LOCK_TOKEN_MISMATCH");
+  const candidates = path.isAbsolute(command) ? [command] : String(env.PATH || "").split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, command));
+  for (const candidate of candidates) try { fs.accessSync(candidate, fs.constants.X_OK); return fs.realpathSync(candidate); } catch {}
+  fail(`executable not found: ${command}`, "INVALID_INVOCATION");
+}
+function environmentEntries(value, label) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${label} must be an object`, "INVALID_INVOCATION");
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const injection = /^(?:NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PHPRC|PHP_INI_SCAN_DIR|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|PERL5DB|RUBYOPT|RUBYLIB|GEM_HOME|GEM_PATH|GCONV_PATH|LOCPATH|NLSPATH)$|^(?:DYLD|LD)_|^LUA_(?:INIT|PATH|CPATH)(?:_.*)?$/.test(key);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || injection || typeof entry !== "string" || entry.includes("\0")) {
+      fail(`${label} contains an invalid environment entry`, "INVALID_INVOCATION");
+    }
+    result[key] = entry;
   }
+  return result;
+}
+function minimalEnvironment(source = process.env) {
+  const result = {};
+  for (const [key, value] of Object.entries(source || {})) {
+    if (["PATH", "PATHEXT", "LANG", "TERM", "COLORTERM", "NO_COLOR"].includes(key) || /^LC_[A-Z0-9_]+$/.test(key)) {
+      if (typeof value === "string" && !value.includes("\0")) result[key] = value;
+    }
+  }
+  return result;
+}
+function regularFileBinding(filePath, label, { canonical = true } = {}) {
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+  try {
+    const stat = fs.fstatSync(fd), pathStat = fs.lstatSync(filePath);
+    if (!stat.isFile() || pathStat.isSymbolicLink() || stat.dev !== pathStat.dev || stat.ino !== pathStat.ino || (canonical && fs.realpathSync(filePath) !== filePath)) {
+      fail(`${label} is not an exact regular file`, "UNTRUSTED_PATH");
+    }
+    const bytes = fs.readFileSync(fd);
+    return { path: filePath, size: bytes.length, sha256: sha256(bytes), dev: stat.dev, ino: stat.ino, bytes };
+  } finally { fs.closeSync(fd); }
+}
+function verifyFileBinding(binding, label) {
+  if (!binding || typeof binding !== "object" || typeof binding.path !== "string") fail(`${label} binding is invalid`, "HOST_CONFIG_MISMATCH");
+  const observed = regularFileBinding(binding.path, label);
+  if (observed.size !== binding.size || observed.sha256 !== binding.sha256 || observed.dev !== binding.dev || observed.ino !== binding.ino) {
+    fail(`${label} changed after launch`, "HOST_INPUT_CHANGED");
+  }
+  return observed.path;
+}
+function credentialSource(filePath, label) {
+  if (typeof filePath !== "string" || !path.isAbsolute(filePath) || path.resolve(filePath) !== filePath) fail(`${label} source must be absolute and canonical`, "INVALID_CREDENTIAL");
+  let fd;
+  try {
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+    const before = fs.fstatSync(fd), named = fs.lstatSync(filePath);
+    if (!before.isFile() || named.isSymbolicLink() || before.dev !== named.dev || before.ino !== named.ino || fs.realpathSync(filePath) !== filePath
+      || (typeof process.getuid === "function" && before.uid !== process.getuid()) || (before.mode & 0o077) !== 0) fail(`${label} source must be a current-user owner-only regular file`, "UNTRUSTED_CREDENTIAL");
+    const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd), renamed = fs.lstatSync(filePath);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs || after.dev !== renamed.dev || after.ino !== renamed.ino || renamed.isSymbolicLink() || bytes.length !== after.size) {
+      bytes.fill(0); fail(`${label} source changed while read`, "CREDENTIAL_CHANGED");
+    }
+    return { path: filePath, dev: before.dev, ino: before.ino, size: bytes.length, sha: sha256(bytes), bytes };
+  } catch (error) {
+    if (error instanceof HostError) throw error;
+    fail(`${label} source is unavailable`, "UNTRUSTED_CREDENTIAL");
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+function prepareCredentialBundle({ metadata = {}, envNames = [], fileSpecs = [], env = process.env } = {}) {
+  if (!Array.isArray(envNames) || !Array.isArray(fileSpecs)) fail("credential options must be arrays", "INVALID_CREDENTIAL");
+  const catalog = new Map((metadata.files || []).map((item) => [item.id, item])), seenEnv = new Set(), seenId = new Set(), seenTarget = new Set(), values = {}, files = [];
+  for (const name of envNames) {
+    if (seenEnv.has(name) || /^(?:HOME|PATH|TMPDIR|TMP|TEMP|XDG_CONFIG_HOME|XDG_DATA_HOME|RELAY_PROCESS_SCOPE)$|^RELAY_/.test(name || "")) fail(`credential environment name is reserved or duplicated: ${name}`, "INVALID_CREDENTIAL");
+    environmentEntries({ [name]: "checked" }, "credential environment");
+    if (typeof env[name] !== "string") fail(`credential environment value is missing: ${name}`, "CREDENTIAL_MISSING");
+    seenEnv.add(name); values[name] = env[name];
+  }
+  try { for (const spec of fileSpecs) {
+    if (typeof spec !== "string") fail("credential file must be ID=/absolute/source", "INVALID_CREDENTIAL");
+    const equals = spec.indexOf("="), id = spec.slice(0, equals), sourcePath = spec.slice(equals + 1), item = catalog.get(id);
+    if (equals < 1 || !item) fail(`unknown credential file id: ${id || spec}`, "INVALID_CREDENTIAL");
+    if (!/^[a-z][a-z0-9_-]*$/.test(item.id || "") || !["home", "xdg_config", "xdg_data"].includes(item.targetRoot)
+      || !["read", "read_write"].includes(item.access) || typeof item.targetRel !== "string" || path.isAbsolute(item.targetRel)
+      || !item.targetRel || item.targetRel.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) fail("credential target metadata is invalid", "INVALID_CREDENTIAL");
+    const target = `${item.targetRoot}:${item.targetRel}`;
+    if (seenId.has(id) || seenTarget.has(target)) fail("credential file id or target collision", "INVALID_CREDENTIAL");
+    seenId.add(id); seenTarget.add(target);
+    files.push({ ...item, source: credentialSource(sourcePath, `credential '${id}'`) });
+  } } catch (error) {
+    for (const item of files) item.source.bytes.fill(0);
+    for (const key of Object.keys(values)) { values[key] = ""; delete values[key]; }
+    throw error;
+  }
+  const bundle = Object.freeze({ env_names: Object.freeze([...seenEnv]), files: Object.freeze(files.map(({ source, recommendedSource, ...item }) => Object.freeze({ ...item, size: source.size, sha: source.sha }))) });
+  issuedCredentialBundles.add(bundle); credentialBundleStates.set(bundle, { values, files }); return bundle;
+}
+function credentialState(bundle) {
+  if (!bundle) return { values: {}, files: [], publicFiles: [], envNames: [] };
+  if (!issuedCredentialBundles.has(bundle)) fail("issued credential bundle required", "INVALID_CREDENTIAL");
+  const state = credentialBundleStates.get(bundle), files = [];
+  try {
+    for (const item of state.files) {
+      const fresh = credentialSource(item.source.path, `credential '${item.id}'`);
+      if (fresh.dev !== item.source.dev || fresh.ino !== item.source.ino || fresh.size !== item.source.size || fresh.sha !== item.source.sha) {
+        fresh.bytes.fill(0); fail(`credential '${item.id}' changed after validation`, "CREDENTIAL_CHANGED");
+      }
+      files.push({ ...item, source: fresh });
+    }
+    return { values: { ...state.values }, files, publicFiles: bundle.files, envNames: bundle.env_names };
+  } catch (error) { for (const item of files) item.source.bytes.fill(0); throw error; }
+  finally {
+    for (const item of state.files) item.source.bytes.fill(0);
+    for (const key of Object.keys(state.values)) { state.values[key] = ""; delete state.values[key]; }
+    credentialBundleStates.delete(bundle); issuedCredentialBundles.delete(bundle);
+  }
+}
+function shebangExecutables(executable, env) {
+  const found = [], seen = new Set(); let current = executable;
+  for (let depth = 0; depth < 4 && current && !seen.has(current); depth += 1) {
+    seen.add(current); found.push(current);
+    let first;
+    try {
+      const fd = fs.openSync(current, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      try { const buffer = Buffer.alloc(4096), length = fs.readSync(fd, buffer, 0, buffer.length, 0); first = buffer.subarray(0, length).toString("utf8").split(/\r?\n/, 1)[0]; }
+      finally { fs.closeSync(fd); }
+    } catch { break; }
+    if (!first.startsWith("#!")) break;
+    const words = first.slice(2).trim().split(/\s+/).filter(Boolean);
+    if (!words.length || !path.isAbsolute(words[0])) fail("script interpreter is invalid", "INVALID_INVOCATION");
+    const interpreter = resolveExecutable(words[0], env); found.push(interpreter);
+    if (path.basename(interpreter) === "env") {
+      const name = words.slice(1).find((word) => !word.startsWith("-"));
+      if (!name) fail("env shebang has no interpreter", "INVALID_INVOCATION");
+      current = resolveExecutable(name, env);
+    } else current = interpreter;
+  }
+  return [...new Set(found)];
+}
+function sandboxFile(value, label, mustExist) {
+  if (typeof value !== "string" || !path.isAbsolute(value)) fail(`${label} must be absolute`, "INVALID_PATH");
+  const resolved = path.resolve(value), parent = canonicalDir(path.dirname(resolved), `${label} parent`);
+  if (path.dirname(resolved) !== parent) fail(`${label} parent must be canonical`, "UNTRUSTED_PATH");
+  try {
+    const stat = fs.lstatSync(resolved);
+    if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(resolved) !== resolved) fail(`${label} is unsafe`, "UNTRUSTED_PATH");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    if (mustExist) fail(`${label} does not exist`, "INVALID_PATH");
+  }
+  return resolved;
+}
+function sandboxInvocation({ role, command, args = [], readRoots = [], writeRoots = [], readFiles = [], writeFiles = [], networkAccess = "disabled", env = process.env, ownershipDir = null, platform = process.platform } = {}) {
+  if (platform !== "darwin") fail("macOS sandbox-exec is required", "EXECUTOR_WRITE_ISOLATION_UNAVAILABLE", { recommended_action: "inspect" });
+  try { fs.accessSync(SANDBOX_EXEC, fs.constants.X_OK); } catch (cause) {
+    fail("macOS sandbox-exec is unavailable", "EXECUTOR_WRITE_ISOLATION_UNAVAILABLE", { cause, recommended_action: "inspect" });
+  }
+  if (!new Set(["executor", "reviewer"]).has(role)) fail("sandbox role is invalid", "INVALID_INVOCATION");
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) fail("args must be string argv", "INVALID_INVOCATION");
+  const executable = resolveExecutable(command, env);
+  const reads = [...new Set(readRoots.map((root) => canonicalDir(root, "sandbox read root")))];
+  const writes = [...new Set(writeRoots.map((root) => canonicalDir(root, "sandbox write root")))];
+  const readableFiles = [...new Set(readFiles.map((file) => sandboxFile(file, "sandbox read file", true)))];
+  const writableFiles = [...new Set(writeFiles.map((file) => sandboxFile(file, "sandbox write file", false)))];
+  const readRules = [...reads.map((root) => `(subpath "${quote(root)}")`), ...readableFiles.map((file) => `(literal "${quote(file)}")`)].join(" ");
+  const writeRules = [...writes.map((root) => `(subpath "${quote(root)}")`), ...writableFiles.map((file) => `(literal "${quote(file)}")`)].join(" ");
+  const denyOwner = ownershipDir ? `(deny file-read* file-write* (subpath "${quote(path.resolve(ownershipDir))}"))` : "";
+  const protectedHomes = [...new Set([os.homedir(), env.HOME].filter((value) => typeof value === "string").map((value) => path.resolve(value)))];
+  const protectedAncestor = (target) => protectedHomes.some((home) => {
+    const relative = path.relative(target, home); return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  });
+  const runtimeExecutables = shebangExecutables(executable, env);
+  const runtimeRules = [...new Set(runtimeExecutables.flatMap((runtimeExecutable) => {
+    const executableDir = path.dirname(runtimeExecutable), applicationIndex = runtimeExecutable.indexOf(".app/");
+    const runtimeRoot = applicationIndex >= 0 ? runtimeExecutable.slice(0, applicationIndex + 4) : path.dirname(executableDir);
+    return [
+      `(literal "${quote(runtimeExecutable)}")`,
+      ...(protectedAncestor(executableDir) ? [] : [`(subpath "${quote(executableDir)}")`]),
+      ...(protectedAncestor(runtimeRoot) ? [] : [`(subpath "${quote(runtimeRoot)}")`]),
+    ];
+  }))].join(" ");
+  const packageRules = runtimeExecutables.some((item) => item.startsWith("/opt/homebrew/"))
+    ? '(subpath "/opt/homebrew/opt") (subpath "/opt/homebrew/Cellar") (subpath "/opt/homebrew/etc/openssl@3")'
+    : "";
+  const profile = [
+    "(version 1)", "(deny default)", "(allow process*)", "(allow process-fork)", "(allow process-exec*)", "(allow signal (target self))", '(deny process-exec (literal "/usr/bin/osascript"))',
+    "(deny appleevent-send)", "(allow sysctl-read)", "(allow file-read-metadata)", ...(networkAccess === "enabled" ? ["(allow network*)"] : []),
+    `(allow file-read* ${readRules} (literal "/") ${runtimeRules} ${packageRules} (subpath "/System") (subpath "/usr") (subpath "/bin") (subpath "/Library") (subpath "/private/etc") (subpath "/private/var/db") (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))`,
+    `(allow file-write* ${writeRules} (literal "/dev/null"))`, denyOwner,
+  ].join("");
+  return Object.freeze({ command: SANDBOX_EXEC, args: ["-p", profile, executable, ...args], env: { ...env } });
+}
+// macOS exposes only second-resolution `lstart` (no kern.proc.pid start microseconds through a safe CLI),
+// so a same-second PID reuse is indistinguishable by identity alone. Every signal target is therefore also
+// bound to a random inherited scope token (`inherited_scope_no_daemon`) and revalidated immediately before
+// delivery; an unverifiable target is never signalled. This is PID-reuse safety, not a same-UID adversary boundary.
+function processRows({ environment = false, pid = null } = {}) {
+  const output = execFileSync("/bin/ps", [...(environment ? ["eww"] : []), ...(pid === null ? ["-ax"] : ["-p", String(pid)]),
+    "-o", "pid=,ppid=,pgid=,state=,lstart=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 });
+  return output.split(/\r?\n/).map((line) => PS_ROW_RE.exec(line)).filter(Boolean).map((match) => {
+    const started = Date.parse(match[5].replace(/\s+/g, " "));
+    return { pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), command: match[6], scope: (SCOPE_RE.exec(match[6]) || [])[1] || null,
+      identity: Number.isFinite(started) ? Object.freeze({ pid: Number(match[1]), pgid: Number(match[3]), state: match[4], started_at: new Date(started).toISOString() }) : null };
+  });
+}
+function scopeSeal(token) { return /^[0-9a-f]{64}$/.test(token || "") ? sha256(token) : null; }
+function sealed(scope, seal) { return Boolean(seal) && typeof scope === "string" && equalHex(sha256(scope), seal); }
+function probeRow(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform === "win32") return null;
+  try { return processRows({ environment: true, pid })[0] || null; } catch { return null; }
+}
+function fingerprint(pid) { return probeRow(pid)?.identity || null; }
+function sameProcess(left, right) { return Boolean(left && right && left.pid === right.pid && left.pgid === right.pgid && left.started_at === right.started_at); }
+function signalScoped(identity, signal, seal) {
+  const row = identity ? probeRow(identity.pid) : null;
+  if (!row || !sameProcess(row.identity, identity) || !sealed(row.scope, seal)) {
+    return { delivered: false, verified: false, absent: !row || !sameProcess(row.identity, identity) };
+  }
+  try { process.kill(row.identity.pid, signal); return { delivered: true, verified: true, absent: false }; }
+  catch (error) { return { delivered: false, verified: true, absent: error.code === "ESRCH" }; }
+}
+function scopedGroupMembers(pgid, seal) {
+  if (!seal || !Number.isInteger(pgid) || pgid <= 0) return [];
+  try { return processRows({ environment: true }).filter((row) => row.pgid === pgid && row.identity && sealed(row.scope, seal)).map((row) => row.identity); }
+  catch { return []; }
+}
+function signalScopedGroup(identity, signal, seal) {
+  let delivered = false;
+  // Never signal a process group as a unit: a same-session outsider can share the
+  // PGID. Enumerate and revalidate the inherited scope on every PID instead.
+  for (const member of scopedGroupMembers(identity?.pgid, seal)) if (signalScoped(member, signal, seal).delivered) delivered = true;
+  return { delivered, absent: !delivered && !groupExists(identity?.pgid) };
+}
+function exactIdentity(value, label = "process identity") {
+  if (!value || !Number.isInteger(value.pid) || value.pid <= 0 || !Number.isInteger(value.pgid) || value.pgid <= 0
+    || typeof value.started_at !== "string" || Number.isNaN(Date.parse(value.started_at))) fail(`${label} is invalid`, "HOST_ARTIFACT_INVALID");
+  return { pid: value.pid, pgid: value.pgid, started_at: value.started_at };
+}
+function pollUntil(predicate, timeoutMs, intervalMs = 20) {
+  const end = Date.now() + timeoutMs, waiter = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < end) { const value = predicate(); if (value) return value; Atomics.wait(waiter, 0, 0, intervalMs); }
+  return predicate();
+}
+function waitFingerprint(pid, timeoutMs = 5_000) { return pollUntil(() => fingerprint(pid), timeoutMs) || null; }
+function probeIdentity(identity) {
+  if (!identity || !Number.isInteger(identity.pid) || identity.pid <= 0) return { status: "unknown", reason: "identity_missing" };
+  try { process.kill(identity.pid, 0); } catch (error) {
+    if (error.code === "ESRCH") return { status: "dead", reason: "pid_missing", identity_matches: false };
+    if (error.code !== "EPERM") return { status: "unknown", reason: "pid_probe_failed" };
+  }
+  const observed = fingerprint(identity.pid);
+  if (!observed) return { status: "unknown", reason: "fingerprint_unavailable" };
+  if (!sameProcess(observed, identity)) return { status: "dead", reason: "pid_reused", identity_matches: false };
+  return { status: "live", reason: "identity_matches", identity_matches: true };
+}
+function groupExists(pgid) {
+  try { process.kill(-Number(pgid), 0); return true; } catch (error) { return error.code === "EPERM"; }
+}
+function processBaseline() {
+  const baseline = new Map();
+  for (const row of processRows()) if (row.identity) baseline.set(row.pid, row.identity);
+  return baseline;
+}
+function sameBaselineProcess(baseline, identity) { return sameProcess(baseline.get(identity.pid), identity); }
+function escapedProcessAudit({ baseline, tracked = new Map(), scopeToken, gateIdentity }) {
+  const seal = scopeSeal(scopeToken);
+  const discover = () => {
+    const rows = processRows({ environment: true }), candidates = new Map(), trackedParents = new Set(tracked.keys());
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const row of rows) if (!trackedParents.has(row.pid) && trackedParents.has(row.ppid)) { trackedParents.add(row.pid); changed = true; }
+    }
+    for (const row of rows) {
+      if (row.pid === process.pid || row.pid === process.ppid) continue;
+      if (row.pgid === gateIdentity.pgid) continue;
+      if (!trackedParents.has(row.pid) && !sealed(row.scope, seal)) continue;
+      const identity = row.identity;
+      if (!identity || sameBaselineProcess(baseline, identity)) continue;
+      candidates.set(row.pid, identity);
+    }
+    return candidates;
+  };
+  const first = discover(); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  const second = discover(); for (const [pid, identity] of first) if (!second.has(pid) && sameProcess(fingerprint(pid), identity)) second.set(pid, identity);
+  const detected = [...second.values()];
+  // A detected escapee that no longer proves the inherited scope token is reported, never signalled.
+  const signal = (identity, name) => { if (!sameBaselineProcess(baseline, identity)) signalScoped(identity, name, seal); };
+  for (const identity of detected) signal(identity, "SIGTERM");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  let remaining = detected.filter((identity) => sameProcess(fingerprint(identity.pid), identity));
+  for (const identity of remaining) signal(identity, "SIGKILL");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  remaining = detected.filter((identity) => sameProcess(fingerprint(identity.pid), identity));
+  return { matched: detected.length, reaped: detected.length - remaining.length, remaining: remaining.length,
+    remaining_identities: remaining.map((identity) => exactIdentity(identity)) };
+}
+function beginProcessScope() {
+  const token = crypto.randomBytes(32).toString("hex");
+  const capability = Object.freeze({ env: Object.freeze({ [PROCESS_SCOPE_KEY]: token }), seal: scopeSeal(token) });
+  issuedProcessScopes.add(capability);
+  processScopeStates.set(capability, { baseline: processBaseline(), token });
+  return capability;
+}
+function auditProcessScope(capability) {
+  if (!issuedProcessScopes.has(capability)) fail("issued process scope required", "PROCESS_SCOPE_INVALID");
+  const state = processScopeStates.get(capability);
+  const gateIdentity = fingerprint(process.pid);
+  if (!gateIdentity) fail("process scope audit identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
+  return escapedProcessAudit({ baseline: state.baseline, scopeToken: state.token, gateIdentity });
+}
+sandboxInvocation.beginProcessScope = beginProcessScope;
+sandboxInvocation.auditProcessScope = auditProcessScope;
+sandboxInvocation.bindRegularFile = (filePath, label) => regularFileBinding(filePath, label, { canonical: false });
+sandboxInvocation.readOwnerCredential = (filePath, label) => credentialSource(filePath, label).bytes;
+function waitForProcessGroupAbsence(pgid, timeoutMs) { return Boolean(pollUntil(() => !groupExists(pgid), timeoutMs, 10)); }
+function reapProcessGroup(pgid, seal) {
+  if (!Number.isInteger(pgid) || pgid <= 0 || process.platform === "win32" || !groupExists(pgid)) {
+    return { survived_terminal: false, absent: true, unverified: false };
+  }
+  let survived = false;
+  for (const signal of ["SIGTERM", "SIGKILL"]) {
+    const members = scopedGroupMembers(pgid, seal);
+    if (!members.length) break;
+    survived = true;
+    for (const member of members) signalScoped(member, signal, seal);
+    if (waitForProcessGroupAbsence(pgid, 250)) return { survived_terminal: true, absent: true, unverified: false };
+  }
+  const absent = !groupExists(pgid);
+  return { survived_terminal: survived, absent, unverified: !absent && !scopedGroupMembers(pgid, seal).length };
+}
+sandboxInvocation.reapProcessGroup = reapProcessGroup;
+function ownerDirectory(runDir, create = false) {
+  const run = canonicalDir(runDir, "runDir"), directory = path.join(run, OWNERSHIP);
+  if (create) { try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (error.code !== "EEXIST") throw error; } syncDir(run); }
+  else if (!fs.existsSync(directory)) return null;
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory || (stat.mode & 0o077) !== 0) fail("ownership directory is unsafe", "LOCK_LEDGER_INVALID");
+  return directory;
+}
+function base(generation) { return String(generation).padStart(12, "0"); }
+function validateOwner(owner) {
+  for (const field of ["lock_id", "secret", "attempt_id", "operation", "host", "host_handle", "acquired_at"]) {
+    if (typeof owner?.[field] !== "string" || !owner[field]) fail(`owner ${field} is invalid`, "LOCK_LEDGER_INVALID");
+  }
+  safeAttempt(owner.attempt_id);
+  if (!/^[0-9a-f]{64}$/.test(owner.secret) || !Number.isInteger(owner.generation) || owner.generation < 1) fail("owner secret or generation is invalid", "LOCK_LEDGER_INVALID");
+  if (!owner.process || owner.process.pid <= 0 || !owner.process.started_at) fail("owner process identity is invalid", "LOCK_LEDGER_INVALID");
+  if (!owner.worktree || typeof owner.worktree.path !== "string" || !Number.isInteger(owner.worktree.dev) || !Number.isInteger(owner.worktree.ino)) fail("owner worktree is invalid", "LOCK_LEDGER_INVALID");
+  return owner;
+}
+function readLedger(runDir, create = false) {
+  const directory = ownerDirectory(runDir, create);
+  if (!directory) return { directory: path.join(canonicalDir(runDir, "runDir"), OWNERSHIP), entries: [], active: null, next: 1 };
+  const entries = fs.readdirSync(directory).filter((name) => OWNER_RE.test(name)).sort().map((name) => {
+    const generation = Number(name.match(OWNER_RE)[1]), ownerPath = path.join(directory, name);
+    const read = secureRead(ownerPath, "lock owner"), owner = validateOwner(read.value);
+    if (owner.generation !== generation) fail("owner generation/path mismatch", "LOCK_LEDGER_INVALID");
+    const closedPath = path.join(directory, `${base(generation)}.closed.json`);
+    let closed = null;
+    if (fs.existsSync(closedPath)) {
+      closed = secureRead(closedPath, "lock close").value;
+      if (!verifySigned(closed, owner.secret) || closed.generation !== generation || closed.lock_id !== owner.lock_id
+        || closed.owner_sha256 !== sha256(read.bytes) || !["released", "broken"].includes(closed.outcome)) fail("lock close is invalid", "LOCK_LEDGER_INVALID");
+    }
+    return { generation, ownerPath, owner, raw: read.bytes, stat: read.stat, closedPath, closed };
+  });
+  const active = entries.filter((entry) => !entry.closed);
+  if (active.length > 1) fail("multiple unresolved lock generations", "LOCK_LEDGER_INVALID");
+  return { directory, entries, active: active[0] || null, next: (entries.at(-1)?.generation || 0) + 1 };
+}
+function auditFragment(type, owner, outcome) {
+  return Object.freeze({ audit_key: sha256(`${type}\0${owner.lock_id}\0${outcome || ""}`), type, attempt_id: owner.attempt_id,
+    payload: Object.freeze(type === "lock_acquired" ? { lock_id: owner.lock_id, operation: owner.operation, host: owner.host,
+      pid: owner.process.pid, process_started_at: owner.process.started_at } : { lock_id: owner.lock_id, operation: owner.operation, outcome }) });
+}
+function emitAudit(audit, type, state, outcome) { return typeof audit === "function" ? audit(auditFragment(type, state.owner, outcome), state.capability) : undefined; }
+function stateFor(capability) {
+  if (!issuedLocks.has(capability) || !lockStates.has(capability)) fail("issued lock capability required", "LOCK_CAPABILITY_INVALID");
+  return lockStates.get(capability);
+}
+function acquireRunLock({ runDir, attemptId, operation, host = os.hostname(), hostHandle, pid = process.pid, worktreeDir = process.cwd(), audit } = {}) {
+  const run = canonicalDir(runDir, "runDir"), worktree = canonicalDir(worktreeDir, "worktreeDir"); safeAttempt(attemptId);
+  if (typeof operation !== "string" || !operation) fail("operation is required", "INVALID_OPERATION");
+  const processIdentity = waitFingerprint(pid);
+  if (!processIdentity) fail("stable owner identity unavailable", "HOST_IDENTITY_UNAVAILABLE", { recommended_action: "inspect" });
+  const worktreeStat = fs.statSync(worktree);
+  let ownerPath, owner;
+  while (true) {
+    const ledger = readLedger(run, true);
+    if (ledger.active) fail("run lock is already held", "LOCK_HELD", { lockPath: ledger.active.ownerPath });
+    owner = validateOwner({ v: 2, generation: ledger.next, lock_id: crypto.randomUUID(), secret: crypto.randomBytes(32).toString("hex"),
+      attempt_id: attemptId, operation, host, host_handle: hostHandle || `${operation}:${process.pid}:${crypto.randomBytes(6).toString("hex")}`,
+      process: processIdentity, acquired_at: new Date().toISOString(), worktree: { path: worktree, dev: worktreeStat.dev, ino: worktreeStat.ino } });
+    ownerPath = path.join(ledger.directory, `${base(owner.generation)}.owner.json`);
+    if (publishOnce(ownerPath, owner)) break;
+  }
+  const fd = fs.openSync(ownerPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  const stat = fs.fstatSync(fd), capability = Object.freeze({ lock_id: owner.lock_id, attempt_id: owner.attempt_id, operation,
+    run_dir: run, host_kind: "local_supervisor", host_handle: owner.host_handle });
+  const state = { capability, runDir: run, ownerPath, fd, inode: { dev: stat.dev, ino: stat.ino }, owner, released: false };
+  issuedLocks.add(capability); lockStates.set(capability, state);
+  try { emitAudit(audit, "lock_acquired", state); replayReleaseReceipts(state, audit); }
+  catch (cause) {
+    const body = { v: 2, generation: owner.generation, lock_id: owner.lock_id, owner_sha256: sha256(fs.readFileSync(ownerPath)),
+      outcome: "broken", release_outcome: null, reason: "acquisition_audit_failed", proof: null, closed_at: new Date().toISOString() };
+    publishOnce(path.join(path.dirname(ownerPath), `${base(owner.generation)}.closed.json`), signed(body, owner.secret));
+    state.released = true; fs.closeSync(fd); fail("lock acquisition audit failed", "LOCK_AUDIT_FAILED", { cause });
+  }
+  return capability;
+}
+// A crash between the authoritative close and its release receipt leaves no durable outcome. The next
+// lock holder replays every closed generation's canonical outcome; the deterministic audit key makes the
+// replay idempotent, so each generation materializes exactly one release outcome.
+function replayReleaseReceipts(state, audit) {
+  if (typeof audit !== "function") return;
+  for (const entry of readLedger(state.runDir).entries) {
+    if (!entry.closed || entry.generation >= state.owner.generation) continue;
+    audit(auditFragment("lock_released", entry.owner, entry.closed.release_outcome || entry.closed.outcome), state.capability);
+  }
+}
+function targetRun(target) {
+  const value = typeof target === "string" ? target : target?.runDir || target?.eventsPath;
+  if (typeof value !== "string") fail("lock target is required", "INVALID_LOCK_TARGET");
+  return path.basename(value) === "events.jsonl" || (fs.existsSync(value) && fs.statSync(value).isFile()) ? path.dirname(path.resolve(value)) : path.resolve(value);
+}
+function assertRunLockHeld(capability, target) {
+  const state = stateFor(capability);
+  if (state.released || targetRun(target) !== state.runDir) fail("lock is not held for this run", state.released ? "LOCK_NOT_HELD" : "LOCK_RUN_MISMATCH");
+  let fdStat, pathStat;
+  try { fdStat = fs.fstatSync(state.fd); pathStat = fs.lstatSync(state.ownerPath); }
+  catch (cause) { fail("lock inode is unavailable", "LOCK_INODE_MISMATCH", { cause }); }
+  if (fdStat.dev !== state.inode.dev || fdStat.ino !== state.inode.ino || pathStat.dev !== state.inode.dev || pathStat.ino !== state.inode.ino) fail("lock inode changed", "LOCK_INODE_MISMATCH");
+  const observed = secureRead(state.ownerPath, "lock owner").value;
+  if (observed.lock_id !== state.owner.lock_id || observed.secret !== state.owner.secret) fail("lock owner changed", "LOCK_TOKEN_MISMATCH");
+  const ledger = readLedger(state.runDir);
+  if (state.receiptWindow) {
+    const entry = ledger.entries.find((item) => item.generation === state.owner.generation);
+    if (!entry?.closed || entry.owner.lock_id !== state.owner.lock_id) fail("lock close receipt is unavailable", "LOCK_NOT_HELD");
+    if (ledger.next !== state.owner.generation + 1) fail("a newer lock generation owns this run", "LOCK_NOT_HELD");
+    return true;
+  }
+  if (!ledger.active || ledger.active.owner.lock_id !== state.owner.lock_id) fail("lock generation is closed", "LOCK_NOT_HELD");
   return true;
 }
-
-function releaseRunLock(capability, { outcome = "released", audit, fault } = {}) {
-  const state = stateForLock(capability);
-  if (state.released) return { released: false, reason: "already_released" };
-  const effectiveOutcome = state.terminalDecision?.release_outcome ?? outcome;
-  if (!state.terminalDecision) assertRunLockHeld(capability, state.runDir);
-  const markerPath = path.join(
-    path.dirname(state.lockPath),
-    `${generationBase(state.owner.generation)}.terminal.json`,
-  );
-  const auditMarkerPath = path.join(
-    path.dirname(state.lockPath),
-    `${generationBase(state.owner.generation)}.terminal-audit.json`,
-  );
-  const unsignedMarker = {
-    generation: state.owner.generation,
-    lock_id: state.owner.lock_id,
-    outcome: "released",
-    release_outcome: effectiveOutcome,
-    audit_required: state.terminalDecision?.audit_required ?? typeof audit === "function",
-    released_at: new Date().toISOString(),
-  };
-  state.terminalDecision = publishTerminalDecision(
-    markerPath,
-    state.owner,
-    unsignedMarker,
-  ).record;
+// The authoritative signed close is published first; only then is the single release outcome materialized,
+// inside a receipt window that stays valid exactly while this generation is the newest one.
+function closeState(state, outcome, releaseOutcome, reason, proof, audit) {
+  const ownerBytes = fs.readFileSync(state.ownerPath);
+  const body = { v: 2, generation: state.owner.generation, lock_id: state.owner.lock_id, owner_sha256: sha256(ownerBytes), outcome,
+    release_outcome: releaseOutcome, reason, proof, closed_at: new Date().toISOString() };
+  const closedPath = path.join(path.dirname(state.ownerPath), `${base(state.owner.generation)}.closed.json`);
+  if (!publishOnce(closedPath, signed(body, state.owner.secret))) {
+    const existing = secureRead(closedPath, "lock close").value;
+    if (!verifySigned(existing, state.owner.secret) || existing.lock_id !== state.owner.lock_id || existing.outcome !== outcome) fail("conflicting lock close", "LOCK_CHANGED");
+  }
+  state.receiptWindow = true;
+  try { emitAudit(audit, "lock_released", state, releaseOutcome || outcome); }
+  finally { state.receiptWindow = false; state.released = true; try { fs.closeSync(state.fd); } catch {}; state.fd = undefined; }
+  return { released: true, outcome: releaseOutcome || outcome, markerPath: closedPath };
+}
+function releaseRunLock(capability, { outcome = "released", audit } = {}) {
+  const state = stateFor(capability); if (state.released) return { released: false, reason: "already_released" };
   assertRunLockHeld(capability, state.runDir);
-  if (state.terminalDecision.audit_required && typeof audit !== "function" && !state.auditAttempted) {
-    fail("the elected release requires its audit callback", "LOCK_AUDIT_REQUIRED");
-  }
-  if (typeof audit === "function") {
-    emitAudit(audit, "lock_released", state, effectiveOutcome);
-    state.auditAttempted = true;
-  }
-  fault?.("after_release_audit");
-  fault?.("before_release_cleanup");
-  publishTerminalAudit(auditMarkerPath, state.owner, state.terminalDecision, {
-    audit_kind: "lock_released",
-  });
-  state.released = true;
-  try { fs.closeSync(state.fd); } catch {}
-  state.fd = undefined;
-  return {
-    released: true,
-    outcome: effectiveOutcome,
-    archivePath: null,
-    markerPath,
-    auditMarkerPath,
-  };
+  return closeState(state, "released", outcome, null, null, audit);
 }
-
-function resumePendingTerminal({ runDir, audit, fault } = {}) {
-  const canonicalRunDir = requireDirectory(runDir, "runDir");
-  const snapshot = ledgerSnapshot(canonicalRunDir);
-  const pending = snapshot.active;
-  if (!pending?.terminal || pending.terminalAudit || pending.released || pending.broken) {
-    fail("no pending terminal decision exists", "TERMINAL_RESUME_NOT_FOUND");
-  }
-  const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
-  const fd = fs.openSync(pending.ownerPath, openFlags);
-  const inode = fs.fstatSync(fd);
-  const pathInode = fs.lstatSync(pending.ownerPath);
-  const openedBytes = fs.readFileSync(fd);
-  if (
-    !inode.isFile()
-    || pathInode.isSymbolicLink()
-    || inode.dev !== pathInode.dev
-    || inode.ino !== pathInode.ino
-    || !openedBytes.equals(pending.raw)
-  ) {
-    fs.closeSync(fd);
-    fail("owner changed while resuming terminal decision", "LOCK_CHANGED");
-  }
-  const capability = Object.freeze({
-    lock_id: pending.owner.lock_id,
-    attempt_id: pending.owner.attempt_id,
-    operation: pending.owner.operation,
-    run_dir: canonicalRunDir,
-    host_kind: pending.owner.host_kind,
-    host_handle: pending.owner.host_handle,
-  });
-  const state = {
-    capability,
-    runDir: canonicalRunDir,
-    lockPath: pending.ownerPath,
-    fd,
-    inode: { dev: inode.dev, ino: inode.ino },
-    owner: pending.owner,
-    terminalDecision: pending.terminal,
-    released: false,
-  };
-  issuedLocks.add(capability);
-  lockStates.set(capability, state);
-  try {
-    assertRunLockHeld(capability, canonicalRunDir);
-    if (
-      pending.terminal.outcome === "broken"
-      && pending.terminal.reason !== "acquisition_audit_failed"
-    ) {
-      ensureCanonicalBreakAudit(state, "broken");
-      emitAudit(audit, "lock_released", state, "broken");
-    } else if (pending.terminal.outcome === "released") {
-      if (pending.terminal.audit_required && typeof audit !== "function") {
-        fail("pending release requires an idempotent audit sink", "LOCK_AUDIT_REQUIRED");
-      }
-      const acknowledgment = emitAudit(
-        audit,
-        "lock_released",
-        state,
-        pending.terminal.release_outcome || "released",
-      );
-      if (
-        pending.terminal.audit_required
-        && (
-          acknowledgment?.audit_key !== terminalAuditKey(pending.owner, pending.terminal)
-          || acknowledgment?.durable !== true
-          || acknowledgment?.idempotent !== true
-        )
-      ) {
-        fail(
-          "recovery audit sink did not acknowledge durable idempotent publication",
-          "LOCK_AUDIT_REQUIRED",
-        );
-      }
-    }
-    fault?.("after_resume_audit");
-    const auditPublication = publishTerminalAudit(
-      pending.terminalAuditPath,
-      pending.owner,
-      pending.terminal,
-      {
-        audit_kind: pending.terminal.reason === "acquisition_audit_failed"
-          ? "acquisition_failure_recorded"
-          : `lock_${pending.terminal.outcome}`,
-        resumed: true,
-      },
-    );
-    state.released = true;
-    fs.closeSync(fd);
-    state.fd = undefined;
-    return {
-      resumed: true,
-      outcome: pending.terminal.outcome,
-      markerPath: pending.terminalPath,
-      auditMarkerPath: pending.terminalAuditPath,
-      already_completed: !auditPublication.published,
-    };
-  } catch (error) {
-    try { fs.closeSync(fd); } catch {}
-    state.fd = undefined;
-    error.terminal_retryable = true;
-    throw error;
-  }
-}
-
 async function withRunLock(options, callback) {
-  const capability = acquireRunLock(options);
-  let outcome = "released";
-  try {
-    return await callback(capability);
-  } catch (error) {
-    outcome = "failed";
-    throw error;
-  } finally {
-    releaseRunLock(capability, { outcome, audit: options?.audit });
+  const capability = acquireRunLock(options); let outcome = "released";
+  try { return await callback(capability); } catch (error) { outcome = "failed"; throw error; }
+  finally { releaseRunLock(capability, { outcome, audit: options?.audit }); }
+}
+function attemptPaths(runDir, attemptId) {
+  const run = canonicalDir(runDir, "runDir"), id = safeAttempt(attemptId), child = (name, label) => directChild(run, path.join(run, name), label);
+  return { run, config: child(`host-attempt-${id}.config.json`, "config"), supervisor: child(`host-attempt-${id}.supervisor.json`, "supervisor"),
+    running: child(`host-attempt-${id}.running.json`, "running"), cleanup: child(`host-attempt-${id}.cleanup-incomplete.json`, "cleanup status"),
+    settled: child(`host-attempt-${id}.cleanup-settled.json`, "cleanup settled"),
+    cancel: child(`host-attempt-${id}.cancel.json`, "cancel") };
+}
+function readBoundArtifact(filePath, label, owner, expected = {}) {
+  const value = secureRead(filePath, label).value;
+  if (!verifySigned(value, owner.secret) || value.lock_id !== owner.lock_id || value.attempt_id !== owner.attempt_id
+    || Object.entries(expected).some(([key, expectedValue]) => value[key] !== expectedValue)) fail(`${label} is unauthenticated`, "HOST_ARTIFACT_INVALID");
+  return value;
+}
+function validTerminal(result, owner) {
+  return verifySigned(result, owner.secret, "result_auth_sha256") && result.lock_id === owner.lock_id && result.attempt_id === owner.attempt_id
+    && result.host_handle === owner.host_handle && result.host_kind === "local_supervisor" && TERMINAL.has(result.status);
+}
+function probeOwner(owner, runDir) {
+  if (owner.host !== os.hostname()) return { status: "unknown", reason: "foreign_host" };
+  const paths = attemptPaths(runDir, owner.attempt_id);
+  const resultPath = path.join(runDir, `attempt-${owner.attempt_id}.result.json`);
+  if (fs.existsSync(resultPath)) {
+    try { if (validTerminal(secureRead(resultPath, "terminal result").value, owner)) return { status: "dead", reason: "terminal_result", identity_matches: false }; }
+    catch { return { status: "unknown", reason: "terminal_result_invalid" }; }
   }
-}
-
-function validateWorktreeFacts(worktreeFacts, runDir) {
-  if (!issuedWorktreeFacts.has(worktreeFacts)) return null;
-  const state = worktreeFactStates.get(worktreeFacts);
-  if (!state || state.runDir !== runDir || Date.now() - state.observedAt > 5_000) return null;
-  const required = ["head_sha", "tree_sha", "reviewable_work", "observed_at"];
-  if (Object.keys(worktreeFacts).sort().join(",") !== required.sort().join(",")) return null;
-  if (typeof worktreeFacts.reviewable_work !== "boolean" || Number.isNaN(Date.parse(worktreeFacts.observed_at))) return null;
-  for (const field of ["head_sha", "tree_sha"]) {
-    if (worktreeFacts[field] !== null && typeof worktreeFacts[field] !== "string") return null;
+  if (fs.existsSync(paths.cleanup)) return { status: "unknown", reason: "cleanup_incomplete" };
+  if (fs.existsSync(paths.running)) {
+    try {
+      const running = readBoundArtifact(paths.running, "running identity", owner);
+      const supervisor = probeIdentity(running.supervisor), executor = probeIdentity(running.executor);
+      if (supervisor.status === "live" || executor.status === "live") return { status: "live", reason: "durable_process_live" };
+      if (supervisor.status === "dead" && executor.status === "dead" && !groupExists(running.executor.pgid)) return { status: "dead", reason: "durable_processes_dead", identity_matches: false };
+      return { status: "unknown", reason: "durable_process_unknown" };
+    } catch { return { status: "unknown", reason: "running_identity_invalid" }; }
   }
-  return Object.freeze({ ...worktreeFacts });
+  if (fs.existsSync(paths.supervisor)) {
+    try { return probeIdentity(readBoundArtifact(paths.supervisor, "supervisor identity", owner).supervisor); }
+    catch { return { status: "unknown", reason: "supervisor_identity_invalid" }; }
+  }
+  if (fs.existsSync(paths.config)) return { status: "unknown", reason: "launch_identity_missing" };
+  return probeIdentity(owner.process);
 }
-
-function digestWorktree(worktreeFacts) {
-  return sha256(JSON.stringify({
-    head_sha: worktreeFacts.head_sha,
-    tree_sha: worktreeFacts.tree_sha,
-    reviewable_work: worktreeFacts.reviewable_work,
-  }));
+function inspectOwnership({ runDir } = {}) {
+  const run = canonicalDir(runDir, "runDir"), ledger = readLedger(run);
+  if (!ledger.active) return Object.freeze({ status: "absent", lockPath: path.join(ledger.directory, "none.owner.json") });
+  const liveness = probeOwner(ledger.active.owner, run);
+  const status = liveness.status === "live" ? "live" : liveness.status === "dead" ? "stale" : "unknown";
+  const inspection = Object.freeze({ status, reason: liveness.reason, lockPath: ledger.active.ownerPath,
+    owner: Object.freeze({ ...ledger.active.owner, secret: undefined }), liveness: Object.freeze(liveness) });
+  issuedInspections.add(inspection); inspectionStates.set(inspection, { runDir: run, owner: ledger.active.owner, ownerDigest: sha256(ledger.active.raw) });
+  return inspection;
 }
-
-function observeWorktree({ runDir, worktreeDir } = {}) {
-  const canonicalRunDir = requireDirectory(runDir, "runDir");
-  const canonicalWorktree = requireDirectory(worktreeDir, "worktreeDir");
-  let headSha;
-  let treeSha;
-  let reviewableWork;
-  try {
-    headSha = execFileSync("git", ["-C", canonicalWorktree, "rev-parse", "HEAD"], {
-      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: GIT_IDENTITY_TIMEOUT_MS,
-    }).trim();
-    const headTree = execFileSync("git", ["-C", canonicalWorktree, "rev-parse", "HEAD^{tree}"], {
-      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: GIT_IDENTITY_TIMEOUT_MS,
-    }).trim();
-    const diff = execFileSync("git", ["-C", canonicalWorktree, "diff", "--binary", "HEAD", "--"], {
-      encoding: null, stdio: ["ignore", "pipe", "ignore"], timeout: GIT_CONTENT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
-    });
-    const untrackedOutput = execFileSync("git", ["-C", canonicalWorktree, "ls-files", "--others", "--exclude-standard", "-z"], {
-      encoding: null, stdio: ["ignore", "pipe", "ignore"], timeout: GIT_CONTENT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
-    });
-    const untracked = untrackedOutput.toString("utf8").split("\0").filter(Boolean).sort();
-    const treeHash = crypto.createHash("sha1").update(`HEAD-tree\0${headTree}\0`).update(diff);
-    for (const relative of untracked) {
-      const filePath = containedPath(canonicalWorktree, path.join(canonicalWorktree, relative), "untracked worktree file", { mustExist: true });
-      treeHash.update(`\0untracked\0${relative}\0`).update(fs.readFileSync(filePath));
+function cleanupObligation(value, runDir, owner) {
+  const expectedRoot = path.join(runDir, `executor-credentials-${owner.attempt_id}`), obligation = value?.obligation;
+  if (!obligation || !Array.isArray(obligation.processes) || !obligation.credential_root || obligation.credential_root.path !== expectedRoot
+    || !((obligation.credential_root.dev === null && obligation.credential_root.ino === null)
+      || (Number.isInteger(obligation.credential_root.dev) && Number.isInteger(obligation.credential_root.ino)))) fail("cleanup obligation is invalid", "HOST_ARTIFACT_INVALID");
+  const identities = value.identities, terminal = value.terminal;
+  if (!identities || !identities.supervisor || (identities.executor !== null && !identities.executor)) fail("cleanup host identities are invalid", "HOST_ARTIFACT_INVALID");
+  exactIdentity(identities.supervisor, "cleanup supervisor"); if (identities.executor) exactIdentity(identities.executor, "cleanup executor");
+  const processes = obligation.processes.map((identity, index) => exactIdentity(identity, `cleanup process ${index}`));
+  if (new Set(processes.map((identity) => identity.pid)).size !== processes.length) fail("cleanup process identities are duplicated", "HOST_ARTIFACT_INVALID");
+  const seal = obligation.scope_seal ?? null;
+  if (seal !== null && !/^[0-9a-f]{64}$/.test(seal)) fail("cleanup process scope seal is invalid", "HOST_ARTIFACT_INVALID");
+  if (!terminal || !["completed", "failed", "cancelled", "timed_out", "spawn_error"].includes(terminal.status)
+    || (terminal.exit_code !== null && !Number.isInteger(terminal.exit_code)) || (terminal.signal !== null && typeof terminal.signal !== "string")) fail("cleanup terminal context is invalid", "HOST_ARTIFACT_INVALID");
+  return { processes, credential_root: { ...obligation.credential_root }, scope_seal: seal, terminal };
+}
+function identityGone(identity, timeoutMs) {
+  return Boolean(pollUntil(() => { const row = probeRow(identity.pid); return !sameProcess(row?.identity, identity) || /^Z/.test(row.identity.state); }, timeoutMs));
+}
+function reapExactIdentity(identity, seal) {
+  for (const [signal, settleMs] of [["SIGTERM", 500], ["SIGKILL", 1_000]]) {
+    if (identityGone(identity, 0)) return;
+    const sent = signalScoped(identity, signal, seal);
+    if (!sent.verified && !sent.absent) {
+      fail("cleanup process could not be bound to the run process scope", "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect", pid: identity.pid });
     }
-    treeSha = treeHash.digest("hex");
-    reviewableWork = diff.length > 0 || untracked.length > 0;
-  } catch (error) {
-    fail("trusted worktree observation failed", "WORKTREE_OBSERVATION_FAILED", { cause: error });
+    if (identityGone(identity, settleMs)) return;
   }
-  for (const [label, value] of [["head_sha", headSha], ["tree_sha", treeSha]]) {
-    if (!/^[0-9a-f]{40}$/i.test(value)) fail(`${label} is not a SHA-1 digest`, "WORKTREE_OBSERVATION_FAILED");
-  }
-  const observedAt = Date.now();
-  const observation = Object.freeze({
-    head_sha: headSha,
-    tree_sha: treeSha,
-    reviewable_work: reviewableWork,
-    observed_at: new Date(observedAt).toISOString(),
-  });
-  issuedWorktreeFacts.add(observation);
-  worktreeFactStates.set(observation, { runDir: canonicalRunDir, worktreeDir: canonicalWorktree, observedAt });
-  return observation;
+  fail("exact cleanup process survived recovery", "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
 }
-
-function attemptState(facts, attemptId) {
-  if (!Array.isArray(facts)) return { status: "missing" };
-  const starts = facts.filter((fact) => fact?.type === "attempt_started" && typeof fact.attempt_id === "string");
-  const evidence = facts.filter((fact) => ["lock_acquired", "attempt_started"].includes(fact?.type) && typeof fact.attempt_id === "string");
-  const match = evidence.some((fact) => fact.attempt_id === attemptId);
-  if (!match) return { status: "missing" };
-  if (evidence[evidence.length - 1]?.attempt_id !== attemptId) return { status: "superseded" };
-  const terminal = facts.some((fact) => fact?.attempt_id === attemptId && ["attempt_finished", "attempt_interrupted"].includes(fact.type));
-  return { status: terminal ? "terminal" : "open" };
-}
-
-function inspectOwnership({ runDir, eventsPath, worktreeFacts } = {}) {
-  const canonicalRunDir = requireDirectory(runDir, "runDir");
-  const safeEventsPath = containedPath(
-    canonicalRunDir,
-    eventsPath || path.join(canonicalRunDir, "events.jsonl"),
-    "attempt facts",
-    { mustExist: true, directChild: true },
-  );
-  const attemptFacts = require("./facts").readFacts({ eventsPath: safeEventsPath }).facts;
-  const observed = readOwner(runDir);
-  if (!observed.exists) return Object.freeze({ status: "absent", lockPath: observed.lockPath });
-  if (!observed.owner) return Object.freeze({ status: "unknown", reason: "invalid_lock_owner", lockPath: observed.lockPath });
-  const worktreeState = worktreeFactStates.get(worktreeFacts);
-  const worktree = validateWorktreeFacts(worktreeFacts, canonicalRunDir);
-  const observedWorktreeStat = worktreeState ? fs.statSync(worktreeState.worktreeDir) : null;
-  const worktreeBound = worktree
-    && worktreeState.worktreeDir === observed.owner.worktree_dir
-    && observedWorktreeStat.dev === observed.owner.worktree_dev
-    && observedWorktreeStat.ino === observed.owner.worktree_ino;
-  const attempt = attemptState(attemptFacts, observed.owner.attempt_id);
-  let liveness;
-  try {
-    liveness = probeDurableHost(observed.owner, canonicalRunDir);
-  } catch (error) {
-    liveness = { status: "unknown", reason: `probe_error:${error.message}` };
+// Swap-safe removal: rename the bound directory to a unique sibling quarantine first, then re-verify the
+// signed dev/ino on the quarantine target. A mismatch means the path was swapped, so the swapped tree is
+// preserved as evidence at its quarantine path and never deleted.
+function removeBoundDirectory(target, expected, label) {
+  let stat;
+  try { stat = fs.lstatSync(target); } catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} is not a real directory`, "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
+  const binding = expected || { dev: stat.dev, ino: stat.ino };
+  if (stat.dev !== binding.dev || stat.ino !== binding.ino) fail(`${label} identity changed before cleanup`, "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
+  const quarantine = path.join(path.dirname(target), `.${path.basename(target)}.quarantine.${process.pid}.${crypto.randomBytes(8).toString("hex")}`);
+  fs.renameSync(target, quarantine);
+  const moved = fs.lstatSync(quarantine);
+  if (!moved.isDirectory() || moved.isSymbolicLink() || moved.dev !== binding.dev || moved.ino !== binding.ino) {
+    fail(`${label} was replaced before quarantined removal`, "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect", quarantinePath: quarantine });
   }
-  let status = "unknown";
-  let reason = null;
-  if (liveness?.status === "live") status = "live";
-  else if (!worktreeBound) reason = "worktree_facts_not_revalidated";
-  else if (!["open", "terminal"].includes(attempt.status)) reason = "attempt_not_revalidated";
-  else if (liveness?.status === "dead") status = "stale";
-  else reason = liveness?.reason || "liveness_unknown";
-  const publicInspection = Object.freeze({
-    status,
-    reason,
-    lockPath: observed.lockPath,
-    owner: Object.freeze({ ...observed.owner, token: undefined }),
-    attempt: Object.freeze(attempt),
-    worktree: worktreeBound ? worktree : null,
-    worktree_digest: worktreeBound ? digestWorktree(worktree) : null,
-    liveness: Object.freeze({ ...liveness }),
-  });
-  if (
-    status === "stale"
-    || (status === "unknown" && worktreeBound && ["open", "terminal"].includes(attempt.status))
-  ) {
-    issuedInspections.add(publicInspection);
-    inspectionStates.set(publicInspection, {
-      runDir: requireDirectory(runDir, "runDir"),
-      owner: observed.owner,
-      ownerDigest: sha256(observed.raw),
-      worktreeDigest: publicInspection.worktree_digest,
-      worktreeDir: worktreeState.worktreeDir,
-    });
-  }
-  return publicInspection;
+  fs.rmSync(quarantine, { recursive: true, force: true }); syncDir(path.dirname(target)); return true;
 }
-
-function proofBinding(state, fields) {
-  return sha256(JSON.stringify({
-    lock_id: state.owner.lock_id,
-    attempt_id: state.owner.attempt_id,
-    host_kind: state.owner.host_kind,
-    host_handle: state.owner.host_handle,
-    host: state.owner.host,
-    worktree_digest: state.worktreeDigest,
-    ...fields,
-  }));
-}
-
-function captureLivenessProbe(inspection) {
-  if (!issuedInspections.has(inspection)) fail("an issued stale inspection is required", "INSPECTION_CAPABILITY_INVALID");
-  const state = inspectionStates.get(inspection);
-  const result = probeDurableHost(state.owner, state.runDir);
-  if (result?.status !== "dead" || result.identity_matches !== false) {
-    fail("liveness break proof must show a dead nonmatching identity", "BREAK_EVIDENCE_INSUFFICIENT");
+function removeExactCredentialRoot(root, runDir) {
+  const target = directChild(runDir, root.path, "cleanup credential root", { directory: true });
+  if (root.dev === null) {
+    if (fs.existsSync(target)) fail("credential root identity changed before recovery", "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
+    return;
   }
-  const at = new Date().toISOString();
-  const proof = Object.freeze({
-    kind: "liveness_probe",
-    at,
-    status: "dead",
-    identity_matches: false,
-    binding_sha256: proofBinding(state, { kind: "liveness_probe", at }),
-  });
-  issuedBreakProofs.add(proof);
-  breakProofStates.set(proof, { inspection, kind: "liveness_probe", at: Date.parse(at) });
-  return proof;
+  removeBoundDirectory(target, { dev: root.dev, ino: root.ino }, "cleanup credential root");
 }
-
-function terminalResultProof(inspection, { resultPath } = {}) {
-  if (!issuedInspections.has(inspection)) fail("an issued stale inspection is required", "INSPECTION_CAPABILITY_INVALID");
-  const state = inspectionStates.get(inspection);
-  const safePath = containedPath(state.runDir, resultPath, "terminal result", { mustExist: true, directChild: true });
-  const bytes = fs.readFileSync(safePath);
-  let result;
-  try { result = JSON.parse(bytes.toString("utf8")); } catch { fail("terminal result is not valid JSON", "BREAK_EVIDENCE_INSUFFICIENT"); }
-  const exact = result
-    && result.lock_id === state.owner.lock_id
-    && result.attempt_id === state.owner.attempt_id
-    && result.host_kind === state.owner.host_kind
-    && result.host_handle === state.owner.host_handle
-    && TERMINAL_HOST_STATUSES.has(result.status);
-  if (!exact) fail("terminal result does not exactly match lock ownership", "BREAK_EVIDENCE_INSUFFICIENT");
-  const { result_auth_sha256: signature, ...unsigned } = result;
-  const expectedSignature = signResult(unsigned, resultAuthKey(state.owner));
-  if (
-    typeof signature !== "string"
-    || signature.length !== expectedSignature.length
-    || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))
-  ) fail("terminal result is not authenticated by its lock owner", "BREAK_EVIDENCE_INSUFFICIENT");
-  const proof = Object.freeze({
-    kind: "terminal_result",
-    result_path: safePath,
-    result_sha256: sha256(bytes),
-    binding_sha256: proofBinding(state, { kind: "terminal_result", result_sha256: sha256(bytes) }),
-  });
-  issuedBreakProofs.add(proof);
-  breakProofStates.set(proof, { inspection, kind: "terminal_result", resultPath: safePath, resultSha256: sha256(bytes) });
-  return proof;
-}
-
-function validateBreakProof(inspection, evidence) {
-  const proofs = Array.isArray(evidence) ? evidence : [evidence];
-  if (!proofs.length || proofs.some((proof) => !issuedBreakProofs.has(proof))) return false;
-  const states = proofs.map((proof) => breakProofStates.get(proof));
-  if (states.some((state) => state.inspection !== inspection)) return false;
-  if (states.length === 1 && states[0].kind === "terminal_result") {
-    const bytes = fs.readFileSync(states[0].resultPath);
-    return sha256(bytes) === states[0].resultSha256;
-  }
-  if (states.length !== 2 || states.some((state) => state.kind !== "liveness_probe")) return false;
-  return states[1].at - states[0].at >= MIN_BREAK_PROBE_INTERVAL_MS;
-}
-
-function revalidateBreakWorktree(inspectionState) {
-  const fresh = observeWorktree({
-    runDir: inspectionState.runDir,
-    worktreeDir: inspectionState.worktreeDir,
-  });
-  if (digestWorktree(fresh) !== inspectionState.worktreeDigest) {
-    fail("worktree changed after stale inspection", "WORKTREE_CHANGED");
-  }
-}
-
-function breakStaleRunLock({ inspection, reason, evidence, audit, fault } = {}) {
-  const evidenceList = Array.isArray(evidence) ? evidence : [evidence];
-  const terminalOnly = evidenceList.length === 1
-    && breakProofStates.get(evidenceList[0])?.kind === "terminal_result";
-  if (
-    !issuedInspections.has(inspection)
-    || (inspection.status !== "stale" && !(inspection.status === "unknown" && terminalOnly))
-  ) {
-    fail("an issued stale inspection is required", "INSPECTION_CAPABILITY_INVALID");
-  }
-  if (typeof reason !== "string" || !reason.trim()) fail("break reason is required", "BREAK_REASON_REQUIRED");
-  if (!validateBreakProof(inspection, evidence)) fail("break proof is unissued, unbound, or insufficient", "BREAK_EVIDENCE_INSUFFICIENT");
-  const inspectionState = inspectionStates.get(inspection);
-  revalidateBreakWorktree(inspectionState);
-  const observed = readOwner(inspectionState.runDir);
-  if (!observed.owner || sha256(observed.raw) !== inspectionState.ownerDigest) fail("lock changed after inspection", "LOCK_CHANGED");
-  const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
-  const fd = fs.openSync(observed.lockPath, openFlags);
-  const inode = fs.fstatSync(fd);
-  const pathInode = fs.lstatSync(observed.lockPath);
-  const openedBytes = fs.readFileSync(fd);
-  if (
-    !inode.isFile()
-    || pathInode.isSymbolicLink()
-    || inode.dev !== pathInode.dev
-    || inode.ino !== pathInode.ino
-    || sha256(openedBytes) !== inspectionState.ownerDigest
-  ) {
-    fs.closeSync(fd);
-    fail("lock changed while opening stale owner", "LOCK_CHANGED");
-  }
-  const capability = Object.freeze({
-    lock_id: observed.owner.lock_id,
-    attempt_id: observed.owner.attempt_id,
-    operation: observed.owner.operation,
-    run_dir: inspectionState.runDir,
-    host_kind: observed.owner.host_kind,
-    host_handle: observed.owner.host_handle,
-  });
-  const state = {
-    capability,
-    runDir: inspectionState.runDir,
-    lockPath: observed.lockPath,
-    fd,
-    inode: { dev: inode.dev, ino: inode.ino },
-    owner: observed.owner,
-    released: false,
+function settleCleanup({ state, cleanupPath, fault }) {
+  const read = secureRead(cleanupPath, "cleanup-incomplete status"), owner = state.owner;
+  if (!verifySigned(read.value, owner.secret) || read.value.lock_id !== owner.lock_id || read.value.attempt_id !== owner.attempt_id
+    || read.value.host_handle !== owner.host_handle) fail("cleanup status is unauthenticated", "HOST_ARTIFACT_INVALID");
+  const obligation = cleanupObligation(read.value, state.runDir, owner), paths = attemptPaths(state.runDir, owner.attempt_id);
+  for (const identity of obligation.processes) reapExactIdentity(identity, obligation.scope_seal);
+  removeExactCredentialRoot(obligation.credential_root, state.runDir); fault?.("after_cleanup");
+  const settledBody = { v: 2, attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_handle: owner.host_handle,
+    cleanup_sha256: sha256(read.bytes), settled_at: new Date().toISOString() };
+  if (!publishOnce(paths.settled, signed(settledBody, owner.secret))) readBoundArtifact(paths.settled, "cleanup settled", owner, { cleanup_sha256: settledBody.cleanup_sha256 });
+  fault?.("after_settled");
+  const resultPath = path.join(state.runDir, `attempt-${owner.attempt_id}.result.json`), body = {
+    attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_kind: "local_supervisor", host_handle: owner.host_handle,
+    status: "failed", exit_code: obligation.terminal.exit_code, signal: obligation.terminal.signal,
+    error: `cleanup recovered after incomplete host settlement: ${read.value.error}`, completed_at: new Date().toISOString(),
   };
-  issuedLocks.add(capability);
-  lockStates.set(capability, state);
-  const proofs = Array.isArray(evidence) ? evidence : [evidence];
-  const markerUnsigned = {
-    generation: state.owner.generation,
-    lock_id: state.owner.lock_id,
-    attempt_id: state.owner.attempt_id,
-    outcome: "broken",
-    reason,
-    evidence_digest: sha256(JSON.stringify(proofs.map((proof) => proof.binding_sha256))),
-    worktree_digest: inspectionState.worktreeDigest,
-    audit_required: true,
-    broken_at: new Date().toISOString(),
-  };
-  try {
-    const markerPath = observed.terminalPath;
-    const auditMarkerPath = observed.terminalAuditPath;
-    if (!fs.existsSync(markerPath)) assertRunLockHeld(capability, state.runDir);
-    state.terminalDecision = publishTerminalDecision(
-      markerPath,
-      state.owner,
-      markerUnsigned,
-    ).record;
-    assertRunLockHeld(capability, state.runDir);
-    ensureCanonicalBreakAudit(state, "broken");
-    emitAudit(audit, "lock_released", state, "broken");
-    fault?.("after_release_audit");
-    fault?.("before_release_archive");
-    const auditPublication = publishTerminalAudit(
-      auditMarkerPath,
-      state.owner,
-      state.terminalDecision,
-      { audit_kind: "lock_broken" },
-    );
-    state.released = true;
-    fs.closeSync(fd);
-    state.fd = undefined;
-    return {
-      released: true,
-      outcome: "broken",
-      archivePath: markerPath,
-      markerPath,
-      auditMarkerPath,
-      already_broken: !auditPublication.published,
-    };
-  } catch (error) {
-    try { fs.closeSync(fd); } catch {}
-    state.fd = undefined;
-    error.break_retryable = true;
-    throw error;
-  }
+  if (!publishOnce(resultPath, signed(body, owner.secret, "result_auth_sha256"))
+    && !validTerminal(secureRead(resultPath, "terminal result").value, owner)) fail("terminal result conflicts with cleanup recovery", "HOST_ARTIFACT_INVALID");
+  fault?.("after_terminal"); return resultPath;
 }
-
-function resumePendingBreak() {
-  fail("immutable ownership markers cannot have a partial transition", "BREAK_TRANSITION_NOT_FOUND");
+async function breakStaleRunLock({ inspection, reason, resultPath, audit, fault } = {}) {
+  if (!issuedInspections.has(inspection) || typeof reason !== "string" || !reason.trim()) fail("issued inspection and reason required", "INSPECTION_CAPABILITY_INVALID");
+  const observedState = inspectionStates.get(inspection); let proof;
+  const cleanupPath = attemptPaths(observedState.runDir, observedState.owner.attempt_id).cleanup;
+  if (!resultPath && fs.existsSync(cleanupPath)) {
+    const ledger = readLedger(observedState.runDir), active = ledger.active;
+    if (!active || sha256(active.raw) !== observedState.ownerDigest) fail("owner changed after inspection", "LOCK_CHANGED");
+    resultPath = settleCleanup({ state: { runDir: observedState.runDir, owner: active.owner }, cleanupPath, fault });
+  }
+  if (resultPath && fs.existsSync(resultPath)) {
+    const safe = directChild(observedState.runDir, resultPath, "terminal result", { exists: true });
+    const read = secureRead(safe, "terminal result");
+    if (!validTerminal(read.value, observedState.owner)) fail("terminal result is unauthenticated", "BREAK_EVIDENCE_INSUFFICIENT");
+    proof = { kind: "terminal_result", result_sha256: sha256(read.bytes) };
+  } else {
+    if (inspection.status !== "stale") fail("unknown owner requires terminal proof", "BREAK_EVIDENCE_INSUFFICIENT");
+    const first = probeOwner(observedState.owner, observedState.runDir);
+    if (first.status !== "dead" || first.identity_matches !== false) fail("first liveness probe is not dead", "BREAK_EVIDENCE_INSUFFICIENT");
+    await new Promise((resolve) => setTimeout(resolve, BREAK_PROBE_MS));
+    const second = probeOwner(observedState.owner, observedState.runDir);
+    if (second.status !== "dead" || second.identity_matches !== false) fail("second liveness probe is not dead", "BREAK_EVIDENCE_INSUFFICIENT");
+    proof = { kind: "two_dead_probes", first_at: new Date(Date.now() - BREAK_PROBE_MS).toISOString(), second_at: new Date().toISOString() };
+  }
+  const ledger = readLedger(observedState.runDir), active = ledger.active;
+  if (!active || sha256(active.raw) !== observedState.ownerDigest) fail("owner changed after inspection", "LOCK_CHANGED");
+  const fd = fs.openSync(active.ownerPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)), stat = fs.fstatSync(fd);
+  const capability = Object.freeze({ lock_id: active.owner.lock_id, attempt_id: active.owner.attempt_id, operation: active.owner.operation,
+    run_dir: observedState.runDir, host_kind: "local_supervisor", host_handle: active.owner.host_handle });
+  const state = { capability, runDir: observedState.runDir, ownerPath: active.ownerPath, fd, inode: { dev: stat.dev, ino: stat.ino }, owner: active.owner, released: false };
+  issuedLocks.add(capability); lockStates.set(capability, state);
+  try { assertRunLockHeld(capability, state.runDir); return closeState(state, "broken", null, reason, proof, audit); }
+  catch (error) { try { fs.closeSync(fd); } catch {}; throw error; }
 }
-
-function probeHostEnvironment({ runDir, requestedHostKind = "local_supervisor" } = {}) {
-  if (!HOST_KINDS.has(requestedHostKind)) {
-    return { supported: false, requestedHostKind, blocker: "unknown_host_kind", recommended_action: "inspect" };
-  }
-  if (requestedHostKind !== "local_supervisor") {
-    return { supported: false, requestedHostKind, blocker: "host_integration_unavailable", recommended_action: "inspect" };
-  }
-  try {
-    const canonicalRunDir = requireDirectory(runDir, "runDir");
-    const probePath = path.join(canonicalRunDir, `.host-probe-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
-    const fd = fs.openSync(probePath, "wx", 0o600);
-    fs.writeFileSync(fd, "probe\n", "utf8");
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fs.unlinkSync(probePath);
-    syncDirectory(canonicalRunDir);
-    const launchPrimitive = process.platform === "win32" ? "unsupported" : "detached_session";
-    if (launchPrimitive === "unsupported") fail("detached sessions are unavailable", "HOST_UNSUPPORTED");
-    const fingerprint = processFingerprint(process.pid);
-    if (!fingerprint) fail("kernel-stable host identity is unavailable", "HOST_IDENTITY_UNAVAILABLE");
-    return {
-      supported: true,
-      host_kind: "local_supervisor",
-      launch_primitive: launchPrimitive,
-      process_started_at: fingerprint.started_at,
-      process_fingerprint: fingerprint,
-    };
-  } catch (error) {
-    return {
-      supported: false,
-      requestedHostKind,
-      blocker: "durable_host_probe_failed",
-      detail: error.message,
-      recommended_action: "inspect",
-    };
-  }
-}
-
-function selectHost({ survivalMeasurement, ...options } = {}) {
-  const probe = probeHostEnvironment(options);
-  if (!probe.supported) return probe;
-  if (!issuedMeasurements.has(survivalMeasurement)) {
-    return {
-      supported: false,
-      requestedHostKind: options.requestedHostKind || "local_supervisor",
-      blocker: "survival_gate_not_verified",
-      recommended_action: "inspect",
-      probe,
-    };
-  }
-  return probe;
-}
-
-function waitForFile(filePath, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  const waiter = new Int32Array(new SharedArrayBuffer(4));
-  while (Date.now() < deadline) {
-    if (fs.existsSync(filePath)) return true;
+function waitForStartup({ child, paths, owner, configSha, timeoutMs }) {
+  const end = Date.now() + timeoutMs, waiter = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < end) {
+    const resultPath = path.join(paths.run, `attempt-${owner.attempt_id}.result.json`);
+    if (fs.existsSync(resultPath)) {
+      const result = secureRead(resultPath, "startup result").value;
+      if (!validTerminal(result, owner)) fail("startup result is invalid", "HOST_START_FAILED");
+      return { terminal: true, started_at: result.completed_at };
+    }
+    if (fs.existsSync(paths.running)) {
+      const running = readBoundArtifact(paths.running, "running identity", owner, { config_sha256: configSha });
+      if (running.supervisor.pid !== child.pid || !sameProcess(fingerprint(child.pid), running.supervisor)) fail("supervisor identity changed", "HOST_START_FAILED");
+      return { terminal: false, started_at: running.started_at };
+    }
+    if (fs.existsSync(paths.supervisor)) readBoundArtifact(paths.supervisor, "supervisor identity", owner, { config_sha256: configSha });
+    try { process.kill(child.pid, 0); } catch (error) { if (error.code === "ESRCH") fail("supervisor exited before running", "HOST_START_FAILED", { recommended_action: "inspect" }); }
     Atomics.wait(waiter, 0, 0, 10);
   }
-  return fs.existsSync(filePath);
+  fail("supervisor startup timed out", "HOST_START_FAILED", { recommended_action: "inspect" });
 }
-
-function validateReadyForLaunch({
-  readyPath,
-  supervisorClaimPath,
-  attemptId,
-  hostHandle,
-  supervisorPid,
-  supervisorStartedAt,
-  supervisorFingerprint,
-  supervisorNonce,
-  configSha256,
-  resultAuthKey: authKey,
-}) {
-  const ready = readSecureJsonArtifact(readyPath, "supervisor ready artifact");
-  const claim = readSecureJsonArtifact(supervisorClaimPath, "supervisor claim artifact");
-  if (
-    ready.attempt_id !== attemptId
-    || ready.host_handle !== hostHandle
-    || ready.host_kind !== "local_supervisor"
-    || ready.supervisor_pid !== supervisorPid
-    || typeof ready.supervisor_started_at !== "string"
-    || Number.isNaN(Date.parse(ready.supervisor_started_at))
-    || !ready.supervisor_fingerprint
-    || (supervisorStartedAt && ready.supervisor_started_at !== supervisorStartedAt)
-    || (supervisorFingerprint && !fingerprintsEqual(ready.supervisor_fingerprint, supervisorFingerprint))
-    || ready.supervisor_nonce !== supervisorNonce
-    || ready.config_sha256 !== configSha256
-    || !verifySignedArtifact(ready, "ready_auth_sha256", authKey)
-    || claim.attempt_id !== attemptId
-    || claim.host_handle !== hostHandle
-    || claim.supervisor_pid !== supervisorPid
-    || claim.supervisor_started_at !== ready.supervisor_started_at
-    || !fingerprintsEqual(claim.supervisor_fingerprint, ready.supervisor_fingerprint)
-    || claim.supervisor_nonce !== supervisorNonce
-    || claim.config_sha256 !== configSha256
-    || !verifySignedArtifact(claim, "claim_auth_sha256", authKey)
-  ) {
-    fail("supervisor ready or claim identity is invalid", "HOST_READY_INVALID", {
-      attemptId,
-      hostHandle,
-      readyPath,
-      supervisorClaimPath,
-    });
+function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedWorktreeRoot, cwd, stdoutPath, stderrPath, resultPath,
+  inputFiles = [], stdinPath = null, stdinSha256 = null, executorResultPath = null, executorSandbox = "workspace-write", executorNetworkAccess = "disabled", timeoutMs = 30_000,
+  cancelGraceMs = 1_000, supervisorStartupTimeoutMs = 30_000, executorEnv = {}, ephemeralEnv = {}, credentialRequest = null, processContainment = PROCESS_CONTRACT,
+  testCredentialPrepared = null, testCleanupFailurePath = null, testGateBarrierPath = null, lockContext } = {}) {
+  if (lockContext === undefined) fail("production launch requires a lock capability", "HOST_LOCK_REQUIRED");
+  const state = stateFor(lockContext), run = canonicalDir(runDir, "runDir"); assertRunLockHeld(lockContext, run);
+  if (attemptId !== state.owner.attempt_id) fail("attempt does not match lock", "HOST_LOCK_IDENTITY_MISMATCH"); safeAttempt(attemptId);
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) fail("args must be string argv", "INVALID_INVOCATION");
+  if (processContainment !== PROCESS_CONTRACT) fail(`executor must honor ${PROCESS_CONTRACT}`, "INVALID_INVOCATION");
+  const worktree = canonicalDir(trustedWorktreeRoot || state.owner.worktree.path, "trustedWorktreeRoot"), stat = fs.statSync(worktree);
+  if (worktree !== state.owner.worktree.path || stat.dev !== state.owner.worktree.dev || stat.ino !== state.owner.worktree.ino
+    || canonicalDir(cwd || worktree, "cwd") !== worktree) fail("worktree does not match lock", "HOST_LOCK_IDENTITY_MISMATCH");
+  if (!["workspace-write", "read-only"].includes(executorSandbox) || !["enabled", "disabled"].includes(executorNetworkAccess)) fail("sandbox options are invalid", "INVALID_INVOCATION");
+  if (!Array.isArray(inputFiles)) fail("inputFiles must be an array", "INVALID_INVOCATION");
+  if (Boolean(stdinPath) !== Boolean(stdinSha256) || (stdinSha256 && !/^[0-9a-f]{64}$/.test(stdinSha256))) fail("stdinPath and stdinSha256 must form an exact binding", "INVALID_INVOCATION");
+  const declaredInputs = [...new Set([...inputFiles, ...(stdinPath ? [stdinPath] : [])])];
+  const inputSources = declaredInputs.map((file) => directChild(run, file, "executor input", { exists: true }));
+  const explicitEnvironment = environmentEntries(executorEnv, "executorEnv"), ephemeralEnvironment = environmentEntries(ephemeralEnv, "ephemeralEnv");
+  if (Object.hasOwn(explicitEnvironment, PROCESS_SCOPE_KEY) || Object.hasOwn(ephemeralEnvironment, PROCESS_SCOPE_KEY)) fail(`${PROCESS_SCOPE_KEY} is host-reserved`, "INVALID_INVOCATION");
+  ephemeralEnvironment[PROCESS_SCOPE_KEY] = crypto.randomBytes(32).toString("hex");
+  if (Object.keys(ephemeralEnvironment).some((key) => Object.hasOwn(explicitEnvironment, key))) fail("ephemeralEnv keys must be distinct", "INVALID_INVOCATION");
+  if ((testGateBarrierPath || testCredentialPrepared || testCleanupFailurePath) && !process.env.NODE_TEST_CONTEXT) fail("test host seam is unavailable", "INVALID_INVOCATION");
+  if (testCredentialPrepared !== null && typeof testCredentialPrepared !== "function") fail("test credential seam is invalid", "INVALID_INVOCATION");
+  const gateBarrier = testGateBarrierPath ? directChild(run, testGateBarrierPath, "test gate barrier") : null;
+  const cleanupFailure = testCleanupFailurePath ? directChild(run, testCleanupFailurePath, "test cleanup failure", { exists: true }) : null;
+  resolveExecutable(command);
+  const paths = attemptPaths(run, attemptId), stdout = directChild(run, stdoutPath || path.join(run, `attempt-${attemptId}.stdout.log`), "stdout"),
+    stderr = directChild(run, stderrPath || path.join(run, `attempt-${attemptId}.stderr.log`), "stderr"),
+    result = directChild(run, resultPath || path.join(run, `attempt-${attemptId}.result.json`), "result"),
+    executorResult = executorResultPath ? directChild(run, executorResultPath, "executor result") : null,
+    tmp = directChild(run, path.join(run, `executor-tmp-${attemptId}`), "executor tmp", { directory: true }),
+    credentialRoot = directChild(run, path.join(run, `executor-credentials-${attemptId}`), "executor credential root", { directory: true });
+  const preparedCredentials = credentialRequest ? prepareCredentialBundle(credentialRequest) : null;
+  if (testCredentialPrepared) testCredentialPrepared();
+  const credentials = credentialState(preparedCredentials);
+  const inputStages = inputSources.map((unused, index) => directChild(run, path.join(run, `host-input-${attemptId}-${index}.bin`), "staged executor input"));
+  for (const target of [paths.config, paths.supervisor, paths.running, paths.cleanup, paths.settled, paths.cancel, stdout, stderr, result, executorResult, credentialRoot, ...inputStages].filter(Boolean)) {
+    if (fs.existsSync(target)) fail("attempt artifact already exists", "HOST_ATTEMPT_ALREADY_LAUNCHED", { artifactPath: target, recommended_action: "inspect" });
   }
-  const observedFingerprint = processFingerprint(supervisorPid);
-  if (
-    observedFingerprint?.state === "Z"
-    || observedFingerprint?.command_terminalized === true
-  ) {
-    fail("supervisor is terminalizing before ready acceptance", "HOST_READY_TERMINALIZING", {
-      attemptId,
-      observedFingerprint,
-    });
-  }
-  if (!fingerprintsEqual(observedFingerprint, ready.supervisor_fingerprint)) {
-    fail("supervisor pid start identity changed before ready acceptance", "HOST_READY_INVALID", {
-      attemptId,
-      hostHandle,
-      readyPath,
-      supervisorClaimPath,
-      observedFingerprint,
-      readyStart: ready.supervisor_started_at,
-    });
-  }
-  return ready;
-}
-
-function terminateIdentityBoundGroup(pid, expectedFingerprint, signal) {
-  if (!pid || !expectedFingerprint) return { delivered: false, absent: false, code: "PROCESS_IDENTITY_INCOMPLETE" };
-  const observedFingerprint = processFingerprint(pid);
-  if (!fingerprintsEqual(observedFingerprint, expectedFingerprint)) {
-    return {
-      delivered: false,
-      absent: !observedFingerprint,
-      code: observedFingerprint ? "PROCESS_IDENTITY_CHANGED" : "PROCESS_IDENTITY_UNAVAILABLE",
-    };
-  }
-  return signalProcessGroup(pid, signal);
-}
-
-function abortSupervisorStartup({
-  child,
-  supervisorFingerprint,
-  supervisorClaimPath,
-  cancelPath,
-  executorPath,
-  attemptId,
-  hostHandle,
-  resultAuthKey: authKey,
-}) {
-  try {
-    atomicWriteFile(cancelPath, `${JSON.stringify({
-      attempt_id: attemptId,
-      host_handle: hostHandle,
-      reason: "startup_failed",
-      requested_at: new Date().toISOString(),
-    })}\n`);
-  } catch {}
-  if (!supervisorFingerprint) {
-    try {
-      const claim = readSecureJsonArtifact(supervisorClaimPath, "supervisor claim artifact");
-      if (
-        claim.attempt_id === attemptId
-        && claim.host_handle === hostHandle
-        && verifySignedArtifact(claim, "claim_auth_sha256", authKey)
-      ) supervisorFingerprint = claim.supervisor_fingerprint;
-    } catch {}
-  }
-  let executor = null;
-  function readExecutor() {
-    try {
-      const candidate = readSecureJsonArtifact(executorPath, "executor identity artifact");
-      if (
-        candidate.attempt_id === attemptId
-        && candidate.host_handle === hostHandle
-        && candidate.executor_pgid === candidate.executor_pid
-        && candidate.executor_fingerprint?.pid === candidate.executor_pid
-        && candidate.executor_fingerprint?.pgid === candidate.executor_pgid
-        && typeof candidate.executor_nonce === "string"
-        && candidate.executor_nonce.length >= 32
-        && verifySignedArtifact(candidate, "executor_auth_sha256", authKey)
-      ) return candidate;
-    } catch {}
-    return null;
-  }
-  executor = readExecutor();
-  const waiter = new Int32Array(new SharedArrayBuffer(4));
-  const executorDeadline = Date.now() + 5_000;
-  while (!executor && Date.now() < executorDeadline) {
-    Atomics.wait(waiter, 0, 0, 25);
-    executor = readExecutor();
-  }
-  const supervisorTerm = terminateIdentityBoundGroup(child.pid, supervisorFingerprint, "SIGTERM");
-  if (!supervisorTerm.delivered && child?.pid) {
-    try { child.kill("SIGTERM"); } catch {}
-  }
-  Atomics.wait(waiter, 0, 0, 250);
-  const supervisorKill = terminateIdentityBoundGroup(child.pid, supervisorFingerprint, "SIGKILL");
-  if (!supervisorKill.delivered && child?.pid) {
-    try { child.kill("SIGKILL"); } catch {}
-  }
-}
-
-function waitForSupervisorReady({
-  child,
-  readyPath,
-  resultPath,
-  supervisorClaimPath,
-  startupStderrPath,
-  attemptId,
-  hostHandle,
-  supervisorStartedAt,
-  supervisorFingerprint,
-  supervisorNonce,
-  configSha256,
-  resultAuthKey: authKey,
-  timeoutMs = 30_000,
-}) {
-  const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
-  const waiter = new Int32Array(new SharedArrayBuffer(4));
-  let lastLiveness = { status: "unknown", reason: "not_probed" };
-  let nextLivenessProbeAt = 0;
-  while (Date.now() < deadline) {
-    if (resultPath && fs.existsSync(resultPath)) {
-      const result = readSecureJsonArtifact(resultPath, "startup terminal result");
-      let terminalFingerprint = supervisorFingerprint;
-      if (!terminalFingerprint) {
-        try {
-          const terminalClaim = readSecureJsonArtifact(supervisorClaimPath, "supervisor claim artifact");
-          if (verifySignedArtifact(terminalClaim, "claim_auth_sha256", authKey)) {
-            terminalFingerprint = terminalClaim.supervisor_fingerprint;
-          }
-        } catch {}
-      }
-      if (
-        result.attempt_id === attemptId
-        && result.host_handle === hostHandle
-        && TERMINAL_HOST_STATUSES.has(result.status)
-        && terminalFingerprint
-        && verifySignedArtifact(result, "result_auth_sha256", authKey)
-      ) {
-        return {
-          ready_at: result.completed_at,
-          supervisor_started_at: terminalFingerprint.started_at,
-          supervisor_fingerprint: terminalFingerprint,
-          terminal_during_startup: true,
-        };
-      }
-      fail("startup terminal result is unauthenticated", "HOST_START_FAILED");
-    }
-    if (fs.existsSync(readyPath)) {
-      try {
-        return validateReadyForLaunch({
-          readyPath,
-          supervisorClaimPath,
-          attemptId,
-          hostHandle,
-          supervisorPid: child.pid,
-          supervisorStartedAt,
-          supervisorFingerprint,
-          supervisorNonce,
-          configSha256,
-          resultAuthKey: authKey,
-        });
-      } catch (error) {
-        let supervisorGone = false;
-        try { process.kill(child.pid, 0); } catch (probeError) {
-          supervisorGone = probeError.code === "ESRCH";
-        }
-        if (error.code === "HOST_READY_TERMINALIZING") supervisorGone = true;
-        if (
-          !["HOST_READY_INVALID", "HOST_READY_TERMINALIZING"].includes(error.code)
-          || !supervisorGone
-        ) throw error;
-        // A short-lived executor may complete and reap the supervisor between
-        // ready publication and launcher validation. Only the authenticated
-        // terminal result can close that race; keep waiting for it.
-      }
-    }
-    const startupStderr = fs.existsSync(startupStderrPath)
-      ? fs.readFileSync(startupStderrPath, "utf8")
-      : "";
-    if (startupStderr.includes("HOST_DIAGNOSTIC ")) {
-      fail("supervisor reported a structured startup failure", "HOST_START_FAILED", {
-        attemptId,
-        hostHandle,
-        supervisorPid: child.pid ?? null,
-        supervisorProcessStartedAt: child.pid ? processStartAt(child.pid) : null,
-        readyPath,
-        startupStderrPath,
-        startupStderr: startupStderr.slice(-4096),
-        elapsedMs: Date.now() - startedAt,
-        recommended_action: "inspect",
-      });
-    }
-    if (!child.pid) {
-      fail("supervisor process did not receive a pid", "HOST_START_FAILED", {
-        attemptId,
-        hostHandle,
-        supervisorPid: null,
-        readyPath,
-        startupStderrPath,
-        elapsedMs: Date.now() - startedAt,
-        recommended_action: "inspect",
-      });
-    }
-    if (Date.now() >= nextLivenessProbeAt) {
-      nextLivenessProbeAt = Date.now() + 250;
-      const observedStart = processStartAt(child.pid);
-      try {
-        process.kill(child.pid, 0);
-        lastLiveness = {
-          status: observedStart ? "live" : "unknown",
-          reason: observedStart ? "pid_present" : "process_start_unavailable",
-          process_started_at: observedStart,
-        };
-      } catch (error) {
-        lastLiveness = error.code === "ESRCH"
-          ? { status: "dead", reason: "pid_missing", process_started_at: observedStart }
-          : { status: "unknown", reason: `pid_probe_failed:${error.code || "unknown"}` };
-        if (lastLiveness.status === "dead") {
-          fail("supervisor exited before publishing ready", "HOST_START_FAILED", {
-            attemptId,
-            hostHandle,
-            supervisorPid: child.pid,
-            supervisorProcessStartedAt: observedStart,
-            readyPath,
-            startupStderrPath,
-            startupStderr: startupStderr.slice(-4096),
-            liveness: lastLiveness,
-            elapsedMs: Date.now() - startedAt,
-            recommended_action: "inspect",
-          });
-        }
-      }
-    }
-    Atomics.wait(waiter, 0, 0, 10);
-  }
-  const startupStderr = fs.existsSync(startupStderrPath)
-    ? fs.readFileSync(startupStderrPath, "utf8")
-    : "";
-  fail("live supervisor did not publish ready before the startup deadline", "HOST_START_FAILED", {
-    attemptId,
-    hostHandle,
-    supervisorPid: child.pid ?? null,
-    supervisorProcessStartedAt: child.pid ? processStartAt(child.pid) : null,
-    readyPath,
-    startupStderrPath,
-    startupStderr: startupStderr.slice(-4096),
-    liveness: lastLiveness,
-    elapsedMs: Date.now() - startedAt,
-    recommended_action: "inspect",
+  fs.mkdirSync(tmp, { mode: 0o700 });
+  const inputBindings = inputSources.map((source, index) => {
+    const sourceBinding = regularFileBinding(source, "executor input");
+    if (!publishOnce(inputStages[index], sourceBinding.bytes)) fail("staged executor input already exists", "HOST_ATTEMPT_ALREADY_LAUNCHED");
+    const { bytes, ...binding } = regularFileBinding(inputStages[index], "staged executor input");
+    return binding;
   });
-}
-
-function launchLocalSupervisor({
-  runDir,
-  attemptId,
-  command,
-  args = [],
-  trustedWorktreeRoot,
-  cwd,
-  stdoutPath,
-  stderrPath,
-  resultPath,
-  timeoutMs = 30_000,
-  cancelGraceMs = 1_000,
-  supervisorStartupTimeoutMs = 30_000,
-  lockId = null,
-  lockContext,
-  hostHandle: requestedHostHandle,
-} = {}) {
-  const canonicalRunDir = requireDirectory(runDir, "runDir");
-  if (process.platform === "win32") {
-    fail("detached local supervisor is unavailable on Windows", "HOST_UNSUPPORTED", {
-      requestedHostKind: "local_supervisor",
-      recommended_action: "inspect",
-    });
-  }
-  let boundLock = null;
-  if (lockContext !== undefined) {
-    assertRunLockHeld(lockContext, canonicalRunDir);
-    boundLock = stateForLock(lockContext);
-    if (attemptId !== boundLock.owner.attempt_id) {
-      fail("host attemptId must match its lock owner", "HOST_LOCK_IDENTITY_MISMATCH");
-    }
-    if (boundLock.owner.host_kind !== "local_supervisor") {
-      fail("lock owner is not bound to local_supervisor", "HOST_LOCK_IDENTITY_MISMATCH");
-    }
-    if (requestedHostHandle && requestedHostHandle !== boundLock.owner.host_handle) {
-      fail("hostHandle must match its lock owner", "HOST_LOCK_IDENTITY_MISMATCH");
-    }
-  }
-  safeAttemptId(attemptId);
-  if (typeof command !== "string" || !command || (!path.isAbsolute(command) && command.includes(path.sep))) {
-    fail("command must be a bare executable name or absolute path", "INVALID_INVOCATION");
-  }
-  if (path.isAbsolute(command)) {
-    try {
-      fs.accessSync(command, fs.constants.X_OK);
-    } catch (error) {
-      fail("absolute command is not executable", "INVALID_INVOCATION", {
-        command,
-        cause: error,
-      });
-    }
-  }
-  if (!Array.isArray(args) || !args.every((item) => typeof item === "string")) fail("args must be a string array", "INVALID_INVOCATION");
-  if (!Number.isFinite(supervisorStartupTimeoutMs) || supervisorStartupTimeoutMs <= 0) {
-    fail("supervisorStartupTimeoutMs must be positive", "INVALID_INVOCATION");
-  }
-  const worktreeRoot = requireDirectory(trustedWorktreeRoot || boundLock?.owner.worktree_dir || canonicalRunDir, "trustedWorktreeRoot");
-  if (boundLock) {
-    const worktreeStat = fs.statSync(worktreeRoot);
-    if (
-      worktreeRoot !== boundLock.owner.worktree_dir
-      || worktreeStat.dev !== boundLock.owner.worktree_dev
-      || worktreeStat.ino !== boundLock.owner.worktree_ino
-    ) fail("trustedWorktreeRoot must match its lock owner", "HOST_LOCK_IDENTITY_MISMATCH");
-  }
-  const safeCwd = containedPath(worktreeRoot, cwd || worktreeRoot, "cwd", { mustExist: true, file: false });
-  if (safeCwd !== worktreeRoot) fail("cwd must be the canonical trusted worktree root", "UNTRUSTED_PATH");
-  const directOutput = { directChild: true };
-  const safeStdout = containedPath(canonicalRunDir, stdoutPath || path.join(canonicalRunDir, `attempt-${attemptId}.stdout.log`), "stdout", directOutput);
-  const safeStderr = containedPath(canonicalRunDir, stderrPath || path.join(canonicalRunDir, `attempt-${attemptId}.stderr.log`), "stderr", directOutput);
-  const safeResult = containedPath(canonicalRunDir, resultPath || path.join(canonicalRunDir, `attempt-${attemptId}.result.json`), "result", directOutput);
-  const configPath = containedPath(canonicalRunDir, path.join(canonicalRunDir, `host-attempt-${attemptId}.json`), "config", directOutput);
-  const readyPath = containedPath(canonicalRunDir, path.join(canonicalRunDir, `host-attempt-${attemptId}.ready.json`), "ready", directOutput);
-  const startupStderrPath = containedPath(
-    canonicalRunDir,
-    path.join(canonicalRunDir, `host-attempt-${attemptId}.startup.stderr.log`),
-    "startup stderr",
-    directOutput,
-  );
-  const cancelPath = containedPath(canonicalRunDir, path.join(canonicalRunDir, `host-attempt-${attemptId}.cancel`), "cancel", directOutput);
-  const executorPath = containedPath(canonicalRunDir, path.join(canonicalRunDir, `host-attempt-${attemptId}.executor.json`), "executor identity", directOutput);
-  const launchClaimPath = containedPath(canonicalRunDir, path.join(canonicalRunDir, `host-attempt-${attemptId}.launch-claim`), "launch claim", directOutput);
-  const supervisorClaimPath = containedPath(canonicalRunDir, path.join(canonicalRunDir, `host-attempt-${attemptId}.supervisor-claim`), "supervisor claim", directOutput);
-  const hostHandle = boundLock?.owner.host_handle || requestedHostHandle || `${os.hostname()}:${crypto.randomUUID()}`;
-  if (typeof hostHandle !== "string" || !/^[A-Za-z0-9._:-]{1,200}$/.test(hostHandle)) {
-    fail("hostHandle contains unsafe characters", "INVALID_HOST_HANDLE");
-  }
-  const config = {
-    attempt_id: attemptId,
-    lock_id: boundLock?.owner.lock_id || lockId,
-    result_auth_key: boundLock ? resultAuthKey(boundLock.owner) : crypto.randomBytes(32).toString("hex"),
-    supervisor_nonce: crypto.randomBytes(32).toString("hex"),
-    host_kind: "local_supervisor",
-    host_handle: hostHandle,
-    command,
-    args,
-    trusted_worktree_root: worktreeRoot,
-    cwd: safeCwd,
-    stdout_path: safeStdout,
-    stderr_path: safeStderr,
-    result_path: safeResult,
-    ready_path: readyPath,
-    cancel_path: cancelPath,
-    executor_path: executorPath,
-    launch_claim_path: launchClaimPath,
-    supervisor_claim_path: supervisorClaimPath,
-    timeout_ms: timeoutMs,
-    cancel_grace_ms: cancelGraceMs,
-  };
-  const configBytes = `${JSON.stringify(config)}\n`;
-  const configSha256 = sha256(configBytes);
-  let launchClaimFd;
-  try {
-    launchClaimFd = fs.openSync(launchClaimPath, "wx", 0o600);
-    fs.writeFileSync(launchClaimFd, `${JSON.stringify({
-      attempt_id: attemptId,
-      host_handle: hostHandle,
-      config_sha256: configSha256,
-      claimed_at: new Date().toISOString(),
-    })}\n`);
-    fs.fsyncSync(launchClaimFd);
-  } catch (error) {
-    if (launchClaimFd !== undefined) try { fs.closeSync(launchClaimFd); } catch {}
-    if (error.code === "EEXIST") {
-      fail("attempt id has already been launched", "HOST_ATTEMPT_ALREADY_LAUNCHED", {
-        attemptId,
-        hostHandle,
-        launchClaimPath,
-        recommended_action: "inspect",
-      });
-    }
-    throw error;
-  }
-  fs.closeSync(launchClaimFd);
-  for (const artifactPath of [
-    configPath, readyPath, startupStderrPath, cancelPath, executorPath, supervisorClaimPath,
-    safeStdout, safeStderr, safeResult,
-  ]) {
-    if (fs.existsSync(artifactPath)) {
-      fail("attempt artifact already exists", "HOST_ATTEMPT_ARTIFACT_EXISTS", {
-        attemptId,
-        hostHandle,
-        artifactPath,
-        recommended_action: "inspect",
-      });
-    }
-  }
-  atomicWriteFile(configPath, configBytes);
-  const startupStderrFd = fs.openSync(startupStderrPath, "wx", 0o600);
+  const stdinSource = stdinPath ? directChild(run, stdinPath, "executor stdin", { exists: true }) : null;
+  const stdinIndex = stdinSource ? inputSources.indexOf(stdinSource) : -1;
+  if (stdinSource && stdinIndex < 0) fail("stdin source is not a declared executor input", "INVALID_INVOCATION");
+  if (stdinIndex >= 0 && inputBindings[stdinIndex].sha256 !== stdinSha256) fail("stdin bytes do not match invocation binding", "HOST_INPUT_CHANGED");
+  const replacements = new Map(inputSources.map((source, index) => [source, inputStages[index]]));
+  const stagedArgs = args.map((argument) => {
+    if (replacements.has(argument)) return replacements.get(argument);
+    if (argument.startsWith("@") && replacements.has(argument.slice(1))) return `@${replacements.get(argument.slice(1))}`;
+    return argument;
+  });
+  const executorEnvironment = { ...minimalEnvironment(process.env), ...explicitEnvironment, TMPDIR: tmp, TMP: tmp, TEMP: tmp };
+  const secretPayload = Buffer.from(JSON.stringify({ owner_secret: state.owner.secret, ephemeral_env: ephemeralEnvironment, credential_env: credentials.values,
+    credential_files: credentials.files.map((item) => ({ id: item.id, bytes: item.source.bytes.toString("base64") })) }), "utf8");
+  for (const item of credentials.files) item.source.bytes.fill(0);
+  for (const key of Object.keys(credentials.values)) { credentials.values[key] = ""; delete credentials.values[key]; }
+  if (secretPayload.length > 8 * 1024 * 1024) { secretPayload.fill(0); fail("ephemeral credential payload is too large", "INVALID_INVOCATION"); }
+  const config = { v: 2, attempt_id: attemptId, lock_id: state.owner.lock_id, host_kind: "local_supervisor", host_handle: state.owner.host_handle,
+    nonce: crypto.randomBytes(32).toString("hex"), command, args: stagedArgs, process_contract: processContainment, input_files: inputBindings,
+    stdin_binding: stdinIndex < 0 ? null : { index: stdinIndex, size: inputBindings[stdinIndex].size, sha256: stdinSha256 }, env: executorEnvironment,
+    ephemeral_env_keys: Object.keys(ephemeralEnvironment), credential_env_keys: credentials.envNames, credentials: credentials.publicFiles, credential_root: credentialRoot,
+    scope_seal: scopeSeal(ephemeralEnvironment[PROCESS_SCOPE_KEY]),
+    worktree, cwd: worktree, stdout, stderr, result, executor_result: executorResult,
+    tmp, sandbox: executorSandbox, network: executorNetworkAccess, timeout_ms: timeoutMs, grace_ms: cancelGraceMs,
+    supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier, test_cleanup_failure: cleanupFailure };
+  if (!publishOnce(paths.config, config)) fail("attempt has already been launched", "HOST_ATTEMPT_ALREADY_LAUNCHED");
+  const configSha = sha256(fs.readFileSync(paths.config)), stdoutFd = fs.openSync(stdout, "wx", 0o600), stderrFd = fs.openSync(stderr, "wx", 0o600);
+  const secretPath = path.join(run, `.host-secret-${attemptId}-${crypto.randomBytes(8).toString("hex")}`), secretFd = fs.openSync(secretPath, "wx+", 0o600);
   let child;
   try {
-    child = spawn(process.execPath, [__filename, "--supervise", configPath, configSha256], {
-      cwd: canonicalRunDir,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "ignore", startupStderrFd],
-    });
+    fs.writeFileSync(secretFd, secretPayload); fs.fsyncSync(secretFd); fs.unlinkSync(secretPath); syncDir(run);
+    child = spawn(process.execPath, [__filename, "--supervise", paths.config, configSha], { cwd: run, detached: true,
+      env: { ...minimalEnvironment(process.env), [PROCESS_SCOPE_KEY]: ephemeralEnvironment[PROCESS_SCOPE_KEY] },
+      stdio: ["ignore", "ignore", stderrFd, secretFd, stdoutFd, stderrFd] });
   } finally {
-    fs.closeSync(startupStderrFd);
+    secretPayload.fill(0); try { fs.unlinkSync(secretPath); } catch {}
+    fs.closeSync(secretFd); fs.closeSync(stdoutFd); fs.closeSync(stderrFd);
   }
   child.unref();
-  let supervisorFingerprint = null;
-  let supervisorStartedAt = null;
-  let ready;
-  try {
-    ready = waitForSupervisorReady({
-      child,
-      readyPath,
-      resultPath: safeResult,
-      supervisorClaimPath,
-      startupStderrPath,
-      attemptId,
-      hostHandle,
-      supervisorStartedAt,
-      supervisorFingerprint,
-      supervisorNonce: config.supervisor_nonce,
-      configSha256,
-      resultAuthKey: config.result_auth_key,
-      timeoutMs: supervisorStartupTimeoutMs,
-    });
-    supervisorStartedAt = ready.supervisor_started_at;
-    supervisorFingerprint = ready.supervisor_fingerprint;
-  } catch (error) {
-    abortSupervisorStartup({
-      child,
-      supervisorFingerprint,
-      supervisorClaimPath,
-      cancelPath,
-      executorPath,
-      attemptId,
-      hostHandle,
-      resultAuthKey: config.result_auth_key,
-    });
+  let started;
+  try { started = waitForStartup({ child, paths, owner: state.owner, configSha, timeoutMs: supervisorStartupTimeoutMs }); }
+  catch (error) {
+    try { atomicWrite(paths.cancel, `${JSON.stringify({ reason: "startup_failed", requested_at: new Date().toISOString() })}\n`); } catch {}
+    const observed = fingerprint(child.pid);
+    if (observed) for (const signal of ["SIGTERM", "SIGKILL"]) signalScopedGroup(observed, signal, config.scope_seal);
     throw error;
   }
-  const receipt = Object.freeze({
-    attempt_id: attemptId,
-    lock_id: config.lock_id,
-    host_kind: "local_supervisor",
-    host_handle: hostHandle,
-    started_at: ready.ready_at,
-    timeout_ms: timeoutMs,
-    stdout_path: safeStdout,
-    stderr_path: safeStderr,
-    result_path: safeResult,
-    config_path: configPath,
-    ready_path: readyPath,
-    startup_stderr_path: startupStderrPath,
-    executor_path: executorPath,
-    cancel_path: cancelPath,
-    run_dir: canonicalRunDir,
-  });
-  issuedReceipts.add(receipt);
-  receiptStates.set(receipt, { config });
-  return receipt;
+  const receipt = Object.freeze({ attempt_id: attemptId, lock_id: state.owner.lock_id, host_kind: "local_supervisor", host_handle: state.owner.host_handle,
+    started_at: started.started_at, timeout_ms: timeoutMs, stdout_path: stdout, stderr_path: stderr, result_path: result, cancel_path: paths.cancel, run_dir: run });
+  issuedReceipts.add(receipt); receiptStates.set(receipt, { owner: state.owner, paths }); return receipt;
 }
-
-function signalProcessGroup(pid, signal) {
-  try {
-    if (process.platform === "win32") {
-      execFileSync("taskkill", ["/PID", String(pid), "/T", signal === "SIGKILL" ? "/F" : ""].filter(Boolean), { stdio: "ignore" });
-    } else {
-      process.kill(-Number(pid), signal);
-    }
-    return { delivered: true };
-  } catch (error) {
-    return {
-      delivered: false,
-      absent: error.code === "ESRCH",
-      code: error.code || "SIGNAL_FAILED",
-      message: error.message,
-    };
-  }
-}
-
-function processGroupExists(pgid) {
-  if (process.platform === "win32") return false;
-  try {
-    process.kill(-Number(pgid), 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-}
-
-function signalExecutorGroup(identity, signal, { anchorLive = false } = {}) {
-  if (
-    !identity
-    || !Number.isInteger(identity.executor_pid)
-    || identity.executor_pid <= 0
-    || identity.executor_pgid !== identity.executor_pid
-    || !identity.executor_fingerprint
-    || identity.executor_fingerprint.pid !== identity.executor_pid
-    || identity.executor_fingerprint.pgid !== identity.executor_pgid
-    || typeof identity.executor_nonce !== "string"
-    || identity.executor_nonce.length < 32
-  ) {
-    return { delivered: false, absent: false, code: "EXECUTOR_IDENTITY_INVALID" };
-  }
-  if (!anchorLive) {
-    return { delivered: false, absent: false, code: "EXECUTOR_ANCHOR_CLOSED" };
-  }
-  if (!processGroupExists(identity.executor_pgid)) {
-    return { delivered: false, absent: true, code: "PROCESS_GROUP_ABSENT" };
-  }
-  const observed = processFingerprint(identity.executor_pid);
-  if (!observed) {
-    return { delivered: false, absent: false, code: "EXECUTOR_IDENTITY_UNAVAILABLE" };
-  }
-  if (!fingerprintsEqual(observed, identity.executor_fingerprint)) {
-    return { delivered: false, absent: false, code: "EXECUTOR_IDENTITY_CHANGED" };
-  }
-  return signalProcessGroup(identity.executor_pgid, signal);
-}
-
 function cancelHost(receipt, { reason = "operator_cancelled" } = {}) {
-  if (!issuedReceipts.has(receipt)) fail("an issued host receipt is required", "HOST_RECEIPT_INVALID");
-  const state = receiptStates.get(receipt);
-  atomicWriteFile(state.config.cancel_path, `${JSON.stringify({
-    host_kind: receipt.host_kind,
-    host_handle: receipt.host_handle,
-    attempt_id: receipt.attempt_id,
-    lock_id: receipt.lock_id,
-    reason,
-    requested_at: new Date().toISOString(),
-  })}\n`);
-  return { requested: true, cancel_path: state.config.cancel_path };
+  if (!issuedReceipts.has(receipt)) fail("issued receipt required", "HOST_RECEIPT_INVALID");
+  const { paths } = receiptStates.get(receipt);
+  if (!fs.existsSync(paths.cancel)) atomicWrite(paths.cancel, `${JSON.stringify({ attempt_id: receipt.attempt_id, lock_id: receipt.lock_id, reason, requested_at: new Date().toISOString() })}\n`);
+  return { requested: true, cancel_path: paths.cancel };
 }
-
-function terminalResult(config, fields) {
-  const unsigned = {
-    attempt_id: config.attempt_id,
-    lock_id: config.lock_id,
-    host_kind: config.host_kind,
-    host_handle: config.host_handle,
-    ...fields,
-    completed_at: new Date().toISOString(),
-  };
-  return { ...unsigned, result_auth_sha256: signResult(unsigned, config.result_auth_key) };
-}
-
-function runSupervisor(configPath, expectedSha256) {
-  const configBytes = fs.readFileSync(configPath);
-  if (!/^[0-9a-f]{64}$/.test(expectedSha256 || "") || sha256(configBytes) !== expectedSha256) {
-    fail("supervisor config integrity check failed", "HOST_CONFIG_MISMATCH");
-  }
-  const config = JSON.parse(configBytes.toString("utf8"));
-  const runDir = requireDirectory(path.dirname(configPath), "supervisor runDir");
-  safeAttemptId(config.attempt_id);
-  config.trusted_worktree_root = requireDirectory(config.trusted_worktree_root, "trustedWorktreeRoot");
-  config.cwd = containedPath(config.trusted_worktree_root, config.cwd, "cwd", { mustExist: true, file: false });
-  if (config.cwd !== config.trusted_worktree_root) fail("cwd must be the canonical trusted worktree root", "UNTRUSTED_PATH");
-  for (const [field, label] of [
-    ["stdout_path", "stdout"],
-    ["stderr_path", "stderr"],
-    ["result_path", "result"],
-    ["ready_path", "ready"],
-    ["cancel_path", "cancel"],
-    ["executor_path", "executor identity"],
-    ["launch_claim_path", "launch claim"],
-    ["supervisor_claim_path", "supervisor claim"],
-  ]) {
-    config[field] = containedPath(runDir, config[field], label, { directChild: true });
-  }
-  const launchClaim = readSecureJsonArtifact(config.launch_claim_path, "launch claim artifact");
-  if (
-    launchClaim.attempt_id !== config.attempt_id
-    || launchClaim.host_handle !== config.host_handle
-    || launchClaim.config_sha256 !== expectedSha256
-  ) {
-    fail("launch claim does not match supervisor config", "HOST_LAUNCH_CLAIM_MISMATCH");
-  }
-  const supervisorFingerprint = waitForFingerprint(process.pid);
-  if (!supervisorFingerprint) {
-    fail("kernel-stable supervisor identity is unavailable", "HOST_IDENTITY_UNAVAILABLE");
-  }
-  const supervisorStartedAt = supervisorFingerprint.started_at;
-  const unsignedClaim = {
-    attempt_id: config.attempt_id,
-    host_kind: config.host_kind,
-    host_handle: config.host_handle,
-    supervisor_pid: process.pid,
-    supervisor_started_at: supervisorStartedAt,
-    supervisor_fingerprint: supervisorFingerprint,
-    supervisor_nonce: config.supervisor_nonce,
-    config_sha256: expectedSha256,
-    claimed_at: new Date().toISOString(),
-  };
-  let claimFd;
-  try {
-    claimFd = fs.openSync(config.supervisor_claim_path, "wx", 0o600);
-    fs.writeFileSync(claimFd, `${JSON.stringify({
-      ...unsignedClaim,
-      claim_auth_sha256: signResult(unsignedClaim, config.result_auth_key),
-    })}\n`, "utf8");
-    fs.fsyncSync(claimFd);
-    fs.closeSync(claimFd);
-  } catch (error) {
-    if (claimFd !== undefined) {
-      try { fs.closeSync(claimFd); } catch {}
-    }
-    if (error.code === "EEXIST") {
-      fail("supervisor claim already exists", "HOST_SUPERVISOR_CLAIMED", {
-        supervisorClaimPath: config.supervisor_claim_path,
-      });
-    }
-    throw error;
-  }
-  const unsignedReady = {
-    attempt_id: config.attempt_id,
-    host_kind: config.host_kind,
-    host_handle: config.host_handle,
-    supervisor_pid: process.pid,
-    supervisor_started_at: supervisorStartedAt,
-    supervisor_fingerprint: supervisorFingerprint,
-    supervisor_nonce: config.supervisor_nonce,
-    config_sha256: expectedSha256,
-  };
-  let stdoutFd;
-  let stderrFd;
-  let child;
-  let finished = false;
-  let requestedStatus = null;
-  let escalationTimer = null;
-  let deadlineTimer = null;
-  let cancelPoll = null;
-  let requestedClose = null;
-  let executorIdentity = null;
-  let childClosed = false;
-
-  function finish(fields) {
-    if (finished) return;
-    finished = true;
-    if (deadlineTimer) clearTimeout(deadlineTimer);
-    if (escalationTimer) clearTimeout(escalationTimer);
-    if (cancelPoll) clearInterval(cancelPoll);
-    try { fs.closeSync(stdoutFd); } catch {}
-    try { fs.closeSync(stderrFd); } catch {}
-    atomicWriteFile(config.result_path, `${JSON.stringify(terminalResult(config, fields))}\n`);
-  }
-
-  function terminate(status) {
-    if (finished || !child || requestedStatus) return;
-    requestedStatus = status;
-    const term = signalExecutorGroup(executorIdentity, "SIGTERM", { anchorLive: !childClosed });
-    if (!term.delivered && !term.absent) {
-      process.stderr.write(`HOST_DIAGNOSTIC ${JSON.stringify({
-        code: "HOST_SIGNAL_FAILED",
-        signal: "SIGTERM",
-        attempt_id: config.attempt_id,
-        detail: term,
-      })}\n`);
-    }
-    escalationTimer = setTimeout(() => {
-      if (finished) return;
-      if (requestedClose && !processGroupExists(child.pid)) {
-        finish(requestedClose);
-        return;
-      }
-      const killed = signalExecutorGroup(executorIdentity, "SIGKILL", { anchorLive: !childClosed });
-      if (!killed.delivered && !killed.absent) {
-        process.stderr.write(`HOST_DIAGNOSTIC ${JSON.stringify({
-          code: "HOST_SIGNAL_FAILED",
-          signal: "SIGKILL",
-          attempt_id: config.attempt_id,
-          detail: killed,
-        })}\n`);
-        return;
-      }
-      const reapDeadline = Date.now() + Math.max(1_000, config.cancel_grace_ms);
-      const reapPoll = setInterval(() => {
-        if (finished) {
-          clearInterval(reapPoll);
-          return;
-        }
-        if (!processGroupExists(executorIdentity.executor_pgid)) {
-          clearInterval(reapPoll);
-          finish(requestedClose || {
-            status: requestedStatus,
-            exit_code: null,
-            signal: "SIGKILL",
-            error: null,
-          });
-          return;
-        }
-        if (Date.now() >= reapDeadline) {
-          clearInterval(reapPoll);
-          process.stderr.write(`HOST_DIAGNOSTIC ${JSON.stringify({
-            code: "HOST_PROCESS_GROUP_SURVIVED_SIGKILL",
-            attempt_id: config.attempt_id,
-            executor_pgid: executorIdentity.executor_pgid,
-          })}\n`);
-        }
-      }, 25);
-    }, config.cancel_grace_ms);
-  }
-
-  try {
-    stdoutFd = fs.openSync(config.stdout_path, "wx", 0o600);
-    stderrFd = fs.openSync(config.stderr_path, "wx", 0o600);
-    child = spawn(config.command, config.args, {
-      cwd: config.cwd,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", stdoutFd, stderrFd],
-    });
-    child.once("error", (error) => finish({
-      status: "spawn_error",
-      exit_code: null,
-      signal: null,
-      error: error.message,
-    }));
-    if (!child.pid) return;
-    const executorFingerprint = waitForFingerprint(child.pid);
-    if (!executorFingerprint) {
-      try { child.kill("SIGKILL"); } catch {}
-      fail("kernel-stable executor identity is unavailable", "HOST_IDENTITY_UNAVAILABLE", {
-        executorPid: child.pid,
-      });
-    }
-    const unsignedExecutor = {
-      attempt_id: config.attempt_id,
-      host_kind: config.host_kind,
-      host_handle: config.host_handle,
-      executor_pid: child.pid,
-      executor_pgid: child.pid,
-      executor_started_at: executorFingerprint.started_at,
-      executor_fingerprint: executorFingerprint,
-      executor_nonce: crypto.randomBytes(32).toString("hex"),
-      config_sha256: expectedSha256,
-      started_at: new Date().toISOString(),
-    };
-    executorIdentity = Object.freeze({ ...unsignedExecutor });
-    atomicWriteFile(config.executor_path, `${JSON.stringify({
-      ...unsignedExecutor,
-      executor_auth_sha256: signResult(unsignedExecutor, config.result_auth_key),
-    })}\n`);
-    if (fs.existsSync(config.cancel_path)) terminate("cancelled");
-    const publishedReady = { ...unsignedReady, ready_at: new Date().toISOString() };
-    atomicWriteFile(config.ready_path, `${JSON.stringify({
-      ...publishedReady,
-      ready_auth_sha256: signResult(publishedReady, config.result_auth_key),
-    })}\n`);
-    child.once("close", (code, signal) => {
-      childClosed = true;
-      const fields = {
-      status: requestedStatus || (code === 0 ? "completed" : "failed"),
-      exit_code: code,
-      signal: signal || null,
-      error: null,
-      };
-      if (processGroupExists(child.pid)) {
-        requestedClose = fields;
-        if (!requestedStatus) terminate(fields.status);
-      } else {
-        finish(fields);
-      }
-    });
-    deadlineTimer = setTimeout(() => terminate("timed_out"), config.timeout_ms);
-    cancelPoll = setInterval(() => {
-      if (fs.existsSync(config.cancel_path)) terminate("cancelled");
-    }, 25);
-    process.once("SIGTERM", () => terminate("cancelled"));
-    process.once("SIGINT", () => terminate("cancelled"));
-  } catch (error) {
-    finish({ status: "spawn_error", exit_code: null, signal: null, error: error.message });
-  }
-}
-
 async function waitForTerminalResult(receipt, { timeoutMs = receipt.timeout_ms + 10_000 } = {}) {
-  if (!issuedReceipts.has(receipt)) fail("an issued host receipt is required", "HOST_RECEIPT_INVALID");
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  if (!issuedReceipts.has(receipt)) fail("issued receipt required", "HOST_RECEIPT_INVALID");
+  const owner = receiptStates.get(receipt).owner, end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
     if (fs.existsSync(receipt.result_path)) {
-      const result = JSON.parse(fs.readFileSync(receipt.result_path, "utf8"));
-      const state = receiptStates.get(receipt);
-      const { result_auth_sha256: signature, ...unsigned } = result;
-      const expectedSignature = signResult(unsigned, state.config.result_auth_key);
-      if (
-        result.attempt_id === receipt.attempt_id
-        && result.host_kind === receipt.host_kind
-        && result.host_handle === receipt.host_handle
-        && result.lock_id === receipt.lock_id
-        && TERMINAL_HOST_STATUSES.has(result.status)
-        && typeof signature === "string"
-        && signature.length === expectedSignature.length
-        && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))
-      ) {
-        return result;
-      }
-      fail("terminal result does not match its issued host receipt", "HOST_RESULT_MISMATCH");
+      const result = secureRead(receipt.result_path, "terminal result").value;
+      if (!validTerminal(result, owner)) fail("terminal result does not match receipt", "HOST_RESULT_MISMATCH");
+      return result;
+    }
+    const cleanupPath = receiptStates.get(receipt).paths.cleanup;
+    if (fs.existsSync(cleanupPath)) {
+      readBoundArtifact(cleanupPath, "cleanup-incomplete status", owner);
+      fail("executor cleanup is incomplete; no terminal result was published", "HOST_CLEANUP_INCOMPLETE", { artifactPath: cleanupPath, recommended_action: "inspect" });
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  fail("timed out waiting for terminal host result", "HOST_RESULT_TIMEOUT");
+  fail("timed out waiting for terminal result", "HOST_RESULT_TIMEOUT");
 }
 
-function verifySurvivalOutcome({ receiptPath, markerPath, launcherExitCode, startedAt } = {}) {
-  if (launcherExitCode !== 0 || !Number.isFinite(startedAt)) {
-    fail("launcher must have exited successfully with a recorded start time", "SURVIVAL_GATE_FAILED");
+function stageCredentials(config, secretFiles, state = {}) {
+  const root = directChild(path.dirname(config.credential_root), config.credential_root, "executor credential root", { directory: true });
+  fs.mkdirSync(root, { mode: 0o700 }); fs.chmodSync(root, 0o700); const rootStat = fs.lstatSync(root);
+  Object.assign(state, { root, binding: { dev: rootStat.dev, ino: rootStat.ino } });
+  const roots = { home: path.join(root, "home"), xdg_config: path.join(root, "xdg-config"), xdg_data: path.join(root, "xdg-data") };
+  for (const value of Object.values(roots)) fs.mkdirSync(value, { mode: 0o700 });
+  const readable = [], writable = [], secrets = new Map((secretFiles || []).map((item) => [item.id, item.bytes]));
+  for (const item of config.credentials || []) {
+    if (!/^[a-z][a-z0-9_-]*$/.test(item.id || "") || !Object.hasOwn(roots, item.targetRoot) || !["read", "read_write"].includes(item.access)
+      || typeof item.targetRel !== "string" || path.isAbsolute(item.targetRel) || item.targetRel.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) fail("credential target is invalid", "HOST_CONFIG_MISMATCH");
+    const encoded = secrets.get(item.id); if (typeof encoded !== "string") fail("credential bytes are unavailable", "HOST_CONFIG_MISMATCH");
+    const bytes = Buffer.from(encoded, "base64");
+    if (bytes.length !== item.size || sha256(bytes) !== item.sha) { bytes.fill(0); fail("credential bytes do not match binding", "HOST_CONFIG_MISMATCH"); }
+    const target = path.join(roots[item.targetRoot], item.targetRel), relative = path.relative(roots[item.targetRoot], target);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) { bytes.fill(0); fail("credential target escapes root", "HOST_CONFIG_MISMATCH"); }
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    for (let parent = path.dirname(target); parent.startsWith(root) && parent !== root; parent = path.dirname(parent)) fs.chmodSync(parent, 0o700);
+    fs.writeFileSync(target, bytes, { flag: "wx", mode: 0o600 }); fs.chmodSync(target, 0o600); bytes.fill(0); readable.push(target);
+    if (item.access === "read_write") writable.push(target);
   }
-  const receiptRoot = requireDirectory(path.dirname(path.resolve(receiptPath)), "survival receipt root");
-  const safeReceipt = containedPath(receiptRoot, receiptPath, "survival receipt", { mustExist: true, directChild: true });
-  const receipt = JSON.parse(fs.readFileSync(safeReceipt, "utf8"));
-  const runDir = requireDirectory(receipt.run_dir, "survival runDir");
-  const resultPath = containedPath(runDir, receipt.result_path, "survival result", { mustExist: true, directChild: true });
-  containedPath(receiptRoot, markerPath, "survival marker", { mustExist: true, directChild: true });
-  const resultBytes = fs.readFileSync(resultPath);
-  const result = JSON.parse(resultBytes.toString("utf8"));
-  if (
-    result.status !== "completed"
-    || result.attempt_id !== receipt.attempt_id
-    || result.host_kind !== receipt.host_kind
-    || result.host_handle !== receipt.host_handle
-    || result.lock_id !== receipt.lock_id
-  ) fail("survival result does not match the launcher receipt", "SURVIVAL_GATE_FAILED");
-  const outcome = Object.freeze({
-    trial_id: receipt.attempt_id,
-    launcher_exit: true,
-    status: "completed",
-    duration_ms: Date.parse(result.completed_at) - startedAt,
-    host_kind: result.host_kind,
-    host_handle: result.host_handle,
-    result_sha256: sha256(resultBytes),
-  });
-  issuedSurvivalOutcomes.add(outcome);
-  return outcome;
+  if (secrets.size !== (config.credentials || []).length) fail("credential descriptors do not match payload", "HOST_CONFIG_MISMATCH");
+  return Object.assign(state, { roots, readable, writable });
+}
+function credentialRootBinding(root, binding = null) { return { path: path.resolve(root), dev: binding?.dev ?? null, ino: binding?.ino ?? null }; }
+function cleanupCredentialRoot(root, config, binding = null) {
+  if (config.test_cleanup_failure && fs.existsSync(config.test_cleanup_failure)) fail("injected cleanup failure", "TEST_CLEANUP_FAILURE");
+  if (!binding) { if (fs.existsSync(root)) fail("credential root binding is unavailable", "HOST_CLEANUP_INCOMPLETE"); return false; }
+  removeBoundDirectory(path.resolve(root), binding, "executor credential root");
 }
 
-function runSurvivalTrial({ runDir, trialId, timeoutMs = 20_000 } = {}) {
-  const canonicalRunDir = requireDirectory(runDir, "runDir");
-  safeAttemptId(trialId);
-  const receiptPath = containedPath(canonicalRunDir, path.join(canonicalRunDir, `survival-${trialId}.receipt.json`), "survival receipt");
-  const markerPath = containedPath(canonicalRunDir, path.join(canonicalRunDir, `survival-${trialId}.marker`), "survival marker");
-  const startedAt = Date.now();
-  const launcherTimeoutMs = timeoutMs + 30_000;
-  const launcher = spawnSync(process.execPath, [
-    __filename, "--survival-launcher", canonicalRunDir, trialId, receiptPath, markerPath, String(timeoutMs),
-  ], { encoding: "utf8", timeout: launcherTimeoutMs });
-  if (launcher.status !== 0) {
-    fail(`survival launcher failed: ${launcher.stderr || launcher.error?.message || "unknown"}`, "SURVIVAL_GATE_FAILED");
-  }
-  const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
-  if (!waitForFile(receipt.result_path, timeoutMs)) fail("survival result timed out", "SURVIVAL_GATE_FAILED");
-  const outcome = verifySurvivalOutcome({
-    receiptPath,
-    markerPath,
-    launcherExitCode: launcher.status,
-    startedAt,
-  });
-  return outcome;
-}
-
-function issueSurvivalMeasurement(outcomes) {
-  if (!Array.isArray(outcomes) || outcomes.length < 20) fail("at least 20 survival outcomes are required", "SURVIVAL_GATE_FAILED");
-  if (outcomes.some((row) => !issuedSurvivalOutcomes.has(row))) {
-    fail("survival outcomes must be internally verified launcher results", "SURVIVAL_GATE_FAILED");
-  }
-  for (const field of ["trial_id", "host_handle", "result_sha256"]) {
-    if (new Set(outcomes.map((row) => row[field])).size !== outcomes.length) {
-      fail(`survival outcomes must have distinct ${field} values`, "SURVIVAL_GATE_FAILED");
+function runExecutorGate(configPath, configSha) {
+  const bytes = fs.readFileSync(configPath); if (sha256(bytes) !== configSha) fail("gate config mismatch", "HOST_CONFIG_MISMATCH");
+  const config = JSON.parse(bytes), release = Buffer.alloc(1), hold = () => {}, ephemeralBytes = fs.readFileSync(5);
+  if (config.process_contract !== PROCESS_CONTRACT) fail("executor process containment contract is invalid", "HOST_CONFIG_MISMATCH");
+  if (ephemeralBytes.length > 8 * 1024 * 1024) fail("ephemeral environment payload is invalid", "HOST_CONFIG_MISMATCH");
+  let gateSecrets, ephemeralEnvironment, credentialEnvironment, stagedCredentials = null;
+  try { gateSecrets = JSON.parse(ephemeralBytes.toString("utf8")); ephemeralEnvironment = environmentEntries(gateSecrets.ephemeral_env, "ephemeral environment");
+    credentialEnvironment = environmentEntries(gateSecrets.credential_env, "credential environment"); } finally { ephemeralBytes.fill(0); }
+  process.on("SIGTERM", hold); process.on("SIGINT", hold);
+  if (fs.readSync(3, release, 0, 1, null) !== 1 || release[0] !== 1) return;
+  let settled = false;
+  const publish = (fields) => { if (settled) return; settled = true; fs.writeSync(4, `${JSON.stringify({ attempt_id: config.attempt_id, ...fields })}\n`); };
+  try {
+    const verifyInputs = () => config.input_files.map((binding, index) => verifyFileBinding(binding, `staged executor input ${index}`));
+    const inputPaths = verifyInputs();
+    let stdinBytes = null;
+    if (config.stdin_binding) {
+      const binding = config.input_files[config.stdin_binding.index];
+      if (!binding || binding.size !== config.stdin_binding.size || binding.sha256 !== config.stdin_binding.sha256) fail("executor stdin binding is invalid", "HOST_CONFIG_MISMATCH");
+      stdinBytes = regularFileBinding(inputPaths[config.stdin_binding.index], "executor stdin").bytes;
     }
-  }
-  const measurement = Object.freeze({
-    trials: outcomes.length,
-    losses: 0,
-    launcher_exit: true,
-    measured_at: new Date().toISOString(),
-    outcomes_sha256: sha256(JSON.stringify(outcomes)),
-  });
-  issuedMeasurements.add(measurement);
-  return measurement;
+    const runtimeEnvironment = environmentEntries(config.env, "config env");
+    if (!Array.isArray(config.ephemeral_env_keys) || config.ephemeral_env_keys.length !== Object.keys(ephemeralEnvironment).length) fail("ephemeral environment keys are invalid", "HOST_CONFIG_MISMATCH");
+    for (const key of config.ephemeral_env_keys) {
+      if (!Object.hasOwn(ephemeralEnvironment, key)) fail("ephemeral environment is unavailable", "HOST_CONFIG_MISMATCH");
+      runtimeEnvironment[key] = ephemeralEnvironment[key];
+    }
+    if (!Array.isArray(config.credential_env_keys) || config.credential_env_keys.length !== Object.keys(credentialEnvironment).length
+      || config.credential_env_keys.some((key) => !Object.hasOwn(credentialEnvironment, key))) fail("credential environment binding is invalid", "HOST_CONFIG_MISMATCH");
+    Object.assign(runtimeEnvironment, credentialEnvironment);
+    stagedCredentials = { root: config.credential_root };
+    stageCredentials(config, gateSecrets.credential_files, stagedCredentials);
+    runtimeEnvironment.HOME = stagedCredentials.roots.home; runtimeEnvironment.XDG_CONFIG_HOME = stagedCredentials.roots.xdg_config; runtimeEnvironment.XDG_DATA_HOME = stagedCredentials.roots.xdg_data;
+    const writes = [config.tmp, ...(config.sandbox === "workspace-write" ? [config.worktree] : [])];
+    const invocation = sandboxInvocation({ role: "executor", command: config.command, args: config.args, readRoots: [config.worktree],
+      readFiles: [...inputPaths, ...stagedCredentials.readable], writeRoots: writes, writeFiles: [...(config.executor_result ? [config.executor_result] : []), ...stagedCredentials.writable],
+      networkAccess: config.network, ownershipDir: config.ownership,
+      env: runtimeEnvironment });
+    const baseline = processBaseline(), tracked = new Map(), gateIdentity = fingerprint(process.pid);
+    if (!gateIdentity) fail("executor gate identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
+    const scopeToken = runtimeEnvironment[PROCESS_SCOPE_KEY];
+    if (!/^[0-9a-f]{64}$/.test(scopeToken || "") || scopeSeal(scopeToken) !== config.scope_seal) fail("executor process scope is unavailable", "HOST_CONFIG_MISMATCH");
+    const worker = spawn(invocation.command, invocation.args, { cwd: config.cwd, env: invocation.env, stdio: [stdinBytes ? "pipe" : "ignore", "inherit", "inherit"] });
+    try { verifyInputs(); }
+    catch (error) { try { worker.kill("SIGKILL"); } catch {}; if (stdinBytes) stdinBytes.fill(0); throw error; }
+    if (stdinBytes) worker.stdin.end(stdinBytes, () => stdinBytes.fill(0));
+    const workerIdentity = waitFingerprint(worker.pid); if (workerIdentity) tracked.set(worker.pid, workerIdentity);
+    const lineagePoll = setInterval(() => {
+      try {
+        const rows = processRows(); let changed = true;
+        while (changed) {
+          changed = false;
+          for (const row of rows) if (!tracked.has(row.pid) && tracked.has(row.ppid)) {
+            const identity = row.identity;
+            if (identity && !sameBaselineProcess(baseline, identity)) { tracked.set(row.pid, identity); changed = true; }
+          }
+        }
+      } catch {}
+    }, 10);
+    for (const values of [ephemeralEnvironment, credentialEnvironment]) for (const key of Object.keys(values)) { values[key] = ""; runtimeEnvironment[key] = ""; }
+    gateSecrets = null;
+    const finishWorker = (fields) => {
+      if (settled) return;
+      clearInterval(lineagePoll);
+      const credentialRoot = credentialRootBinding(stagedCredentials.root, stagedCredentials.binding); let cleanupError = null, audit = null;
+      try { cleanupCredentialRoot(stagedCredentials.root, config, stagedCredentials.binding); } catch (error) { cleanupError = error; }
+      try {
+        audit = escapedProcessAudit({ baseline, tracked, scopeToken, gateIdentity });
+        if (cleanupError || audit.remaining) return publish({ status: "cleanup_incomplete", exit_code: fields.exit_code, signal: fields.signal,
+          error: cleanupError ? `credential cleanup failed: ${cleanupError.message}`
+            : `escaped process audit cleanup incomplete: matched=${audit.matched} reaped=${audit.reaped} remaining=${audit.remaining}`,
+          obligation: { processes: audit.remaining_identities, credential_root: credentialRoot, scope_seal: config.scope_seal } });
+        if (audit.matched) return publish({ status: "failed", exit_code: fields.exit_code, signal: fields.signal,
+          error: `escaped process audit failed: matched=${audit.matched} reaped=${audit.reaped} remaining=${audit.remaining}` });
+        return publish(fields);
+      } catch (error) {
+        const processes = [...tracked.values()].filter((identity) => sameProcess(fingerprint(identity.pid), identity)).map((identity) => exactIdentity(identity));
+        return publish({ status: "cleanup_incomplete", exit_code: fields.exit_code, signal: fields.signal,
+          error: `escaped process audit unavailable: ${error.message}`, obligation: { processes, credential_root: credentialRoot, scope_seal: config.scope_seal } });
+      }
+    };
+    worker.once("error", (error) => finishWorker({ status: "spawn_error", exit_code: null, signal: null, error: error.message }));
+    worker.once("close", (code, signal) => finishWorker({ status: code === 0 ? "completed" : "failed", exit_code: code, signal: signal || null, error: null }));
+  } catch (error) { for (const values of [ephemeralEnvironment, credentialEnvironment]) if (values) for (const key of Object.keys(values)) values[key] = "";
+    let cleanupFailed = false;
+    if (stagedCredentials) try { cleanupCredentialRoot(stagedCredentials.root, config, stagedCredentials.binding); } catch { cleanupFailed = true; }
+    publish({ status: cleanupFailed ? "cleanup_incomplete" : "spawn_error", exit_code: null, signal: null, error: cleanupFailed ? "credential cleanup failed" : error.message,
+      ...(cleanupFailed ? { obligation: { processes: [], credential_root: credentialRootBinding(stagedCredentials.root, stagedCredentials.binding), scope_seal: config.scope_seal } } : {}) }); }
 }
-
-function cliErrorText(error) {
-  const diagnostic = {
-    name: error?.name || "Error",
-    code: error?.code || null,
-    message: error?.message || String(error),
+function runSupervisor(configPath, configSha) {
+  const bytes = fs.readFileSync(configPath); if (sha256(bytes) !== configSha) fail("supervisor config mismatch", "HOST_CONFIG_MISMATCH");
+  const secretSize = fs.fstatSync(3).size; if (secretSize > 8 * 1024 * 1024) fail("host secret payload is invalid", "HOST_CONFIG_MISMATCH");
+  const secretBuffer = Buffer.alloc(secretSize); if (fs.readSync(3, secretBuffer, 0, secretSize, 0) !== secretSize) fail("host secret payload is truncated", "HOST_CONFIG_MISMATCH");
+  let secretPayload; try { secretPayload = JSON.parse(secretBuffer.toString("utf8")); } finally { secretBuffer.fill(0); }
+  const secret = secretPayload?.owner_secret, ephemeralEnvironment = environmentEntries(secretPayload?.ephemeral_env || {}, "ephemeral environment"),
+    credentialEnvironment = environmentEntries(secretPayload?.credential_env || {}, "credential environment");
+  if (!/^[0-9a-f]{64}$/.test(secret)) fail("host secret is invalid", "HOST_CONFIG_MISMATCH");
+  const config = JSON.parse(bytes), supervisor = waitFingerprint(process.pid); if (!supervisor) fail("supervisor identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
+  const scopeToken = process.env[PROCESS_SCOPE_KEY];
+  if (scopeSeal(scopeToken) !== config.scope_seal) fail("supervisor process scope is unavailable", "HOST_CONFIG_MISMATCH");
+  if (!Array.isArray(config.ephemeral_env_keys) || config.ephemeral_env_keys.length !== Object.keys(ephemeralEnvironment).length
+    || config.ephemeral_env_keys.some((key) => !Object.hasOwn(ephemeralEnvironment, key))) fail("ephemeral environment binding is invalid", "HOST_CONFIG_MISMATCH");
+  if (!Array.isArray(config.credential_env_keys) || config.credential_env_keys.length !== Object.keys(credentialEnvironment).length
+    || config.credential_env_keys.some((key) => !Object.hasOwn(credentialEnvironment, key))) fail("credential environment binding is invalid", "HOST_CONFIG_MISMATCH");
+  publishOnce(config.supervisor, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
+    config_sha256: configSha, nonce: config.nonce, supervisor, started_at: new Date().toISOString() }, secret));
+  let child, childClosed = false, executorIdentity = null, finished = false, requested = null, pendingClose = null, deadline, escalation, cancelPoll, barrierPoll, outcome = "", overflow = false;
+  const cleanupCredentials = () => { if (fs.existsSync(config.credential_root)) fail("executor credential root remains without a trusted binding", "HOST_CLEANUP_INCOMPLETE"); };
+  const cleanupIncomplete = (error, obligation = null, terminal = {}) => {
+    if (finished) return; finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll);
+    const priorStatus = TERMINAL.has(terminal.status) ? terminal.status : "failed", provided = obligation?.processes || [];
+    const processes = [supervisor, executorIdentity, ...provided].filter(Boolean).map((identity) => exactIdentity(identity));
+    publishOnce(config.cleanup, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
+      identities: { supervisor: exactIdentity(supervisor), executor: executorIdentity ? exactIdentity(executorIdentity) : null },
+      error: error.message, terminal: { status: priorStatus, exit_code: terminal.exit_code ?? null, signal: terminal.signal || null },
+      obligation: { processes: [...new Map(processes.map((identity) => [identity.pid, identity])).values()], credential_root: obligation?.credential_root || credentialRootBinding(config.credential_root),
+        scope_seal: config.scope_seal }, observed_at: new Date().toISOString() }, secret));
   };
-  for (const field of [
-    "status", "signal", "killed", "hostHandle", "primitive", "recommended_action",
-    "attemptId", "supervisorPid", "supervisorProcessStartedAt", "readyPath",
-    "startupStderrPath", "startupStderr", "elapsedMs", "liveness",
-    "failures", "bootout", "remove", "state", "after",
-  ]) {
-    if (error?.[field] !== undefined) diagnostic[field] = error[field];
+  function finish(fields) {
+    if (finished) return;
+    try { cleanupCredentials(); } catch (error) { return cleanupIncomplete(new Error(`credential cleanup failed: ${error.message}`), null, fields); }
+    finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll);
+    const body = { attempt_id: config.attempt_id, lock_id: config.lock_id, host_kind: "local_supervisor", host_handle: config.host_handle,
+      ...fields, completed_at: new Date().toISOString() };
+    atomicWrite(config.result, `${JSON.stringify(signed(body, secret, "result_auth_sha256"))}\n`);
   }
-  return `${error?.stack || error?.message || String(error)}\nHOST_DIAGNOSTIC ${JSON.stringify(diagnostic)}\n`;
+  const unverifiedGroup = (status) => cleanupIncomplete(new Error("executor process group could not be bound to the run process scope"), null, { status });
+  function terminate(status) {
+    if (finished || requested || !child) return; requested = status;
+    const identity = { pid: child.pid, pgid: child.pid, started_at: config.executor_started_at };
+    const term = signalScopedGroup(identity, "SIGTERM", config.scope_seal);
+    if (!term.delivered && !term.absent) return unverifiedGroup(status);
+    if (term.absent && pendingClose) return finish(pendingClose);
+    escalation = setTimeout(() => {
+      if (finished) return;
+      if (pendingClose && !groupExists(child.pid)) return finish(pendingClose);
+      const killed = signalScopedGroup(identity, "SIGKILL", config.scope_seal);
+      if (!killed.delivered && !killed.absent) return unverifiedGroup(status);
+      if (killed.absent) return finish(pendingClose || { status, exit_code: null, signal: "SIGKILL", error: null });
+      const end = Date.now() + Math.max(1_000, config.grace_ms), poll = setInterval(() => {
+        if (!groupExists(child.pid)) { clearInterval(poll); finish(pendingClose || { status, exit_code: null, signal: "SIGKILL", error: null }); }
+        else if (Date.now() >= end) { clearInterval(poll); cleanupIncomplete(new Error(`process group cleanup bound elapsed; prior_status=${pendingClose?.status || status}`)); }
+      }, 25);
+    }, config.grace_ms);
+  }
+  try {
+    child = spawn(process.execPath, [__filename, "--executor-gate", configPath, configSha], { cwd: config.cwd, detached: true,
+      env: { ...minimalEnvironment(process.env), [PROCESS_SCOPE_KEY]: scopeToken }, stdio: ["ignore", 4, 5, "pipe", "pipe", "pipe"] });
+    const ephemeralPipe = Buffer.from(JSON.stringify({ ephemeral_env: ephemeralEnvironment, credential_env: credentialEnvironment, credential_files: secretPayload.credential_files || [] })); child.stdio[5].end(ephemeralPipe, () => ephemeralPipe.fill(0));
+    for (const values of [ephemeralEnvironment, credentialEnvironment]) for (const key of Object.keys(values)) { values[key] = ""; }
+    secretPayload.ephemeral_env = {}; secretPayload.credential_env = {}; secretPayload.credential_files = [];
+    child.stdio[4].setEncoding("utf8"); child.stdio[4].on("data", (chunk) => { if (outcome.length + chunk.length > 16_384) overflow = true; else outcome += chunk; });
+    const executor = waitFingerprint(child.pid); if (!executor || executor.pgid !== child.pid) fail("executor group identity unavailable", "HOST_IDENTITY_UNAVAILABLE"); executorIdentity = executor;
+    config.executor_started_at = executor.started_at;
+    publishOnce(config.running, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
+      config_sha256: configSha, nonce: config.nonce, supervisor, executor, started_at: new Date().toISOString() }, secret));
+    child.once("error", (error) => finish({ status: "spawn_error", exit_code: null, signal: null, error: error.message }));
+    child.once("close", (code, signal) => {
+      childClosed = true; let parsed = null; try { parsed = overflow ? null : JSON.parse(outcome); } catch {}
+      if (!requested && parsed?.attempt_id === config.attempt_id && parsed.status === "cleanup_incomplete") {
+        cleanupIncomplete(new Error(parsed.error || "executor cleanup is incomplete"), parsed.obligation, parsed); return;
+      }
+      const fields = requested ? { status: requested, exit_code: code, signal: signal || null, error: null }
+        : parsed && parsed.attempt_id === config.attempt_id && TERMINAL.has(parsed.status)
+          ? { status: parsed.status, exit_code: parsed.exit_code, signal: parsed.signal, error: parsed.error }
+          : { status: "failed", exit_code: code, signal: signal || null, error: "executor gate returned no valid outcome" };
+      if (groupExists(child.pid)) { pendingClose = fields; if (!requested) terminate(fields.status); }
+      else finish(fields);
+    });
+    if (config.test_gate_barrier) barrierPoll = setInterval(() => { if (fs.existsSync(config.test_gate_barrier)) { clearInterval(barrierPoll); child.stdio[3].end(Buffer.from([1])); } }, 10);
+    else child.stdio[3].end(Buffer.from([1]));
+    deadline = setTimeout(() => terminate("timed_out"), config.timeout_ms);
+    cancelPoll = setInterval(() => { if (fs.existsSync(config.cancel)) terminate("cancelled"); }, 25);
+    process.once("SIGTERM", () => terminate("cancelled")); process.once("SIGINT", () => terminate("cancelled"));
+  } catch (error) { finish({ status: "spawn_error", exit_code: null, signal: null, error: error.message }); }
 }
-
+function cliError(error) { return `${error.stack || error.message}\nHOST_DIAGNOSTIC ${JSON.stringify({ code: error.code || null, message: error.message, recommended_action: error.recommended_action })}\n`; }
 if (require.main === module) {
-  if (process.argv[2] === "--supervise" && process.argv[3]) {
-    try {
-      runSupervisor(process.argv[3], process.argv[4]);
-    } catch (error) {
-      process.stderr.write(cliErrorText(error));
-      process.exitCode = 1;
-    }
-  } else if (process.argv[2] === "--survival-launcher") {
-    try {
-      const [, , , rawRunDir, trialId, receiptPath, markerPath, rawTimeout] = process.argv;
-      const canonicalRunDir = requireDirectory(rawRunDir, "runDir");
-      const receipt = launchLocalSupervisor({
-        runDir: canonicalRunDir,
-        attemptId: trialId,
-        command: process.execPath,
-        args: [__filename, "--survival-worker", markerPath],
-        cwd: canonicalRunDir,
-        timeoutMs: Number(rawTimeout),
-      });
-      fs.writeFileSync(receiptPath, `${JSON.stringify(receipt)}\n`, "utf8");
-    } catch (error) {
-      process.stderr.write(cliErrorText(error));
-      process.exitCode = 1;
-    }
-  } else if (process.argv[2] === "--survival-worker") {
-    fs.writeFileSync(process.argv[3], `completed:${process.pid}\n`, "utf8");
-  } else {
-    process.stderr.write("Usage: host.js --supervise <config-path>\n");
-    process.exitCode = 2;
-  }
+  try {
+    if (process.argv[2] === "--supervise") runSupervisor(process.argv[3], process.argv[4]);
+    else if (process.argv[2] === "--executor-gate") runExecutorGate(process.argv[3], process.argv[4]);
+    else { process.stderr.write("Usage: host.js --supervise <config> <sha256>\n"); process.exitCode = 2; }
+  } catch (error) { process.stderr.write(cliError(error)); process.exitCode = 1; }
 }
 
 module.exports = {
-  ATTEMPT_ID_RE,
-  HOST_KINDS,
-  HostError,
-  LOCK_FILENAME,
-  MIN_BREAK_PROBE_INTERVAL_MS,
-  TERMINAL_HOST_STATUSES,
   acquireRunLock,
   assertRunLockHeld,
-  breakStaleRunLock,
-  captureLocalProcessIdentity,
-  cancelHost,
-  captureLivenessProbe,
-  inspectOwnership,
-  issueSurvivalMeasurement,
-  launchLocalSupervisor,
-  lockPathFor,
-  probeHostEnvironment,
-  probeLocalProcess,
-  readOwner: readOwnerPublic,
   releaseRunLock,
-  resumePendingTerminal,
-  resumePendingBreak,
-  observeWorktree,
-  runSurvivalTrial,
-  selectHost,
-  terminalResultProof,
-  waitForTerminalResult,
   withRunLock,
-  __testing: Object.freeze({
-    cliErrorText,
-  }),
+  launchLocalSupervisor,
+  waitForTerminalResult,
+  cancelHost,
+  inspectOwnership,
+  breakStaleRunLock,
+  sandboxInvocation,
 };

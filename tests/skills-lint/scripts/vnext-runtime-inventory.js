@@ -36,61 +36,7 @@ const ROLES = new Set([
 // Reviewed semantic roles are deliberately separate from lexical detection.
 // They cover indirect readers/writers (facades, delegated gates, and paths passed
 // through manifest fields) that cannot be proven by keywords in one source file.
-const REVIEWED_SEMANTIC_ROLE_SEEDS = Object.freeze({
-  "skills/relay-dispatch/scripts/dispatch.js": [
-    "done-criteria:read",
-    "done-criteria:write",
-    "evidence:write",
-  ],
-  "skills/relay-dispatch/scripts/execution-evidence.js": [
-    "evidence:read",
-    "evidence:write",
-  ],
-  "skills/relay-dispatch/scripts/manifest/inflight-runs.js": ["event:read"],
-  "skills/relay-dispatch/scripts/manifest/rubric.js": ["done-criteria:read"],
-  "skills/relay-dispatch/scripts/rebrand-evidence.js": [
-    "evidence:read",
-    "evidence:write",
-  ],
-  "skills/relay-dispatch/scripts/reconcile-run.js": [
-    "evidence:read",
-    "evidence:write",
-  ],
-  "skills/relay-dispatch/scripts/recover-commit.js": [
-    "evidence:read",
-    "evidence:write",
-  ],
-  "skills/relay-merge/scripts/gate-check.js": [
-    "done-criteria:read",
-    "manifest:read",
-    "run-record:read",
-  ],
-  "skills/relay-merge/scripts/review-gate.js": [
-    "done-criteria:read",
-    "event:read",
-    "evidence:read",
-  ],
-  "skills/relay-merge/scripts/sprint-close-report.js": ["done-criteria:read"],
-  "skills/relay-plan/scripts/persist-done-criteria.js": ["done-criteria:write"],
-  "skills/relay-ready/scripts/probe-readiness.js": ["done-criteria:read"],
-  "skills/relay-ready/scripts/relay-request.js": ["done-criteria:write"],
-  "skills/relay-review/scripts/review-runner.js": [
-    "done-criteria:read",
-    "evidence:read",
-  ],
-  "skills/relay-review/scripts/review-runner/context.js": ["done-criteria:read"],
-  "skills/relay-review/scripts/review-runner/execution-evidence.js": [
-    "done-criteria:read",
-    "evidence:read",
-  ],
-  "skills/relay-review/scripts/review-runner/preflight.js": ["evidence:read"],
-  "skills/relay-review/scripts/review-runner/redispatch.js": ["event:read"],
-  "skills/relay-review/scripts/review-runner/round-analysis.js": ["done-criteria:read"],
-  "skills/relay-review/scripts/review-runner/round-artifacts.js": [
-    "done-criteria:read",
-    "done-criteria:write",
-  ],
-});
+const REVIEWED_SEMANTIC_ROLE_SEEDS = Object.freeze({});
 
 function repoPath(repoRoot, filePath) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
@@ -186,16 +132,13 @@ function scanPathBuiltInvocations({ content, repoRoot, source }) {
 
 function scanRegisteredReviewerInvocations(repoRoot, scripts) {
   const source = "skills/relay-review/scripts/review-runner/reviewer-invoke.js";
-  const registry = "skills/relay-dispatch/scripts/agent-adapters/index.js";
+  const registry = "skills/relay-dispatch/scripts/adapters/index.js";
   if (!scripts.includes(source) || !scripts.includes(registry)) return [];
-  const registryContent = fs.readFileSync(path.join(repoRoot, registry), "utf8");
-  const names = new Set();
-  const reviewerPattern = /\bprimaryReviewScript:\s*["']([^"']+\.js)["']/g;
-  let match;
-  while ((match = reviewerPattern.exec(registryContent)) !== null) names.add(match[1]);
-  return [...names].sort(compareText).map((name) => ({
+  const { getAdapter, listAdapters } = require(path.join(repoRoot, registry));
+  const scriptsByPath = new Set(listAdapters().map((name) => getAdapter(name).metadata.reviewScript).filter(Boolean));
+  return [...scriptsByPath].sort(compareText).map((scriptPath) => ({
     from: source,
-    to: `skills/relay-review/scripts/${name}`,
+    to: repoPath(repoRoot, scriptPath),
     kind: "dynamic-invocation",
   }));
 }

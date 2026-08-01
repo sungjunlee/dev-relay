@@ -1,6 +1,6 @@
 # append-learnings.js — post-merge learning writer
 
-`finalize-run.js` invokes `append-learnings.js` after the merge state advances to `MERGED` and before cleanup runs. It writes a one-line entry into the matching capability's `## Learnings` block in the target repo's `spec/capabilities.md`.
+`append-learnings.js` is an explicit post-merge project update. vNext `finalize-run.js` does not invoke it inside the merge transaction. Run it after finalize returns `status: merged`; it writes a one-line entry into the matching capability's `## Learnings` block in the target repo's `spec/capabilities.md`.
 
 ## Structural contract
 

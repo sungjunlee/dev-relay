@@ -1,405 +1,160 @@
-# Relay Architecture Reference
+# Relay vNext Architecture
 
-Deep-dive into the manifest contract, state machine, and extension points. For overview, see [CLAUDE.md](../CLAUDE.md).
+Relay vNext is an immutable-run system. It deliberately replaces the legacy
+Markdown manifest, mutable lifecycle state, event journal vocabulary, rubric
+sidecars, and executor-specific registration layer with one small durable
+contract and a derived action.
 
-This reference centers on the manifest-backed run lifecycle, plus the readiness boundary that may sit ahead of `relay-plan`. For the full relay-ready control-flow contract, see [docs/relay-ready-routing-and-handoff-design.md](../docs/relay-ready-routing-and-handoff-design.md). For explicit adapter/model selection examples, see [docs/model-route-policy.md](../docs/model-route-policy.md). For the public/internal/optional skill tiers, see [operator-surface.md](operator-surface.md).
+This document describes the shipped vNext runtime. Files under
+[`docs/archive/`](../docs/archive/) and dated plans are historical evidence,
+not operator instructions.
 
-## Readiness Boundary
-
-Before a run manifest exists, raw work may live in relay-ready artifacts under `~/.relay/requests/<repo-slug>/`.
+## Core model
 
 ```text
-raw request
-  -> relay-ready request artifact + events
-  -> relay-ready handoff brief(s) + frozen Done Criteria snapshot(s)
-  -> relay-plan
-  -> relay-dispatch run manifest
-  -> relay-review (internal, before PR publication)
-  -> publish PR
-  -> post-publication relay-review
+frozen input -> run.json + done-criteria.md
+                     |
+                     v
+             append-only events.jsonl + external observations
+                     |
+                     v
+                  inspect (derived action)
+                     |
+     dispatch / recover / review / explicit merge or close
+```
+
+There is no mutable state machine. `inspect` folds immutable facts together
+with fresh Git, GitHub, host, and verification observations and returns one
+typed next action. Writers re-inspect under the per-run lock and require the
+same action key before they make a change.
+
+The normal action sequence is `wait` -> `recover` -> `review` -> `merge`.
+`redispatch`, `close`, `none`, and `operator_attention` are explicit terminal
+or recovery outcomes, not hidden state transitions. PR publication is a
+recovery action; dispatch never commits, pushes, opens a PR, or recovers a run.
+
+```text
+relay-review
   -> ready_to_merge
   -> relay-merge (explicit only)
 ```
 
-Boundary rules:
+## Durable layout
 
-- `/relay` remains the public front door for full-cycle execution
-- `/relay` bypasses relay-ready only for issue-first or task-first inputs that are already relay-sized and already have a trustworthy review anchor
-- `/relay` invokes relay-ready for ambiguous, oversized, or anchorless requests, then continues the normal downstream chain once a relay-ready leaf exists
-- readiness interactions are append-only request events: `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`
-- request-level `next_action` is lightweight coordination metadata, not a manifest lifecycle state
+Each vNext run is a directory below `~/.relay/runs/<repo-slug>/<run-id>/`:
 
-## State Machine
+| Artifact | Contract |
+| --- | --- |
+| `run.json` | Immutable version-3 identity: repository, worktree, branch, immutable executor/reviewer bindings, start SHA, and Done Criteria digest/path. |
+| `done-criteria.md` | Frozen review anchor. The digest in `run.json` must match its exact bytes. |
+| `events.jsonl` | Append-only, newline-delimited facts. Facts validate before append and are never rewritten. |
+| attempt artifacts | Immutable prompt, stdout, stderr, result, and review/verification bundles bound by the attempt facts. |
+| recovery and merge artifacts | Immutable intent, authorization, and receipt files used for crash-safe convergence. |
 
-Ten states with enforced transitions (`skills/relay-dispatch/scripts/manifest/lifecycle.js:ALLOWED_TRANSITIONS`):
+The eleven fact types are `attempt_started`, `attempt_finished`,
+`attempt_interrupted`, `verification_recorded`, `lock_acquired`,
+`lock_released`, `pull_request_recorded`, `review_recorded`,
+`recovery_applied`, `merge_recorded`, and `run_closed`. They are the only
+lifecycle evidence. There is no manifest mutation, lifecycle transition API,
+execution-evidence sidecar, score log, route catalog, or app-registration
+receipt.
 
-```text
-  ┌─────────┐
-  │  draft   │──────────────────────────────────────────┐
-  └────┬─────┘                                          │
-       ↓                                                ↓
-  ┌──────────────┐                                  ┌────────┐
-  │  dispatched   │──────────────────────────────────┐       │ closed  │
-  └──────┬────────┘                                  │       └─────────┘
-         ↓                                           ↓           ↑
-┌─────────────────────────┐                     ┌───────────┐    │
-│ internal_review_pending │─────────────────────│ escalated  │───┘
-└──────┬────────────┬─────┘                     └───────────┘
-       │            │
-       ↓            ↓
-┌────────────────┐   ┌──────────────────┐
-│ publish_pending│──→│  review_pending  │
-└───────┬────────┘   └──┬───────────┬───┘
-        │               │           │
-        ↓               │           │
-   escalated            │           │
-                        ↓           ↓
-┌────────────────────┐    ┌──────────────────┐
-│ changes_requested   │    │  ready_to_merge   │
-└────────┬───────────┘    └────┬────────┬──────┘
-         │                     │        │
-         ↓ (re-dispatch)       │        ↓
-    dispatched                 │   ┌────────┐
-                               │   │ merged  │←── escalated (already-merged recovery)
-                               │   └─────────┘
-                               ↓
-                         ┌───────────────┐
-                         │ merge_blocked │
-                         └───────┬───────┘
-                                 ↓
-                           ready_to_merge
+## Operations
+
+`dispatch.js` creates a new immutable run or appends a guarded attempt to a
+run whose current action is exactly `redispatch`. It uses the universally
+registered adapter descriptor and a thin local host. On macOS the host uses a
+fail-closed `sandbox-exec` profile that gives the executor only its retained
+worktree, exact declared inputs, exact output artifact, and attempt-private
+temporary space. Unsupported local containment fails before writes.
+
+`inspect.js` is pure folding logic. `recover.js` supplies the production
+observer and the sole convergent mutation path. The public wrapper is:
+
+```bash
+node skills/relay/scripts/relay-recover.js inspect --repo . --run-id <id> --json
+node skills/relay/scripts/relay-recover.js recover --repo . --run-id <id> \
+  --reason "<why>" --expected-action-key <key> --json
 ```
 
-`internal_review_pending` is the pre-publication review gate over the retained worktree diff. A passing internal review advances to `publish_pending`, never `ready_to_merge`. `publish_pending` is the only state where `publish-run.js` may push/open the PR and stamp `git.pr_number`; successful publication advances to `review_pending`, while publish preflight or push/PR failures advance to `escalated`.
-
-`review_pending` is the post-publication review gate. It reviews the PR diff plus CI/actions, GitHub review, and PR comment signals. A passing post-publication review advances to `ready_to_merge`.
-
-An `escalated` run may transition directly to `merged` only during already-merged recovery: GitHub must report the PR as MERGED and the fresh review gate must pass for the merged head.
-
-Terminal states: `merged`, `closed`. Once entered, no further transitions. `merge_blocked` is non-terminal: Phase 3 fleet merge queues use it to preserve a failed merge attempt without forcing an invalid review-cycle transition.
-
-## Manifest Schema
-
-Each run produces `~/.relay/runs/<repo-slug>/<run-id>.md` — a Markdown file with YAML frontmatter:
-
-```yaml
----
-relay_version: 2
-run_id: issue-42-20260403120000000
-state: review_pending
-next_action: run_review
-
-issue:
-  number: 42
-  source: github               # github | unknown
-
-coordination:
-  marker: relay-orca: example-program-1234abcd/outcome-a  # optional opaque single-line integration correlation
-
-git:
-  base_branch: main
-  working_branch: issue-42
-  pr_number: 128                 # null before publish_pending -> review_pending; review/merge consumers require it after publication
-  head_sha: abc123def
-
-github:
-  pr_created_by_orchestrator: true   # set when dispatch.js opened or reused the PR
-
-roles:
-  orchestrator: codex           # who drives the lifecycle
-  executor: codex               # who implements
-  reviewer: claude              # who reviews (isolated)
-
-fleet_id: sprint-batch-2        # optional; immutable fleet back-pointer
-ownership:                      # required with fleet_id; immutable on resume
-  sprint: backlog/sprints/2026-07-relay-fleet.md
-  track: 2026-07-relay-fleet
-  component: relay-fleet
-
-paths:
-  repo_root: /Users/me/project
-  worktree: /tmp/relay-wt-issue-42
-  dispatch_stdout: ~/.relay/runs/<repo-slug>/<run-id>/dispatch-stdout.log
-  dispatch_stderr: ~/.relay/runs/<repo-slug>/<run-id>/dispatch-stderr.log
-  dispatch_result: ~/.relay/runs/<repo-slug>/<run-id>/dispatch-result.txt
-  lease: ~/.relay/runs/<repo-slug>/<run-id>/lease.json
-
-policy:
-  merge: manual_after_lgtm      # merge strategy
-  cleanup: on_close              # when to remove worktree
-  reviewer_write: forbid         # reviewer must not mutate code
-  executor_network:
-    access: disabled             # disabled | enabled
-    mechanism: default           # default | sandbox_workspace_write.network_access
-    domains: null                # reserved for managed network profile allowlists
-
-anchor:
-  done_criteria_source: issue    # issue | unknown
-  rubric_source: manifest        # where rubric lives
-
-review:
-  rounds: 3                   # total applied verdicts; audit/artifact sequence
-  latest_verdict: pass           # pending | pass | changes_requested | escalated
-  repeated_issue_count: 0
-  last_reviewed_sha: abc123def
-  last_reviewer: codex           # acting reviewer for the most recent round
-
-cleanup:
-  status: pending                # pending | succeeded | failed | skipped
-  last_attempted_at: null
-  cleaned_at: null
-  worktree_removed: false
-  branch_deleted: false
-  prune_ran: false
-  error: null
-
-timestamps:
-  created_at: "2026-04-03T12:00:00.000Z"
-  updated_at: "2026-04-03T13:30:00.000Z"
-
-# Optional; present only when relay-reconcile-artifact is used.
-bootstrap_exempt:
-  enabled: true
-  artifact_path: ~/.relay/runs/project-abcd1234/issue-42-20260403120000000/execution-evidence.json
-  writer_pr: 267
-  reason: "this run predates the artifact writer"
----
-
-# Notes
-
-## Context
-
-## Review History
-```
-
-### Key fields
-
-| Field | Purpose |
-|-------|---------|
-| `roles.*` | Immutable per-run binding. Decouples who decides, who implements, who validates |
-| `fleet_id`, `ownership` | Fleet child lineage and its validated `{sprint, track, component}` finalize owner; immutable on resume |
-| `model_hints.*`, `routes`, `routing` | Legacy persisted fields are retained only as inert historical data. Runtime selection ignores them. |
-| `dispatch.model`, `dispatch.last_model` | Immutable effective model binding for the run. A null value delegates to the adapter provider default. |
-| `review.rounds` | Monotonic applied-verdict/artifact sequence. Failed invokes do not increment it. |
-| Run-dir runtime artifacts | While dispatch is active, `lease.json` records `{ pid, pgid, host, started_at, timeout_s }` for crash-only reconciliation. `pid` is the dispatch supervisor and `pgid` is the detached executor process group. Executor stdout, stderr, and result output live as `dispatch-stdout.log`, `dispatch-stderr.log`, and `dispatch-result.txt` in the same run directory and are referenced from manifest `paths`. |
-| Detached launch receipt | `dispatch.js --detach --json` re-execs dispatch under a detached Node supervisor and returns only after the child has entered `dispatched`, written `lease.json`, and created the real run-dir log files. The receipt includes `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and `reconcileCommand`; it is a launch contract, not a manifest field. |
-| `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
-| `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
-| `anchor.*` | Immutable review scope — prevents drift across rounds |
-| `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
-| `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
-| `git.pr_number` / `github.pr_created_by_orchestrator` | Orchestrator-owned push + PR creation persists `git.pr_number` for review/merge consumers; `github.pr_created_by_orchestrator` records whether relay created or reused the PR. In delayed-publication runs these fields stay null/absent until `publish-run.js` advances `publish_pending -> review_pending`. See [ADR-0001](../docs/decisions/0001-orchestrator-owns-publication.md) |
-| `bootstrap_exempt.*` | Optional operator-declared reconciliation for runs that predate an artifact writer but are closed after that writer lands |
-
-### Adapter Capability and Model Binding
-
-Relay validates that the selected CLI adapter can safely perform dispatch or
-primary review with the requested containment shape. This includes read-only
-semantics, sandbox metadata, and network metadata. A new run binds the explicit
-`--executor` and optional `--model`; omitting `--model` records the adapter
-provider default as a null binding. A resumed run cannot replace its executor
-or model binding. Historical `model_hints`, `routes`, and `routing` fields are
-readable only for audit and never authorize or select runtime behavior.
-
-The supported adapter capability matrix and new-adapter checklist are published in [`skills/relay-dispatch/references/agent-adapter-platform.md`](../skills/relay-dispatch/references/agent-adapter-platform.md). That reference is the source of truth for dispatch, primary-review, containment, structured-output, transport, and app-registration support.
-
-### Bootstrap exemptions
-
-`bootstrap_exempt` is absent for normal runs. It is populated only by `relay-reconcile-artifact`, which exists for bootstrap cases where a run cannot satisfy a newly introduced artifact requirement because the run itself produced that writer.
-
-Shape:
-
-```yaml
-bootstrap_exempt:
-  enabled: true
-  artifact_path: <path to the reconciled artifact contract>
-  writer_pr: <pull request number that introduced the writer>
-  reason: <operator audit reason>
-```
-
-Semantics:
-
-- `enabled: true` marks the run as a structured bootstrap exemption; analytics must count this field, not reason-string prefixes.
-- `artifact_path` records the artifact contract that the run predates or reconciles.
-- `writer_pr` records the PR that introduced the writer or artifact contract.
-- `reason` remains an operator-readable audit explanation.
-- Re-running `relay-reconcile-artifact` with identical fields against the already merged exempt run is a no-op and does not append another event.
-- Existing manifests without this field remain valid and load as non-exempt runs.
-
-## Event Journal
-
-Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `executor_network`, `failure_class`, `before`, `after`, `profile`, `status`, `artifact_path`, `raw_response_path`, `elapsed_ms`, `critical_path_wait_ms`, `consumed_by_phase`, `phase_decision_waited`, `frontier_step_replaced`, `failure_reason`, `state`, override audit fields):
-
-```jsonl
-{"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":null,"executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"policy_decision":{"allowed":true,"reason":"managed_cli","phase":"dispatch","actor":"codex","model":null}}
-{"ts":"2026-04-18T12:05:00.000Z","event":"dispatch_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"dispatched","state_to":"internal_review_pending","head_sha":"def456","round":null,"reason":"new_dispatch:completed","publish_policy":"after-internal-review","executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"failure_class":null}
-{"ts":"2026-04-18T12:08:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"internal_review_pending","state_to":"publish_pending","head_sha":"def456","round":1,"reviewer":"codex","reason":"pass"}
-{"ts":"2026-04-18T12:09:00.000Z","event":"publish_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"publish_pending","state_to":"review_pending","head_sha":"def456","round":null,"reason":"created_pr","pr_number":128,"branch":"issue-42","pr_created_by_orchestrator":true}
-{"ts":"2026-04-18T12:10:00.000Z","event":"review_invoke","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":"codex","model":null}
-{"ts":"2026-04-18T12:12:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"changes_requested","head_sha":"def456","round":1,"reviewer":"codex","reason":"changes_requested"}
-{"ts":"2026-04-18T12:40:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"ready_to_merge","head_sha":"ghi789","round":2,"reviewer":"codex","reason":"pass"}
-{"ts":"2026-04-18T12:45:00.000Z","event":"merge_finalize","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"ready_to_merge","state_to":"merged","head_sha":"ghi789","round":2,"reason":"squash"}
-```
-
-**Source of truth** — `relay-events.js` owns the envelope; event names are emitted across production scripts. To enumerate all events, grep `event:` inside `skills/*/scripts/` (excluding `*.test.js`). Known events today:
-
-| Event | Emitted by |
-|-------|------------|
-| `dispatch_start`, `dispatch_interrupted`, `dispatch_result`, `environment_drift` | `relay-dispatch/scripts/dispatch.js`; `reconcile-run.js` may also emit `dispatch_interrupted` when settling dead or timed-out dispatched runs |
-| `publish_result` | `relay-dispatch/scripts/publish-run.js` |
-| `recover_commit`, `recover_commit_failed`, `execution_evidence_rebranded` | `relay-dispatch/scripts/recover-commit.js`, `rebrand-evidence.js` |
-| `iteration_score`, `rubric_quality`, `safety_boundary_violation` | `relay-dispatch/scripts/relay-events.js` (helpers) |
-| `close`, `cleanup_result` | `relay-dispatch/scripts/close-run.js`, `cleanup-worktrees.js` |
-| `state_recovery` | `relay-dispatch/scripts/recover-state.js`; `reconcile-run.js` emits it for `dispatched -> review_pending` dead-work recovery |
-| `review_invoke` | `relay-review/scripts/review-runner/reviewer-invoke.js` |
-| `review_apply` | `relay-review/scripts/review-runner.js`, `reviewer-invoke.js` |
-| `pr_number_stamped`, `merge_blocked`, `skip_review`, `force_finalize`, `merge_finalize`, `cleanup_result` | `relay-merge/scripts/finalize-run.js`, `relay-reconcile-artifact.js`, `gate-check.js` |
-| `request_persisted`, `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`, `relay_ready_handoff_persisted` | `relay-ready/scripts/relay-request.js` |
-
-There is no standalone `state_transition` event — state changes ride on the lifecycle event that caused them (`state_from`/`state_to` fields on `dispatch_start`, `dispatch_result`, `review_apply`, `merge_finalize`, etc.).
-
-For reviewer analytics, `roles.reviewer` answers "who was assigned to review this run?" while `review_apply.reviewer` answers "who actually executed this review round?". Keep them separate. If a run shows review activity in the manifest but lacks `review_apply` reviewer data, report that gap explicitly rather than backfilling from the assigned role binding.
-
-### Override audit shape
-
-Operator escape hatches remain available, but high-risk override events add a shared audit shape without removing legacy fields:
-
-| Field | Meaning |
-|-------|---------|
-| `override_class` | Stable class such as `force_finalize_nonready`, `execution_evidence_rebrand`, or `bootstrap_artifact_reconcile` |
-| `affected_head_sha` | Commit SHA the override affects or attests after the override |
-| `prior_state` | Manifest state observed before the override side effect |
-| `required_reason` | Non-empty operator-provided reason, duplicated from `reason` for override-specific queries |
-| `operator_initiated` | `true` for deliberate operator escape hatches |
-| `independent_attestation` | Optional supplemental attestation when a path has a separate review or verification source |
-
-Current producers are `force_finalize` from `finalize-run --force-finalize-nonready`, bootstrap `force_finalize` from `relay-reconcile-artifact`, and `execution_evidence_rebranded` from `rebrand-evidence` / `recover-commit`. Consumers must treat these fields as additive because older events only have the legacy envelope.
-
-## Review Round Artifacts
-
-Each round produces files under `~/.relay/runs/<repo-slug>/<run-id>/`:
-
-| File | Content |
-|------|---------|
-| `review-round-N-prompt.md` | Generated review prompt |
-| `review-round-N-done-criteria.md` | Frozen Done Criteria snapshot |
-| `review-round-N-diff.patch` | Diff at time of review |
-| `review-round-N-verdict.json` | Structured verdict |
-| `review-round-N-raw-response.txt` | Raw reviewer output |
-| `review-round-N-redispatch.md` | Fix prompt (when changes requested) |
-| `review-round-N-policy-violation.txt` | If reviewer mutated code |
-
-## Dispatch Handoff (PR Boundary)
-
-The PR is the handoff boundary between executor and review. After #198, publication is orchestrator-owned, not executor-owned:
-
-- **Executor:** edit and commit inside the retained worktree only.
-- **Orchestrator (`dispatch.js`):** push branch with operator shell credentials, open or reuse PR, persist `git.pr_number` (and `github.pr_created_by_orchestrator` when applicable), then transition toward review.
-- **Failure:** publication errors escalate the run with `push_or_pr_failed:` — no silent continuation without a PR.
-
-Worktree lifecycle is centralized in `worktree-runtime.js` ([ADR-0003](../docs/decisions/0003-worktree-runtime-single-owner.md)). Manifest logic uses slice modules behind a thin facade ([ADR-0002](../docs/decisions/0002-manifest-slice-ownership.md)). Durable refactor decisions live under [docs/decisions/](../docs/decisions/README.md).
-
-## Module Boundaries (and what they are NOT)
-
-Two patterns look like inconsistencies but are intentional. Both are pinned by tests; mechanical "unification" would break working design.
-
-### `skills/*/` is a packaging boundary, not a runtime boundary
-
-`skills/` exists so users can install individual skills via `npx skills add sungjunlee/dev-relay/<skill>`. At runtime, the boundary is purely how files are packaged — Node imports routinely cross it.
-
-Tests and test fixtures intentionally live under `tests/<skill>/`, not inside `skills/<skill>/`. The skills installer copies each skill directory without a project-specific ignore manifest, so keeping test assets outside `skills/` is the packaging contract that prevents installed skills from carrying repository-only test files.
-
-Current cross-skill imports:
-
-| Importer | Imports from |
-|----------|--------------|
-| `skills/relay-merge/scripts/gate-check.js` | `relay-review/scripts/review-runner/{context,redispatch}.js`, `relay-dispatch/scripts/manifest/lifecycle.js` |
-| `skills/relay-review/scripts/review-runner.js` | `relay-dispatch/scripts/manifest/{lifecycle,paths,store}.js`, `relay-dispatch/scripts/relay-events.js` |
-| `skills/relay-ready/scripts/relay-request.js` | `relay-dispatch/scripts/relay-manifest.js` (facade — see below) |
-| Consumers of `cli-args.js` and `reviewer-helpers.js` | see [Shared utilities (cross-skill)](#shared-utilities-cross-skill) |
-
-Placement rule for new shared helpers: the skill most often invoked as a dependency hosts the module. Today `relay-dispatch` hosts `cli-args.js`; `relay-review` hosts `reviewer-helpers.js`. Do not introduce a neutral top-level directory — it would contradict the packaging-not-runtime rule above.
-
-### `relay-manifest.js` is a compatibility facade
-
-`skills/relay-dispatch/scripts/relay-manifest.js` is a 17-line re-export-only module that spreads seven `manifest/*` submodules:
-
-```js
-module.exports = { ...paths, ...store, ...lifecycle, ...rubric, ...cleanup, ...attempts, ...environment };
-```
-
-Convention (from [ADR-0002 manifest slice ownership](../docs/decisions/0002-manifest-slice-ownership.md), issue #188):
-
-- **Runtime code** imports direct submodules: `require("./manifest/lifecycle")`. The docs list every runtime caller and its narrow submodule set.
-- **Compatibility tests** (e.g. `relay-manifest.test.js`, `dispatch.test.js`, `close-run.test.js`) and **out-of-scope runtime callers** (today: `relay-ready/scripts/relay-request.js`) continue to import via the facade. Each retained consumer is catalogued in the boundary-split doc with the reason it stayed.
-
-Enforcement: [`manifest-direct-imports.test.js`](../tests/relay-dispatch/scripts/manifest-direct-imports.test.js) asserts the facade stays ≤40 lines with zero function declarations and transitively runs every `manifest/*.test.js`. If the facade regains logic — or if submodules fall out of test — that file fails.
-
-Do not "simplify" the facade by collapsing submodules back into it or by force-migrating the remaining facade consumers. Both moves regress the boundary the test pins.
-
-## Extending
-
-### Adding a new executor
-
-1. Add `skills/relay-dispatch/scripts/executors/<name>.js` exporting the 7-field adapter contract documented in [`agent-adapter-platform.md`](../skills/relay-dispatch/references/agent-adapter-platform.md): `cliBinary`, `defaultTimeout`, `validateExecutionMode`, `buildExecCommand`, `finalizeResult`, `register`, and `probe`.
-2. Register the harness descriptor in `skills/relay-dispatch/scripts/agent-adapters/index.js`; update `skills/relay-dispatch/scripts/executors/index.js` only if display order needs a stable compatibility slot.
-3. Add behavior-matrix and probe coverage in `tests/relay-dispatch/scripts/executors.test.js`.
-4. Add adapter capability coverage in `tests/relay-dispatch/scripts/adapter-contract.test.js` and docs consistency coverage in `tests/relay-dispatch/scripts/docs-defaults.test.js`.
-5. Optional: implement adapter `register(...)` for dispatch-time app registration; unsupported adapters should return `{threadId: null, raw}`.
-
-### Adding a new reviewer adapter
-
-1. Create `skills/relay-review/scripts/invoke-reviewer-<name>.js`
-2. The script is invoked by `review-runner/reviewer-invoke.js:invokeReviewer()` as:
-   ```
-   node invoke-reviewer-<name>.js --repo <repoPath> --prompt-file <promptPath> --json [--model <name>]
-   ```
-   The `<promptPath>` bundle already contains the diff, Done Criteria, and rubric — adapters read that single prompt file, not separate `--diff-file` / `--done-criteria-file` flags.
-3. Trusted primary adapters must print a JSON verdict to **stdout** matching `REVIEW_VERDICT_JSON_SCHEMA` in `skills/relay-review/scripts/review-schema.js`. `review-runner` captures stdout via `execFileSync({ stdio: "pipe" })` and writes it to `review-round-N-raw-response.txt`; adapters must not write their own output files or mutate the repo.
-4. `review-runner.js` auto-discovers adapters via `resolveReviewerScript()` by naming convention: `invoke-reviewer-<name>.js`. The `<name>` must match `/^[a-z0-9-]+$/`.
-5. Existing adapters share small utilities (`getArg`, `hasFlag`, `summarizeFailure`, `ensureJsonText`) but NOT full execution logic — each adapter encodes its own execution contract (e.g. Claude uses `--json-schema` + stdout recovery; Codex uses temp-file exchange + `--ephemeral` + sandbox). New adapters should extract only the small utilities.
-
-`invoke-reviewer-cursor.js` supports primary review only: it invokes `agent --print --trust --force --mode ask --workspace <repo> --output-format json`, parses the wrapper `result` field into strict verdict JSON, probes auth via `agent status` or `CURSOR_API_KEY`, and enforces a parent-process timeout via `RELAY_CURSOR_REVIEW_TIMEOUT` (default `1800s`). Relay passes `--workspace` only and never `agent --worktree`.
-
-`invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, and `invoke-reviewer-antigravity.js` validate the same primary-review verdict contract. OpenCode uses prompt-only read-only review with a post-run dirty-worktree guard. Pi invokes `pi --no-session --tools read,grep,find,ls --print`, supplies the prompt through stdin, and enforces `RELAY_PI_REVIEW_TIMEOUT` (default `1800s`). Antigravity targets the `agy` CLI only; relay passes a control-safe prompt-file reference with `--print-timeout <duration> --sandbox` and relies on dirty-worktree checks. Antigravity live review support remains experimental until a healthy live canary passes.
-
-### Shared utilities (cross-skill)
-
-Small, pure utilities that multiple skills import live under `skills/relay-dispatch/scripts/` alongside the runtime modules they share kinship with — not in a neutral top-level directory. `skills/` packages independent publishable skills, but at runtime the skill boundary is packaging only (see retro: `gate-check.js` → relay-review internals, `review-runner.js` → relay-dispatch internals). Placement rule: the skill most often invoked as a dependency hosts the shared helper.
-
-Before deleting, moving, or reclassifying scripts, use the script inventory in
-[`docs/script-inventory-and-cleanup.md`](../docs/script-inventory-and-cleanup.md).
-Zero runtime imports are not enough to prove a script is dead: operator CLIs,
-adapter entry points, and archived measurement tools often have no importers.
-
-Current shared helpers:
-
-| Module | Owner | Consumers |
-|--------|-------|-----------|
-| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-cursor.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
-| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-cursor.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js` |
-
-`reviewer-helpers.js` is scoped to JSON recovery/parsing helpers and `summarizeFailure`. Reviewer adapters intentionally keep divergent execution contracts (Claude uses `--json-schema` + stdout recovery; Codex uses temp schema/result files + `--ephemeral` + sandbox; OpenCode uses prompt-enforced read-only behavior), so a full adapter factory would hide meaningful differences. See item 5 under "Adding a new reviewer adapter" above.
-
-Call sites take a local-wrapper pattern so inline flag lists (`KNOWN_FLAGS`) keep acting as fail-closed `reservedFlags`:
-
-```js
-const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
-const hasFlag = (flag) => sharedHasFlag(args, flag);
-```
-
-This keeps behavior identical to the original inline helpers while centralizing the `--*` look-alike guard and the reserved-flag handling.
-
-### Role binding
-
-Roles are set at manifest creation time in `createManifestSkeleton()`:
-```js
-roles: {
-  orchestrator: "codex",   // or "claude", future: any agent
-  executor: "codex",
-  reviewer: "claude",
-}
-```
-
-At review time, `--reviewer` (or `RELAY_REVIEWER`) selects the acting reviewer for the round. The assigned `roles.reviewer` binding stays immutable; the acting reviewer is recorded in `review.last_reviewer` and the `review_apply` event payload. Reporting that compares Codex vs Claude review execution should read `review_apply.reviewer`, not `roles.reviewer`.
+Recovery alone may close a dead attempt, commit reviewable work, push a branch,
+record/create the exact PR, record verification, or append `run_closed`.
+Every recovery step is authorized by a fresh action key and re-observed after
+the side effect. An explicit close carries a durable operator and reason.
+
+`review-runner.js` accepts only a run whose inspection says `review`. It binds
+the immutable reviewer, current PR head, passed verification, and frozen Done
+Criteria into an isolated review bundle, then appends one `review_recorded`
+fact. A passing verdict is `lgtm`; changed requests derive `redispatch`.
+
+`gate-check.js` is read-only. `finalize-run.js` is the explicit merge writer:
+it repeats inspection under admission and lock, records an HMAC-bound
+authorization tied to the authenticated GitHub login, uses GitHub's
+expected-source-SHA guard, re-observes the exact merge, records one
+`merge_recorded` fact, and only then removes a clean trusted worktree. GitHub
+does not expose an expected-base CAS; the documented post-check/pre-request
+base-retarget nanorace is a platform boundary, while source-SHA binding remains
+strict.
+
+## Adapters and host
+
+The adapter platform is intentionally retained and universal. The seven
+built-in executors are Claude, Codex, OpenCode, Pi, Antigravity, Cursor, and
+Cline. Every descriptor lives in `scripts/adapters/` and is registered in
+`adapters/index.js`; its four-method contract declares argv construction,
+capabilities, output parsing, and metadata. Cline is dispatch-only until its
+strict primary-review canary passes. No adapter owns manifest storage,
+publication, app registration, or a private lifecycle.
+
+The host owns only durable lock/ownership, detached supervisor launch,
+terminal-result observation, bounded cancellation, stale-lock break, and
+sandbox profile construction. It has no business lifecycle policy. The
+authoritative signed close is published first and the single `lock_released`
+outcome is materialized after it; a crash in between leaves no durable outcome,
+and the next lock holder replays the canonical one exactly once.
+
+Process containment is the cooperative `inherited_scope_no_daemon` contract:
+supported CLIs must preserve the injected `RELAY_PROCESS_SCOPE` marker and must
+not daemonize or clear it. `sandbox-exec` cannot prevent arbitrary `setsid` or
+environment clearing, so the host revalidates the marker before every signal,
+never signals an unverifiable process or group, and reports survivors as a
+signed cleanup obligation. See the
+[adapter platform](../skills/relay-dispatch/references/agent-adapter-platform.md)
+for the full contract.
+
+## Migration overlay
+
+`runtime-generation.js` is an explicit repository-scoped migration store. A
+repository first records a decision and a zero-active-legacy-run drain, then
+switches to a sealed vNext writer generation. Legacy recovery is available only
+through `legacy-recovery-shim.js`, which translates historical command names at
+the public `relay-recover` boundary; it is not a parallel lifecycle runtime.
+
+The overlay must remain until **both** 30 consecutive days and 30 vNext runs
+have completed with zero legacy reads. Until that later threshold is met, the
+installed dispatch package contains 19 JavaScript files and 7,149 production
+LOC (including the two migration files). After retiring the overlay, the core
+target is 17 JavaScript files and 6,000 production LOC. The sealed production
+bootstrap is active; the retirement threshold is deliberately not claimed as
+complete.
+
+## Trust boundaries
+
+- `run.json`, Done Criteria, facts, and immutable artifact bytes are validated
+  as regular contained files before use.
+- Action keys bind the inspected snapshot and fresh observations; stale writers
+  fail closed.
+- Locks are capabilities with inode/owner checks and append durable acquire and
+  release audit facts; each generation materializes exactly one release outcome,
+  never before its authoritative signed close.
+- Signals are bound to the inherited process-scope marker and revalidated
+  immediately before delivery; unverifiable targets fail closed.
+- Signed credential roots are removed by rename-to-quarantine and dev/ino
+  revalidation; a swapped path is preserved as evidence, never deleted.
+- External GitHub and merge observations use a fresh nonce-bound observer.
+- PR comments, mutable files, prior prompts, executor transcripts, and legacy
+  state are not authorities for vNext actions.
+
+For command-level guidance see the [operator guide](../docs/relay-operator-guide.md),
+the [adapter platform](../skills/relay-dispatch/references/agent-adapter-platform.md),
+and the [recovery playbook](../skills/relay-dispatch/references/recovery-playbook.md).

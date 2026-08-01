@@ -1,4 +1,7 @@
 {
+  "evidence_status": "superseded_incomplete",
+  "superseded_by": "adapter-live-canary-2026-08-02.json",
+  "non_release_reason": "Historical diagnostic skipped all required live invocations and predates the 13-cell acceptance matrix.",
   "generated_at": "2026-07-31T08:46:10.843Z",
   "timeout_ms": 30000,
   "results": [

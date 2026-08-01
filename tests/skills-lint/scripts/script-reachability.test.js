@@ -6,7 +6,7 @@ const path = require("node:path");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SKILLS_DIR = path.join(REPO_ROOT, "skills");
-const ADAPTER_INDEX_PATH = path.join(SKILLS_DIR, "relay-dispatch", "scripts", "agent-adapters", "index.js");
+const ADAPTER_INDEX_PATH = path.join(SKILLS_DIR, "relay-dispatch", "scripts", "adapters", "index.js");
 
 const PACKAGED_SCRIPT_ALLOWLIST = [];
 
@@ -101,15 +101,13 @@ function addDocumentationReachability({ docs, reachable, repoRoot, scriptFiles }
 
 function addAdapterDescriptorReachability({ adapterIndexPath, reachable, repoRoot }) {
   if (!fs.existsSync(adapterIndexPath)) return;
-  const { listAgentAdapters } = require(adapterIndexPath);
-  listAgentAdapters().forEach((descriptor) => {
-    Object.values(descriptor.reviewer || {}).forEach((scriptName) => {
-      if (!scriptName) return;
-      const scriptPath = path.join(repoRoot, "skills", "relay-review", "scripts", scriptName);
-      if (fs.existsSync(scriptPath)) {
-        reachable.add(toRepoRelative(scriptPath, repoRoot));
-      }
-    });
+  const { getAdapter, listAdapters } = require(adapterIndexPath);
+  listAdapters().forEach((name) => {
+    const scriptPath = getAdapter(name).metadata.reviewScript;
+    if (scriptPath && fs.existsSync(scriptPath)) {
+      reachable.add(toRepoRelative(scriptPath, repoRoot));
+      reachable.add(toRepoRelative(fs.realpathSync(scriptPath), fs.realpathSync(repoRoot)));
+    }
   });
 }
 
@@ -196,7 +194,7 @@ function buildFixtureRepo() {
   writeFile(path.join(repoRoot, "README.md"), "Fixture docs mention documented-tool.js.\n");
   writeFile(path.join(repoRoot, "CLAUDE.md"), "Fixture guide.\n");
   writeFile(path.join(repoRoot, "skills", "fixture", "SKILL.md"), "Run entrypoint.js.\n");
-  writeFile(path.join(repoRoot, "skills", "relay-dispatch", "SKILL.md"), "Adapters are registered in agent-adapters/index.js.\n");
+  writeFile(path.join(repoRoot, "skills", "relay-dispatch", "SKILL.md"), "Adapters are registered in adapters/index.js.\n");
   writeFile(path.join(repoRoot, "skills", "fixture", "references", "tools.md"), "Use referenced-helper.js.\n");
   writeFile(path.join(repoRoot, "skills", "fixture", "scripts", "entrypoint.js"), 'require("./lib/extensionless");\nrequire("./spawner");\n');
   writeFile(path.join(repoRoot, "skills", "fixture", "scripts", "lib", "extensionless.js"), "module.exports = {};\n");
@@ -208,12 +206,11 @@ function buildFixtureRepo() {
   );
   writeFile(path.join(repoRoot, "skills", "fixture", "scripts", "dynamic-worker.js"), "module.exports = {};\n");
   writeFile(
-    path.join(repoRoot, "skills", "relay-dispatch", "scripts", "agent-adapters", "index.js"),
+    path.join(repoRoot, "skills", "relay-dispatch", "scripts", "adapters", "index.js"),
     [
-      "function listAgentAdapters() {",
-      "  return [{ reviewer: { primaryReviewScript: 'adapter-reviewer.js' } }];",
-      "}",
-      "module.exports = { listAgentAdapters };",
+      "function listAdapters() { return ['fixture']; }",
+      "function getAdapter() { return { metadata: { reviewScript: require('node:path').join(__dirname, '../../../relay-review/scripts/adapter-reviewer.js') } }; }",
+      "module.exports = { getAdapter, listAdapters };",
       "",
     ].join("\n"),
   );
@@ -228,7 +225,7 @@ test("scanner reports a planted orphan by exact file name", () => {
 
   assert.throws(
     () => assertAllPackagedSkillScriptsReachable({
-      adapterIndexPath: path.join(repoRoot, "skills", "relay-dispatch", "scripts", "agent-adapters", "index.js"),
+      adapterIndexPath: path.join(repoRoot, "skills", "relay-dispatch", "scripts", "adapters", "index.js"),
       allowlist: [],
       repoRoot,
     }),
@@ -238,9 +235,11 @@ test("scanner reports a planted orphan by exact file name", () => {
 
 test("scanner recognizes require, documentation, rule 3 adapter descriptor, and rule 4 path.join dynamic reachability", () => {
   const repoRoot = buildFixtureRepo();
+  const fixtureAdapter = require(path.join(repoRoot, "skills", "relay-dispatch", "scripts", "adapters", "index.js"));
+  assert.equal(fs.existsSync(fixtureAdapter.getAdapter("fixture").metadata.reviewScript), true);
 
   assertAllPackagedSkillScriptsReachable({
-    adapterIndexPath: path.join(repoRoot, "skills", "relay-dispatch", "scripts", "agent-adapters", "index.js"),
+    adapterIndexPath: path.join(repoRoot, "skills", "relay-dispatch", "scripts", "adapters", "index.js"),
     allowlist: [],
     repoRoot,
   });
@@ -251,7 +250,7 @@ test("generic flag-registry command registration alone does not count as script 
   writeFile(path.join(repoRoot, "README.md"), "No command names here.\n");
   writeFile(path.join(repoRoot, "CLAUDE.md"), "No command names here.\n");
   writeFile(path.join(repoRoot, "skills", "fixture", "SKILL.md"), "No script references here.\n");
-  writeFile(path.join(repoRoot, "skills", "relay-dispatch", "SKILL.md"), "Adapter registry: agent-adapters/index.js.\n");
+  writeFile(path.join(repoRoot, "skills", "relay-dispatch", "SKILL.md"), "Adapter registry: adapters/index.js.\n");
   writeFile(path.join(repoRoot, "skills", "fixture", "scripts", "flag-registry.js"), [
     "const COMMAND_FLAGS = {",
     "  'zz-orphan-probe': ['--json'],",
@@ -261,13 +260,13 @@ test("generic flag-registry command registration alone does not count as script 
   ].join("\n"));
   writeFile(path.join(repoRoot, "skills", "fixture", "scripts", "zz-orphan-probe.js"), "module.exports = {};\n");
   writeFile(
-    path.join(repoRoot, "skills", "relay-dispatch", "scripts", "agent-adapters", "index.js"),
-    "module.exports = { listAgentAdapters: () => [] };\n",
+    path.join(repoRoot, "skills", "relay-dispatch", "scripts", "adapters", "index.js"),
+    "module.exports = { getAdapter: () => null, listAdapters: () => [] };\n",
   );
 
   assert.deepEqual(
     findUnreachableScripts({
-      adapterIndexPath: path.join(repoRoot, "skills", "relay-dispatch", "scripts", "agent-adapters", "index.js"),
+      adapterIndexPath: path.join(repoRoot, "skills", "relay-dispatch", "scripts", "adapters", "index.js"),
       allowlist: [],
       repoRoot,
     }),
@@ -283,7 +282,7 @@ test("allowlist entries must exist on disk", () => {
 
   assert.throws(
     () => findUnreachableScripts({
-      adapterIndexPath: path.join(repoRoot, "skills", "relay-dispatch", "scripts", "agent-adapters", "index.js"),
+      adapterIndexPath: path.join(repoRoot, "skills", "relay-dispatch", "scripts", "adapters", "index.js"),
       allowlist: ["skills/fixture/scripts/missing-convention-entry.js"],
       repoRoot,
     }),
@@ -294,8 +293,8 @@ test("allowlist entries must exist on disk", () => {
 test("real adapter reviewer and executor scripts are reachable", () => {
   const orphans = new Set(findUnreachableScripts());
   [
-    "skills/relay-dispatch/scripts/executors/codex.js",
-    "skills/relay-dispatch/scripts/executors/opencode.js",
+    "skills/relay-dispatch/scripts/adapters/codex.js",
+    "skills/relay-dispatch/scripts/adapters/opencode.js",
     "skills/relay-review/scripts/invoke-reviewer-codex.js",
     "skills/relay-review/scripts/invoke-reviewer-opencode.js",
   ].forEach((relativePath) => {

@@ -1,5 +1,11 @@
 # Operational Visibility for Relay Runs
 
+> Historical design note. The manifest-era observer and dry-run reconciliation
+> surface described below were retired by the vNext cutover. `relay-status.js`
+> now selects validated `run.json` records and delegates lifecycle derivation
+> to `runtime.inspectRun`; mutation is exclusively `runtime.recoverRun` with an
+> explicit audit reason.
+
 ## Source
 
 This PRD covers #826 and child issues #827-#830. Provider-aware model resolution is intentionally separate and owned by #825.

@@ -19,7 +19,7 @@ Invocations are argv arrays only. Shell command strings are forbidden.
 
 - Migrate Codex, Claude, Cursor, OpenCode, Pi, Antigravity, and Cline.
 - Share the same descriptor between dispatch and review where the executor supports both roles.
-- Define capability negotiation and generic JSON/stdin/stdout protocols for future adapters.
+- Define capability negotiation and shared JSON/stdin/stdout protocols for future native adapters.
 - Add transcript-based conformance fixtures.
 
 ## Acceptance criteria
@@ -30,7 +30,7 @@ Invocations are argv arrays only. Shell command strings are forbidden.
 - [ ] No adapter or core path invokes a shell through an interpolated command string.
 - [ ] Adding a future executor requires one descriptor file, fixtures, and registration only.
 - [ ] Unsupported capabilities fail before worktree mutation with a precise error.
-- [ ] Live canaries run for each executor available in the test environment; unavailable executors are reported as skipped, not silently passed.
+- [ ] Live canaries pass the exact 13-cell matrix (all seven dispatch phases and all six declared primary-review phases). Missing CLIs or explicit credentials are `not_run_*` and keep evidence non-release; skip and fallback never satisfy a cell. The 2026-08-02 evidence is honestly incomplete (0/13) until operators provision every phase.
 
 ## Verification
 

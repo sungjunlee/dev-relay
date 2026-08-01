@@ -64,5 +64,5 @@ Case handling:
 | Case | Planner handling |
 |------|------------------|
 | No signals detected | `Probe signal: no quality infra detected.` Render each `probe_signal.*` field as `no quality infra detected`. This is acceptable, not an error. |
-| Probe failure / `agent_probe_error` present | `Probe signals unavailable: <cause>. Proceeding without probe signal.` Use the first stderr line (with any leading `Error:` prefix stripped), the `agent_probe_error` string, or the exit code as `<cause>`, then continue rubric design. |
+| `executor_availability.status` is not `available` | `Executor availability unavailable: <cause>. Proceeding without version evidence.` Use `executor_availability.error` or the status as `<cause>`, then continue rubric design. |
 | Malformed JSON on stdout | `Probe signals unavailable: <cause>. Proceeding without probe signal.` Surface the parse error and continue rubric design. |

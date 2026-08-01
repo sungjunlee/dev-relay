@@ -4,8 +4,70 @@ const { spawnSync } = require("child_process");
 
 const PHASES = Object.freeze(["dispatch", "primary_review"]);
 const OUTPUT_PROTOCOLS = Object.freeze(["text_stdout", "json_result", "jsonl_run_result"]);
-const INVOCATION_IDENTITIES = new WeakMap();
 const CONTROL_BOUND_INVOCATIONS = new WeakSet();
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const CREDENTIAL_ROOTS = new Set(["home", "xdg_config", "xdg_data"]);
+const CREDENTIAL_ACCESS = new Set(["read", "read_write"]);
+// sandbox-exec cannot forbid setsid(2): supported CLIs must preserve the inherited
+// scope marker and must not daemonize or clear it from descendants.
+const PROCESS_CONTAINMENT = "inherited_scope_no_daemon";
+const CREDENTIAL_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const RESERVED_CREDENTIAL_ENV = /^(?:HOME|PATH|TMPDIR|TMP|TEMP|XDG_CONFIG_HOME|XDG_DATA_HOME|RELAY_PROCESS_SCOPE)$|^RELAY_/;
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
+function normalizeCredentialMetadata(credentials = {}) {
+  const files = credentials.files || [], envHints = credentials.envHints || [];
+  if (!Array.isArray(files) || !Array.isArray(envHints) || envHints.some((name) => typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) {
+    throw new Error("adapter credential metadata must contain files and environment-name hints");
+  }
+  const ids = new Set(), targets = new Set();
+  for (const file of files) {
+    const keys = Object.keys(file || {}).sort().join(",");
+    if (keys !== "access,id,recommendedSource,targetRel,targetRoot" || !/^[a-z][a-z0-9_-]*$/.test(file.id || "")
+      || !CREDENTIAL_ROOTS.has(file.targetRoot) || !CREDENTIAL_ACCESS.has(file.access)
+      || typeof file.recommendedSource !== "string" || typeof file.targetRel !== "string" || path.isAbsolute(file.targetRel)
+      || !file.targetRel || file.targetRel.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) {
+      throw new Error("adapter credential file metadata is invalid");
+    }
+    const target = `${file.targetRoot}:${file.targetRel}`;
+    if (ids.has(file.id) || targets.has(target)) throw new Error("adapter credential metadata contains an id or target collision");
+    ids.add(file.id); targets.add(target);
+  }
+  return deepFreeze({ files: files.map((file) => ({ ...file })), envHints: [...envHints] });
+}
+
+// This is deliberately value-free: callers use it before a dry run or before
+// opening any credential source.  The host/reviewer own the later byte trust
+// boundary, while both phases share one catalog and argv grammar.
+function credentialRequest(metadata = {}, { envNames = [], fileSpecs = [] } = {}) {
+  const credentials = normalizeCredentialMetadata(metadata);
+  if (!Array.isArray(envNames) || !Array.isArray(fileSpecs)) throw new Error("credential options must be arrays");
+  const files = new Map(credentials.files.map((item) => [item.id, item]));
+  const seenEnv = new Set(), seenIds = new Set(), seenTargets = new Set(), ids = [];
+  for (const name of envNames) {
+    if (typeof name !== "string" || !CREDENTIAL_ENV_RE.test(name) || RESERVED_CREDENTIAL_ENV.test(name) || seenEnv.has(name)) {
+      throw new Error("credential environment name is unsafe, reserved, or duplicated");
+    }
+    seenEnv.add(name);
+  }
+  for (const spec of fileSpecs) {
+    const equals = typeof spec === "string" ? spec.indexOf("=") : -1;
+    const id = equals > 0 ? spec.slice(0, equals) : "", source = equals > 0 ? spec.slice(equals + 1) : "", item = files.get(id);
+    if (!item || !path.isAbsolute(source) || path.resolve(source) !== source) {
+      throw new Error("credential file must be a declared ID=/absolute/source");
+    }
+    const target = `${item.targetRoot}:${item.targetRel}`;
+    if (seenIds.has(id) || seenTargets.has(target)) throw new Error("credential file contains an id or target collision");
+    seenIds.add(id); seenTargets.add(target); ids.push(id);
+  }
+  return Object.freeze({ metadata: credentials, envNames: Object.freeze([...seenEnv]), fileSpecs: Object.freeze([...fileSpecs]),
+    summary: Object.freeze({ env_names: Object.freeze([...seenEnv]), file_ids: Object.freeze(ids) }) });
+}
 
 class AdapterCapabilityError extends Error {
   constructor(adapter, phase, reason) {
@@ -32,6 +94,18 @@ function requireSafeOptionalValue(value, name) {
   return value;
 }
 
+function decodeTrustedPrompt(promptBytes) {
+  if (!Buffer.isBuffer(promptBytes)) throw new Error("promptBytes must be a Buffer");
+  const prompt = promptBytes.toString("utf8");
+  if (!Buffer.from(prompt, "utf8").equals(promptBytes)) {
+    throw new Error("promptBytes must contain valid canonical UTF-8");
+  }
+  return Object.freeze({
+    prompt,
+    sha256: require("crypto").createHash("sha256").update(promptBytes).digest("hex"),
+  });
+}
+
 function normalizeInvocationShape(invocation, { nested = false, allowControlInvocation = false } = {}) {
   if (!invocation || typeof invocation !== "object") throw new Error("adapter invocation must be an object");
   if (typeof invocation.command !== "string" || !invocation.command || invocation.command.includes("\n")) {
@@ -41,6 +115,9 @@ function normalizeInvocationShape(invocation, { nested = false, allowControlInvo
     throw new Error("adapter invocation args must be an array of string argv values");
   }
   requireAbsolutePath(invocation.cwd, "adapter invocation cwd");
+  if (Boolean(invocation.stdinPath) !== Boolean(invocation.stdinSha256)) {
+    throw new Error("adapter invocation stdinPath and stdinSha256 must be supplied together");
+  }
   const controlInvocation = invocation.controlInvocation;
   if (controlInvocation && !allowControlInvocation) {
     throw new Error("adapter control invocation metadata must be bound by the adapter contract");
@@ -58,6 +135,12 @@ function normalizeInvocationShape(invocation, { nested = false, allowControlInvo
     command: invocation.command,
     args: Object.freeze([...invocation.args]),
     cwd: invocation.cwd,
+    ...(invocation.stdinPath ? {
+      stdinPath: requireAbsolutePath(invocation.stdinPath, "adapter invocation stdinPath"),
+      stdinSha256: SHA256_RE.test(invocation.stdinSha256 || "")
+        ? invocation.stdinSha256
+        : (() => { throw new Error("adapter invocation stdinSha256 must bind stdinPath bytes"); })(),
+    } : {}),
     ...(normalizedControl ? { controlInvocation: normalizedControl } : {}),
   });
   if (normalizedControl && allowControlInvocation) CONTROL_BOUND_INVOCATIONS.add(normalized);
@@ -68,37 +151,12 @@ function assertInvocationShape(invocation) {
   return normalizeInvocationShape(invocation);
 }
 
-function executableIdentity(command) {
-  const stat = fs.statSync(command);
-  return Object.freeze({ dev: stat.dev, ino: stat.ino, mode: stat.mode });
-}
-
-function bindInvocationIdentity(invocation, identity) {
-  INVOCATION_IDENTITIES.set(invocation, identity);
-  return invocation;
-}
-
 function getInvocationAuditTarget(invocation) {
   if (!invocation?.controlInvocation) return invocation;
   if (!CONTROL_BOUND_INVOCATIONS.has(invocation)) {
     throw new Error("adapter control invocation metadata is not contract-bound");
   }
   return invocation.controlInvocation;
-}
-
-function assertInvocationIdentity(invocation) {
-  const expected = INVOCATION_IDENTITIES.get(invocation);
-  if (!expected) return invocation;
-  let actual;
-  try {
-    actual = executableIdentity(invocation.command);
-  } catch (error) {
-    throw new Error(`adapter invocation executable identity cannot be revalidated: ${error.message}`);
-  }
-  if (actual.dev !== expected.dev || actual.ino !== expected.ino || actual.mode !== expected.mode) {
-    throw new Error("adapter invocation executable identity changed after validation");
-  }
-  return invocation;
 }
 
 function readOutput(outputPath) {
@@ -216,36 +274,63 @@ function probeBinary(command, { env = process.env, timeoutMs = 5000, spawn = spa
   return Object.freeze({ status: "available", error: null, raw: String(result.stdout || "").trim() || null });
 }
 
-function makeLegacyCliAdapter({
+function formatAdapterPhase({ adapter, phase } = {}) {
+  const adapterName = String(adapter || "").trim() || "unknown";
+  const phaseName = String(phase || "").trim() || "unknown";
+  return `adapter=${adapterName} phase=${phaseName}`;
+}
+
+function parseJsonObject(text, { adapter, phase, description = "result" } = {}) {
+  const context = formatAdapterPhase({ adapter, phase });
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${context} ${description} must be valid JSON: ${error.message}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${context} ${description} must be a JSON object`);
+  }
+  return parsed;
+}
+
+function recoverExecStdout(error) {
+  const stdout = String(error?.stdout || "").trim();
+  return stdout || null;
+}
+
+function createNativeAdapter({
   name,
-  legacy,
+  timeoutMs,
+  metadata,
   phases,
   outputProtocol,
-  reviewScript = null,
-  buildReviewControlInvocation = null,
-  omitImplicitReasoning = false,
-  metadata = {},
+  buildDispatch,
+  buildReview = null,
+  validateDispatch = null,
 }) {
-  if (!legacy || typeof legacy.buildExecCommand !== "function" || typeof legacy.probe !== "function") {
-    throw new Error(`legacy bridge for '${name}' is incomplete`);
-  }
   const phaseMetadata = Object.freeze({ ...phases });
   const parseOutcomeForProtocol = makeParseOutcome(outputProtocol);
+  const cliBinary = metadata.cliBinary;
+  if (!name || typeof buildDispatch !== "function" || typeof cliBinary !== "string") {
+    throw new Error("native adapter requires name, metadata.cliBinary, and buildDispatch");
+  }
+  if (metadata.processContainment !== PROCESS_CONTAINMENT) throw new Error(`native adapter must declare ${PROCESS_CONTAINMENT} process containment`);
   return Object.freeze({
     name,
-    defaults: Object.freeze({ timeoutMs: Number(legacy.defaultTimeout || 1800) * 1000 }),
-    metadata: Object.freeze({ cliBinary: legacy.cliBinary, outputProtocol: typeof outputProtocol === "string" ? outputProtocol : "phase-specific", ...metadata, reviewScript }),
-    probe({ env = process.env, timeoutMs = 5000, spawn = spawnSync } = {}) {
+    defaults: Object.freeze({ timeoutMs }),
+    metadata: deepFreeze({ ...metadata, credentials: normalizeCredentialMetadata(metadata.credentials) }),
+    probe({ env = process.env, timeoutMs: probeTimeoutMs = 5000, spawn = spawnSync } = {}) {
       const binary = metadata.cliBinaryEnv && env[metadata.cliBinaryEnv]
         ? env[metadata.cliBinaryEnv]
-        : legacy.cliBinary;
-      return probeBinary(binary, { env, timeoutMs, spawn });
+        : cliBinary;
+      return probeBinary(binary, { env, timeoutMs: probeTimeoutMs, spawn });
     },
     capabilities({ phase, request = null }) {
       const value = phaseMetadata[phase];
       if (!value) return Object.freeze({ supported: false, reason: "unknown phase" });
-      if (value.supported && phase === "dispatch" && request && typeof legacy.validateExecutionMode === "function") {
-        const validation = legacy.validateExecutionMode({
+      if (value.supported && phase === "dispatch" && request && validateDispatch) {
+        const validation = validateDispatch({
           sandbox: request.sandbox || (request.readOnly ? "read-only" : "workspace-write"),
           networkAccess: request.networkAccess || "disabled",
         });
@@ -254,55 +339,45 @@ function makeLegacyCliAdapter({
       }
       return Object.freeze({ ...value });
     },
-    buildInvocation({ phase, cwd, promptPath, resultPath, model = null, timeoutMs, sandbox = "workspace-write", networkAccess = "disabled", reasoning = null }) {
+    buildInvocation({ phase, cwd, promptPath, promptBytes, resultPath, schemaPath = null, model = null, timeoutMs: requestedTimeoutMs, sandbox = "workspace-write", networkAccess = "disabled", reasoning = null }) {
       validateCapabilities(this, phase, { readOnly: sandbox === "read-only", sandbox, networkAccess });
       requireAbsolutePath(cwd, "cwd");
       requireAbsolutePath(promptPath, "promptPath");
       requireAbsolutePath(resultPath, "resultPath");
+      if (schemaPath) requireAbsolutePath(schemaPath, "schemaPath");
       requireSafeOptionalValue(model, "model");
+      const trustedPrompt = decodeTrustedPrompt(promptBytes);
+      const prompt = trustedPrompt.prompt;
       if (phase !== "dispatch") {
-        if (!reviewScript) throw new AdapterCapabilityError(name, phase, "no review invocation bridge is registered");
-        const args = [reviewScript, "--repo", cwd, "--prompt-file", promptPath, "--json"];
-        args.push("--phase", phase);
-        if (model) args.push("--model", model);
-        const controlInvocation = buildReviewControlInvocation
-          ? buildReviewControlInvocation({ phase, cwd, promptPath, resultPath, model, timeoutMs })
-          : null;
-        return normalizeInvocationShape({
-          command: process.execPath,
-          args,
+        if (!buildReview) throw new AdapterCapabilityError(name, phase, "no direct review invocation is registered");
+        return assertInvocationShape(buildReview({
           cwd,
-          ...(controlInvocation ? { controlInvocation } : {}),
-        }, { allowControlInvocation: true });
+          prompt,
+          promptPath,
+          promptSha256: trustedPrompt.sha256,
+          resultPath,
+          schemaPath,
+          model,
+          timeoutSeconds: Math.max(1, Math.floor((requestedTimeoutMs || timeoutMs) / 1000)),
+        }));
       }
-      const prompt = fs.readFileSync(promptPath, "utf8");
-      const built = legacy.buildExecCommand({
-        wtPath: cwd,
-        resultFile: resultPath,
+      const invocation = buildDispatch({
+        cwd,
         prompt,
+        promptPath,
+        promptSha256: trustedPrompt.sha256,
+        resultPath,
         model,
         sandbox,
         networkAccess,
         reasoning,
-        timeoutSeconds: Math.max(1, Math.floor((timeoutMs || legacy.defaultTimeout * 1000) / 1000)),
+        timeoutSeconds: Math.max(1, Math.floor((requestedTimeoutMs || timeoutMs) / 1000)),
       });
-      const args = [...built.args];
-      if (omitImplicitReasoning && !reasoning) {
-        const reasoningIndex = args.findIndex((value, index) => (
-          value === "-c"
-          && /^model_reasoning_effort=/.test(String(args[index + 1] || ""))
-        ));
-        if (reasoningIndex >= 0) args.splice(reasoningIndex, 2);
-      }
-      return assertInvocationShape({ command: built.cmd, args, cwd: built.cwd || cwd });
+      return assertInvocationShape(invocation);
     },
     parseOutcome(input) {
       const outcome = parseOutcomeForProtocol(input);
-      if (
-        outcome.status === "failed"
-        && metadata.resultErrorLabel
-        && outcome.summary.startsWith("jsonl_run_result line ")
-      ) {
+      if (outcome.status === "failed" && metadata.resultErrorLabel && outcome.summary.startsWith("jsonl_run_result line ")) {
         return Object.freeze({
           ...outcome,
           summary: outcome.summary.replace("jsonl_run_result line ", `${metadata.resultErrorLabel} line `),
@@ -316,16 +391,19 @@ function makeLegacyCliAdapter({
 module.exports = {
   AdapterCapabilityError,
   OUTPUT_PROTOCOLS,
+  PROCESS_CONTAINMENT,
   PHASES,
   assertInvocationShape,
-  assertInvocationIdentity,
-  bindInvocationIdentity,
-  executableIdentity,
   getInvocationAuditTarget,
-  makeLegacyCliAdapter,
+  createNativeAdapter,
+  credentialRequest,
+  decodeTrustedPrompt,
+  formatAdapterPhase,
   makeParseOutcome,
   parseOutput,
+  parseJsonObject,
   probeBinary,
+  recoverExecStdout,
   requireAbsolutePath,
   requireSafeOptionalValue,
   resolveAdapterProvider,

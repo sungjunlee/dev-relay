@@ -163,7 +163,7 @@ test("deriveTestInfra exposes runner candidates for TDD fallback", () => {
 // probeAgent (raw text pass-through, no parsing)
 // ---------------------------------------------------------------------------
 
-test("probeAgent returns raw text from a fake codex executor", () => {
+test("probeAgent reports deterministic adapter availability without running a model turn", () => {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-fakecodex-"));
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
@@ -177,10 +177,9 @@ process.stdout.write('[{"name":"/browse","type":"skill","description":"Headless 
   process.env.PATH = `${binDir}:${origPath}`;
   try {
     const result = probeAgent("codex", 10);
+    assert.equal(result.status, "available");
     assert.equal(result.error, null);
-    assert.ok(result.raw);
-    assert.match(result.raw, /\/browse/);
-    assert.match(result.raw, /skill/);
+    assert.equal(result.version, "codex-fake");
   } finally {
     process.env.PATH = origPath;
   }
@@ -190,7 +189,7 @@ test("probeAgent returns error for unknown executor", () => {
   const result = probeAgent("unknown-executor", 5);
   assert.ok(result.error);
   assert.match(result.error, /unknown executor/);
-  assert.equal(result.raw, null);
+  assert.equal(result.version, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -257,8 +256,9 @@ test("CLI handles missing executor gracefully", () => {
   });
   assert.equal(result.status, 0, `stderr: ${result.stderr}`);
   const output = JSON.parse(result.stdout);
-  assert.ok(output.agent_probe_error);
-  assert.equal(output.agent_tools_raw, null);
+  assert.equal(output.executor_availability.status, "skipped");
+  assert.ok(output.executor_availability.error);
+  assert.equal(output.executor_availability.version, null);
 });
 
 test("CLI help advertises explicit model selection", () => {
@@ -295,8 +295,9 @@ test("CLI probes pi and records the explicit model selection", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.existsSync(markerPath), true);
   const output = JSON.parse(result.stdout);
-  assert.equal(output.agent_probe_error, null);
-  assert.match(output.agent_tools_raw, /pi-fake/);
+  assert.equal(output.executor_availability.status, "available");
+  assert.equal(output.executor_availability.error, null);
+  assert.match(output.executor_availability.version, /pi-fake/);
   assert.equal(output.executor, "pi");
   assert.equal(output.model, "example/opencode-model-fast");
 });

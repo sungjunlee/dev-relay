@@ -98,11 +98,11 @@ Before persisting, apply `references/rubric-simplification.md`: rewrite HOW into
 
 Persist only when planning writes the final Done Criteria, or expands, rejects, or narrows issue-body AC. This includes AC-missing inputs, user-provided descriptions, and any case where planning changes the issue-body AC.
 
-Before Step 7, the orchestrator/planner must allocate the `RUN_ID` that dispatch will later reuse. Use the same valid run id in this persistence command and in Step 8's `relay-dispatch --run-id "$RUN_ID"` handoff; if no Done Criteria persistence is needed, dispatch may allocate the run id itself.
+Publish the final bytes to an explicit path whose parent directory already exists and is not a symlink. This step never allocates a run id and rejects output under `~/.relay/runs`; dispatch creates the run and freezes these bytes later.
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js" --repo . \
-  --run-id "$RUN_ID" --file /tmp/done-criteria-<N>.md --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js" \
+  --output /tmp/done-criteria-<N>.md --file /tmp/done-criteria-source-<N>.md --json
 ```
 
 Skip this step when the issue or relay-ready handoff already provides the final Done Criteria without planner changes.
@@ -113,13 +113,13 @@ Write the dispatch prompt and evaluation YAML to temp files. The prompt uses `..
 
 Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, and the recommended `relay-dispatch` command.
 
-If the recommended executor or reviewer route/model cannot resolve, point the operator to `relay-config` to register the route or set the default before dispatch.
+Use `relay-config doctor` or `relay-config check` to validate an explicit adapter/model selection; relay-config has no mutable route catalog or defaults.
 
 When Step 7 persisted Done Criteria, the dispatch handoff must preserve both anchors:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
-  --run-id "$RUN_ID" --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \
+  --branch issue-<N>-<slug> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \
   --done-criteria-file <done-criteria-path>
 ```
 

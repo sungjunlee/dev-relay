@@ -1,1929 +1,939 @@
 #!/usr/bin/env node
-/**
- * Merge a ready relay run, then finalize cleanup and manifest metadata.
- * Operator-only escape hatch: `--force-finalize-nonready --reason <text>`
- * bypasses the manifest state gate for non-terminal runs, emits a loud
- * `force_finalize` audit event, and records `last_force` in the manifest
- * before the merge side effect.
- *
- * Usage:
- *   ./finalize-run.js --repo <path> --run-id <id> [options]
- *   ./finalize-run.js --repo <path> --pr <number> [options]
- *   ./finalize-run.js --manifest <path> [options]
- *
- * Options:
- *   --repo <path>          Repository root (default: .)
- *   --run-id <id>          Relay run identifier
- *   --manifest <path>      Explicit manifest path
- *   --branch <name>        Override branch name
- *   --pr <number>          Pull request number (optional when stored in manifest)
- *   --merge-method <name>  squash | merge | rebase (default: squash)
- *   --skip-review <reason> Bypass the fresh-review gate with an audit reason
- *   --force-finalize-nonready
- *                          Operator-only: bypass non-ready state gate
- *   --allow-behind-main    Override overlapping behind-main freshness refusal
- *   --reason <text>        Required with either operator override above
- *   --allow-stacked-base-hazard <reason>
- *                          Override non-default stacked PR base hazard block
- *   --skip-merge           Skip the PR merge step and run cleanup only
- *   --no-issue-close       Skip linked issue close
- *   --dry-run              Print what would happen without writing
- *   --json                 Output JSON
- *   --help, -h             Show usage
- */
+"use strict";
 
-const path = require("path");
+/** Explicit vNext merge: inspect, authorize, merge, record provenance, clean up. */
+
+const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
+const path = require("path");
+const { parseArgs } = require("util");
+
+const facts = require("../../relay-dispatch/scripts/facts");
+const host = require("../../relay-dispatch/scripts/host");
+const { inspectProductionRun } = require("../../relay-dispatch/scripts/recover");
+const generation = require("../../relay-dispatch/scripts/runtime-generation");
 const {
-  getExpectedManifestRepoRoot,
-  getRunDir,
-  parsePositiveInt,
-  summarizeFailure,
-  validateManifestPaths,
-} = require("../../relay-dispatch/scripts/manifest/paths");
-const {
-  STATES,
-  forceUpdateManifestState,
-  updateManifestState,
-} = require("../../relay-dispatch/scripts/manifest/lifecycle");
-const {
-  getActorName,
-  listManifestRecords,
-  writeManifest,
-} = require("../../relay-dispatch/scripts/manifest/store");
-const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
-const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
-const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
-const { execGit, execGh } = require("../../relay-dispatch/scripts/exec");
-const {
-  bindCliArgs,
-  findUnknownFlags,
-  modeLabel: formatCliModeLabel,
-} = require("../../relay-dispatch/scripts/cli-args");
-const {
-  buildSkipReviewGateFailure,
-  buildSkipComment,
-  evaluateReviewGate,
-  summarizeRubricAuditForSkip,
+  fail,
+  requireMergeAction,
+  resolveRun,
+  terminalMergeFact,
 } = require("./review-gate");
-const { STATUS: LEARNING_STATUS, appendLearnings } = require("./append-learnings");
-const {
-  resolveSprintOwner,
-  readManifestOwnership,
-  parseIssueComponent,
-} = require("./sprint-owner");
-const os = require("os");
 
-const ALLOWED_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+const SHA1_RE = /^[0-9a-f]{40}$/;
+const SAFE_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,126}$/;
+const METHODS = new Set(["squash", "merge", "rebase"]);
+const OPTIONS = Object.freeze({
+  repo: { type: "string" },
+  "run-dir": { type: "string" },
+  "run-id": { type: "string" },
+  "merge-method": { type: "string", default: "squash" },
+  actor: { type: "string" },
+  "operation-id": { type: "string" },
+  "no-cleanup": { type: "boolean", default: false },
+  "dry-run": { type: "boolean", default: false },
+  json: { type: "boolean", default: false },
+  help: { type: "boolean", short: "h", default: false },
+});
 
-const args = process.argv.slice(2);
-const KNOWN_FLAGS = [
-  "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method", "--skip-review",
-  "--force-finalize-nonready", "--reason",
-  "--allow-behind-main",
-  "--allow-stacked-base-hazard",
-  "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
-];
-const CLI_ARG_OPTIONS = {
-  reservedFlags: KNOWN_FLAGS,
-  booleanFlags: ["--force-finalize-nonready", "--allow-behind-main", "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h"],
-  verbatimValueFlags: ["--repo", "--manifest", "--branch", "--skip-review", "--reason", "--allow-stacked-base-hazard"],
-};
-const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
-const helpRequested = cliArgs.hasFlag(["--help", "-h"]);
-
-function printHelpAndExit() {
-  console.log("Usage: finalize-run.js (--repo <path> --run-id <id> | --repo <path> --pr <number> | --manifest <path>) [options]");
-  console.log("\nMerge a ready relay run, then finalize cleanup and manifest metadata.");
-  console.log("\nOptions:");
-  console.log(`  --repo <path>          ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root (default: .)`);
-  console.log(`  --run-id <id>          ${formatCliModeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier`);
-  console.log(`  --manifest <path>      ${formatCliModeLabel("--manifest", CLI_ARG_OPTIONS)} Explicit manifest path`);
-  console.log(`  --branch <name>        ${formatCliModeLabel("--branch", CLI_ARG_OPTIONS)} Override branch name`);
-  console.log(`  --pr <number>          ${formatCliModeLabel("--pr", CLI_ARG_OPTIONS)} Pull request number (optional when stored in manifest)`);
-  console.log(`  --merge-method <name>  ${formatCliModeLabel("--merge-method", CLI_ARG_OPTIONS)} squash | merge | rebase (default: squash)`);
-  console.log(`  --skip-review <reason> ${formatCliModeLabel("--skip-review", CLI_ARG_OPTIONS)} Bypass the fresh-review gate with an audit reason`);
-  console.log(`  --force-finalize-nonready ${formatCliModeLabel("--force-finalize-nonready", CLI_ARG_OPTIONS)}`);
-  console.log("                         Operator-only: bypass non-ready state gate");
-  console.log("  --allow-behind-main   [parsed] Override overlapping behind-main freshness refusal");
-  console.log(`  --reason <text>        ${formatCliModeLabel("--reason", CLI_ARG_OPTIONS)} Required with either operator override above`);
-  console.log(`  --allow-stacked-base-hazard <reason> ${formatCliModeLabel("--allow-stacked-base-hazard", CLI_ARG_OPTIONS)} Override non-default stacked PR base hazard block`);
-  console.log(`  --skip-merge           ${formatCliModeLabel("--skip-merge", CLI_ARG_OPTIONS)} Skip the PR merge step and run cleanup only`);
-  console.log(`  --no-issue-close       ${formatCliModeLabel("--no-issue-close", CLI_ARG_OPTIONS)} Skip linked issue close`);
-  console.log(`  --dry-run              ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Print what would happen without writing`);
-  console.log(`  --json                 ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
-  console.log("\nReview-bypass decision tree:");
-  console.log("  State is 'review_pending' + you want to skip review:     --skip-review <reason>");
-  console.log("  State is 'changes_requested' + reviewer-bundle limit:    --force-finalize-nonready --reason <text>");
-  console.log("  State is 'escalated' + PR MERGED + review PASS audit:    neither - just run finalize-run");
-  console.log("  State is 'escalated' + anything else resolved:           --force-finalize-nonready --reason <text>");
-  console.log("  State is 'ready_to_merge':                               neither - just run finalize-run");
-  process.exit(helpRequested ? 0 : 1);
+function usage() {
+  return [
+    "Usage: finalize-run.js --repo <path> (--run-id <id> | --run-dir <path>) [options]",
+    "",
+    "Options:",
+    "  --merge-method <method>  squash | merge | rebase (default: squash)",
+    "  --actor <name>           Explicit operator identity (default: git user.name)",
+    "  --operation-id <id>      Stable id for audited crash recovery",
+    "  --no-cleanup             Retain the linked worktree after merge",
+    "  --dry-run                Validate the exact merge gate without mutation",
+    "  --json                   Emit one JSON object",
+    "",
+    "The command has no review/state bypass. A current passing review is mandatory.",
+  ].join("\n");
 }
 
-function resolveBranch(repoPath, prNumber, branchArg, manifestData) {
-  if (branchArg) return branchArg;
-  if (manifestData?.git?.working_branch) return manifestData.git.working_branch;
-  if (!prNumber) return null;
-  const raw = execGh(repoPath, ["pr", "view", String(prNumber), "--json", "headRefName"]);
-  return JSON.parse(raw).headRefName;
+function parseCli(argv) {
+  let parsed;
+  try { parsed = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true }); }
+  catch (error) {
+    const unknown = /^Unknown option ['\"]?([^'\"]+)['\"]?/.exec(error.message);
+    fail(unknown ? `unknown flag: ${unknown[1]}` : error.message, "MERGE_USAGE");
+  }
+  if (parsed.values.help) return { help: true, values: parsed.values, repo: "." };
+  if (parsed.positionals.length > 1) fail("at most one positional repo is allowed", "MERGE_USAGE");
+  if (parsed.values.repo && parsed.positionals.length) fail("use positional repo or --repo, not both", "MERGE_USAGE");
+  if (!METHODS.has(parsed.values["merge-method"])) fail("--merge-method must be squash, merge, or rebase", "MERGE_USAGE");
+  if (parsed.values["operation-id"] && !SAFE_TOKEN_RE.test(parsed.values["operation-id"])) {
+    fail("--operation-id must be a safe 1-127 character identifier", "MERGE_USAGE");
+  }
+  if (parsed.values.actor !== undefined && !String(parsed.values.actor).trim()) {
+    fail("--actor must be non-empty", "MERGE_USAGE");
+  }
+  return {
+    help: false,
+    values: parsed.values,
+    repo: parsed.values.repo || parsed.positionals[0] || ".",
+  };
+}
+
+function command(repo, executable, args, options = {}) {
+  return execFileSync(executable, args, {
+    cwd: repo,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    ...options,
+  }).trim();
+}
+
+function git(repo, args) {
+  return command(repo, process.env.RELAY_GIT_BIN || "git", ["-C", repo, ...args]);
+}
+
+function gh(repo, args) {
+  return command(repo, process.env.RELAY_GH_BIN || "gh", args);
+}
+
+function operatorName(repo, explicit) {
+  const candidate = explicit || (() => {
+    try { return git(repo, ["config", "user.name"]); }
+    catch { return process.env.USER || "operator"; }
+  })();
+  const actor = String(candidate).trim();
+  if (!actor || actor.includes("\0") || /[\r\n]/.test(actor)) {
+    fail("operator identity is invalid", "MERGE_ACTOR_INVALID");
+  }
+  return actor;
+}
+
+function operationId(record, binding, method, explicit) {
+  if (explicit) return explicit;
+  return `merge-${crypto.createHash("sha256")
+    .update(`${record.run_id}\0${binding.prNumber}\0${binding.head}\0${method}`)
+    .digest("hex").slice(0, 32)}`;
+}
+
+function findAuthorizationOperation(runDir, preferredId) {
+  const prefix = "merge-authorization-";
+  const suffix = ".json";
+  const operations = fs.readdirSync(runDir)
+    .filter((name) => name.startsWith(prefix) && name.endsWith(suffix))
+    .map((name) => name.slice(prefix.length, -suffix.length));
+  if (operations.some((id) => !SAFE_TOKEN_RE.test(id))) {
+    fail("run contains an unsafe merge authorization filename", "MERGE_AUTHORIZATION_INVALID");
+  }
+  if (operations.length > 1) {
+    fail("run contains multiple durable merge authorizations", "MERGE_AUTHORIZATION_CONFLICT");
+  }
+  return { operationId: operations[0] || preferredId, existing: operations.length === 1 };
+}
+
+function pendingPath(runDir, operationIdValue) {
+  return path.join(runDir, `merge-pending-${operationIdValue}.json`);
+}
+
+function requestIntentPath(runDir, operationIdValue) {
+  return path.join(runDir, `merge-request-intent-${operationIdValue}.json`);
+}
+
+function ambiguousPath(runDir, operationIdValue) {
+  return path.join(runDir, `merge-ambiguous-${operationIdValue}.json`);
+}
+
+function readRegularJson(filePath, label) {
+  let fd;
+  try {
+    fd = fs.openSync(
+      filePath,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0),
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    const before = fs.fstatSync(fd);
+    if (!before.isFile()) fail(`${label} must be a regular non-symlink file`, "MERGE_ARTIFACT_INVALID");
+    const bytes = fs.readFileSync(fd);
+    const after = fs.fstatSync(fd);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size) {
+      fail(`${label} changed identity while being read`, "MERGE_ARTIFACT_INVALID");
+    }
+    return JSON.parse(bytes.toString("utf8"));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function writeImmutableJson(filePath, value) {
+  const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
+  try {
+    const fd = fs.openSync(filePath, "wx", 0o600);
+    try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+    const directoryFd = fs.openSync(path.dirname(filePath), fs.constants.O_RDONLY);
+    try { fs.fsyncSync(directoryFd); }
+    finally { fs.closeSync(directoryFd); }
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const existing = readRegularJson(filePath, path.basename(filePath));
+    if (JSON.stringify(existing) !== JSON.stringify(value)) {
+      fail("immutable merge artifact conflict", "MERGE_ARTIFACT_CONFLICT");
+    }
+  }
+}
+
+function mergeMethodName(method) {
+  return String(method || "").toLowerCase();
+}
+
+function pendingMethod(live) {
+  return mergeMethodName(live.auto_merge_request?.mergeMethod || live.auto_merge_request?.merge_method);
+}
+
+function isMergePending(live) {
+  return live?.pr_state === "OPEN" && Boolean(
+    live.auto_merge_request
+    || live.merge_state_status === "QUEUED",
+  );
+}
+
+function validatePending(pending, authorization, binding) {
+  const expected = {
+    schema_version: 1,
+    operation_id: authorization.operationId,
+    authorization_id: authorization.authorizationId,
+    pr_number: binding.prNumber,
+    pr_head_sha: binding.head,
+    method: authorization.method,
+    github_login: authorization.githubLogin,
+  };
+  if (JSON.stringify(pending) !== JSON.stringify(expected)) {
+    fail("merge pending artifact does not match the durable authorization", "MERGE_PENDING_MISMATCH");
+  }
+  return pending;
+}
+
+function recordPending(runDir, authorization, binding) {
+  const pending = {
+    schema_version: 1,
+    operation_id: authorization.operationId,
+    authorization_id: authorization.authorizationId,
+    pr_number: binding.prNumber,
+    pr_head_sha: binding.head,
+    method: authorization.method,
+    github_login: authorization.githubLogin,
+  };
+  writeImmutableJson(pendingPath(runDir, authorization.operationId), pending);
+  return pending;
+}
+
+function requestIntentValue(authorization, binding) {
+  return {
+    schema_version: 1,
+    operation_id: authorization.operationId,
+    authorization_id: authorization.authorizationId,
+    pr_number: binding.prNumber,
+    pr_head_sha: binding.head,
+    method: authorization.method,
+    operator: authorization.actor,
+    github_login: authorization.githubLogin,
+  };
+}
+
+function validateRequestIntent(value, authorization, binding) {
+  if (JSON.stringify(value) !== JSON.stringify(requestIntentValue(authorization, binding))) {
+    fail("merge request intent does not match the durable authorization", "MERGE_REQUEST_INTENT_MISMATCH");
+  }
+  return value;
+}
+
+function requireRelayRequestEvidence({ live, pending, requestIntent, mergePerformed }) {
+  if (live.pr_state !== "MERGED") return;
+  if (pending || mergePerformed) return;
+  if (requestIntent) {
+    fail(
+      "a durable merge request intent has no confirmed Relay request outcome; use canonical recover",
+      "MERGE_REQUEST_OUTCOME_AMBIGUOUS",
+    );
+  }
+  fail(
+    "an externally merged PR without durable Relay request evidence must use canonical recover",
+    "MERGE_RECOVER_REQUIRED",
+  );
+}
+
+function recordRequestIntent(runDir, authorization, binding) {
+  const intent = requestIntentValue(authorization, binding);
+  writeImmutableJson(requestIntentPath(runDir, authorization.operationId), intent);
+  return intent;
+}
+
+function ambiguousValue(authorization, binding) {
+  return {
+    schema_version: 1,
+    operation_id: authorization.operationId,
+    authorization_id: authorization.authorizationId,
+    pr_number: binding.prNumber,
+    pr_head_sha: binding.head,
+    method: authorization.method,
+    operator: authorization.actor,
+    github_login: authorization.githubLogin,
+    reason: "merge_command_error_external_merged",
+  };
+}
+
+function validateAmbiguous(value, authorization, binding) {
+  if (JSON.stringify(value) !== JSON.stringify(ambiguousValue(authorization, binding))) {
+    fail("ambiguous merge artifact does not match the durable authorization", "MERGE_AMBIGUOUS_MISMATCH");
+  }
+  return value;
+}
+
+function headRepository(pr) {
+  return pr?.headRepository?.nameWithOwner
+    || (pr?.headRepositoryOwner?.login && pr?.headRepository?.name
+      ? `${pr.headRepositoryOwner.login}/${pr.headRepository.name}`
+      : null);
+}
+
+function normalizePr(record, raw) {
+  return {
+    repo: record.repo.remote,
+    head_repo: headRepository(raw),
+    pr_number: raw?.number,
+    pr_state: raw?.state,
+    pr_head_sha: raw?.headRefOid,
+    head_ref: raw?.headRefName,
+    base_ref: raw?.baseRefName,
+    merge_sha: raw?.mergeCommit?.oid || null,
+    auto_merge_request: raw?.autoMergeRequest || null,
+    merge_state_status: raw?.mergeStateStatus || null,
+  };
+}
+
+function observeLivePr(record, prNumber) {
+  const raw = JSON.parse(gh(record.repo.root, [
+    "pr", "view", String(prNumber), "--repo", record.repo.remote,
+    "--json", "number,state,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus",
+  ]));
+  return normalizePr(record, raw);
+}
+
+function githubToken(repo) {
+  const direct = String(process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "").trim();
+  if (direct) return direct;
+  try {
+    const token = gh(repo, ["auth", "token"]);
+    if (token) return token;
+  } catch {}
+  fail("GitHub revalidation requires GH_TOKEN/GITHUB_TOKEN or `gh auth login`", "GITHUB_AUTH_REQUIRED");
+}
+
+function authenticatedGithubLogin(record) {
+  const login = gh(record.repo.root, ["api", "user", "--jq", ".login"]);
+  if (!login || login.length > 255 || login.includes("\0") || /[\r\n]/.test(login)) {
+    fail("GitHub returned an invalid authenticated login", "GITHUB_AUTH_IDENTITY_INVALID");
+  }
+  return login;
+}
+
+function assertQueueRequestor(live, authorization) {
+  const enabledBy = live.auto_merge_request?.enabledBy?.login;
+  if (!enabledBy || enabledBy !== authorization.githubLogin) {
+    fail(
+      "GitHub merge queue requestor does not match the authenticated durable request principal",
+      "MERGE_QUEUE_REQUESTOR_MISMATCH",
+    );
+  }
+}
+
+function mergeObserver(record) {
+  const code = [
+    "const fs=require('fs'),{execFileSync}=require('child_process');",
+    "const i=process.argv.indexOf('--request-file');if(i<0)throw new Error('missing request');",
+    "const input=JSON.parse(fs.readFileSync(process.argv[i+1],'utf8')),q=input.request;",
+    `const repo=${JSON.stringify(record.repo.remote)};`,
+    "const b=process.argv.indexOf('--gh-bin'),bin=b>=0?process.argv[b+1]:'gh';",
+    "const a=['pr','view',String(q.pr_number),'--repo',repo,'--json','number,state,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus'];",
+    "const raw=execFileSync(process.argv.includes('--gh-node-script')?process.execPath:bin,process.argv.includes('--gh-node-script')?[bin,...a]:a,{encoding:'utf8',stdio:['ignore','pipe','pipe']});",
+    "const p=JSON.parse(raw),hr=p.headRepository&&p.headRepository.nameWithOwner||(p.headRepositoryOwner&&p.headRepositoryOwner.login&&p.headRepository&&p.headRepository.name?`${p.headRepositoryOwner.login}/${p.headRepository.name}`:null);",
+    `if((q.repo&&q.repo!==repo)||hr!==repo||p.headRefName!==${JSON.stringify(record.git.branch)}||p.baseRefName!==${JSON.stringify(record.git.base_branch)})throw new Error('exact PR identity mismatch');`,
+    "process.stdout.write(JSON.stringify({nonce:input.nonce,repo,head_repo:hr,pr_number:p.number,pr_state:p.state,pr_head_sha:p.headRefOid,head_ref:p.headRefName,base_ref:p.baseRefName,merge_sha:p.mergeCommit&&p.mergeCommit.oid||null,auto_merge_request:p.autoMergeRequest||null,merge_state_status:p.mergeStateStatus||null}));",
+  ].join("");
+  const args = [
+    { kind: "literal", value: "-e" },
+    { kind: "literal", value: code },
+    { kind: "literal", value: "--" },
+  ];
+  if (process.env.RELAY_GH_BIN) {
+    args.push(
+      { kind: "literal", value: "--gh-bin" },
+      { kind: "staged_file", value: path.resolve(process.env.RELAY_GH_BIN) },
+    );
+    if (path.extname(process.env.RELAY_GH_BIN) === ".js") {
+      args.push({ kind: "literal", value: "--gh-node-script" });
+    }
+  }
+  return {
+    command: process.execPath,
+    args,
+    env: { GH_TOKEN: githubToken(record.repo.root) },
+  };
+}
+
+function assertExactPr(observed, record, binding, allowedStates) {
+  if (
+    !observed || !allowedStates.has(observed.pr_state)
+    || observed.repo !== record.repo.remote
+    || observed.head_repo !== record.repo.remote
+    || observed.pr_number !== binding.prNumber
+    || observed.pr_head_sha !== binding.head
+    || observed.head_ref !== record.git.branch
+    || observed.base_ref !== record.git.base_branch
+  ) fail("fresh GitHub observation changed PR identity or state", "MERGE_LIVE_OBSERVATION_MISMATCH");
+  if (observed.pr_state === "MERGED" && !SHA1_RE.test(String(observed.merge_sha || ""))) {
+    fail("merged PR observation is missing the result target SHA", "MERGE_TARGET_MISSING");
+  }
+  return observed;
 }
 
 function mergeFlag(method) {
-  switch (method) {
-    case "squash":
-      return "--squash";
-    case "merge":
-      return "--merge";
-    case "rebase":
-      return "--rebase";
-    default:
-      throw new Error(`Unsupported merge method: ${method}`);
-  }
+  return `--${method}`;
 }
 
-function buildSquashSubject(prTitle, prNumber) {
-  if (typeof prTitle !== "string" || !prTitle) return null;
-  const suffix = ` (#${prNumber})`;
-  return prTitle.endsWith(suffix) ? prTitle : `${prTitle}${suffix}`;
-}
-
-function buildMergeFinalizeReason({
-  mergeMethod,
-  mergeRecovered,
-  skipReviewReason,
-  stackedBaseGuard,
-}) {
-  const mergeReason = skipReviewReason
-    ? `skip_review:${skipReviewReason}`
-    : (mergeRecovered ? "already_merged" : mergeMethod);
-
-  if (stackedBaseGuard?.status !== "overridden") {
-    return mergeReason;
-  }
-
-  return `stacked_base_override:${stackedBaseGuard.reason};${mergeReason}`;
-}
-
-function buildStackedBaseOverrideAuditFields(stackedBaseGuard, prNumber, headSha, priorState) {
-  if (stackedBaseGuard?.status !== "overridden") {
-    return {};
-  }
-
-  return {
-    override_class: "stacked_base_hazard",
-    affected_head_sha: headSha,
-    prior_state: priorState,
-    required_reason: stackedBaseGuard.overrideReason,
-    operator_initiated: true,
-    pr_number: prNumber,
-  };
-}
-
-class MergeFreshnessRefusal extends Error {
-  constructor(assessment) {
-    super("PR head is behind origin/main on overlapping files");
-    this.name = "MergeFreshnessRefusal";
-    this.result = {
-      status: "refused_behind_main",
-      next_action: "rebase_and_rerun",
-      behind_count: assessment.behindCount,
-      overlapping_files: assessment.overlappingFiles,
-    };
-  }
-}
-
-class DraftPrRefusal extends Error {
-  constructor(prNumber) {
-    super(`Draft PR #${prNumber} could not be marked ready for review`);
-    this.name = "DraftPrRefusal";
-    this.result = {
-      status: "refused_draft_pr",
-      next_action: "mark_ready_and_rerun",
-      pr_number: prNumber,
-    };
-  }
-}
-
-function splitLines(value) {
-  return String(value || "").split(/\r?\n/).filter(Boolean);
-}
-
-function splitNullPaths(value) {
-  return String(value || "").split("\0").filter(Boolean);
-}
-
-function evaluateMergeFreshness(repoPath, prHead) {
-  if (!prHead) {
-    throw new Error("Cannot evaluate merge freshness without the PR head SHA");
-  }
-
-  execGit(repoPath, ["fetch", "origin"]);
-  const behindCommits = splitLines(execGit(repoPath, ["rev-list", `${prHead}..origin/main`]));
-  if (!behindCommits.length) {
-    return { status: "up_to_date", behindCount: 0, overlappingFiles: [] };
-  }
-
-  const behindFiles = new Set();
-  for (const commit of behindCommits) {
-    const touched = execGit(repoPath, [
-      "diff-tree", "--root", "-m", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", commit,
-    ], { raw: true });
-    for (const file of splitNullPaths(touched)) behindFiles.add(file);
-  }
-
-  const mergeBase = execGit(repoPath, ["merge-base", prHead, "origin/main"]);
-  const prFiles = new Set(splitNullPaths(execGit(repoPath, [
-    "diff", "--name-only", "--no-renames", "-z", mergeBase, prHead,
-  ], { raw: true })));
-  const overlappingFiles = [...prFiles]
-    .filter((file) => behindFiles.has(file))
-    .sort((left, right) => left.localeCompare(right));
-
-  return {
-    status: overlappingFiles.length ? "overlap" : "behind_disjoint",
-    behindCount: behindCommits.length,
-    overlappingFiles,
-  };
-}
-
-function appendBehindMainOverrideEvent(repoPath, safeData, { prNumber, currentHeadSha, reason }) {
-  appendRunEvent(repoPath, safeData.run_id, {
-    event: EVENTS.FORCE_FINALIZE,
-    state_from: safeData.state,
-    state_to: STATES.MERGED,
-    head_sha: currentHeadSha,
-    round: safeData.review?.rounds || null,
-    reason,
-    override_class: "behind_main_overlap",
-    affected_head_sha: currentHeadSha,
-    prior_state: safeData.state,
-    required_reason: reason,
-    operator_initiated: true,
-    pr_number: prNumber,
-    last_reviewed_sha: safeData.review?.last_reviewed_sha,
-  });
-}
-
-// Fetch only the inputs the fresh review gate needs, without pulling
-// statusCheckRollup/mergeable/base. Used on the already-merged retry path where
-// CI, mergeability, and stacked-base checks are moot but the review marker must
-// still be validated.
-function fetchReviewContext(repoPath, prNumber) {
-  const raw = execGh(repoPath, ["pr", "view", String(prNumber),
-    "--json", "comments,commits,headRefOid"]);
-  const parsed = JSON.parse(raw);
-  return {
-    comments: parsed.comments || [],
-    commits: parsed.commits || [],
-    headRefOid: parsed.headRefOid || null,
-  };
-}
-
-function fetchPreMergeContext(repoPath, prNumber) {
-  const raw = execGh(repoPath, ["pr", "view", String(prNumber),
-    "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,isDraft,title"]);
-  const parsed = JSON.parse(raw);
-  const checks = parsed.statusCheckRollup || [];
-  return {
-    baseRefName: parsed.baseRefName || null,
-    comments: parsed.comments || [],
-    commits: parsed.commits || [],
-    mergeable: parsed.mergeable || null,
-    headRefOid: parsed.headRefOid || null,
-    isDraft: parsed.isDraft === true,
-    title: typeof parsed.title === "string" && parsed.title ? parsed.title : null,
-    checks,
-    unsafeChecks: checks.filter(isUnsafeStatusCheck),
-  };
-}
-
-// Enforce the skip-review rubric gate. Throws (after journaling MERGE_BLOCKED)
-// when the operator's --skip-review is not admissible. Shared by the normal and
-// already-merged finalize paths so both apply the identical audit check.
-function assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit }) {
-  const skipReviewFailure = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
-  if (!skipReviewFailure) {
-    return;
-  }
-  if (!dryRun) {
-    appendRunEvent(repoPath, safeData.run_id, {
-      event: EVENTS.MERGE_BLOCKED,
-      state_from: safeData.state,
-      state_to: safeData.state,
-      head_sha: currentHeadSha,
-      round: safeData.review?.rounds || null,
-      reason: skipReviewFailure.status,
-    });
-  }
-  throw new Error(`Fresh review gate failed: ${skipReviewFailure.status}`);
-}
-
-// Record the operator skip-review audit trail (SKIP_REVIEW event + relay-review-skip
-// PR comment) and return the skipped reviewGate. Shared by the normal and
-// already-merged finalize paths so the audit is identical on both.
-function recordSkipReviewAudit(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit }) {
-  if (!dryRun) {
-    const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricAudit);
-    appendRunEvent(repoPath, safeData.run_id, {
-      event: EVENTS.SKIP_REVIEW,
-      state_from: safeData.state,
-      state_to: safeData.state,
-      head_sha: currentHeadSha,
-      round: safeData.review?.rounds || null,
-      reason: skipReviewReason,
-      rubric_status: skipReviewRubricStatus,
-    });
-    execGh(repoPath, ["pr", "comment", String(prNumber), "--body", skipComment]);
-  }
-  return {
-    status: "skipped",
-    pr: prNumber,
-    reason: skipReviewReason,
-    rubricStatus: skipReviewRubricStatus,
-    readyToMerge: safeData.state === STATES.READY_TO_MERGE,
-  };
-}
-
-function normalizeStatusCheckValue(value) {
-  return String(value || "").trim().toUpperCase();
-}
-
-function statusCheckName(check) {
-  return check?.name || check?.context || "unknown";
-}
-
-function describeStatusCheck(check) {
-  const status = normalizeStatusCheckValue(check?.status);
-  const conclusion = normalizeStatusCheckValue(check?.conclusion);
-  const state = normalizeStatusCheckValue(check?.state);
-  const details = [];
-  if (status) details.push(`status=${status}`);
-  if (conclusion) details.push(`conclusion=${conclusion}`);
-  if (state) details.push(`state=${state}`);
-  if (!details.length) details.push("state=UNKNOWN");
-  return `${statusCheckName(check)} (${details.join(", ")})`;
-}
-
-function isUnsafeStatusCheck(check) {
-  const status = normalizeStatusCheckValue(check?.status);
-  if (status && status !== "COMPLETED") return true;
-
-  const conclusion = normalizeStatusCheckValue(check?.conclusion);
-  if (conclusion) {
-    return !ALLOWED_CHECK_CONCLUSIONS.has(conclusion);
-  }
-
-  const state = normalizeStatusCheckValue(check?.state);
-  if (state) return state !== "SUCCESS";
-
-  return true;
-}
-
-function fetchPrMergeState(repoPath, prNumber) {
-  const raw = execGh(repoPath, ["pr", "view", String(prNumber), "--json", "state,mergeCommit"]);
-  const parsed = JSON.parse(raw);
-  return {
-    state: parsed.state || null,
-    mergeCommitSha: parsed.mergeCommit?.oid || null,
-  };
-}
-
-function isMergedPrState(prMergeState) {
-  return prMergeState?.state === "MERGED";
-}
-
-function manifestHeadShaFallback(manifestData) {
-  return manifestData?.git?.head_sha || manifestData?.review?.last_reviewed_sha || null;
-}
-
-function resolveCurrentHeadSha(worktreePath, manifestData) {
-  if (worktreePath && fs.existsSync(worktreePath)) {
-    return execGit(worktreePath, ["rev-parse", "HEAD"]);
-  }
-  return manifestHeadShaFallback(manifestData);
-}
-
-function fetchDefaultBranchName(repoPath) {
-  try {
-    const raw = execGh(repoPath, ["repo", "view", "--json", "defaultBranchRef"]);
-    const parsed = JSON.parse(raw);
-    return parsed.defaultBranchRef?.name || null;
-  } catch {
-    return null;
-  }
-}
-
-function fetchPrsForHeadBranch(repoPath, branchName) {
-  try {
-    const raw = execGh(repoPath, [
-      "pr",
-      "list",
-      "--head",
-      String(branchName),
-      "--state",
-      "all",
-      "--json",
-      "number,state,mergedAt,headRefName,url",
-    ]);
-    return JSON.parse(raw || "[]");
-  } catch {
-    return [];
-  }
-}
-
-function normalizePrState(value) {
-  return String(value || "").trim().toUpperCase();
-}
-
-function buildStackedBaseGuard(repoPath, prNumber, baseRefName, overrideReason = null) {
-  if (!baseRefName) {
-    return {
-      status: "skipped",
-      reason: "missing_base_ref",
-      prNumber,
-      baseRefName: null,
-      defaultBranchName: null,
-      basePr: null,
-      overrideReason: null,
-    };
-  }
-
-  const defaultBranchName = fetchDefaultBranchName(repoPath);
-  if (!defaultBranchName || baseRefName === defaultBranchName) {
-    return {
-      status: "clear",
-      reason: defaultBranchName ? "default_branch_base" : "default_branch_unknown",
-      prNumber,
-      baseRefName,
-      defaultBranchName,
-      basePr: null,
-      overrideReason: null,
-    };
-  }
-
-  const candidates = fetchPrsForHeadBranch(repoPath, baseRefName)
-    .filter((entry) => !entry.headRefName || entry.headRefName === baseRefName);
-  const merged = candidates.find((entry) => normalizePrState(entry.state) === "MERGED" || Boolean(entry.mergedAt));
-  if (merged) {
-    return {
-      status: "clear",
-      reason: "base_pr_merged",
-      prNumber,
-      baseRefName,
-      defaultBranchName,
-      basePr: {
-        number: Number(merged.number),
-        state: merged.state || null,
-        mergedAt: merged.mergedAt || null,
-        url: merged.url || null,
-      },
-      overrideReason: null,
-    };
-  }
-
-  const selected = candidates.find((entry) => normalizePrState(entry.state) === "OPEN")
-    || candidates.find((entry) => normalizePrState(entry.state) === "CLOSED")
-    || candidates[0]
-    || null;
-  const selectedState = normalizePrState(selected?.state);
-  const reason = !selected
-    ? "base_pr_missing"
-    : selectedState === "CLOSED"
-      ? "base_pr_closed"
-      : "base_pr_unmerged";
-  return {
-    status: overrideReason ? "overridden" : "blocked",
-    reason,
-    prNumber,
-    baseRefName,
-    defaultBranchName,
-    basePr: selected
-      ? {
-          number: Number(selected.number),
-          state: selected.state || null,
-          mergedAt: selected.mergedAt || null,
-          url: selected.url || null,
-        }
-      : null,
-    overrideReason: overrideReason || null,
-  };
-}
-
-function assertStackedBaseGuard(guard, prNumber) {
-  if (!guard || guard.status !== "blocked") return;
-  const basePrText = guard.basePr?.number
-    ? `; base PR #${guard.basePr.number} is ${guard.basePr.state || "unmerged"}`
-    : "; no base PR was found";
-  throw new Error(
-    `Stacked PR base hazard: PR #${prNumber} targets non-default base '${guard.baseRefName}' ` +
-    `(default: '${guard.defaultBranchName || "unknown"}')${basePrText}. ` +
-    "Merge the base PR first or rerun with --allow-stacked-base-hazard <reason>."
-  );
-}
-
-function buildDraftPrGuard(preMerge, prNumber) {
-  return {
-    status: preMerge?.isDraft ? "draft" : "clear",
-    prNumber,
-  };
-}
-
-function assertDraftPrGuard(repoPath, safeData, guard, { currentHeadSha, dryRun }) {
-  if (!guard || guard.status !== "draft") return guard;
-  if (dryRun) return { ...guard, status: "would_auto_ready" };
-
-  try {
-    execGh(repoPath, ["pr", "ready", String(guard.prNumber)]);
-  } catch {
-    throw new DraftPrRefusal(guard.prNumber);
-  }
-
-  appendRunEvent(repoPath, safeData.run_id, {
-    event: EVENTS.DRAFT_PR_AUTO_READY,
-    state_from: safeData.state,
-    state_to: safeData.state,
-    head_sha: currentHeadSha,
-    round: safeData.review?.rounds || null,
-    pr_number: guard.prNumber,
-  });
-  return { ...guard, status: "auto_readied" };
-}
-
-function assertPreMergeSafety(preMerge, prNumber) {
-  if (preMerge.mergeable === "CONFLICTING") {
-    throw new Error(
-      `PR #${prNumber} has merge conflicts with the base branch. Resolve conflicts and push, then retry.`
-    );
-  }
-  if (preMerge.unsafeChecks.length > 0) {
-    const names = preMerge.unsafeChecks.map(describeStatusCheck).join(", ");
-    throw new Error(
-      `PR #${prNumber} has non-success CI checks: ${names}. Fix these before merging.`
-    );
-  }
-}
-
-function resolveRemoteName(repoPath, branch) {
-  if (!branch) return null;
-  try {
-    return execGit(repoPath, ["config", `branch.${branch}.remote`]) || "origin";
-  } catch {
-    return "origin";
-  }
-}
-
-function hasRemote(repoPath, remoteName) {
-  if (!remoteName) return false;
-  try {
-    execGit(repoPath, ["remote", "get-url", remoteName]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function remoteBranchExists(repoPath, remoteName, branch) {
-  if (!remoteName || !branch) return false;
-  try {
-    execGit(repoPath, ["ls-remote", "--exit-code", "--heads", remoteName, branch]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Resolve the remote branch tip that `gh pr merge` will merge — not the
-// retained worktree HEAD, which can lag on normal ready_to_merge runs.
-// Deliberately the branch tip rather than GitHub's headRefOid: relay pushes every
-// PR branch to its tracked remote, so the tip IS the merge commit; fork and
-// non-origin-head PRs are outside this gate's domain (#966).
-function resolveRemoteBranchHead(repoPath, remoteName, branch) {
-  if (!remoteName || !branch) {
-    throw new Error("Cannot resolve remote PR head without remote and branch");
-  }
-  const output = execGit(repoPath, ["ls-remote", "--exit-code", "--heads", remoteName, branch]);
-  const sha = String(output || "").trim().split(/\s+/)[0] || "";
-  if (!/^[0-9a-f]{40}$/i.test(sha)) {
-    throw new Error(`Cannot resolve remote PR tip for ${remoteName}/${branch}`);
-  }
-  return sha;
-}
-
-function deleteRemoteBranch(repoPath, branch) {
-  const remoteName = resolveRemoteName(repoPath, branch);
-  if (!remoteName || !hasRemote(repoPath, remoteName)) {
-    return {
-      remoteName,
-      attempted: false,
-      deleted: false,
-      warning: null,
-    };
-  }
-  if (!remoteBranchExists(repoPath, remoteName, branch)) {
-    return {
-      remoteName,
-      attempted: false,
-      deleted: true,
-      warning: null,
-    };
-  }
-  try {
-    execGit(repoPath, ["push", remoteName, "--delete", branch]);
-    return {
-      remoteName,
-      attempted: true,
-      deleted: true,
-      warning: null,
-    };
-  } catch (error) {
-    return {
-      remoteName,
-      attempted: true,
-      deleted: false,
-      warning: summarizeFailure(error),
-    };
-  }
-}
-
-function runFinalizeCleanup({
-  repoRoot,
-  data,
-  dryRun,
-  deleteMergedBranch,
-}) {
-  const worktreePath = data?.paths?.worktree || null;
-  const worktreeAlreadyMissing = Boolean(worktreePath) && !fs.existsSync(worktreePath);
-  if (!worktreeAlreadyMissing) {
-    return runCleanup({
-      repoRoot,
-      data,
-      dryRun,
-      deleteMergedBranch,
-    });
-  }
-
-  const cleanupInput = {
-    ...data,
-    paths: {
-      ...(data.paths || {}),
-      worktree: null,
-    },
-  };
-  if (!dryRun) {
-    try {
-      execGit(repoRoot, ["worktree", "prune"]);
-    } catch {
-      // runCleanup records the cleanup failure if stale registration cleanup
-      // still prevents branch deletion or final pruning.
-    }
-  }
-  const cleanupResult = runCleanup({
-    repoRoot,
-    data: cleanupInput,
-    dryRun,
-    deleteMergedBranch,
-  });
-
-  return {
-    updatedData: {
-      ...cleanupResult.updatedData,
-      paths: {
-        ...(cleanupResult.updatedData.paths || {}),
-        worktree: worktreePath,
-      },
-    },
-    summary: {
-      ...cleanupResult.summary,
-      worktreePath,
-      worktreeExistsBefore: false,
-      worktreeRemoved: true,
-    },
-  };
-}
-
-function hasExplicitBranchPrSelector({ manifestPath, runId, branch, prNumber }) {
-  return !manifestPath && !runId && branch && prNumber !== undefined && prNumber !== null;
-}
-
-function matchesBranchPr(record, branch, prNumber) {
-  return record?.data?.git?.working_branch === branch
-    && Number(record?.data?.git?.pr_number || 0) === Number(prNumber);
-}
-
-// A merged run is a crash-resume target only while its finalize cleanup or
-// post-merge bookkeeping is still pending. A run that completed (next_action=done
-// or cleanup already succeeded) must not be re-selected — re-running it would
-// duplicate post-merge side effects (remote branch delete, issue close, durable
-// learnings commit).
-function mergedRetryStillPending(record) {
-  const data = record?.data || {};
-  if (data.next_action === "done") {
-    return false;
-  }
-  return data.cleanup?.status !== "succeeded";
-}
-
-function resolveMergedBranchPrRetryRecord({ repoRoot, branch, prNumber }) {
-  const exactMatches = listManifestRecords(repoRoot)
-    .filter((record) => matchesBranchPr(record, branch, prNumber));
-  const mergedMatches = exactMatches
-    .filter((record) => record?.data?.state === STATES.MERGED);
-  const pendingMerged = mergedMatches.filter(mergedRetryStillPending);
-
-  if (exactMatches.length === 1 && pendingMerged.length === 1) {
-    return resolveManifestRecord({
-      repoRoot,
-      runId: pendingMerged[0].data.run_id,
-    });
-  }
-
-  if (exactMatches.length > 1 && mergedMatches.length === exactMatches.length && pendingMerged.length > 1) {
-    const runIds = pendingMerged
-      .map((record) => record?.data?.run_id || path.basename(record?.manifestPath || "unknown", ".md"))
-      .join(", ");
-    throw new Error(
-      `Ambiguous merged relay manifest for branch '${branch}' + pr '${prNumber}' ` +
-      `(${pendingMerged.length} candidates): ${runIds}. Pass --run-id or --manifest explicitly.`
-    );
-  }
-
-  return null;
-}
-
-function resolveFinalizeManifestRecord({
-  repoRoot,
-  manifestPath,
-  runId,
-  branch,
-  prNumber,
-  includeTerminal,
-}) {
-  if (hasExplicitBranchPrSelector({ manifestPath, runId, branch, prNumber })) {
-    const retryRecord = resolveMergedBranchPrRetryRecord({ repoRoot, branch, prNumber });
-    if (retryRecord) {
-      return retryRecord;
-    }
-  }
-
-  try {
-    return resolveManifestRecord({
-      repoRoot,
-      manifestPath,
-      runId,
-      branch,
-      prNumber,
-      includeTerminal,
-    });
-  } catch (error) {
-    if (hasExplicitBranchPrSelector({ manifestPath, runId, branch, prNumber })) {
-      const retryRecord = resolveMergedBranchPrRetryRecord({ repoRoot, branch, prNumber });
-      if (retryRecord) {
-        return retryRecord;
-      }
-    }
-    throw error;
-  }
-}
-
-function isTrackedPath(repoPath, relativePath) {
-  try {
-    execGit(repoPath, ["ls-files", "--error-unmatch", "--", relativePath]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function learningCommitMessage(runId, prNumber) {
-  return `Record relay learning for PR #${prNumber}\n\nRun: ${runId}`;
-}
-
-const DEFAULT_LEARNING_PUSH_ATTEMPTS = 3;
-const LEARNING_CAPABILITIES_REL = path.join("spec", "capabilities.md");
-
-/**
- * Narrow NFF detection: require an actual non-fast-forward / behind-tip signal.
- * Generic "failed to push" / "updates were rejected" alone also covers
- * protected-branch, permission, and hook declines — those must not burn retry
- * cycles or be labeled as an NFF race.
- */
-function isNonFastForwardPushError(error) {
-  const text = `${error?.stderr || ""}\n${error?.message || ""}`.toLowerCase();
-  if (
-    text.includes("protected branch")
-    || text.includes("permission denied")
-    || text.includes("hook declined")
-    || text.includes("pre-receive hook")
-    || text.includes("pre-receive-hook")
-  ) {
-    return false;
-  }
-  return text.includes("non-fast-forward")
-    || text.includes("fetch first")
-    || text.includes("tip of your current branch is behind")
-    || text.includes("pushed branch tip is behind")
-    || text.includes("current branch is behind");
-}
-
-function persistLearningRecoveryPatch({
-  repoPath,
-  worktreePath,
-  runId,
-  execGitFn = execGit,
-}) {
-  try {
-    let patch = execGitFn(worktreePath, [
-      "diff",
-      "HEAD",
-      "--binary",
-      "--",
-      LEARNING_CAPABILITIES_REL,
-    ], { raw: true });
-    if (!String(patch || "").trim()) {
-      patch = execGitFn(worktreePath, [
-        "format-patch",
-        "-1",
-        "--stdout",
-        "HEAD",
-        "--",
-        LEARNING_CAPABILITIES_REL,
-      ], { raw: true });
-    }
-    if (!String(patch || "").trim()) return null;
-    const runDir = getRunDir(repoPath, runId);
-    fs.mkdirSync(runDir, { recursive: true });
-    const recoveryPath = path.join(runDir, "learning-recovery.patch");
-    fs.writeFileSync(recoveryPath, patch, { encoding: "utf-8" });
-    return recoveryPath;
-  } catch {
-    return null;
-  }
-}
-
-function remapTransientLearningPaths(result, repoPath, worktreePath) {
-  if (!result || typeof result !== "object") return result;
-  const remap = (candidate) => {
-    if (typeof candidate !== "string") return candidate;
-    const rel = path.relative(worktreePath, candidate);
-    if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-      return candidate;
-    }
-    return path.join(repoPath, rel);
-  };
-  return {
-    ...result,
-    ...(result.sprintFile ? { sprintFile: remap(result.sprintFile) } : {}),
-    ...(result.capabilitiesPath ? { capabilitiesPath: remap(result.capabilitiesPath) } : {}),
-    ...(result.owner ? {
-      owner: {
-        ...result.owner,
-        ...(result.owner.sprintPath ? { sprintPath: remap(result.owner.sprintPath) } : {}),
-      },
-    } : {}),
-  };
-}
-
-function fetchIssueBody(repoPath, issueNumber, execGhFn = execGh) {
-  if (!issueNumber) return null;
-  try {
-    const raw = execGhFn(repoPath, ["issue", "view", String(issueNumber), "--json", "body"]);
-    const parsed = JSON.parse(raw);
-    return typeof parsed?.body === "string" ? parsed.body : null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveLearningOwner({
-  repoPath,
-  manifest,
-  issueNumber,
-  owner = null,
-  issueBody = null,
-  resolveOwnerFn = resolveSprintOwner,
-  execGhFn = execGh,
-}) {
-  const manifestOwner = owner || readManifestOwnership(manifest);
-  let body = issueBody;
-  if (!manifestOwner?.sprint && !manifestOwner?.track && !manifestOwner?.component && !body) {
-    body = fetchIssueBody(repoPath, issueNumber, execGhFn);
-  }
-  return resolveOwnerFn({
-    repo: repoPath,
-    owner: manifestOwner,
-    issueBody: body,
-  });
-}
-
-function cleanupLearningWorktree(repoPath, worktreePath, execGitFn = execGit, rmSyncFn = fs.rmSync) {
-  if (!worktreePath) return;
-  try {
-    execGitFn(repoPath, ["worktree", "remove", "--force", worktreePath]);
-  } catch {
-    try {
-      rmSyncFn(worktreePath, { recursive: true, force: true });
-    } catch {
-      // best-effort
-    }
-    try {
-      execGitFn(repoPath, ["worktree", "prune"]);
-    } catch {
-      // best-effort
-    }
-  }
-}
-
-function durableOwnerPaths(repoPath, worktreePath, ownerResult) {
-  const relSprint = path.relative(worktreePath, ownerResult.sprintPath);
-  const durableSprint = path.join(repoPath, relSprint);
-  return {
-    repoPath,
-    sprintPath: durableSprint,
-    capabilitiesPath: path.join(repoPath, "spec", "capabilities.md"),
-    owner: {
-      sprintPath: durableSprint,
-      track: ownerResult.track,
-      component: ownerResult.component,
-      source: ownerResult.source,
-    },
-  };
-}
-
-function withDurableOwnerPaths(result, durable) {
-  if (!result || typeof result !== "object") return result;
-  const next = { ...result };
-  if (durable.sprintPath) {
-    next.sprintFile = durable.sprintPath;
-  }
-  if (durable.capabilitiesPath) {
-    next.capabilitiesPath = durable.capabilitiesPath;
-  }
-  if (result.owner || durable.owner) {
-    next.owner = {
-      ...(result.owner || {}),
-      ...durable.owner,
-    };
-  }
-  return next;
-}
-
-/**
- * Durable Learnings write that never switches, commits, or dirties the
- * operator's canonical checkout. Fetches the remote base first, creates an
- * isolated worktree at that tip, then resolves ownership and runs both
- * dry-run/write against that worktree. Does not inspect canonical HEAD/status.
- *
- * Crash mid-flight can leave a `relay-learn-*` worktree registration; the
- * finally block is best-effort (`worktree remove` → rm → `worktree prune`).
- * Operators recover with `git worktree prune` / removing stale `/tmp/relay-learn-*`
- * dirs — finalize does not install process-global signal handlers.
- */
-function appendDurableLearnings({
-  repoPath,
-  runId,
-  prNumber,
-  synthesis,
-  baseBranch,
-  manifest = null,
-  issueNumber = null,
-  owner = null,
-  issueBody = null,
-  maxPushAttempts = DEFAULT_LEARNING_PUSH_ATTEMPTS,
-  appendLearningsFn = appendLearnings,
-  resolveOwnerFn = resolveSprintOwner,
-  execGitFn = execGit,
-  execGhFn = execGh,
-  mkdtempSyncFn = fs.mkdtempSync,
-  rmSyncFn = fs.rmSync,
-}) {
-  if (!baseBranch) {
-    return {
-      status: LEARNING_STATUS.FAILED,
-      reason: "base_branch_missing",
-      durability: { status: "not_written" },
-      canonicalUntouched: true,
-    };
-  }
-
-  const remoteName = resolveRemoteName(repoPath, baseBranch) || "origin";
-  if (!remoteName || !hasRemote(repoPath, remoteName)) {
-    return {
-      status: LEARNING_STATUS.FAILED,
-      reason: "remote_missing",
-      remoteName,
-      baseBranch,
-      durability: { status: "manual_action_required", reason: "remote_missing" },
-      canonicalUntouched: true,
-    };
-  }
-
-  let worktreePath = null;
-  try {
-    try {
-      execGitFn(repoPath, ["fetch", remoteName, baseBranch]);
-    } catch (error) {
-      return {
-        status: LEARNING_STATUS.FAILED,
-        reason: "fetch_failed",
-        durability: {
-          status: "manual_action_required",
-          reason: "fetch_failed",
-          message: summarizeFailure(error),
-        },
-        canonicalUntouched: true,
-      };
-    }
-
-    const remoteTipRef = `${remoteName}/${baseBranch}`;
-    let remoteTip;
-    try {
-      remoteTip = execGitFn(repoPath, ["rev-parse", "--verify", remoteTipRef]);
-    } catch (error) {
-      return {
-        status: LEARNING_STATUS.FAILED,
-        reason: "base_tip_unresolved",
-        durability: {
-          status: "manual_action_required",
-          reason: "base_tip_unresolved",
-          message: summarizeFailure(error),
-        },
-        canonicalUntouched: true,
-      };
-    }
-
-    worktreePath = mkdtempSyncFn(path.join(os.tmpdir(), "relay-learn-"));
-    try {
-      execGitFn(repoPath, ["worktree", "add", "--detach", worktreePath, remoteTip]);
-    } catch (error) {
-      cleanupLearningWorktree(repoPath, worktreePath, execGitFn, rmSyncFn);
-      worktreePath = null;
-      return {
-        status: LEARNING_STATUS.FAILED,
-        reason: "worktree_create_failed",
-        durability: {
-          status: "not_written",
-          reason: "worktree_create_failed",
-          message: summarizeFailure(error),
-        },
-        canonicalUntouched: true,
-      };
-    }
-
-    // Ownership + dry-run/write all target the isolated remote-tip worktree —
-    // never the operator's canonical checkout (which may lack backlog/capabilities).
-    const ownerResult = resolveLearningOwner({
-      repoPath: worktreePath,
-      manifest,
-      issueNumber,
-      owner,
-      issueBody,
-      resolveOwnerFn,
-      execGhFn,
-    });
-
-    if (!ownerResult.ok) {
-      const dryMapped = appendLearningsFn({
-        repo: worktreePath,
-        runId,
-        pr: String(prNumber),
-        synthesis,
-        dryRun: true,
-        issueBody: issueBody || (issueNumber ? fetchIssueBody(worktreePath, issueNumber, execGhFn) : null),
-        resolveOwner: () => ownerResult,
-      });
-      return {
-        ...remapTransientLearningPaths(dryMapped, repoPath, worktreePath),
-        durability: {
-          status: "not_written",
-          reason: dryMapped.reason || ownerResult.reason || "owner_unresolved",
-        },
-        canonicalUntouched: true,
-      };
-    }
-
-    const durable = durableOwnerPaths(repoPath, worktreePath, ownerResult);
-    const ownerHandles = {
-      sprint: ownerResult.sprintPath,
-      owner: {
-        sprint: ownerResult.sprintPath,
-        track: ownerResult.track,
-        component: ownerResult.component,
-        source: ownerResult.source,
-      },
-      // Reuse the owner resolved on the fetched remote-tip worktree. This
-      // prevents append-learnings from reinterpreting its source/precedence.
-      resolveOwner: () => ownerResult,
-    };
-
-    const dryRunResult = appendLearningsFn({
-      repo: worktreePath,
-      runId,
-      pr: String(prNumber),
-      synthesis,
-      dryRun: true,
-      ...ownerHandles,
-    });
-    if (dryRunResult.status === LEARNING_STATUS.SKIPPED && dryRunResult.reason === "idempotent_match") {
-      return {
-        ...withDurableOwnerPaths(dryRunResult, durable),
-        durability: { status: "already_present", baseBranch, remoteName },
-        canonicalUntouched: true,
-      };
-    }
-    if (dryRunResult.status !== LEARNING_STATUS.APPENDED) {
-      return {
-        ...withDurableOwnerPaths(dryRunResult, durable),
-        durability: { status: "not_written" },
-        canonicalUntouched: true,
-      };
-    }
-
-    if (!isTrackedPath(worktreePath, LEARNING_CAPABILITIES_REL)) {
-      return {
-        ...withDurableOwnerPaths(dryRunResult, durable),
-        status: LEARNING_STATUS.FAILED,
-        reason: "capabilities_untracked",
-        durability: { status: "not_written" },
-        canonicalUntouched: true,
-      };
-    }
-
-    const appendResult = appendLearningsFn({
-      repo: worktreePath,
-      runId,
-      pr: String(prNumber),
-      synthesis,
-      ...ownerHandles,
-    });
-
-    if (appendResult.status === LEARNING_STATUS.SKIPPED && appendResult.reason === "idempotent_match") {
-      return {
-        ...withDurableOwnerPaths(appendResult, durable),
-        durability: { status: "already_present", baseBranch, remoteName },
-        canonicalUntouched: true,
-      };
-    }
-    if (appendResult.status !== LEARNING_STATUS.APPENDED) {
-      return {
-        ...withDurableOwnerPaths(appendResult, durable),
-        durability: { status: "not_written" },
-        canonicalUntouched: true,
-      };
-    }
-
-    try {
-      execGitFn(worktreePath, ["add", "--", LEARNING_CAPABILITIES_REL]);
-      execGitFn(worktreePath, ["commit", "-m", learningCommitMessage(runId, prNumber)]);
-    } catch (error) {
-      const recoveryPatch = persistLearningRecoveryPatch({
-        repoPath,
-        worktreePath,
-        runId,
-        execGitFn,
-      });
-      return {
-        ...withDurableOwnerPaths(appendResult, durable),
-        ...(recoveryPatch ? { recoveryPatch } : {}),
-        durability: {
-          status: "manual_action_required",
-          reason: "commit_failed",
-          message: summarizeFailure(error),
-          ...(recoveryPatch ? { recoveryPatch } : {}),
-        },
-        canonicalUntouched: true,
-      };
-    }
-
-    let commitSha = execGitFn(worktreePath, ["rev-parse", "HEAD"]);
-    const recoveryPatch = persistLearningRecoveryPatch({
-      repoPath,
-      worktreePath,
-      runId,
-      execGitFn,
-    });
-    let attempts = 0;
-    let lastPushError = null;
-
-    while (attempts < maxPushAttempts) {
-      attempts += 1;
-      try {
-        // Git's rejection text is localized. Pin the command locale so the
-        // deliberately narrow NFF classifier below receives stable signals.
-        // Push from the canonical repository so relative remote URLs retain
-        // their configured resolution base. The detached worktree commit is
-        // available through the shared object database.
-        execGitFn(repoPath, ["push", remoteName, `${commitSha}:refs/heads/${baseBranch}`], {
-          env: { ...process.env, LC_ALL: "C", LANG: "C" },
-        });
-        if (recoveryPatch) {
-          try { fs.unlinkSync(recoveryPatch); } catch {}
-        }
-        return {
-          ...withDurableOwnerPaths(appendResult, durable),
-          commitSha,
-          baseBranch,
-          remoteName,
-          pushAttempts: attempts,
-          durability: { status: "pushed", baseBranch, remoteName, attempts },
-          canonicalUntouched: true,
-        };
-      } catch (error) {
-        lastPushError = error;
-        if (!isNonFastForwardPushError(error) || attempts >= maxPushAttempts) {
-          break;
-        }
-        try {
-          execGitFn(repoPath, ["fetch", remoteName, baseBranch]);
-          execGitFn(worktreePath, ["rebase", `${remoteName}/${baseBranch}`]);
-          commitSha = execGitFn(worktreePath, ["rev-parse", "HEAD"]);
-        } catch (rebaseError) {
-          const rebaseText = `${rebaseError?.stderr || ""}\n${rebaseError?.message || ""}`.toLowerCase();
-          const conflict = rebaseText.includes("conflict") || rebaseText.includes("could not apply");
-          return {
-            ...withDurableOwnerPaths(appendResult, durable),
-            commitSha,
-            baseBranch,
-            remoteName,
-            pushAttempts: attempts,
-            ...(recoveryPatch ? { recoveryPatch } : {}),
-            durability: {
-              status: "manual_action_required",
-              reason: conflict ? "push_conflict" : "rebase_failed",
-              message: summarizeFailure(rebaseError),
-              pushMessage: summarizeFailure(error),
-              ...(recoveryPatch ? { recoveryPatch } : {}),
-            },
-            canonicalUntouched: true,
-          };
-        }
-      }
-    }
-
-    return {
-      ...withDurableOwnerPaths(appendResult, durable),
-      commitSha,
-      baseBranch,
-      remoteName,
-      pushAttempts: attempts,
-      ...(recoveryPatch ? { recoveryPatch } : {}),
-      durability: {
-        status: "manual_action_required",
-        reason: "push_failed",
-        message: summarizeFailure(lastPushError),
-        attempts,
-        ...(recoveryPatch ? { recoveryPatch } : {}),
-      },
-      canonicalUntouched: true,
-    };
-  } finally {
-    cleanupLearningWorktree(repoPath, worktreePath, execGitFn, rmSyncFn);
-  }
-}
-
-function main() {
-  if (!args.length || helpRequested) {
-    printHelpAndExit();
-  }
-
-  // --allow-behind-main is intentionally local to relay-merge so this bounded
-  const unknownFlags = findUnknownFlags(args, cliArgs.options);
-  if (unknownFlags.length) {
-    throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
-  }
-
-  const repoArg = cliArgs.getArg("--repo");
-  let repoPath = path.resolve(repoArg || ".");
-  const manifestArg = cliArgs.getArg("--manifest");
-  const runId = cliArgs.getArg("--run-id");
-  let prNumber = parsePositiveInt(cliArgs.getArg("--pr"), "--pr");
-  const mergeMethod = cliArgs.getArg("--merge-method") || "squash";
-  const skipReviewReason = cliArgs.getArg("--skip-review");
-  const forceFinalizeNonready = cliArgs.hasFlag("--force-finalize-nonready");
-  const allowBehindMain = cliArgs.hasFlag("--allow-behind-main");
-  const allowStackedBaseHazard = cliArgs.hasFlag("--allow-stacked-base-hazard");
-  const stackedBaseOverrideReason = allowStackedBaseHazard
-    ? cliArgs.getArg("--allow-stacked-base-hazard")
-    : null;
-  const forceFinalizeReason = cliArgs.getArg("--reason");
-  const dryRun = cliArgs.hasFlag("--dry-run");
-  const skipMerge = cliArgs.hasFlag("--skip-merge");
-  const skipIssueClose = cliArgs.hasFlag("--no-issue-close");
-  const jsonOut = cliArgs.hasFlag("--json");
-  if (forceFinalizeNonready && !String(forceFinalizeReason || "").trim()) {
-    throw new Error("--force-finalize-nonready requires --reason <non-empty-text>");
-  }
-  if (allowBehindMain && !String(forceFinalizeReason || "").trim()) {
-    throw new Error("--allow-behind-main requires --reason <non-empty-text>");
-  }
-  if (allowStackedBaseHazard && !String(stackedBaseOverrideReason || "").trim()) {
-    throw new Error("--allow-stacked-base-hazard requires a non-empty reason");
-  }
-
-  let branch = cliArgs.getArg("--branch");
-  let manifestRecord = resolveFinalizeManifestRecord({
-    repoRoot: repoPath,
-    manifestPath: manifestArg,
-    runId,
-    branch,
-    prNumber,
-    includeTerminal: skipMerge,
-  });
-  const selectorExpectedRepoRoot = manifestArg
-    ? undefined
-    : getExpectedManifestRepoRoot(repoPath, repoArg);
-  let validatedPaths = validateManifestPaths(manifestRecord.data?.paths, {
-    expectedRepoRoot: selectorExpectedRepoRoot,
-    manifestPath: manifestRecord.manifestPath,
-    runId: manifestRecord.data?.run_id,
-    allowMissingWorktree: true,
-    caller: "finalize-run",
-  });
-  repoPath = validatedPaths.repoRoot;
-  if ((manifestArg || runId) && !repoArg) {
-    manifestRecord = resolveFinalizeManifestRecord({
-      repoRoot: repoPath,
-      manifestPath: manifestArg,
-      runId,
-      branch,
-      prNumber,
-      includeTerminal: skipMerge,
-    });
-    validatedPaths = validateManifestPaths(manifestRecord.data?.paths, {
-      expectedRepoRoot: manifestArg ? undefined : repoPath,
-      manifestPath: manifestRecord.manifestPath,
-      runId: manifestRecord.data?.run_id,
-      allowMissingWorktree: true,
-      caller: "finalize-run",
-    });
-  }
-
-  const { manifestPath, data, body } = manifestRecord;
-  const safeData = {
-    ...data,
-    paths: {
-      ...(data.paths || {}),
-      repo_root: validatedPaths.repoRoot,
-      worktree: validatedPaths.worktree,
-    },
-  };
-  const FORCE_FINALIZE_ALLOWED_STATES = new Set([
-    STATES.DRAFT,
-    STATES.DISPATCHED,
-    STATES.REVIEW_PENDING,
-    STATES.CHANGES_REQUESTED,
-    STATES.ESCALATED,
-    STATES.READY_TO_MERGE,
+function mergePullRequest(record, binding, method) {
+  gh(record.repo.root, [
+    "pr", "merge", String(binding.prNumber),
+    "--repo", record.repo.remote,
+    mergeFlag(method),
+    "--match-head-commit", binding.head,
   ]);
-  prNumber = prNumber || safeData.git?.pr_number || null;
-  branch = resolveBranch(repoPath, prNumber, branch, safeData);
-  if (!skipMerge && !prNumber) {
-    throw new Error("PR number is required for merge finalization");
-  }
-  if (forceFinalizeNonready && (safeData.state === STATES.MERGED || safeData.state === STATES.CLOSED)) {
-    throw new Error(`force-finalize cannot be used from terminal state ${safeData.state}`);
-  }
-  if (forceFinalizeNonready && !FORCE_FINALIZE_ALLOWED_STATES.has(safeData.state)) {
-    throw new Error(`force-finalize cannot be used from state ${safeData.state}`);
-  }
-  if (skipMerge && safeData.state !== STATES.MERGED) {
-    throw new Error("--skip-merge can only be used for runs that are already in the merged state");
-  }
-  const escalatedAutoRetryRequested = (
-    !skipMerge
-    && !forceFinalizeNonready
-    && !skipReviewReason
-    && safeData.state === STATES.ESCALATED
-  );
-  const escalatedPrMergeState = escalatedAutoRetryRequested
-    ? fetchPrMergeState(repoPath, prNumber)
-    : null;
-  const escalatedAlreadyMergedRetry = isMergedPrState(escalatedPrMergeState);
-  if (!skipMerge && !forceFinalizeNonready && safeData.state !== STATES.READY_TO_MERGE) {
-    if (safeData.state !== STATES.MERGED && !escalatedAlreadyMergedRetry) {
-      throw new Error(`Expected relay run to be ${STATES.READY_TO_MERGE} before merge, got ${safeData.state}`);
-    }
-  }
-  const mergeAllowed = !skipMerge && (
-    safeData.state === STATES.READY_TO_MERGE
-    || forceFinalizeNonready
-    || escalatedAlreadyMergedRetry
-  );
-  const operatorName = getActorName(repoPath);
+}
 
-  let updated = safeData;
-  let mergePerformed = false;
-  let mergeRecovered = false;
-  let alreadyMerged = false;
-  let prMergeState = escalatedPrMergeState || (dryRun ? { state: "MERGED", mergeCommitSha: null } : null);
-  let remoteBranchDeleted = false;
-  let remoteBranchDeleteWarning = null;
-  let remoteBranchDeleteAttempted = false;
-  let remoteName = null;
-  let issueClosed = false;
-  let issueCloseWarning = null;
-  let reviewGate = null;
-  let stackedBaseGuard = { status: "not_checked", reason: null };
-  let preMergeContext = null;
-  let freshness = null;
-  let freshnessOverrideRequired = false;
-  let currentHeadSha = safeData.git?.head_sha || null;
-  let prTitle = null;
-  const skipReviewRubricAudit = summarizeRubricAuditForSkip(safeData, {
-    runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
-  });
-  const skipReviewRubricStatus = skipReviewRubricAudit.rubricStatus;
+function registeredWorktrees(repoRoot) {
+  return git(repoRoot, ["worktree", "list", "--porcelain"])
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length));
+}
 
-  if (mergeAllowed) {
-    if (!dryRun) {
-      prMergeState = fetchPrMergeState(repoPath, prNumber);
-      if (isMergedPrState(prMergeState)) {
-        mergeRecovered = true;
-      }
-    }
-    alreadyMerged = isMergedPrState(prMergeState) && (!dryRun || escalatedAlreadyMergedRetry);
-    if (alreadyMerged) {
-      mergeRecovered = true;
-      currentHeadSha = manifestHeadShaFallback(safeData);
-    } else {
-      if (validatedPaths.worktreeMissing) {
-        validateManifestPaths(safeData.paths, {
-          expectedRepoRoot: validatedPaths.repoRoot,
-          manifestPath,
-          runId: safeData.run_id,
-          caller: "finalize-run",
-        });
-      }
-      currentHeadSha = resolveCurrentHeadSha(validatedPaths.worktree, safeData);
-    }
-    if (!alreadyMerged) {
-      const freshnessRemote = resolveRemoteName(repoPath, branch) || "origin";
-      let prHead = null;
-      try {
-        prHead = resolveRemoteBranchHead(repoPath, freshnessRemote, branch);
-      } catch {
-        // Fail-OPEN on resolution: an unresolvable remote tip must not abort
-        // a legitimate merge. Stale detection stays strict when the tip resolves.
-        freshness = {
-          skipped: true,
-          reason: "unresolvable_remote_head",
-          remote: freshnessRemote,
-          branch,
-        };
-        console.warn(
-          `freshness gate skipped: unresolvable remote PR head for ${freshnessRemote}/${branch}`,
-        );
-      }
-      if (prHead) {
-        const assessment = evaluateMergeFreshness(repoPath, prHead);
-        if (assessment.status === "behind_disjoint") {
-          freshness = {
-            behind_count: assessment.behindCount,
-            overlapping_files: [],
-          };
-        } else if (assessment.status === "overlap") {
-          if (!allowBehindMain) {
-            if (!dryRun) {
-              appendRunEvent(repoPath, safeData.run_id, {
-                event: EVENTS.MERGE_BLOCKED,
-                state_from: safeData.state,
-                state_to: safeData.state,
-                head_sha: currentHeadSha,
-                round: safeData.review?.rounds || null,
-                reason: "behind_main_overlap",
-              });
+function cleanupWorktree(record, mergeFact) {
+  if (!fs.existsSync(record.git.worktree)) return { status: "already_absent" };
+  let worktree;
+  try { worktree = fs.realpathSync(record.git.worktree); }
+  catch (error) { return { status: "retained", reason: error.message }; }
+  if (worktree === record.repo.root) {
+    return { status: "retained", reason: "refusing to remove the canonical repository checkout" };
+  }
+  let commonDir;
+  try {
+    commonDir = fs.realpathSync(path.resolve(
+      worktree,
+      git(worktree, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    ));
+  } catch (error) {
+    return { status: "retained", reason: `worktree identity failed: ${error.message}` };
+  }
+  if (fs.realpathSync(path.dirname(commonDir)) !== record.repo.root) {
+    return { status: "retained", reason: "worktree belongs to a different repository" };
+  }
+  const registered = registeredWorktrees(record.repo.root)
+    .map((entry) => { try { return fs.realpathSync(entry); } catch { return null; } });
+  if (!registered.includes(worktree)) {
+    return { status: "retained", reason: "path is not a registered linked worktree" };
+  }
+  const head = git(worktree, ["rev-parse", "HEAD"]);
+  if (head !== mergeFact.payload.pr_head_sha) {
+    return { status: "retained", reason: "worktree HEAD changed after review" };
+  }
+  if (git(worktree, ["status", "--porcelain"])) {
+    return { status: "retained", reason: "worktree contains uncommitted changes" };
+  }
+  try {
+    git(record.repo.root, ["worktree", "remove", worktree]);
+    return { status: "removed" };
+  } catch (error) {
+    return { status: "retained", reason: error.message };
+  }
+}
+
+function productionServices() {
+  function withRunLock(runDir, callback) {
+    const canonical = fs.realpathSync(runDir);
+    return host.withRunLock({ runDir: canonical, attemptId: `merge-${crypto.randomUUID()}`, operation: "merge",
+      hostKind: "local_supervisor", hostHandle: `merge:${process.pid}`, worktreeDir: canonical }, callback);
+  }
+  return {
+    authenticatedGithubLogin,
+    assertGenerationWrite: generation.assertGenerationWrite,
+    cleanupWorktree,
+    inspectRun: inspectProductionRun,
+    mergeObserver,
+    mergePullRequest,
+    observeLivePr,
+    planOperatorMerge: facts.planOperatorMerge,
+    recordMerge: facts.recordMerge,
+    resumeOperatorMerge: facts.resumeOperatorMerge,
+    revalidateExternalFacts: facts.revalidateExternalFacts,
+    withGenerationAdmission: generation.withGenerationAdmission,
+    withRunLock,
+    beforeMerge: () => {},
+    afterMergeRequest: () => {},
+    afterRequestIntent: () => {},
+    afterMerge: () => {},
+  };
+}
+
+function resumeBinding(inspection, record, binding) {
+  if (inspection.blockers?.length) fail(`merge resume is blocked: ${inspection.blockers[0].code}`, "MERGE_BLOCKED");
+  if (
+    inspection.derived?.action !== "recover"
+    || inspection.derived?.reason !== "merged_pr_unrecorded"
+  ) fail("durable merge authorization can resume only an exact unrecorded merged PR", "MERGE_RESUME_MISMATCH");
+  const observed = inspection.observations?.github;
+  assertExactPr(observed, record, binding, new Set(["MERGED"]));
+  return observed;
+}
+
+async function finishTerminal({ store, resolved, mergeFact, cleanup, services, observer }) {
+  const { record, runDir } = resolved;
+  const payload = mergeFact.payload;
+  if (!SAFE_TOKEN_RE.test(String(payload.operation_id || ""))) {
+    fail("terminal merge fact contains an unsafe operation id", "MERGE_TERMINAL_INVALID");
+  }
+  return services.withGenerationAdmission(
+    { store, generation: "vnext", mode: "write" },
+    async (admission) => {
+      services.assertGenerationWrite({ store, admission, generation: "vnext" });
+      return services.withRunLock(runDir, async (lockContext) => {
+        const binding = { prNumber: payload.pr_number, head: payload.pr_head_sha };
+        const revalidated = await services.revalidateExternalFacts({
+          runDir,
+          lockContext,
+          observer,
+          request: {
+            repo: record.repo.remote,
+            operation_id: payload.operation_id,
+            pr_number: binding.prNumber,
+            expected_pr_head_sha: binding.head,
+            expected_head_ref: record.git.branch,
+            expected_base_ref: record.git.base_branch,
+            expected_result_target_sha: payload.result_target_sha,
+            required_state: "MERGED",
+          },
+          authorize: (observed) => {
+            assertExactPr(observed, record, binding, new Set(["MERGED"]));
+            if (observed.merge_sha !== payload.result_target_sha) {
+              fail("terminal merge target changed", "MERGE_TARGET_MISMATCH");
             }
-            throw new MergeFreshnessRefusal(assessment);
-          }
-          freshnessOverrideRequired = true;
-        }
-      }
-    }
-    if (alreadyMerged) {
-      // The PR is already in GitHub's terminal MERGED state. Retry finalization
-      // must skip gates whose inputs disappear or are moot after merge (CI
-      // checks, mergeability, stacked base, retained worktree HEAD). It STILL
-      // runs the fresh review gate for a normal ready_to_merge finalize so a
-      // stale or advanced review marker cannot be finalized silently against an
-      // externally merged PR. Explicit operator overrides
-      // (--force-finalize-nonready, --skip-review) keep their bypass semantics.
-      if (skipReviewReason) {
-        // Preserve the operator skip-review audit trail (rubric gate +
-        // SKIP_REVIEW event + relay-review-skip comment) on the already-merged
-        // retry, while skipping the moot CI/mergeability/stacked-base checks.
-        assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit });
-        reviewGate = recordSkipReviewAudit(repoPath, safeData, {
-          prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit,
+            return { authorized: true };
+          },
         });
-      } else if (!forceFinalizeNonready && (
-        safeData.state === STATES.READY_TO_MERGE || escalatedAlreadyMergedRetry
-      )) {
-        const reviewContext = fetchReviewContext(repoPath, prNumber);
-        reviewGate = evaluateReviewGate({
-          prNumber,
-          comments: reviewContext.comments,
-          commits: reviewContext.commits,
-          manifestData: safeData,
-          expectedReviewerLogin: safeData.review?.reviewer_login || null,
-          runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
-          headRefOid: reviewContext.headRefOid,
+        const authorization = services.resumeOperatorMerge({
+          runDir,
+          lockContext,
+          operationId: payload.operation_id,
+          freshObservation: revalidated.observationCapability,
         });
-        if (!reviewGate.readyToMerge) {
-          if (!dryRun) {
-            appendRunEvent(repoPath, safeData.run_id, {
-              event: EVENTS.MERGE_BLOCKED,
-              state_from: safeData.state,
-              state_to: safeData.state,
-              head_sha: reviewGate.latestCommit || currentHeadSha,
-              round: safeData.review?.rounds || null,
-              reason: reviewGate.status,
-            });
-          }
-          throw new Error(`Fresh review gate failed: ${reviewGate.status}`);
-        }
-      }
-    } else if (skipReviewReason) {
-      assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit });
-      preMergeContext = fetchPreMergeContext(repoPath, prNumber);
-      prTitle = preMergeContext.title;
-      stackedBaseGuard = buildStackedBaseGuard(
-        repoPath,
-        prNumber,
-        preMergeContext.baseRefName,
-        stackedBaseOverrideReason
-      );
-      if (stackedBaseGuard.status === "blocked" && !dryRun) {
-        appendRunEvent(repoPath, safeData.run_id, {
-          event: EVENTS.MERGE_BLOCKED,
-          state_from: safeData.state,
-          state_to: safeData.state,
-          head_sha: currentHeadSha,
-          round: safeData.review?.rounds || null,
-          reason: `stacked_base_hazard:${stackedBaseGuard.reason}`,
+        if (
+          payload.authorization_id !== authorization.authorizationId
+          || payload.method !== authorization.method
+          || payload.operator !== authorization.actor
+          || payload.pr_number !== authorization.prNumber
+          || payload.pr_head_sha !== authorization.headSha
+          || payload.reviewed_source_sha !== authorization.headSha
+          || payload.done_criteria_sha256 !== authorization.doneCriteriaSha256
+          || payload.override_reason !== authorization.overrideReason
+        ) fail("terminal fact does not match its verified durable authorization", "MERGE_TERMINAL_AUTH_MISMATCH");
+        const repaired = await services.recordMerge({
+          eventsPath: path.join(runDir, "events.jsonl"),
+          provenance: {
+            pr_number: authorization.prNumber,
+            reviewed_source_sha: authorization.headSha,
+            pr_head_sha: authorization.headSha,
+            result_target_sha: payload.result_target_sha,
+            method: authorization.method,
+            operator: authorization.actor,
+            override_reason: authorization.overrideReason,
+          },
+          authorization,
+          lockContext,
+          observer,
         });
-      }
-      assertStackedBaseGuard(stackedBaseGuard, prNumber);
-      reviewGate = recordSkipReviewAudit(repoPath, safeData, {
-        prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit,
+        const cleanupResult = cleanup
+          ? await services.cleanupWorktree(record, repaired)
+          : { status: "retained_by_request" };
+        return {
+          run_id: record.run_id,
+          status: "merged",
+          merge_performed: false,
+          merge_recorded: true,
+          pr_number: payload.pr_number,
+          pr_head_sha: payload.pr_head_sha,
+          result_target_sha: payload.result_target_sha,
+          method: authorization.method,
+          operator: authorization.actor,
+          operation_id: authorization.operationId,
+          cleanup: cleanupResult,
+        };
       });
-    } else if (safeData.state === STATES.READY_TO_MERGE) {
-      preMergeContext = fetchPreMergeContext(repoPath, prNumber);
-      prTitle = preMergeContext.title;
-      reviewGate = evaluateReviewGate({
-        prNumber,
-        comments: preMergeContext.comments,
-        commits: preMergeContext.commits,
-        manifestData: safeData,
-        expectedReviewerLogin: safeData.review?.reviewer_login || null,
-        runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
-        headRefOid: preMergeContext.headRefOid,
-      });
-      if (!reviewGate.readyToMerge) {
-        if (!dryRun) {
-          appendRunEvent(repoPath, safeData.run_id, {
-            event: EVENTS.MERGE_BLOCKED,
-            state_from: safeData.state,
-            state_to: safeData.state,
-            head_sha: reviewGate.latestCommit || currentHeadSha,
-            round: safeData.review?.rounds || null,
-            reason: reviewGate.status,
-          });
-        }
-        throw new Error(`Fresh review gate failed: ${reviewGate.status}`);
-      }
-      stackedBaseGuard = buildStackedBaseGuard(
-        repoPath,
-        prNumber,
-        preMergeContext.baseRefName,
-        stackedBaseOverrideReason
-      );
-      if (stackedBaseGuard.status === "blocked" && !dryRun) {
-        appendRunEvent(repoPath, safeData.run_id, {
-          event: EVENTS.MERGE_BLOCKED,
-          state_from: safeData.state,
-          state_to: safeData.state,
-          head_sha: reviewGate.latestCommit || currentHeadSha,
-          round: safeData.review?.rounds || null,
-          reason: `stacked_base_hazard:${stackedBaseGuard.reason}`,
-        });
-      }
-      assertStackedBaseGuard(stackedBaseGuard, prNumber);
-      assertPreMergeSafety(preMergeContext, prNumber);
-    } else if (forceFinalizeNonready) {
-      preMergeContext = fetchPreMergeContext(repoPath, prNumber);
-      prTitle = preMergeContext.title;
-      stackedBaseGuard = buildStackedBaseGuard(
-        repoPath,
-        prNumber,
-        preMergeContext.baseRefName,
-        stackedBaseOverrideReason
-      );
-      if (stackedBaseGuard.status === "blocked" && !dryRun) {
-        appendRunEvent(repoPath, safeData.run_id, {
-          event: EVENTS.MERGE_BLOCKED,
-          state_from: safeData.state,
-          state_to: safeData.state,
-          head_sha: currentHeadSha,
-          round: safeData.review?.rounds || null,
-          reason: `stacked_base_hazard:${stackedBaseGuard.reason}`,
-        });
-      }
-      assertStackedBaseGuard(stackedBaseGuard, prNumber);
-      assertPreMergeSafety(preMergeContext, prNumber);
-    }
+    },
+  );
+}
+
+async function finalizeRun(cli, overrides = {}) {
+  const services = { ...productionServices(), ...overrides };
+  const resolved = resolveRun({
+    repo: cli.repo,
+    runDir: cli.values["run-dir"] || null,
+    runId: cli.values["run-id"] || null,
+  });
+  const { record, runDir, identity } = resolved;
+  const store = generation.initializeStore({ checkoutRoot: identity.repoRoot, remote: identity.remote });
+  if (generation.readGeneration(store)?.writer_generation !== "vnext") {
+    fail("vNext is not the active writer generation", "GENERATION_NOT_ACTIVE");
+  }
+  const terminal = terminalMergeFact(runDir, facts);
+  if (terminal.fact) {
+    const observer = services.mergeObserver(record);
+    return finishTerminal({
+      store,
+      resolved,
+      mergeFact: terminal.fact,
+      cleanup: !cli.values["no-cleanup"],
+      services,
+      observer,
+    });
   }
 
-  if (mergeAllowed) {
-    if (!alreadyMerged) {
-      const draftPrGuard = buildDraftPrGuard(preMergeContext, prNumber);
-      assertDraftPrGuard(repoPath, safeData, draftPrGuard, { currentHeadSha, dryRun });
-    }
-    if (freshnessOverrideRequired && !dryRun) {
-      appendBehindMainOverrideEvent(repoPath, safeData, {
-        prNumber,
-        currentHeadSha,
-        reason: forceFinalizeReason,
-      });
-    }
-    if (forceFinalizeNonready && !dryRun) {
-      appendRunEvent(repoPath, safeData.run_id, {
-        event: EVENTS.FORCE_FINALIZE,
-        state_from: safeData.state,
-        state_to: STATES.MERGED,
-        head_sha: currentHeadSha,
-        round: safeData.review?.rounds || null,
-        reason: forceFinalizeReason,
-        override_class: "force_finalize_nonready",
-        affected_head_sha: currentHeadSha,
-        prior_state: safeData.state,
-        required_reason: forceFinalizeReason,
-        operator_initiated: true,
-        pr_number: prNumber,
-        last_reviewed_sha: safeData.review?.last_reviewed_sha,
-      });
-    }
+  const initial = await services.inspectRun({ runDir });
+  let binding;
+  try { binding = requireMergeAction(initial, record); }
+  catch (error) {
+    const derivedHead = initial.derived?.head_sha;
+    const derivedPr = initial.derived?.pr_number;
+    if (
+      initial.derived?.reason !== "merged_pr_unrecorded"
+      || !SHA1_RE.test(String(derivedHead || ""))
+      || !Number.isInteger(derivedPr)
+    ) throw error;
+    binding = { head: derivedHead, prNumber: derivedPr };
+  }
+  const method = cli.values["merge-method"];
+  const preferredId = operationId(record, binding, method, cli.values["operation-id"] || null);
+  const authorizationLookup = findAuthorizationOperation(runDir, preferredId);
+  const id = authorizationLookup.operationId;
+  const hasAuthorization = authorizationLookup.existing;
+  if (initial.derived?.action !== "merge" && !hasAuthorization) {
+    fail("an externally merged PR without this command's durable authorization must use canonical recover", "MERGE_RECOVER_REQUIRED");
+  }
+  if (cli.values["dry-run"]) {
+    if (initial.derived?.action !== "merge") fail("dry-run cannot resume an in-flight merge", "MERGE_DRY_RUN_RESUME_UNSUPPORTED");
+    const gate = requireMergeAction(initial, record);
+    return {
+      run_id: record.run_id,
+      status: "ready_to_merge",
+      dry_run: true,
+      pr_number: gate.prNumber,
+      pr_head_sha: gate.head,
+      method,
+      operation_id: id,
+      action_key: initial.recommended_action.key,
+    };
+  }
 
-    if (!dryRun && !prMergeState) {
-      prMergeState = fetchPrMergeState(repoPath, prNumber);
-    }
-    if (!dryRun && !isMergedPrState(prMergeState)) {
-      try {
-        const mergeArgs = ["pr", "merge", String(prNumber), mergeFlag(mergeMethod)];
-        if (mergeMethod === "squash") {
-          const subject = buildSquashSubject(prTitle, prNumber);
-          if (subject) {
-            mergeArgs.push("--subject", subject);
-          } else {
-            console.error(`Note: PR title unavailable for PR #${prNumber}; proceeding with subjectless squash merge.`);
+  const actor = operatorName(record.repo.root, cli.values.actor);
+  const observer = services.mergeObserver(record);
+  return services.withGenerationAdmission(
+    { store, generation: "vnext", mode: "write" },
+    async (admission) => {
+      services.assertGenerationWrite({ store, admission, generation: "vnext" });
+      return services.withRunLock(runDir, async (lockContext) => {
+        const fresh = await services.inspectRun({ runDir });
+        let freshBinding;
+        if (hasAuthorization) {
+          if (fresh.derived?.action === "merge") freshBinding = requireMergeAction(fresh, record);
+          else {
+            resumeBinding(fresh, record, binding);
+            freshBinding = binding;
           }
+        } else {
+          freshBinding = requireMergeAction(fresh, record);
         }
-        execGh(repoPath, mergeArgs);
-        mergePerformed = true;
-        prMergeState = fetchPrMergeState(repoPath, prNumber);
-      } catch (error) {
-        prMergeState = fetchPrMergeState(repoPath, prNumber);
-        if (!isMergedPrState(prMergeState)) {
-          throw error;
+        if (freshBinding.head !== binding.head || freshBinding.prNumber !== binding.prNumber) {
+          fail("merge binding changed while acquiring the run lock", "MERGE_BINDING_CHANGED");
         }
-        mergeRecovered = true;
-      }
-    } else if (!dryRun && isMergedPrState(prMergeState)) {
-      mergeRecovered = true;
-    } else if (dryRun && !alreadyMerged) {
-      mergePerformed = true;
-    }
-    // Merge queue support: if PR isn't immediately MERGED, poll for completion.
-    // Repos with merge queues transition through an intermediate state before merging.
-    if (!dryRun && !isMergedPrState(prMergeState)) {
-      const MERGE_QUEUE_POLL_INTERVAL_MS = parseInt(process.env.RELAY_MERGE_QUEUE_POLL_MS || "30000", 10);
-      const MERGE_QUEUE_MAX_POLLS = parseInt(process.env.RELAY_MERGE_QUEUE_MAX_POLLS || "60", 10);
-      if (!Number.isFinite(MERGE_QUEUE_POLL_INTERVAL_MS) || MERGE_QUEUE_POLL_INTERVAL_MS < 100) {
-        throw new Error(`Invalid RELAY_MERGE_QUEUE_POLL_MS: must be >= 100 (got ${process.env.RELAY_MERGE_QUEUE_POLL_MS})`);
-      }
-      if (!Number.isFinite(MERGE_QUEUE_MAX_POLLS) || MERGE_QUEUE_MAX_POLLS < 1) {
-        throw new Error(`Invalid RELAY_MERGE_QUEUE_MAX_POLLS: must be >= 1 (got ${process.env.RELAY_MERGE_QUEUE_MAX_POLLS})`);
-      }
-      const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
-      if (!jsonOut) {
-        console.log(`  PR #${prNumber} is in a merge queue. Polling every ${MERGE_QUEUE_POLL_INTERVAL_MS / 1000}s...`);
-      }
-      for (let i = 0; i < MERGE_QUEUE_MAX_POLLS; i++) {
-        Atomics.wait(sleepBuf, 0, 0, MERGE_QUEUE_POLL_INTERVAL_MS);
-        prMergeState = fetchPrMergeState(repoPath, prNumber);
-        if (isMergedPrState(prMergeState)) break;
-        if (prMergeState.state === "OPEN") {
-          appendRunEvent(repoPath, safeData.run_id, {
-            event: EVENTS.MERGE_BLOCKED,
-            state_from: safeData.state,
-            state_to: safeData.state,
-            head_sha: reviewGate?.latestCommit || currentHeadSha,
-            round: safeData.review?.rounds || null,
-            reason: "removed_from_merge_queue",
-          });
-          throw new Error(
-            `PR #${prNumber} was removed from the merge queue (state reverted to OPEN). Check the GitHub merge queue page.`
+        const direct = assertExactPr(
+          await services.observeLivePr(record, binding.prNumber),
+          record,
+          binding,
+          hasAuthorization ? new Set(["OPEN", "MERGED"]) : new Set(["OPEN"]),
+        );
+        const revalidated = await services.revalidateExternalFacts({
+          runDir,
+          lockContext,
+          observer,
+          request: {
+            repo: record.repo.remote,
+            pr_number: binding.prNumber,
+            expected_pr_head_sha: binding.head,
+            expected_head_ref: record.git.branch,
+            expected_base_ref: record.git.base_branch,
+            expected_state: direct.pr_state,
+            expected_auto_merge_request: direct.auto_merge_request,
+            expected_merge_state_status: direct.merge_state_status,
+          },
+          authorize: (observed) => {
+            assertExactPr(
+              observed,
+              record,
+              binding,
+              hasAuthorization ? new Set(["OPEN", "MERGED"]) : new Set(["OPEN"]),
+            );
+            if (
+              isMergePending(observed) !== isMergePending(direct)
+              || (isMergePending(direct) && pendingMethod(observed) !== pendingMethod(direct))
+            ) fail("merge queue state changed across independent observations", "MERGE_QUEUE_OBSERVATION_MISMATCH");
+            return { authorized: true };
+          },
+        });
+        if (!hasAuthorization && isMergePending(revalidated.facts)) {
+          fail("an existing external merge queue request requires canonical recover", "MERGE_RECOVER_REQUIRED");
+        }
+        const githubLogin = await services.authenticatedGithubLogin(record);
+        const authorization = hasAuthorization
+          ? services.resumeOperatorMerge({
+              runDir,
+              lockContext,
+              operationId: id,
+              freshObservation: revalidated.observationCapability,
+            })
+          : services.planOperatorMerge({
+              runDir,
+              lockContext,
+              freshObservation: revalidated.observationCapability,
+              operatorAction: { actor, method, operationId: id, githubLogin },
+              currentHead: binding.head,
+              currentDoneCriteriaSha256: record.contract.done_criteria_sha256,
+              verdict: {
+                verdict: freshBinding.review.payload.verdict,
+                reviewed_sha: freshBinding.review.payload.reviewed_sha,
+                done_criteria_sha256: freshBinding.review.payload.done_criteria_sha256,
+              },
+              prNumber: binding.prNumber,
+            });
+
+        if (authorization.githubLogin !== githubLogin) {
+          fail(
+            "authenticated GitHub identity differs from the durable merge authorization",
+            "MERGE_AUTH_IDENTITY_DRIFT",
           );
         }
-      }
-      if (!isMergedPrState(prMergeState)) {
-        appendRunEvent(repoPath, safeData.run_id, {
-          event: EVENTS.MERGE_BLOCKED,
-          state_from: safeData.state,
-          state_to: safeData.state,
-          head_sha: reviewGate?.latestCommit || currentHeadSha,
-          round: safeData.review?.rounds || null,
-          reason: `merge_queue_timeout:${prMergeState.state || "unknown"}`,
+
+        if (hasAuthorization && (authorization.method !== method || authorization.actor !== actor)) {
+          fail(
+            "requested method or actor differs from the verified durable authorization",
+            "MERGE_AUTHORIZATION_REQUEST_MISMATCH",
+          );
+        }
+        const ambiguousFile = ambiguousPath(runDir, authorization.operationId);
+        const ambiguous = readRegularJson(ambiguousFile, "ambiguous merge artifact");
+        if (ambiguous) {
+          validateAmbiguous(ambiguous, authorization, binding);
+          fail("a prior merge command failed after GitHub reported MERGED; use canonical external recover", "MERGE_EXTERNAL_RECOVER_REQUIRED");
+        }
+        const pendingFile = pendingPath(runDir, authorization.operationId);
+        let pending = readRegularJson(pendingFile, "merge pending artifact");
+        if (pending) validatePending(pending, authorization, binding);
+        const intentFile = requestIntentPath(runDir, authorization.operationId);
+        let requestIntent = readRegularJson(intentFile, "merge request intent");
+        if (requestIntent) validateRequestIntent(requestIntent, authorization, binding);
+
+        let live = revalidated.facts;
+        let mergePerformed = false;
+        if (live.pr_state === "OPEN") {
+          if (isMergePending(live)) {
+            const queuedMethod = pendingMethod(live);
+            if (queuedMethod && queuedMethod !== authorization.method) {
+              fail("GitHub merge queue method differs from the durable authorization", "MERGE_QUEUE_METHOD_MISMATCH");
+            }
+            if (!pending && !requestIntent) {
+              fail(
+                "an external merge queue request without durable Relay request evidence must use canonical recover",
+                "MERGE_RECOVER_REQUIRED",
+              );
+            }
+            assertQueueRequestor(live, authorization);
+            if (!pending) pending = recordPending(runDir, authorization, binding);
+            return {
+              run_id: record.run_id,
+              status: "merge_pending",
+              merge_performed: false,
+              merge_recorded: false,
+              pr_number: binding.prNumber,
+              pr_head_sha: binding.head,
+              method: authorization.method,
+              operator: authorization.actor,
+              operation_id: authorization.operationId,
+              cleanup: { status: "deferred_until_merged" },
+            };
+          }
+          if (pending) {
+            fail("durable merge queue request disappeared before merge", "MERGE_QUEUE_STATE_LOST");
+          }
+          if (requestIntent) {
+            fail(
+              "a durable merge request intent has no confirmed GitHub outcome; use canonical recover",
+              "MERGE_REQUEST_OUTCOME_AMBIGUOUS",
+            );
+          }
+          const preflight = assertExactPr(
+            await services.observeLivePr(record, binding.prNumber),
+            record,
+            binding,
+            new Set(["OPEN"]),
+          );
+          if (isMergePending(preflight)) {
+            fail("merge queue state changed immediately before the merge request", "MERGE_QUEUE_OBSERVATION_MISMATCH");
+          }
+          const finalGithubLogin = await services.authenticatedGithubLogin(record);
+          if (finalGithubLogin !== authorization.githubLogin) {
+            fail(
+              "authenticated GitHub identity changed immediately before the merge request",
+              "MERGE_AUTH_IDENTITY_DRIFT",
+            );
+          }
+          await services.beforeMerge({ record, binding, authorization });
+          requestIntent = recordRequestIntent(runDir, authorization, binding);
+          await services.afterRequestIntent({ record, binding, authorization });
+          try {
+            await services.mergePullRequest(record, binding, authorization.method);
+            mergePerformed = true;
+          } catch (error) {
+            live = await services.observeLivePr(record, binding.prNumber);
+            if (live.pr_state === "MERGED") {
+              writeImmutableJson(ambiguousFile, ambiguousValue(authorization, binding));
+              fail(
+                "merge command failed after GitHub reported MERGED; use canonical external recover",
+                "MERGE_EXTERNAL_RECOVER_REQUIRED",
+              );
+            }
+            if (live.pr_state === "OPEN" && isMergePending(live)) {
+              const queuedMethod = pendingMethod(live);
+              if (queuedMethod && queuedMethod !== authorization.method) {
+                fail("GitHub merge queue method differs from the durable authorization", "MERGE_QUEUE_METHOD_MISMATCH");
+              }
+              assertQueueRequestor(live, authorization);
+              pending = recordPending(runDir, authorization, binding);
+              return {
+                run_id: record.run_id,
+                status: "merge_pending",
+                merge_performed: true,
+                merge_recorded: false,
+                pr_number: binding.prNumber,
+                pr_head_sha: binding.head,
+                method: authorization.method,
+                operator: authorization.actor,
+                operation_id: authorization.operationId,
+                cleanup: { status: "deferred_until_merged" },
+              };
+            }
+            fail(
+              `merge request outcome is ambiguous after command failure: ${error.message}`,
+              "MERGE_REQUEST_OUTCOME_AMBIGUOUS",
+            );
+          }
+          await services.afterMergeRequest({ record, binding, authorization });
+          // A successful command is the exactly-once request boundary. Persist
+          // confirmation only after the post-call crash seam has been crossed.
+          pending = recordPending(runDir, authorization, binding);
+          await services.afterMerge({ record, binding, operationId: id });
+          live = await services.observeLivePr(record, binding.prNumber);
+          if (live.pr_state === "OPEN" && isMergePending(live)) {
+            const queuedMethod = pendingMethod(live);
+            if (queuedMethod && queuedMethod !== authorization.method) {
+              fail("GitHub merge queue method differs from the durable authorization", "MERGE_QUEUE_METHOD_MISMATCH");
+            }
+            assertQueueRequestor(live, authorization);
+            pending = recordPending(runDir, authorization, binding);
+            return {
+              run_id: record.run_id,
+              status: "merge_pending",
+              merge_performed: true,
+              merge_recorded: false,
+              pr_number: binding.prNumber,
+              pr_head_sha: binding.head,
+              method: authorization.method,
+              operator: authorization.actor,
+              operation_id: authorization.operationId,
+              cleanup: { status: "deferred_until_merged" },
+            };
+          }
+        }
+        assertExactPr(live, record, binding, new Set(["MERGED"]));
+        requireRelayRequestEvidence({ live, pending, requestIntent, mergePerformed });
+        const mergeFact = await services.recordMerge({
+          eventsPath: path.join(runDir, "events.jsonl"),
+          provenance: {
+            pr_number: binding.prNumber,
+            reviewed_source_sha: binding.head,
+            pr_head_sha: binding.head,
+            result_target_sha: live.merge_sha,
+            method: authorization.method,
+            operator: authorization.actor,
+            override_reason: authorization.overrideReason,
+          },
+          authorization,
+          lockContext,
+          observer,
         });
-        const totalWaitMin = Math.round((MERGE_QUEUE_POLL_INTERVAL_MS * MERGE_QUEUE_MAX_POLLS) / 60000);
-        throw new Error(
-          `PR #${prNumber} did not merge after ~${totalWaitMin} minutes in the merge queue (state=${prMergeState.state || "unknown"}). Check the GitHub merge queue page.`
-        );
-      }
-    }
-    updated = forceFinalizeNonready
-      ? forceUpdateManifestState(updated, STATES.MERGED, "manual_cleanup_required", {
-        reason: forceFinalizeReason,
-        operator: operatorName,
-      })
-      : updateManifestState(updated, STATES.MERGED, "manual_cleanup_required");
-    updated = {
-      ...updated,
-      git: {
-        ...(updated.git || {}),
-        head_sha: currentHeadSha || reviewGate?.latestCommit || updated.review?.last_reviewed_sha || updated.git?.head_sha || null,
-      },
-    };
-    if (!dryRun) {
-      appendRunEvent(repoPath, safeData.run_id, {
-        event: EVENTS.MERGE_FINALIZE,
-        state_from: safeData.state,
-        state_to: STATES.MERGED,
-        head_sha: updated.git?.head_sha || null,
-        round: updated.review?.rounds || null,
-        reason: buildMergeFinalizeReason({
-          mergeMethod,
-          mergeRecovered,
-          skipReviewReason,
-          stackedBaseGuard,
-        }),
-        ...buildStackedBaseOverrideAuditFields(
-          stackedBaseGuard,
-          prNumber,
-          updated.git?.head_sha || currentHeadSha,
-          safeData.state
-        ),
+        const cleanup = cli.values["no-cleanup"]
+          ? { status: "retained_by_request" }
+          : await services.cleanupWorktree(record, mergeFact);
+        return {
+          run_id: record.run_id,
+          status: "merged",
+          merge_performed: mergePerformed,
+          merge_recorded: true,
+          pr_number: binding.prNumber,
+          pr_head_sha: binding.head,
+          result_target_sha: mergeFact.payload.result_target_sha,
+          method: mergeFact.payload.method,
+          operator: mergeFact.payload.operator,
+          operation_id: mergeFact.payload.operation_id,
+          cleanup,
+        };
       });
-      writeManifest(manifestPath, updated, body);
-      if (process.env.RELAY_FINALIZE_ABORT_AFTER_MERGE_WRITE) {
-        throw new Error("simulated post-merge failure after merged manifest write");
-      }
-    }
-  }
+    },
+  );
+}
 
-  if (!skipMerge && updated.state === STATES.MERGED) {
-    if (!dryRun) {
-      const remoteDelete = deleteRemoteBranch(repoPath, branch);
-      remoteName = remoteDelete.remoteName;
-      remoteBranchDeleteAttempted = remoteDelete.attempted;
-      remoteBranchDeleted = remoteDelete.deleted;
-      remoteBranchDeleteWarning = remoteDelete.warning;
-    } else {
-      remoteBranchDeleted = true;
-    }
+async function main(argv = process.argv.slice(2)) {
+  const cli = parseCli(argv);
+  if (cli.help) {
+    console.log(usage());
+    return 0;
   }
-
-  const issueNumber = updated.issue?.number || null;
-  if (!skipIssueClose && issueNumber) {
-    if (!dryRun) {
-      try {
-        execGh(repoPath, ["issue", "close", String(issueNumber), "--comment", `Resolved in PR #${prNumber}`]);
-        issueClosed = true;
-      } catch (error) {
-        issueCloseWarning = summarizeFailure(error);
-      }
-    }
-  }
-
-  let learningsResult = null;
-  if (updated.state === STATES.MERGED && !dryRun) {
-    try {
-      learningsResult = appendDurableLearnings({
-        repoPath,
-        runId: updated.run_id,
-        prNumber: String(prNumber),
-        synthesis: updated.issue?.title || null,
-        baseBranch: updated.git?.base_branch || null,
-        manifest: updated,
-        issueNumber: updated.issue?.number || null,
-      });
-    } catch (error) {
-      learningsResult = { status: "failed", reason: "exception", message: summarizeFailure(error) };
-    }
-  }
-
-  const cleanupResult = runFinalizeCleanup({
-    repoRoot: repoPath,
-    data: updated,
-    dryRun,
-    deleteMergedBranch: updated.state === STATES.MERGED,
-  });
-  updated = cleanupResult.updatedData;
-  if (!dryRun) {
-    appendRunEvent(repoPath, updated.run_id, {
-      event: EVENTS.CLEANUP_RESULT,
-      state_from: updated.state,
-      state_to: updated.state,
-      head_sha: updated.git?.head_sha || null,
-      round: updated.review?.rounds || null,
-      reason: cleanupResult.summary.cleanupStatus === "succeeded"
-        ? "cleanup_succeeded"
-        : cleanupResult.summary.error,
-    });
-  }
-
-  if (!dryRun) {
-    writeManifest(manifestPath, updated, body);
-  }
-
-  const result = {
-    manifestPath,
-    previousState: safeData.state,
-    state: updated.state,
-    nextAction: updated.next_action,
-    branch,
-    prNumber,
-    issueNumber,
-    mergePerformed,
-    mergeRecovered,
-    prMergeState: prMergeState?.state || null,
-    mergeMethod,
-    remoteName,
-    remoteBranchDeleteAttempted,
-    remoteBranchDeleted,
-    remoteBranchDeleteWarning,
-    reviewGate,
-    stackedBaseGuard,
-    issueClosed,
-    issueCloseWarning,
-    cleanup: cleanupResult.summary,
-    learnings: learningsResult,
-    dryRun,
-    forceFinalized: forceFinalizeNonready,
-    forceFinalizeReason: forceFinalizeNonready ? forceFinalizeReason : null,
-    ...(freshness ? { freshness } : {}),
-  };
-
-  if (jsonOut) {
-    console.log(JSON.stringify(result, null, 2));
-  } else {
-    console.log(`Finalized relay run: ${manifestPath}`);
-    console.log(`  State:        ${safeData.state} -> ${updated.state}`);
-    console.log(`  Next action:  ${updated.next_action}`);
-    console.log(`  Merge:        ${mergePerformed ? `performed (${mergeMethod})` : (skipMerge ? "skipped" : "already merged")}`);
-    if (!skipMerge) {
-      console.log(`  Remote branch:${remoteBranchDeleted ? " deleted" : (remoteBranchDeleteAttempted ? " warning" : " skipped")}`);
-      if (remoteBranchDeleteWarning) console.log(`  Remote note:  ${remoteBranchDeleteWarning}`);
-    }
-    console.log(`  Issue close:  ${issueNumber ? (issueClosed ? "closed" : (issueCloseWarning ? `warning: ${issueCloseWarning}` : "skipped")) : "none"}`);
-    console.log(`  Cleanup:      ${cleanupResult.summary.cleanupStatus}`);
-    if (cleanupResult.summary.error) console.log(`  Cleanup note: ${cleanupResult.summary.error}`);
-    if (dryRun) console.log("  dry-run:      no changes written");
-  }
+  const result = await finalizeRun(cli);
+  console.log(cli.values.json ? JSON.stringify(result) : JSON.stringify(result, null, 2));
+  return 0;
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
-    if (error instanceof DraftPrRefusal) {
-      if (args.includes("--json")) {
-        console.log(JSON.stringify(error.result, null, 2));
-      } else {
-        console.log(`Merge refused: PR #${error.result.pr_number} is still a draft and could not be marked ready.`);
-        console.log(`  Next action: ${error.result.next_action}`);
-      }
-      process.exit(2);
-    }
-    if (error instanceof MergeFreshnessRefusal) {
-      if (args.includes("--json")) {
-        console.log(JSON.stringify(error.result, null, 2));
-      } else {
-        console.log("Merge refused: PR head is behind origin/main on overlapping files.");
-        console.log(`  Behind commits:    ${error.result.behind_count}`);
-        console.log(`  Overlapping files: ${error.result.overlapping_files.join(", ")}`);
-        console.log(`  Next action:       ${error.result.next_action}`);
-      }
-      process.exit(2);
-    }
-    console.error(`Error: ${error.message}`);
-    process.exit(1);
-  }
+  main().catch((error) => {
+    const payload = { ok: false, code: error.code || "MERGE_FAILED", error: error.message };
+    console.error(process.argv.includes("--json") ? JSON.stringify(payload) : `Error: ${error.message}`);
+    process.exitCode = 1;
+  });
 }
 
 module.exports = {
-  buildSquashSubject,
-  appendDurableLearnings,
-  resolveLearningOwner,
-  parseIssueComponent,
-  readManifestOwnership,
+  assertExactPr,
+  cleanupWorktree,
+  finalizeRun,
+  main,
+  mergeObserver,
+  operationId,
+  parseCli,
+  usage,
 };

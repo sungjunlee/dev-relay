@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { execFileSync } = require("node:child_process");
 
 const {
   PAYLOAD_SCHEMAS,
@@ -71,6 +72,20 @@ function payload(type) {
       last_known_sha: SHA, reason: "signal", host_liveness: "unknown",
       reviewable_work: false,
     },
+    verification_recorded: {
+      head_sha: SHA2,
+      tree_sha: SHA,
+      done_criteria_sha256: HASH,
+      command: "node --test",
+      verification_request_sha256: HASH,
+      declared_command_count: 1,
+      completed_command_count: 1,
+      result_path: "/r/verification.log",
+      result_sha256: HASH,
+      exit_code: 0,
+      status: "passed",
+      operator: "owner",
+    },
     lock_acquired: {
       lock_id: "l1", operation: "dispatch", host: "host", pid: 42,
       process_started_at: "2026-07-31T00:00:00Z",
@@ -102,6 +117,26 @@ function payload(type) {
   return values[type];
 }
 
+test("fact reader rejects a FIFO without blocking", () => {
+  const eventsPath = tempEvents("fifo");
+  execFileSync("mkfifo", [eventsPath]);
+  const started = Date.now();
+  assert.throws(() => readFacts({ eventsPath }), /regular non-symlink/);
+  assert.ok(Date.now() - started < 1000, "FIFO rejection must not wait for a writer");
+});
+
+test("fact reader honors the injected filesystem implementation", () => {
+  const eventsPath = tempEvents("injected-read-fs");
+  let openCalls = 0;
+  const fsSpy = Object.create(fs);
+  fsSpy.openSync = (...args) => {
+    openCalls += 1;
+    return fs.openSync(...args);
+  };
+  assert.deepEqual(readFacts({ eventsPath, fsModule: fsSpy }).facts, []);
+  assert.equal(openCalls, 1);
+});
+
 function fact(type, index = 1) {
   return {
     event_id: `e${index}`,
@@ -128,9 +163,9 @@ function acquireFactLock(eventsPath) {
   });
 }
 
-test("all ten fact payloads have closed, executable schemas", () => {
+test("all eleven fact payloads have closed, executable schemas", () => {
   const types = Object.keys(PAYLOAD_SCHEMAS);
-  assert.equal(types.length, 10);
+  assert.equal(types.length, 11);
   types.forEach((type, index) => {
     assert.equal(validateFact(fact(type, index + 1)).known, true);
     assert.throws(
@@ -147,6 +182,48 @@ test("all ten fact payloads have closed, executable schemas", () => {
       /is required/,
     );
   });
+  assert.throws(
+    () => validateFact({
+      ...fact("verification_recorded"),
+      payload: { ...payload("verification_recorded"), status: "passed", exit_code: null },
+    }),
+    /passed verification requires exit_code=0 and all declared commands completed/,
+  );
+  assert.throws(
+    () => validateFact({
+      ...fact("verification_recorded"),
+      payload: { ...payload("verification_recorded"), status: "incomplete", exit_code: 0 },
+    }),
+    /incomplete verification requires exit_code=null/,
+  );
+  assert.throws(
+    () => validateFact({
+      ...fact("verification_recorded"),
+      actor: "different-operator",
+    }),
+    /actor must equal payload.operator/,
+  );
+  assert.equal(validateFact({
+    ...fact("verification_recorded"),
+    payload: {
+      ...payload("verification_recorded"),
+      declared_command_count: 2,
+      completed_command_count: 1,
+      status: "failed",
+      exit_code: 1,
+    },
+  }).known, true);
+  assert.throws(
+    () => validateFact({
+      ...fact("verification_recorded"),
+      payload: {
+        ...payload("verification_recorded"),
+        declared_command_count: 2,
+        completed_command_count: 1,
+      },
+    }),
+    /all declared commands completed/,
+  );
   assert.throws(() => validateFact({ ...fact("run_closed"), type: "future_fact" }), /unknown fact type/);
 });
 

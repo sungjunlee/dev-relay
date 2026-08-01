@@ -61,8 +61,7 @@ test("matches raw project-only probe file shape", () => {
   fs.writeFileSync(probeFile, JSON.stringify({
     executor: null,
     repo: "/tmp/example",
-    agent_tools_raw: null,
-    agent_probe_error: null,
+    executor_availability: { status: "not_requested", error: null, version: null },
     test_infra: [{ name: "jest", source: "package.json" }],
     project_tools: {
       frameworks: [

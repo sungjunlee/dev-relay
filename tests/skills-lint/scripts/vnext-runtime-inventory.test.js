@@ -97,7 +97,7 @@ test("checked-in runtime inventory covers every shipped relay script and edge", 
   }));
 });
 
-test("#1134 deletion table and retired inventory map the same 43 absent production scripts", () => {
+test("retired runtime table and deletion plan map the same absent production scripts", () => {
   const inventory = readInventory(INVENTORY_PATH);
   const retired = inventory.retiredArtifacts.map((entry) => entry.path).sort();
   const plan = fs.readFileSync(path.join(
@@ -107,8 +107,8 @@ test("#1134 deletion table and retired inventory map the same 43 absent producti
   const mapped = [...plan.matchAll(/\| `([^`]+\.js)` \|/g)]
     .map((match) => `skills/${match[1]}`)
     .sort();
-  assert.equal(retired.length, 43);
-  assert.equal(new Set(retired).size, 43);
+  assert.ok(retired.length > 0);
+  assert.equal(new Set(retired).size, retired.length);
   assert.deepEqual(mapped, retired);
   retired.forEach((script) => assert.equal(fs.existsSync(path.join(REPO_ROOT, script)), false, script));
 });
@@ -189,41 +189,5 @@ test("runtime inventory fails when a directly detected access role is missing", 
   assert.throws(
     () => validateInventory({ repoRoot, inventory }),
     /missing detected runtime role for skills\/relay\/scripts\/entry\.js: cli-entry/,
-  );
-});
-
-function removeSemanticRole(inventory, artifactPath, role) {
-  const artifact = inventory.artifactGroups
-    .flatMap((group) => group.artifacts)
-    .find((candidate) => candidate.path === artifactPath);
-  assert.ok(artifact, `fixture artifact exists: ${artifactPath}`);
-  artifact.roles.reviewedSemantic = artifact.roles.reviewedSemantic.filter((candidate) => candidate !== role);
-}
-
-test("runtime inventory enforces reviewed semantic rubric-reader roles", () => {
-  const inventory = structuredClone(readInventory(INVENTORY_PATH));
-  removeSemanticRole(
-    inventory,
-    "skills/relay-dispatch/scripts/manifest/rubric.js",
-    "done-criteria:read",
-  );
-
-  assert.throws(
-    () => validateInventory({ repoRoot: REPO_ROOT, inventory }),
-    /missing reviewed semantic runtime role for skills\/relay-dispatch\/scripts\/manifest\/rubric\.js: done-criteria:read/,
-  );
-});
-
-test("runtime inventory enforces delegated review-gate semantic roles", () => {
-  const inventory = structuredClone(readInventory(INVENTORY_PATH));
-  removeSemanticRole(
-    inventory,
-    "skills/relay-merge/scripts/review-gate.js",
-    "done-criteria:read",
-  );
-
-  assert.throws(
-    () => validateInventory({ repoRoot: REPO_ROOT, inventory }),
-    /missing reviewed semantic runtime role for skills\/relay-merge\/scripts\/review-gate\.js: done-criteria:read/,
   );
 });

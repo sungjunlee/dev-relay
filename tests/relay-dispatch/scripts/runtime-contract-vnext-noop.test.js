@@ -10,7 +10,7 @@ const noopRuntime = path.join(
   "tests/relay-dispatch/fixtures/runtime-contract-vnext-noop.js",
 );
 
-test("vNext contract suite rejects a no-op runtime", () => {
+test("vNext contract suite rejects a runtime missing retained createRunRecord behavior", () => {
   const childEnv = { ...process.env };
   delete childEnv.NODE_TEST_CONTEXT;
   const result = spawnSync(
@@ -31,7 +31,5 @@ test("vNext contract suite rejects a no-op runtime", () => {
   const output = `${result.stdout || ""}\n${result.stderr || ""}`;
   assert.equal(result.error, undefined);
   assert.notEqual(result.status, 0, output);
-  assert.match(output, /ℹ tests 13/);
-  assert.match(output, /ℹ pass 0/);
-  assert.match(output, /ℹ fail 13/);
+  assert.match(output, /createRunRecord is not a function/);
 });

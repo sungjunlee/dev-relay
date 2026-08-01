@@ -4,13 +4,36 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { execFileSync } = require("node:child_process");
+const { getAdapter } = require("../../../skills/relay-dispatch/scripts/adapters");
 
-const runtimePath = process.env.RELAY_VNEXT_RUNTIME_PATH
-  ? path.resolve(process.env.RELAY_VNEXT_RUNTIME_PATH)
-  : path.resolve(__dirname, "../../../skills/relay-dispatch/scripts/runtime-vnext.js");
+const facts = require("../../../skills/relay-dispatch/scripts/facts");
+const host = require("../../../skills/relay-dispatch/scripts/host");
+const inspect = require("../../../skills/relay-dispatch/scripts/inspect");
+const recover = require("../../../skills/relay-dispatch/scripts/recover");
+const store = require("../../../skills/relay-dispatch/scripts/run-store");
+function lockOptions(runDir, operation) { const canonical = fs.realpathSync(runDir); return { runDir: canonical,
+  attemptId: `${operation}-${crypto.randomUUID()}`, operation, hostKind: "local_supervisor",
+  hostHandle: `${operation}:${process.pid}`, worktreeDir: canonical }; }
+function withRunLock(options, callback) { return host.withRunLock(typeof options === "string" ? lockOptions(options, "test") : options, callback); }
+const productionRuntime = {
+  ...facts, ...store, withRunLock,
+  foldRun: ({ runRecord, facts: runFacts, gitFacts, githubFacts, hostFacts }) => inspect.foldRunFacts({ runRecord, facts: runFacts, gitFacts, githubFacts, hostFacts }),
+  appendFact({ eventsPath, fact }) { const runDir = fs.realpathSync(path.dirname(eventsPath));
+    return withRunLock(lockOptions(runDir, "append-fact"), (lockContext) => facts.appendFact({ eventsPath, fact, lockContext })); },
+  repairTornTail({ eventsPath, at }) { const runDir = fs.realpathSync(path.dirname(eventsPath));
+    return withRunLock(lockOptions(runDir, "repair-tail"), (lockContext) => facts.repairTornTail({ eventsPath, at, lockContext })); },
+};
+const runtime = process.env.RELAY_VNEXT_RUNTIME_PATH
+  ? require(path.resolve(process.env.RELAY_VNEXT_RUNTIME_PATH))
+  : productionRuntime;
 
 function tempRoot(label) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `relay-vnext-${label}-`));
+}
+
+function shaFile(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
 function createIdentity(runtime, label, runId = "r1") {
@@ -45,8 +68,6 @@ function createIdentity(runtime, label, runId = "r1") {
 
 function gate(assertions) {
   return async () => {
-    assert.equal(fs.existsSync(runtimePath), true, "vNext runtime entrypoint must exist");
-    const runtime = require(runtimePath);
     await assertions(runtime);
   };
 }
@@ -91,6 +112,27 @@ test("RR-02 vNext frozen outcome contract", gate(async (runtime) => {
   fs.writeFileSync(sourcePath, "criterion B\n", "utf-8");
   assert.equal(fs.readFileSync(frozen.path, "utf-8"), "criterion A\n");
   assert.equal(await runtime.hashDoneCriteria(frozen.path), expected);
+}));
+
+test("RR-02b independent artifact hashing rejects a FIFO without blocking", gate(async (runtime) => {
+  const { runDir, record } = createIdentity(runtime, "fifo-artifact");
+  const diffPath = path.join(runDir, "review.patch");
+  const promptPath = path.join(runDir, "prompt.md");
+  execFileSync("mkfifo", [diffPath]);
+  fs.writeFileSync(promptPath, "review exactly\n");
+  const started = Date.now();
+  assert.throws(() => runtime.invokeIndependentReviewer({
+    runDir,
+    request: {
+      diff_path: diffPath,
+      prompt_path: promptPath,
+      done_criteria_path: record.contract.done_criteria_path,
+      reviewed_sha: record.git.start_sha,
+      current_sha: record.git.start_sha,
+    },
+    command: process.execPath,
+  }), /regular non-symlink/);
+  assert.ok(Date.now() - started < 1000, "FIFO rejection must not wait for a writer");
 }));
 
 test("RR-03 vNext immutable identity", gate(async (runtime) => {
@@ -219,64 +261,205 @@ test("RR-07 vNext independent review", gate(async (runtime) => {
     done_criteria_path: record.contract.done_criteria_path,
     reviewed_sha: "a".repeat(40),
     current_sha: "a".repeat(40),
+    diff_sha256: shaFile(diffPath),
+    prompt_sha256: shaFile(promptPath),
   };
+  const parseOutcome = ({ exitCode, stdoutPath }) => {
+    const output = JSON.parse(fs.readFileSync(stdoutPath, "utf8"));
+    return { status: exitCode === 0 ? "succeeded" : "failed", summary: output.verdict, output };
+  };
+  const buildInvocation = ({ cwd, promptPath: stagedPrompt, promptBytes }) => ({
+    command: process.execPath,
+    args: ["-e", `
+let text = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { text += chunk; });
+process.stdin.on("end", () => process.stdout.write(JSON.stringify({
+  verdict: "lgtm", prompt_text: text, cwd: process.cwd(), home: process.env.HOME,
+  executor_session_token: process.env.EXECUTOR_SESSION_TOKEN || null,
+  executor_worktree: process.env.EXECUTOR_WORKTREE || null,
+})));
+`],
+    cwd,
+    stdinPath: stagedPrompt,
+    stdinSha256: crypto.createHash("sha256").update(promptBytes).digest("hex"),
+  });
   const verdict = runtime.invokeIndependentReviewer({
     runDir,
     request,
-    command: process.execPath,
-    args: [{
-      kind: "staged_file",
-      value: path.resolve(__dirname, "../fixtures/vnext-json-observer.js"),
-    }],
+    buildInvocation,
+    parseOutcome,
   });
-  assert.equal(verdict.verdict, "lgtm");
-  assert.equal(verdict.run_id, "r1");
-  assert.equal(verdict.reviewed_sha, request.reviewed_sha);
+  assert.equal(verdict.output.verdict, "lgtm");
   const artifacts = fs.readdirSync(runDir).filter((entry) => entry.startsWith("review-request-"));
   assert.equal(artifacts.length, 0);
-  assert.equal(verdict.prompt_text, "review this\n");
-  assert.equal(verdict.request_paths.every((entry) => entry.startsWith(verdict.cwd)), true);
-  assert.equal(verdict.request_paths.every((entry) => !entry.startsWith(runDir)), true);
-  assert.equal(verdict.executor_session_token, null);
-  assert.equal(verdict.executor_worktree, null);
-  assert.equal(verdict.cwd.startsWith(runDir), false);
+  assert.equal(verdict.output.prompt_text, "review this\n");
+  assert.equal(verdict.output.executor_session_token, null);
+  assert.equal(verdict.output.executor_worktree, null);
+  assert.equal(verdict.output.cwd.startsWith(runDir), false);
   assert.equal(
-    verdict.home === verdict.cwd || `/private${verdict.home}` === verdict.cwd,
+    verdict.output.home === path.join(verdict.output.cwd, "output")
+      || `/private${verdict.output.home}` === path.join(verdict.output.cwd, "output"),
     true,
   );
   fs.writeFileSync(promptPath, "mutated executor-side prompt\n");
+  request.prompt_sha256 = shaFile(promptPath);
   assert.throws(() => runtime.invokeIndependentReviewer({
     runDir,
     request,
-    command: process.execPath,
-    args: [{ kind: "staged_file", value: path.resolve(__dirname, "../fixtures/vnext-json-observer.js") }],
+    buildInvocation,
+    parseOutcome,
     env: { EXECUTOR_SESSION_TOKEN: "leak" },
   }), /not allowed/);
+  const transcriptPath = path.join(runDir, "executor-transcript.txt");
+  fs.writeFileSync(transcriptPath, "private executor reasoning\n");
   assert.throws(() => runtime.invokeIndependentReviewer({
     runDir,
     request,
-    command: process.execPath,
-    args: [{ kind: "literal", value: "worker.js", executorSession: "leak" }],
-  }), /must match/);
-  const transcriptPath = path.join(runDir, "executor-transcript.txt");
-  const maliciousPath = path.join(runDir, "malicious-reviewer.js");
-  fs.writeFileSync(transcriptPath, "private executor reasoning\n");
-  fs.writeFileSync(maliciousPath, `
+    buildInvocation: ({ cwd }) => ({ command: process.execPath, args: ["-e", ""], cwd, stdinPath: transcriptPath }),
+    parseOutcome,
+  }), /stdin must be inside/);
+  const maliciousSource = `
 const fs = require("fs");
+const { execFileSync } = require("child_process");
 let leak = null;
 let denied = false;
 try { leak = fs.readFileSync(${JSON.stringify(transcriptPath)}, "utf8"); }
 catch { denied = true; }
-process.stdout.write(JSON.stringify({ verdict: "lgtm", leak, denied }));
-`);
+let childLeak = null;
+let childDenied = false;
+try {
+  childLeak = execFileSync(process.execPath, ["-e", ${JSON.stringify(`process.stdout.write(require("fs").readFileSync(${JSON.stringify(transcriptPath)}, "utf8"))`)}], { encoding: "utf8" });
+} catch { childDenied = true; }
+process.stdout.write(JSON.stringify({
+  verdict: "lgtm", leak, denied, childLeak, childDenied,
+  githubToken: process.env.GH_TOKEN || null,
+}));
+`;
+  const previousGhToken = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "must-not-reach-reviewer";
   const isolated = runtime.invokeIndependentReviewer({
     runDir,
     request,
-    command: process.execPath,
-    args: [{ kind: "staged_file", value: maliciousPath }],
+    buildInvocation: ({ cwd }) => ({ command: process.execPath, args: ["-e", maliciousSource], cwd }),
+    parseOutcome,
   });
-  assert.equal(isolated.leak, null);
-  assert.equal(isolated.denied, true);
+  if (previousGhToken === undefined) delete process.env.GH_TOKEN;
+  else process.env.GH_TOKEN = previousGhToken;
+  assert.equal(isolated.output.leak, null);
+  assert.equal(isolated.output.denied, true);
+  assert.equal(isolated.output.childLeak, null);
+  assert.equal(isolated.output.childDenied, true);
+  assert.equal(isolated.output.githubToken, null);
+  const immutableInputs = runtime.invokeIndependentReviewer({
+    runDir,
+    request,
+    buildInvocation: ({ cwd, diffPath: stagedDiff, promptPath: stagedPrompt, doneCriteriaPath: stagedCriteria }) => ({
+      command: process.execPath,
+      args: ["-e", `
+const fs = require("fs");
+const result = {};
+for (const [label, target] of [["diff", process.argv[1]], ["prompt", process.argv[2]], ["criteria", process.argv[3]]]) {
+  try { fs.appendFileSync(target, "mutated\\n"); result[label] = "allowed"; }
+  catch (error) { result[label] = "denied:" + (error.code || "unknown"); }
+}
+process.stdout.write(JSON.stringify({ verdict: "lgtm", ...result }));
+`, stagedDiff, stagedPrompt, stagedCriteria],
+      cwd,
+    }),
+    parseOutcome,
+  });
+  for (const label of ["diff", "prompt", "criteria"]) {
+    assert.match(immutableInputs.output[label], /^denied:/);
+  }
+}));
+
+test("RR-07b staged runtime executes a direct adapter when host isolation is available and otherwise fails closed", gate(async (runtime) => {
+  const { runDir, record } = createIdentity(runtime, "direct-adapter");
+  const diffPath = path.join(runDir, "review.patch");
+  const promptPath = path.join(runDir, "review.prompt.md");
+  const binDir = path.join(path.dirname(runDir), "bin");
+  fs.mkdirSync(binDir);
+  fs.writeFileSync(diffPath, "diff\n");
+  fs.writeFileSync(promptPath, "review exactly\n");
+  const fakeCodex = path.join(binDir, "codex");
+  fs.writeFileSync(fakeCodex, `#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then shift; out="$1"; fi
+  shift
+done
+printf '%s\\n' '{"verdict":"pass","summary":"direct","issues":[]}' > "$out"
+`);
+  fs.chmodSync(fakeCodex, 0o755);
+  const adapter = getAdapter("codex");
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${previousPath}`;
+  try {
+    let outcome;
+    try {
+      outcome = runtime.invokeIndependentReviewer({
+        runDir,
+        request: {
+          diff_path: diffPath,
+          prompt_path: promptPath,
+          done_criteria_path: record.contract.done_criteria_path,
+          reviewed_sha: record.git.start_sha,
+          current_sha: record.git.start_sha,
+          diff_sha256: shaFile(diffPath),
+          prompt_sha256: shaFile(promptPath),
+          schema: { type: "object" },
+        },
+        buildInvocation: ({ cwd, promptPath: stagedPrompt, promptBytes, resultPath, schemaPath }) => adapter.buildInvocation({
+          phase: "primary_review", cwd, promptPath: stagedPrompt, promptBytes, resultPath, schemaPath,
+          sandbox: "read-only", networkAccess: "disabled",
+        }),
+        parseOutcome: (input) => adapter.parseOutcome(input),
+      });
+    } catch (error) {
+      assert.match(error.message, /filesystem isolation unavailable/);
+      return;
+    }
+    assert.equal(outcome.status, "succeeded");
+    assert.deepEqual(outcome.output, { verdict: "pass", summary: "direct", issues: [] });
+  } finally {
+    process.env.PATH = previousPath;
+  }
+}));
+
+test("RR-07c staged prompt binding rejects inode, symlink, and FIFO swaps while restored content executes trusted bytes", gate(async (runtime) => {
+  const { runDir, record } = createIdentity(runtime, "prompt-binding");
+  const diffPath = path.join(runDir, "review.patch"), promptPath = path.join(runDir, "review.prompt.md");
+  fs.writeFileSync(diffPath, "diff\n"); fs.writeFileSync(promptPath, "trusted prompt\n");
+  const request = { diff_path: diffPath, prompt_path: promptPath, done_criteria_path: record.contract.done_criteria_path,
+    reviewed_sha: record.git.start_sha, current_sha: record.git.start_sha,
+    diff_sha256: shaFile(diffPath), prompt_sha256: shaFile(promptPath) };
+  const parseOutcome = ({ exitCode, stdoutPath }) => ({ status: exitCode === 0 ? "succeeded" : "failed",
+    output: JSON.parse(fs.readFileSync(stdoutPath, "utf8")), summary: "prompt binding" });
+  const command = (cwd, value) => ({ command: process.execPath,
+    args: ["-e", "process.stdout.write(JSON.stringify({prompt:process.argv[1]}))", value], cwd });
+
+  assert.throws(() => runtime.invokeIndependentReviewer({ runDir, request, parseOutcome,
+    buildInvocation({ cwd, promptPath: staged, promptBytes }) {
+      fs.renameSync(staged, `${staged}.old`); fs.writeFileSync(staged, promptBytes);
+      return command(cwd, promptBytes.toString("utf8"));
+    } }), /changed after immutable staging/);
+  assert.throws(() => runtime.invokeIndependentReviewer({ runDir, request, parseOutcome,
+    buildInvocation({ cwd, promptPath: staged, promptBytes }) {
+      fs.unlinkSync(staged); fs.symlinkSync(promptPath, staged); return command(cwd, promptBytes.toString("utf8"));
+    } }), /symbolic link|exact regular|ELOOP/i);
+  assert.throws(() => runtime.invokeIndependentReviewer({ runDir, request, parseOutcome,
+    buildInvocation({ cwd, promptPath: staged, promptBytes }) {
+      fs.unlinkSync(staged); execFileSync("mkfifo", [staged]); return command(cwd, promptBytes.toString("utf8"));
+    } }), /exact regular/i);
+
+  const restored = runtime.invokeIndependentReviewer({ runDir, request, parseOutcome,
+    buildInvocation({ cwd, promptPath: staged, promptBytes }) {
+      fs.writeFileSync(staged, "attacker bytes\n"); fs.writeFileSync(staged, promptBytes);
+      return command(cwd, promptBytes.toString("utf8"));
+    } });
+  assert.equal(restored.output.prompt, "trusted prompt\n");
+  assert.equal(restored.review_binding.executed_prompt_sha256, request.prompt_sha256);
 }));
 
 test("RR-07 Node 18 capability simulation fails closed without isolation", gate(async (runtime) => {
@@ -284,7 +467,7 @@ test("RR-07 Node 18 capability simulation fails closed without isolation", gate(
     darwinSandboxAvailable: false,
     nodePermissionModelAvailable: false,
     isNodeCommand: true,
-  }), /filesystem isolation unavailable/);
+  }), /macOS sandbox-exec is required/);
 }));
 
 test("RR-08 vNext explicit merge", gate(async (runtime) => {
@@ -317,17 +500,28 @@ test("RR-08 vNext explicit merge", gate(async (runtime) => {
       runDir,
       lockContext,
       freshObservation: fresh.observationCapability,
-      operatorAction: { actor: "owner", method: "squash" },
+      operatorAction: { actor: "owner", method: "squash", githubLogin: "relay-bot" },
       currentHead: "c".repeat(40),
       currentDoneCriteriaSha256: verdict.done_criteria_sha256,
       prNumber: 42,
       verdict,
     }));
+    assert.throws(() => runtime.planOperatorMerge({
+      runDir,
+      lockContext,
+      freshObservation: fresh.observationCapability,
+      operatorAction: { actor: "owner", method: "squash", githubLogin: "relay-bot", operationId: "../../escape" },
+      currentHead: head,
+      currentDoneCriteriaSha256: verdict.done_criteria_sha256,
+      prNumber: 42,
+      verdict,
+    }), /safe path-independent identifier/);
+    assert.equal(fs.existsSync(path.join(path.dirname(runDir), "escape.json")), false);
     const plan = runtime.planOperatorMerge({
       runDir,
       lockContext,
       freshObservation: fresh.observationCapability,
-      operatorAction: { actor: "owner", method: "squash" },
+      operatorAction: { actor: "owner", method: "squash", githubLogin: "relay-bot" },
       currentHead: head,
       currentDoneCriteriaSha256: verdict.done_criteria_sha256,
       prNumber: 42,
@@ -371,7 +565,7 @@ test("RR-09 vNext merge provenance", gate(async (runtime) => {
       runDir,
       lockContext,
       freshObservation: fresh.observationCapability,
-      operatorAction: { actor: "owner", method: "squash" },
+      operatorAction: { actor: "owner", method: "squash", githubLogin: "relay-bot" },
       currentHead: provenance.pr_head_sha,
       currentDoneCriteriaSha256: record.contract.done_criteria_sha256,
       prNumber: 42,
@@ -421,27 +615,6 @@ test("RR-09 vNext merge provenance", gate(async (runtime) => {
   const persisted = JSON.parse(fs.readFileSync(eventsPath, "utf-8").trim());
   assert.equal(persisted.at, at);
   assert.deepEqual(persisted.payload, fact.payload);
-}));
-
-test("RR-10 vNext crash-safe idempotency", gate(async (runtime) => {
-  const runDir = tempRoot("recover");
-  const effects = [];
-  let published = false;
-  const operation = {
-    runDir,
-    recoveryKey: "publish-head-a",
-    observe: async ({ phase }) => ({ phase, head: "a", converged: published }),
-    apply: async (_observation, context) => {
-      effects.push(`publish:${context.operationId}`);
-      published = true;
-      return { pr: 42 };
-    },
-  };
-  const first = await runtime.recoverRun(operation);
-  const second = await runtime.recoverRun(operation);
-  assert.deepEqual(second, first);
-  assert.equal(effects.length, 1);
-  assert.equal(first.final_observation.converged, true);
 }));
 
 test("RR-11 vNext terminal irreversibility", gate(async (runtime) => {

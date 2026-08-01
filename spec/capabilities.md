@@ -88,7 +88,7 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 **In-scope:**
 - `skills/relay-dispatch/` worktree creation, executor invocation, manifest creation/update, recovery utilities, and execution evidence.
 - `skills/relay-fleet/` parent/child fan-out dispatch and crashed-fleet resume.
-- Executor adapters under `skills/relay-dispatch/scripts/executors/`.
+- Executor adapters under `skills/relay-dispatch/scripts/adapters/`.
 
 **Out-of-scope:**
 - Authoring rubrics or prompts, which belongs to `planning`.

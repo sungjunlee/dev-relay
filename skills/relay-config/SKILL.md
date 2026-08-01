@@ -33,4 +33,5 @@ the immutable run binding and the adapter provider default.
 
 - Keep executor/reviewer and model selections explicit.
 - Run `doctor --json` to inspect CLI availability.
-- Treat persisted legacy route and model-hint fields as inert historical data.
+- `doctor` checks all seven built-in adapters by running each CLI's `--version` probe.
+- Neither command reads or writes runtime policy, routes, presets, or defaults.

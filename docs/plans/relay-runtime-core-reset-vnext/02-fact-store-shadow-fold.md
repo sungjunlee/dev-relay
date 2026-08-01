@@ -33,10 +33,10 @@ Introduce the vNext immutable run record and append-only fact journal, with a pu
 - A run directory is identity-bearing: its canonical basename, immutable
   `run.json.run_id`, every fact's `run_id`, and the sole
   `events.jsonl` journal must agree.
-- `evaluateLegacyShadow()` is the production-facing shadow entry point. It
-  is wired at `run-observer`, where live Git, GitHub PR, repository identity,
-  and lease observations are already available, when
-  `RELAY_VNEXT_SHADOW_TELEMETRY_DIR` is configured. It parses the manifest and
+- `evaluateLegacyShadow()` was the migration-only shadow entry point. It was
+  wired at the now-retired legacy observer, where live Git, GitHub PR,
+  repository identity, and lease observations were available when
+  `RELAY_VNEXT_SHADOW_TELEMETRY_DIR` was configured. It parsed the manifest and
   events from source bytes, rejects caller/source disagreement, folds them,
   and fsyncs comparison telemetry without changing the production decision.
 - Review is invoked through an argv child process. The child receives only an

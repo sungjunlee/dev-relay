@@ -78,15 +78,15 @@ test("enumerates pr view fields from an argv variable assembled separately", () 
   }]);
 });
 
-test("#894 regression: missing title-bearing merge fields names finalize-run", () => {
-  const titleBearingFields = "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,isDraft,title";
-  const registryWithoutTitleBearingFields = Object.fromEntries(
-    Object.entries(PR_VIEW_JSON_REGISTRY).filter(([fields]) => fields !== titleBearingFields),
+test("vNext regression: missing exact merge-observation fields names finalize-run", () => {
+  const finalizeFields = "number,state,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus";
+  const registryWithoutFinalizeFields = Object.fromEntries(
+    Object.entries(PR_VIEW_JSON_REGISTRY).filter(([fields]) => fields !== finalizeFields),
   );
   const callSites = extractPrViewCallSitesFromDirectory(SKILLS_DIR);
-  const errors = comparePrViewCallSites(callSites, registryWithoutTitleBearingFields, FIXTURE_PATH);
+  const errors = comparePrViewCallSites(callSites, registryWithoutFinalizeFields, FIXTURE_PATH);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /skills\/relay-merge\/scripts\/finalize-run\.js:\d+/);
-  assert.match(errors[0], new RegExp(titleBearingFields));
+  assert.match(errors[0], new RegExp(finalizeFields));
   assert.match(errors[0], /tests\/relay-review\/fixtures\/fake-gh\.js/);
 });

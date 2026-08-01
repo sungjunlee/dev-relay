@@ -17,10 +17,10 @@ frozen prompt/rubric/Done Criteria files.
 
 ## Derived view
 
-For each leaf, relay-fleet scans child records. A vNext `run.json` parent and
-ownership digest are authoritative. Before legacy cutover, a legacy manifest
-with `fleet_id` is a read-only fallback. A candidate must also match branch and
-the Done Criteria hash. Exactly one candidate is a child; zero is
+For each leaf, relay-fleet scans vNext child records. The `run.json` fleet
+parent and ownership digest are authoritative; legacy manifests are never
+read. A candidate must also match issue number, branch, and Done Criteria hash.
+Exactly one candidate is a child; zero is
 `retry_pending`; more than one is an error. A parent child that matches no leaf
 is an orphan requiring operator attention.
 
@@ -30,12 +30,12 @@ read and prevents a second mutable lifecycle from drifting away from the run.
 
 ## Dispatch and merge
 
-The CLI only spawns leaves whose derived view has no child record. A
-pre-manifest failure therefore remains receipt-only and is safely retried on
-the next invocation. `dispatch.js` owns a small exclusive per-issue admission
-lock; it permits only same-host provably-dead-holder reclamation and otherwise
-fails closed.
+The CLI starts a new dispatch only when the view has no child record, and
+resumes an existing run only for the exact canonical `redispatch` action. A
+pre-record failure therefore remains receipt-only and is safely retried on the
+next invocation. Waiting, review, merge, corrupt, ambiguous, or blocked runs
+are never dispatched.
 
-`--review` may invoke each child's ordinary review and finalization command,
-but does not write fleet state. Finalization is serial and child-owned. All
-seven dispatch adapters remain normal child executors.
+`--review` invokes review-runner only for exact `review` actions and invokes
+finalize-run serially only for exact `merge` actions. It does not write fleet
+state. All seven dispatch adapters remain normal child executors.

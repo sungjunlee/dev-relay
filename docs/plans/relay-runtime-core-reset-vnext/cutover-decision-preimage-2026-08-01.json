@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "kind": "relay_runtime_cutover_checked_in_preimage",
+  "repository": "sungjunlee/dev-relay",
+  "decision_observation": {
+    "observed_at": "2026-08-01T06:11:54.302Z",
+    "active_legacy_run_count": 1,
+    "oldest_active_legacy_age_hours": 35,
+    "legacy_run_id": "issue-1118-20260730181218333-33897c8c",
+    "legacy_run_created_at": "2026-07-30T18:12:20.207Z",
+    "legacy_run_state": "escalated",
+    "provenance": "historical_operator_evidence",
+    "observation_basis": "The close event records this run transitioning from escalated at the decision boundary; the operator inventory found no other active dev-relay legacy run."
+  },
+  "drain_completion": {
+    "observed_at": "2026-08-01T06:11:54.365Z",
+    "active_legacy_run_count": 0,
+    "oldest_active_legacy_age_hours": null,
+    "provenance": "historical_operator_evidence",
+    "observation_basis": "The archived run was closed, its worktree was removed, and the post-cleanup active-run inventory was empty."
+  },
+  "archive": {
+    "tag": "archive/relay-issue-1118-vnext-drain",
+    "commit": "7c83ed0620ec25b4e182c10813724dde02fbf9d7"
+  },
+  "verification": {
+    "reproducible_in_repository": [
+      "git rev-parse archive/relay-issue-1118-vnext-drain",
+      "git cat-file -t archive/relay-issue-1118-vnext-drain"
+    ],
+    "not_checked_in": [
+      "The historical ~/.relay manifest and events journal bytes were intentionally not copied into this repository.",
+      "The one-run decision inventory, zero-run drain inventory, and their recorded SHA-256 values remain operator evidence and are not independently test-verified repository evidence."
+    ]
+  }
+}

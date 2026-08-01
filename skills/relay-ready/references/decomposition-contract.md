@@ -33,7 +33,7 @@ After shaping is accepted, write the existing persistence contract:
 - per leaf: `leaf_id`, `title`, `goal`, `order`, and `done_criteria_markdown`
 - optional per leaf: `depends_on`, `in_scope`, `out_of_scope`, `assumptions`, and `escalation_conditions`
 
-The persister validates schema shape, ordering, unique leaf ids, and `depends_on` references. It records the resulting request artifact, `relay-ready/<leaf-id>.md` handoff(s), frozen `done-criteria/<leaf-id>.md` snapshot(s), and append-only events. It does not create or revise semantic decomposition.
+The persister validates schema shape, safe identifiers, ordering, unique leaf ids, and `depends_on` references. It publishes the resulting request artifact, `relay-ready/<leaf-id>.md` handoff(s), frozen `done-criteria/<leaf-id>.md` snapshot(s), and a last completion marker as one immutable bundle. Conversation shaping is transient; the persister does not record interaction events or create or revise semantic decomposition.
 
 ## Planner Consumption
 

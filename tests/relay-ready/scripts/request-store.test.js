@@ -1,1281 +1,368 @@
-const test = require("node:test");
+"use strict";
+
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
+const { execFileSync, spawn } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
 
-const { readManifest } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
-const {
-  acceptProposal,
-  answerQuestion,
-  clarify,
-  editProposal,
-  getRequestsDir,
-  getRequestPath,
-  normalizeSingleLeafContract,
-  propose,
-  readRequestEvents,
-  persistRequestContract,
-  readRequestArtifact,
-  structure,
-} = require("../../../skills/relay-ready/scripts/relay-request");
+const request = require("../../../skills/relay-ready/scripts/relay-request");
 
-const PERSIST_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-ready", "scripts", "persist-request.js");
-const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
-const REVIEW_RUNNER_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
-const DECOMPOSITION_CONTRACT_DOC = path.join(
-  __dirname,
-  "..",
-  "..",
-  "..",
-  "skills",
-  "relay-ready",
-  "references",
-  "decomposition-contract.md",
-);
-
-function setupRepo() {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ready-"));
-  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ready-origin-"));
-  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["init", "--bare", remoteRoot], { encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["config", "user.name", "Relay Intake Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["config", "user.email", "relay-ready@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
-  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["remote", "add", "origin", remoteRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  process.env.RELAY_HOME = relayHome;
-  return { repoRoot, relayHome };
+function git(repo, args) {
+  return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
 }
 
-function createContract(overrides = {}) {
+function fixture(label) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-ready-${label}-`)));
+  const repo = path.join(root, "repo");
+  const requests = path.join(root, "requests");
+  fs.mkdirSync(repo);
+  fs.mkdirSync(requests);
+  execFileSync("git", ["-C", repo, "init", "-q"]);
+  execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+  execFileSync("git", ["-C", repo, "config", "user.name", "Test"]);
+  fs.writeFileSync(path.join(repo, "README.md"), "base\n");
+  execFileSync("git", ["-C", repo, "add", "README.md"]);
+  execFileSync("git", ["-C", repo, "commit", "-qm", "base"]);
+  return { root, repo, requests: fs.realpathSync(requests) };
+}
+
+function requestRepoDir(base, repo) {
+  const canonical = fs.realpathSync(repo);
+  const name = path.basename(canonical).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+  const suffix = require("node:crypto").createHash("sha256").update(canonical).digest("hex").slice(0, 8);
+  return path.join(base, `${name}-${suffix}`);
+}
+
+function contract(overrides = {}) {
+  const handoff = {
+    leaf_id: "leaf-01",
+    title: "Implement the request",
+    goal: "Ship one verified change",
+    in_scope: ["Implementation"],
+    out_of_scope: ["Deployment"],
+    assumptions: [],
+    escalation_conditions: ["The contract changes"],
+    done_criteria_markdown: "- [ ] Tests pass",
+    ...overrides.handoff,
+  };
   return {
     source: { kind: "raw_text" },
-    request_text: "Fix the login redirect loop for authenticated users.",
-    handoff: {
-      leaf_id: "leaf-01",
-      title: "Fix login redirect loop",
-      goal: "Stop authenticated users from bouncing back to /login",
-      in_scope: ["Update the redirect guard", "Cover both auth states"],
-      out_of_scope: ["Redesigning the login page"],
-      assumptions: ["Session state remains cookie-based"],
-      done_criteria_markdown: "# Done Criteria\n\n- Authenticated users stay off /login\n- Guests still reach /login\n",
-      escalation_conditions: ["Auth state source is unclear"],
-    },
+    request_text: "Implement the requested change.",
+    handoff,
     ...overrides,
+    ...(overrides.handoff ? { handoff } : {}),
   };
 }
 
-function createMultiLeafContract(overrides = {}) {
-  const baseHandoff = createContract().handoff;
+function multiContract() {
   return {
     source: { kind: "raw_text" },
-    request_text: "Fix the login redirect loop and backfill auth redirect coverage.",
+    request_text: "Implement two ordered changes.",
     handoffs: [
-      {
-        ...baseHandoff,
-        leaf_id: "leaf-02",
-        title: "Backfill auth redirect coverage",
-        goal: "Add regression coverage for authenticated and guest redirects",
-        order: 2,
-        depends_on: ["leaf-01"],
-        in_scope: ["Add redirect regression coverage", "Cover guest and authenticated states"],
-        out_of_scope: ["Changing auth providers"],
-        assumptions: ["The existing auth test harness can simulate both states"],
-        done_criteria_markdown: "# Done Criteria\n\n- Redirect regressions are covered for guests and authenticated users\n",
-        escalation_conditions: ["The auth test harness cannot simulate both states"],
-      },
-      {
-        ...baseHandoff,
-        leaf_id: "leaf-01",
-        title: "Fix login redirect loop",
-        goal: "Stop authenticated users from bouncing back to /login",
-        order: 1,
-        depends_on: [],
-        done_criteria_markdown: "# Done Criteria\n\n- Authenticated users stay off /login\n- Guests still reach /login\n",
-      },
+      { ...contract().handoff, leaf_id: "leaf-a", order: 1, title: "Foundation" },
+      { ...contract().handoff, leaf_id: "leaf-b", order: 2, title: "Consumer", depends_on: ["leaf-a"] },
     ],
-    ...overrides,
   };
 }
 
-function createProductFoundationContract(overrides = {}) {
-  return {
-    source: { kind: "raw_text" },
-    request_text: [
-      "Build the initial product foundation: tenant onboarding, billing gates,",
-      "admin analytics, and operator documentation.",
-    ].join(" "),
-    handoffs: [
-      {
-        leaf_id: "foundation-auth-shell",
-        title: "Create tenant onboarding shell",
-        goal: "Add the minimum tenant onboarding flow needed before gated features can exist",
-        order: 1,
-        depends_on: [],
-        in_scope: ["Create tenant onboarding entry points", "Persist tenant setup status"],
-        out_of_scope: ["Billing enforcement", "Analytics dashboards"],
-        assumptions: ["Existing account records can own tenant setup state"],
-        done_criteria_markdown: [
-          "# Done Criteria",
-          "",
-          "- Tenant onboarding status is stored and visible to the app shell",
-          "- Existing unauthenticated access behavior remains unchanged",
-        ].join("\n"),
-        escalation_conditions: ["Tenant ownership is not represented in the data model"],
-      },
-      {
-        leaf_id: "foundation-billing-gate",
-        title: "Add billing gate skeleton",
-        goal: "Introduce a billing gate that can block premium tenant actions after onboarding exists",
-        order: 2,
-        depends_on: ["foundation-auth-shell"],
-        in_scope: ["Add the billing gate decision point", "Cover allowed and blocked tenant states"],
-        out_of_scope: ["Payment provider integration", "Admin analytics"],
-        assumptions: ["Billing state can be stubbed for tests"],
-        done_criteria_markdown: [
-          "# Done Criteria",
-          "",
-          "- Premium tenant actions consult a billing gate",
-          "- Tests cover allowed and blocked billing states",
-        ].join("\n"),
-        escalation_conditions: ["No stable premium-action boundary exists"],
-      },
-      {
-        leaf_id: "foundation-operator-docs",
-        title: "Document product foundation operation",
-        goal: "Document the operator workflow after onboarding and billing gate contracts are frozen",
-        order: 3,
-        depends_on: ["foundation-auth-shell", "foundation-billing-gate"],
-        in_scope: ["Document onboarding and billing gate operational checks"],
-        out_of_scope: ["Changing product behavior", "Analytics dashboard implementation"],
-        assumptions: ["The first two leaves define the stable operator contract"],
-        done_criteria_markdown: [
-          "# Done Criteria",
-          "",
-          "- Operator docs describe onboarding status checks",
-          "- Operator docs describe billing gate troubleshooting",
-        ].join("\n"),
-        escalation_conditions: ["Earlier foundation leaves change their public contract"],
-      },
-    ],
-    ...overrides,
-  };
+function withBase(base, callback) {
+  const prior = process.env.RELAY_REQUESTS_BASE;
+  process.env.RELAY_REQUESTS_BASE = base;
+  try { return callback(); }
+  finally {
+    if (prior === undefined) delete process.env.RELAY_REQUESTS_BASE;
+    else process.env.RELAY_REQUESTS_BASE = prior;
+  }
 }
 
-function createReadiness(overrides = {}) {
-  return {
-    clarity: "high",
-    granularity: "single_task",
-    dependency: "internal",
-    verifiability: "high",
-    risk: "medium",
-    ...overrides,
-  };
-}
-
-function chooseRelayRoute({
-  sourceKind,
-  leafCount,
-  hasStableReviewAnchor,
-  requiresClarification = false,
-  requiresDecomposition = false,
-}) {
-  return sourceKind !== "raw_text"
-    && leafCount === 1
-    && hasStableReviewAnchor
-    && !requiresClarification
-    && !requiresDecomposition
-    ? "bypass_intake"
-    : "invoke_intake";
-}
-
-function invokeRelayFrontDoor(repoRoot, {
-  contract,
-  hasStableReviewAnchor,
-  requiresClarification = false,
-  requiresDecomposition = false,
-  requestId,
-}) {
-  const leafCount = Array.isArray(contract.handoffs)
-    ? contract.handoffs.length
-    : (contract.handoff ? 1 : 0);
-  const route = chooseRelayRoute({
-    sourceKind: contract.source?.kind || "raw_text",
-    leafCount,
-    hasStableReviewAnchor,
-    requiresClarification,
-    requiresDecomposition,
+function runChild({ repo, requests, contractPath, requestId }) {
+  const modulePath = path.resolve(__dirname, "../../../skills/relay-ready/scripts/relay-request.js");
+  const source = [
+    "const fs=require('fs');",
+    `const api=require(${JSON.stringify(modulePath)});`,
+    "const value=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));",
+    "const result=api.persistRequestContract(process.argv[2],value,{requestId:process.argv[3]});",
+    "process.stdout.write(JSON.stringify(result));",
+  ].join("");
+  const child = spawn(process.execPath, ["-e", source, contractPath, repo, requestId], {
+    env: { ...process.env, RELAY_REQUESTS_BASE: requests },
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  const downstreamChain = route === "invoke_intake"
-    ? ["relay-ready", "relay-plan", "relay-dispatch"]
-    : ["relay-plan", "relay-dispatch"];
+  return new Promise((resolve) => {
+    let stdout = ""; let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+  });
+}
 
-  if (route === "bypass_intake") {
-    const normalized = normalizeSingleLeafContract(contract);
-    return {
-      route,
-      downstreamChain,
-      sourceKind: normalized.source.kind,
-      readiness: normalized.readiness || null,
-      leafId: normalized.handoff.leafId,
-      title: normalized.handoff.title,
-      reviewAnchorSource: normalized.source.kind,
-    };
-  }
+test("publishes one immutable single-leaf bundle with a last completion marker", () => {
+  const value = fixture("single");
+  const result = withBase(value.requests, () => request.persistRequestContract(value.repo, contract()));
+  assert.match(result.requestId, /^req-\d{17}-[0-9a-f]{16}$/);
+  assert.equal(request.readRequestArtifact(result.requestPath).data.state, "relay_ready");
+  assert.equal(fs.readFileSync(result.rawRequestPath, "utf8"), "Implement the requested change.\n");
+  assert.equal(fs.readFileSync(result.doneCriteriaPath, "utf8"), "- [ ] Tests pass\n");
+  assert.equal(fs.existsSync(path.join(result.requestDir, "events.jsonl")), false);
+  const marker = JSON.parse(fs.readFileSync(path.join(result.requestDir, "bundle-complete.json"), "utf8"));
+  assert.equal(marker.request_id, result.requestId);
+  assert.match(marker.bundle_sha256, /^[0-9a-f]{64}$/);
+});
 
-  return {
-    route,
-    downstreamChain,
-    ...persistRequestContract(repoRoot, contract, requestId ? { requestId } : {}),
+test("reads the public request exactly once and returns that verified snapshot", () => {
+  const value = fixture("single-verified-snapshot");
+  const result = withBase(value.requests, () => request.persistRequestContract(value.repo, contract()));
+  const originalOpen = fs.openSync;
+  const originalRead = fs.readFileSync;
+  const opened = new Map();
+  let publicReads = 0;
+  fs.openSync = function trackedOpen(file, ...args) {
+    const descriptor = originalOpen.call(this, file, ...args);
+    if (typeof file === "string") opened.set(descriptor, path.resolve(file));
+    return descriptor;
   };
-}
-
-function proposeDelegateFallback(repoRoot, requestId, {
-  requestText,
-  hostCapabilities = {},
-}) {
-  if (hostCapabilities.gstack || hostCapabilities.superpowers) {
-    throw new Error("delegate fallback only applies when gstack/superpowers are unavailable");
-  }
-
-  return {
-    fallback: "portable_plain_text",
-    ...structure(repoRoot, requestId, {
-      source_kind: "raw_text",
-      request_text: requestText,
-      proposal_summary: "Delegate the shared middleware change and keep the local tests here.",
-      proposal_kind: "structure",
-      proposal_text: "A. Delegate middleware ownership\nB. Keep the work local\nC. Other + free text",
-      response_options: ["A. Delegate", "B. Keep local", "C. Other + free text"],
-      structure_kind: "delegate",
-      reason: "gstack/superpowers are unavailable, so fall back to the portable plain-text protocol.",
-    }),
+  fs.readFileSync = function trackedRead(file, ...args) {
+    if (typeof file === "number" && opened.get(file) === result.requestPath) publicReads += 1;
+    return originalRead.call(this, file, ...args);
   };
-}
-
-function writeFakeCodex(binDir) {
-  const ghPath = path.join(binDir, "gh");
-  if (!fs.existsSync(ghPath)) {
-    fs.writeFileSync(ghPath, `#!/usr/bin/env node
-const args = process.argv.slice(2);
-if (args[0] === "pr" && args[1] === "list") {
-  process.exit(0);
-}
-if (args[0] === "pr" && args[1] === "create") {
-  process.stdout.write("https://example.test/acme/dev-relay/pull/123\\n");
-  process.exit(0);
-}
-process.stderr.write("Unsupported gh invocation: " + args.join(" "));
-process.exit(1);
-`, "utf-8");
-    fs.chmodSync(ghPath, 0o755);
-  }
-  const codexPath = path.join(binDir, "codex");
-  fs.writeFileSync(codexPath, `#!/usr/bin/env node
-const fs = require("fs");
-const { execFileSync } = require("child_process");
-const args = process.argv.slice(2);
-if (args[0] === "--version") {
-  process.stdout.write("codex-fake\\n");
-  process.exit(0);
-}
-const cwd = args[args.indexOf("-C") + 1];
-const output = args[args.indexOf("-o") + 1];
-fs.writeFileSync(cwd + "/intake.txt", "ok\\n", "utf-8");
-execFileSync("git", ["-C", cwd, "add", "intake.txt"], { stdio: "pipe" });
-execFileSync("git", ["-C", cwd, "commit", "-m", "fake intake commit"], { stdio: "pipe" });
-fs.writeFileSync(output, "ok\\n", "utf-8");
-`, "utf-8");
-  fs.chmodSync(codexPath, 0o755);
-}
-
-function readRequest(repoRoot, requestId) {
-  return readRequestArtifact(getRequestPath(repoRoot, requestId));
-}
-
-function readEventNames(repoRoot, requestId) {
-  return readRequestEvents(repoRoot, requestId).map((event) => event.event);
-}
-
-test("persistRequestContract writes request artifact, relay-ready handoff, done criteria snapshot, and events", () => {
-  const { repoRoot } = setupRepo();
-
-  const result = persistRequestContract(repoRoot, createContract());
-
-  assert.ok(fs.existsSync(result.requestPath));
-  assert.ok(fs.existsSync(result.rawRequestPath));
-  assert.ok(fs.existsSync(result.handoffPath));
-  assert.ok(fs.existsSync(result.doneCriteriaPath));
-  assert.equal(result.leafCount, 1);
-  assert.deepEqual(result.leafIds, ["leaf-01"]);
-  assert.deepEqual(result.handoffPaths, [result.handoffPath]);
-  assert.deepEqual(result.doneCriteriaPaths, [result.doneCriteriaPath]);
-
-  const requestArtifact = readRequestArtifact(result.requestPath);
-  assert.equal(requestArtifact.data.request_id, result.requestId);
-  assert.equal(requestArtifact.data.state, "relay_ready");
-  assert.equal(requestArtifact.data.leaf_id, "leaf-01");
-  assert.equal(requestArtifact.data.next_action, "relay_plan");
-  assert.equal(requestArtifact.data.readiness, undefined);
-  assert.equal(requestArtifact.data.source.kind, "raw_text");
-  assert.equal(requestArtifact.data.paths.handoff, result.handoffPath);
-  assert.match(requestArtifact.body, /Relay Intake Request/);
-  assert.match(requestArtifact.body, /leaf-01/);
-  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/relay-ready/leaf-01\\.md`));
-  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/done-criteria/leaf-01\\.md`));
-
-  const handoffArtifact = readRequestArtifact(result.handoffPath);
-  assert.equal(handoffArtifact.data.request_id, result.requestId);
-  assert.equal(handoffArtifact.data.leaf_id, "leaf-01");
-  assert.equal(handoffArtifact.data.order, 1);
-  assert.deepEqual(handoffArtifact.data.depends_on, []);
-  assert.equal(handoffArtifact.data.done_criteria_path, result.doneCriteriaPath);
-  assert.match(handoffArtifact.body, /In Scope/);
-  assert.match(handoffArtifact.body, /Update the redirect guard/);
-
-  const doneCriteria = fs.readFileSync(result.doneCriteriaPath, "utf-8");
-  assert.match(doneCriteria, /Authenticated users stay off \/login/);
-
-  const events = readRequestEvents(repoRoot, result.requestId);
-  assert.equal(events.length, 2);
-  assert.equal(events[0].event, "request_persisted");
-  assert.equal(events[1].event, "relay_ready_handoff_persisted");
-  assert.equal(events[1].leaf_id, "leaf-01");
-  assert.equal(result.nextAction, "relay_plan");
-  assert.equal(result.readiness, null);
-});
-
-test("persist-request CLI persists the single-leaf request bundle", () => {
-  const { repoRoot } = setupRepo();
-  const contractPath = path.join(repoRoot, "contract.json");
-  fs.writeFileSync(contractPath, `${JSON.stringify(createContract(), null, 2)}\n`, "utf-8");
-
-  const stdout = execFileSync("node", [
-    PERSIST_SCRIPT,
-    "--repo", repoRoot,
-    "--contract-file", contractPath,
-    "--json",
-  ], { encoding: "utf-8" });
-
-  const result = JSON.parse(stdout);
-  assert.ok(result.requestId);
-  assert.equal(result.leafId, "leaf-01");
-  assert.ok(fs.existsSync(result.requestPath));
-  assert.ok(fs.existsSync(result.handoffPath));
-  assert.ok(fs.existsSync(result.doneCriteriaPath));
-});
-
-test("persist-request CLI accepts missing optional per-leaf arrays", () => {
-  const { repoRoot } = setupRepo();
-  const contractPath = path.join(repoRoot, "contract-without-optional-arrays.json");
-  const {
-    in_scope,
-    out_of_scope,
-    assumptions,
-    escalation_conditions,
-    ...handoff
-  } = createContract().handoff;
-
-  fs.writeFileSync(
-    contractPath,
-    `${JSON.stringify(createContract({ handoff }), null, 2)}\n`,
-    "utf-8",
-  );
-
-  const stdout = execFileSync("node", [
-    PERSIST_SCRIPT,
-    "--repo", repoRoot,
-    "--contract-file", contractPath,
-    "--json",
-  ], { encoding: "utf-8" });
-
-  const result = JSON.parse(stdout);
-  assert.equal(result.leafId, "leaf-01");
-  assert.ok(fs.existsSync(result.handoffPath));
-});
-
-test("persist-request CLI rejects optional per-leaf arrays when present with a non-array value", () => {
-  for (const field of ["in_scope", "out_of_scope", "assumptions", "escalation_conditions"]) {
-    const { repoRoot } = setupRepo();
-    const contractPath = path.join(repoRoot, `contract-invalid-${field}.json`);
-    fs.writeFileSync(
-      contractPath,
-      `${JSON.stringify(createContract({
-        handoff: {
-          ...createContract().handoff,
-          [field]: "not an array",
-        },
-      }), null, 2)}\n`,
-      "utf-8",
-    );
-
-    assert.throws(
-      () => execFileSync("node", [
-        PERSIST_SCRIPT,
-        "--repo", repoRoot,
-        "--contract-file", contractPath,
-        "--json",
-      ], { encoding: "utf-8", stdio: "pipe" }),
-      (error) => {
-        assert.match(String(error.stderr), new RegExp(`contract validation failed: handoff\\.${field}: must be an array`));
-        return true;
-      },
-    );
+  try {
+    const artifact = request.readRequestArtifact(result.requestPath);
+    assert.equal(artifact.data.request_id, result.requestId);
+    assert.equal(publicReads, 1);
+  } finally {
+    fs.openSync = originalOpen;
+    fs.readFileSync = originalRead;
   }
 });
 
-test("persist-request CLI returns multi-leaf paths in execution order", () => {
-  const { repoRoot } = setupRepo();
-  const contractPath = path.join(repoRoot, "multi-contract.json");
-  fs.writeFileSync(contractPath, `${JSON.stringify(createMultiLeafContract(), null, 2)}\n`, "utf-8");
-
-  const stdout = execFileSync("node", [
-    PERSIST_SCRIPT,
-    "--repo", repoRoot,
-    "--contract-file", contractPath,
-    "--json",
-  ], { encoding: "utf-8" });
-
-  const result = JSON.parse(stdout);
-  assert.equal(result.leafCount, 2);
-  assert.deepEqual(result.leafIds, ["leaf-01", "leaf-02"]);
-  assert.equal(result.handoffPath, undefined);
-  assert.equal(result.doneCriteriaPath, undefined);
-  assert.equal(result.handoffPaths.length, 2);
-  assert.equal(result.doneCriteriaPaths.length, 2);
+test("publishes an ordered multi-leaf bundle without mutable intake state", () => {
+  const value = fixture("multi");
+  const result = withBase(value.requests, () => request.persistRequestContract(value.repo, multiContract()));
+  assert.deepEqual(result.leafIds, ["leaf-a", "leaf-b"]);
+  const artifact = request.readRequestArtifact(result.requestPath);
+  assert.equal(artifact.data.state, "relay_ready");
+  assert.equal(artifact.data.leaf_count, 2);
+  assert.equal(fs.existsSync(path.join(result.requestDir, "events.jsonl")), false);
 });
 
-test("persist-request CLI rejects readiness objects missing a required field before persistence", () => {
-  const { repoRoot } = setupRepo();
-  const contractPath = path.join(repoRoot, "contract-missing-readiness.json");
-  const { risk, ...incompleteReadiness } = createReadiness();
-  fs.writeFileSync(
-    contractPath,
-    `${JSON.stringify(createContract({ readiness: incompleteReadiness }), null, 2)}\n`,
-    "utf-8",
-  );
-
+test("same explicit request id and bytes are idempotent; conflicting bytes fail", () => {
+  const value = fixture("idempotent");
+  const requestId = "req-explicit-01";
+  const first = withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId }));
+  const second = withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId }));
+  assert.equal(second.requestPath, first.requestPath);
   assert.throws(
-    () => execFileSync("node", [
-      PERSIST_SCRIPT,
-      "--repo", repoRoot,
-      "--contract-file", contractPath,
-      "--json",
-    ], { encoding: "utf-8", stdio: "pipe" }),
-    (error) => {
-      assert.match(String(error.stderr), /contract validation failed: readiness\.risk: is required/);
-      return true;
-    },
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract({
+      handoff: { done_criteria_markdown: "- [ ] Different bytes" },
+    }), { requestId })),
+    /different immutable bundle/,
   );
 });
 
-test("persistRequestContract stores readiness dimensions in request frontmatter when provided", () => {
-  const { repoRoot } = setupRepo();
-  const readiness = createReadiness({ risk: "low" });
-
-  const result = persistRequestContract(repoRoot, createContract({ readiness }));
-  const requestArtifact = readRequestArtifact(result.requestPath);
-
-  assert.deepEqual(requestArtifact.data.readiness, readiness);
-  assert.deepEqual(result.readiness, readiness);
-});
-
-test("persistRequestContract stores readiness dimensions from handoff.readiness", () => {
-  const { repoRoot } = setupRepo();
-  const readiness = createReadiness({ clarity: "medium" });
-
-  const result = persistRequestContract(repoRoot, createContract({
-    handoff: {
-      ...createContract().handoff,
-      readiness,
-    },
-  }));
-  const requestArtifact = readRequestArtifact(result.requestPath);
-
-  assert.deepEqual(requestArtifact.data.readiness, readiness);
-  assert.deepEqual(result.readiness, readiness);
-});
-
-test("persistRequestContract persists multi-leaf handoffs with ordering, dependencies, and per-leaf artifacts", () => {
-  const { repoRoot } = setupRepo();
-  const result = persistRequestContract(repoRoot, createMultiLeafContract());
-
-  assert.equal(result.leafCount, 2);
-  assert.equal(result.leafId, undefined);
-  assert.equal(result.handoffPath, undefined);
-  assert.equal(result.doneCriteriaPath, undefined);
-  assert.deepEqual(result.leafIds, ["leaf-01", "leaf-02"]);
-  assert.equal(result.handoffPaths.length, 2);
-  assert.equal(result.doneCriteriaPaths.length, 2);
-  for (const artifactPath of [...result.handoffPaths, ...result.doneCriteriaPaths]) {
-    assert.ok(fs.existsSync(artifactPath));
-  }
-
-  const requestArtifact = readRequestArtifact(result.requestPath);
-  assert.equal(requestArtifact.data.request_id, result.requestId);
-  assert.equal(requestArtifact.data.state, "relay_ready");
-  assert.equal(requestArtifact.data.leaf_id, undefined);
-  assert.equal(requestArtifact.data.leaf_count, 2);
-  assert.deepEqual(requestArtifact.data.paths.handoffs, result.handoffPaths);
-  assert.deepEqual(requestArtifact.data.paths.done_criteria, result.doneCriteriaPaths);
-  assert.equal(requestArtifact.data.paths.handoff, undefined);
-  assert.deepEqual(requestArtifact.data.decomposition.leaf_order, ["leaf-01", "leaf-02"]);
-  assert.deepEqual(requestArtifact.data.decomposition.dependencies, {
-    "leaf-02": ["leaf-01"],
-  });
-  assert.match(requestArtifact.body, /leaf-01 \[order 1\] Fix login redirect loop/);
-  assert.match(requestArtifact.body, /leaf-02 \[order 2\] Backfill auth redirect coverage/);
-  assert.match(requestArtifact.body, /depends_on: leaf-01/);
-  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/relay-ready/leaf-01\\.md`));
-  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/relay-ready/leaf-02\\.md`));
-  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/done-criteria/leaf-01\\.md`));
-  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/done-criteria/leaf-02\\.md`));
-
-  const firstHandoff = readRequestArtifact(result.handoffPaths[0]);
-  assert.equal(firstHandoff.data.leaf_id, "leaf-01");
-  assert.equal(firstHandoff.data.order, 1);
-  assert.deepEqual(firstHandoff.data.depends_on, []);
-  assert.equal(firstHandoff.data.done_criteria_path, result.doneCriteriaPaths[0]);
-
-  const secondHandoff = readRequestArtifact(result.handoffPaths[1]);
-  assert.equal(secondHandoff.data.leaf_id, "leaf-02");
-  assert.equal(secondHandoff.data.order, 2);
-  assert.deepEqual(secondHandoff.data.depends_on, ["leaf-01"]);
-  assert.equal(secondHandoff.data.done_criteria_path, result.doneCriteriaPaths[1]);
-
-  const firstDoneCriteria = fs.readFileSync(result.doneCriteriaPaths[0], "utf-8");
-  const secondDoneCriteria = fs.readFileSync(result.doneCriteriaPaths[1], "utf-8");
-  assert.match(firstDoneCriteria, /Authenticated users stay off \/login/);
-  assert.match(secondDoneCriteria, /Redirect regressions are covered/);
-
-  const events = readRequestEvents(repoRoot, result.requestId);
-  assert.equal(events.length, 3);
-  assert.equal(events[0].event, "request_persisted");
-  assert.deepEqual(
-    events.slice(1).map((event) => event.leaf_id),
-    ["leaf-01", "leaf-02"]
-  );
-});
-
-test("scenario: directly relayable raw request persists immediately without preflight interactions", () => {
-  const { repoRoot } = setupRepo();
-  const readiness = createReadiness({ risk: "low" });
-
-  const result = persistRequestContract(repoRoot, createContract({ readiness }));
-  const requestArtifact = readRequestArtifact(result.requestPath);
-
-  assert.equal(result.leafCount, 1);
-  assert.equal(requestArtifact.data.state, "relay_ready");
-  assert.equal(requestArtifact.data.next_action, "relay_plan");
-  assert.equal(requestArtifact.data.source.kind, "raw_text");
-  assert.deepEqual(requestArtifact.data.readiness, readiness);
-  assert.deepEqual(
-    readEventNames(repoRoot, result.requestId),
-    ["request_persisted", "relay_ready_handoff_persisted"]
-  );
-});
-
-test("scenario: ambiguous request flows through proposal, clarification, answer, acceptance, and final persistence", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260409101010000";
-  const requestText = "Fix the auth routing bug around login redirects.";
-
-  propose(repoRoot, requestId, {
-    source_kind: "raw_text",
-    request_text: requestText,
-    proposal_summary: "Shape this into one redirect-focused leaf after clarifying guest behavior.",
-    proposal_text: "A. Keep guest deep links on /login\nB. Redirect guests elsewhere\nC. Other + free text",
-    response_options: ["A. Keep /login", "B. Redirect elsewhere", "C. Other + free text"],
-    reason: "The request is ambiguous about guest deep-link behavior.",
-  });
-  clarify(repoRoot, requestId, {
-    question_text: "Should guest deep links still land on /login?",
-    response_options: ["A. Yes", "B. No", "C. Other + free text"],
-    reason: "Need one stable review anchor before freezing the handoff.",
-  });
-
-  const answered = answerQuestion(repoRoot, requestId, {
-    question_text: "Should guest deep links still land on /login?",
-    answer_text: "A. Yes, keep guest deep links on /login.",
-    answer_choice: "A",
-    reason: "Clarified by the requester.",
-  });
-  assert.equal(answered.event, "question_answered");
-  assert.equal(readRequest(repoRoot, requestId).data.next_action, "review_answer");
-
-  const accepted = acceptProposal(repoRoot, requestId, {
-    proposal_summary: "Single redirect leaf that keeps guest deep links on /login.",
-    acceptance_note: "Proceed with one relay-sized fix.",
-    reason: "Clarification resolved the scope.",
-  });
-  assert.equal(accepted.event, "proposal_accepted");
-  assert.equal(readRequest(repoRoot, requestId).data.next_action, "relay_plan");
-
-  const result = persistRequestContract(repoRoot, createContract({
-    request_text: requestText,
-  }), { requestId });
-  const requestArtifact = readRequestArtifact(result.requestPath);
-
-  assert.equal(requestArtifact.data.state, "relay_ready");
-  assert.equal(requestArtifact.data.next_action, "relay_plan");
-  assert.deepEqual(
-    readEventNames(repoRoot, requestId),
-    [
-      "request_persisted",
-      "proposal_presented",
-      "question_asked",
-      "question_answered",
-      "proposal_accepted",
-      "relay_ready_handoff_persisted",
-    ]
-  );
-});
-
-test("scenario: oversized request is proposed, decomposed, and accepted before relay-ready persistence", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260409111111000";
-  const requestText = "Fix auth redirects, add regression coverage, and document the routing rules.";
-
-  propose(repoRoot, requestId, {
-    source_kind: "raw_text",
-    request_text: requestText,
-    proposal_summary: "This is too broad for one relay run; start by proposing a smaller shape.",
-    proposal_text: "A. Keep one leaf\nB. Split into multiple leaves\nC. Other + free text",
-    response_options: ["A. One leaf", "B. Multiple leaves", "C. Other + free text"],
-  });
-
-  const structured = structure(repoRoot, requestId, {
-    proposal_summary: "Split the work into a guard fix leaf and a regression coverage leaf.",
-    proposal_kind: "structure",
-    proposal_text: "Leaf 1 fixes the redirect guard. Leaf 2 adds regression coverage.",
-    response_options: ["A. Accept split", "B. Keep one leaf", "C. Other + free text"],
-    structure_kind: "decompose",
-    reason: "The request is oversized for one relay-sized handoff.",
-  });
-  assert.equal(structured.event, "proposal_presented");
-  assert.equal(structured.structure_kind, "decompose");
-  assert.equal(readRequest(repoRoot, requestId).data.next_action, "await_proposal_response");
-
-  const accepted = acceptProposal(repoRoot, requestId, {
-    proposal_summary: "Split the oversized request into two ordered relay-ready leaves.",
-    acceptance_note: "Use the decomposed shape.",
-  });
-  assert.equal(accepted.event, "proposal_accepted");
-
-  const requestArtifact = readRequest(repoRoot, requestId);
-  assert.equal(requestArtifact.data.state, "intake");
-  assert.equal(requestArtifact.data.leaf_count, 0);
-  assert.equal(requestArtifact.data.next_action, "relay_plan");
-  assert.deepEqual(
-    readEventNames(repoRoot, requestId),
-    ["request_persisted", "proposal_presented", "proposal_presented", "proposal_accepted"]
-  );
-});
-
-test("scenario: larger request decomposes into ordered child handoffs", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260409121212000";
-  const requestText = createMultiLeafContract().request_text;
-
-  structure(repoRoot, requestId, {
-    source_kind: "raw_text",
-    request_text: requestText,
-    proposal_summary: "Split the request into an implementation leaf followed by a coverage leaf.",
-    proposal_kind: "structure",
-    structure_kind: "decompose",
-  });
-  acceptProposal(repoRoot, requestId, {
-    proposal_summary: "Persist two ordered relay-ready leaves.",
-    acceptance_note: "Guard fix first, then regression coverage.",
-  });
-
-  const result = persistRequestContract(repoRoot, createMultiLeafContract(), { requestId });
-  const requestArtifact = readRequestArtifact(result.requestPath);
-  const firstLeaf = readRequestArtifact(result.handoffPaths[0]);
-  const secondLeaf = readRequestArtifact(result.handoffPaths[1]);
-
-  assert.equal(result.leafCount, 2);
-  assert.deepEqual(result.leafIds, ["leaf-01", "leaf-02"]);
-  assert.deepEqual(requestArtifact.data.decomposition.leaf_order, ["leaf-01", "leaf-02"]);
-  assert.deepEqual(requestArtifact.data.decomposition.dependencies, { "leaf-02": ["leaf-01"] });
-  assert.equal(firstLeaf.data.order, 1);
-  assert.deepEqual(firstLeaf.data.depends_on, []);
-  assert.equal(secondLeaf.data.order, 2);
-  assert.deepEqual(secondLeaf.data.depends_on, ["leaf-01"]);
-  assert.deepEqual(
-    readEventNames(repoRoot, requestId),
-    [
-      "request_persisted",
-      "proposal_presented",
-      "proposal_accepted",
-      "relay_ready_handoff_persisted",
-      "relay_ready_handoff_persisted",
-    ]
-  );
-});
-
-test("scenario: oversized product-foundation request uses AI-authored leaf proposals before persistence", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260608010101000";
-  const contract = createProductFoundationContract();
-  const proposalText = [
-    "Leaf 1: Create tenant onboarding shell",
-    "Goal: Add the minimum tenant onboarding flow needed before gated features can exist",
-    "Dependencies: none",
-    "In scope: Create tenant onboarding entry points; Persist tenant setup status",
-    "Out of scope: Billing enforcement; Analytics dashboards",
-    "Done Criteria: Tenant onboarding status is stored and visible to the app shell; Existing unauthenticated access behavior remains unchanged",
-    "",
-    "Leaf 2: Add billing gate skeleton",
-    "Goal: Introduce a billing gate that can block premium tenant actions after onboarding exists",
-    "Dependencies: depends on Leaf 1",
-    "In scope: Add the billing gate decision point; Cover allowed and blocked tenant states",
-    "Out of scope: Payment provider integration; Admin analytics",
-    "Done Criteria: Premium tenant actions consult a billing gate; Tests cover allowed and blocked billing states",
-    "",
-    "Leaf 3: Document product foundation operation",
-    "Goal: Document the operator workflow after onboarding and billing gate contracts are frozen",
-    "Dependencies: depends on Leaves 1 and 2",
-    "In scope: Document onboarding and billing gate operational checks",
-    "Out of scope: Changing product behavior; Analytics dashboard implementation",
-    "Done Criteria: Operator docs describe onboarding status checks; Operator docs describe billing gate troubleshooting",
-  ].join("\n");
-
-  structure(repoRoot, requestId, {
-    source_kind: "raw_text",
-    request_text: contract.request_text,
-    readiness: createReadiness({
-      clarity: "medium",
-      granularity: "multi_task",
-      dependency: "internal",
-      verifiability: "medium",
-      risk: "high",
-    }),
-    proposal_summary: "Strong decomposition signals: product foundation spans onboarding, billing, and docs.",
-    proposal_kind: "structure",
-    proposal_text: proposalText,
-    response_options: [
-      "A. Accept proposed leaves",
-      "B. Keep one high-risk leaf",
-      "C. Edit boundaries + free text",
-    ],
-    structure_kind: "decompose",
-    reason: "Deterministic signals show multi-task scope; AI proposes semantic leaf boundaries.",
-  });
-  acceptProposal(repoRoot, requestId, {
-    proposal_summary: "Persist the three AI-authored product foundation leaves.",
-    acceptance_note: "Use the proposed dependency order.",
-  });
-
-  const result = persistRequestContract(repoRoot, contract, { requestId });
-  const requestArtifact = readRequestArtifact(result.requestPath);
-  const leafArtifacts = result.handoffPaths.map((artifactPath) => readRequestArtifact(artifactPath));
-
-  assert.equal(result.leafCount, 3);
-  assert.deepEqual(result.leafIds, [
-    "foundation-auth-shell",
-    "foundation-billing-gate",
-    "foundation-operator-docs",
+test("two concurrent writers converge on the same completed bundle", async () => {
+  const value = fixture("concurrent");
+  const contractPath = path.join(value.root, "contract.json");
+  fs.writeFileSync(contractPath, JSON.stringify(contract()));
+  const requestId = "req-concurrent-01";
+  const results = await Promise.all([
+    runChild({ ...value, contractPath, requestId }),
+    runChild({ ...value, contractPath, requestId }),
   ]);
-  assert.deepEqual(requestArtifact.data.decomposition.leaf_order, result.leafIds);
-  assert.deepEqual(requestArtifact.data.decomposition.dependencies, {
-    "foundation-billing-gate": ["foundation-auth-shell"],
-    "foundation-operator-docs": ["foundation-auth-shell", "foundation-billing-gate"],
-  });
-  assert.deepEqual(
-    leafArtifacts.map((artifact) => artifact.data.depends_on),
-    [
-      [],
-      ["foundation-auth-shell"],
-      ["foundation-auth-shell", "foundation-billing-gate"],
-    ]
-  );
-  assert.match(requestArtifact.body, /foundation-operator-docs \[order 3\]/);
-  assert.match(requestArtifact.body, /depends_on: foundation-auth-shell, foundation-billing-gate/);
-  const proposalEvent = readRequestEvents(repoRoot, requestId).find((event) => event.event === "proposal_presented");
-  assert.equal(proposalEvent.proposal_text, proposalText);
-  assert.match(proposalEvent.proposal_text, /Goal: Add the minimum tenant onboarding flow/);
-  assert.match(proposalEvent.proposal_text, /Dependencies: depends on Leaves 1 and 2/);
-  assert.match(proposalEvent.proposal_text, /In scope: Document onboarding and billing gate operational checks/);
-  assert.match(proposalEvent.proposal_text, /Out of scope: Changing product behavior; Analytics dashboard implementation/);
-  assert.match(proposalEvent.proposal_text, /Done Criteria: Operator docs describe onboarding status checks/);
-  assert.deepEqual(
-    readEventNames(repoRoot, requestId),
-    [
-      "request_persisted",
-      "proposal_presented",
-      "proposal_accepted",
-      "relay_ready_handoff_persisted",
-      "relay_ready_handoff_persisted",
-      "relay_ready_handoff_persisted",
-    ]
-  );
+  assert.deepEqual(results.map((entry) => entry.status), [0, 0], results.map((entry) => entry.stderr).join("\n"));
+  assert.equal(JSON.parse(results[0].stdout).requestPath, JSON.parse(results[1].stdout).requestPath);
+  const marker = path.join(JSON.parse(results[0].stdout).requestDir, "bundle-complete.json");
+  assert.equal(fs.existsSync(marker), true);
 });
 
-test("decomposition contract docs pin the script-vs-AI and planner handoff boundary", () => {
-  const doc = fs.readFileSync(DECOMPOSITION_CONTRACT_DOC, "utf-8");
-
-  assert.match(doc, /Scripts emit deterministic signals and persist validated artifacts/);
-  assert.match(doc, /Scripts must not infer semantic leaf boundaries/);
-  assert.match(doc, /proposal-first shaping/);
-  assert.match(doc, /leaf title, goal, dependency intent, in-scope items, out-of-scope items, and leaf-level Done Criteria/);
-  assert.match(doc, /one bounded clarification question/);
-  assert.match(doc, /Sprint-batch bypass/);
-  assert.match(doc, /leaf-level Done Criteria, dispatch prompt, rubric, and smoke\/replay scenario/);
-  assert.match(doc, /relay-ready\/<leaf-id>\.md/);
-  assert.match(doc, /frozen Done Criteria/);
-  assert.match(doc, /#431/);
-});
-
-test("scenario: non-issue request freezes done criteria from the handoff rather than GitHub", () => {
-  const { repoRoot } = setupRepo();
-  const doneCriteriaMarkdown = "# Done Criteria\n\n- Duplicate invite emails stop after resend\n- The resend actor is logged in the audit trail\n";
-  const result = persistRequestContract(repoRoot, createContract({
-    request_text: "Fix duplicate invite sends when admins resend an invite.",
-    handoff: {
-      ...createContract().handoff,
-      leaf_id: "leaf-invite-01",
-      title: "Fix duplicate invite resend notifications",
-      goal: "Stop duplicate invite emails when an admin resends an invite",
-      in_scope: ["Deduplicate resend notifications", "Log the acting admin"],
-      out_of_scope: ["Redesigning the invite email"],
-      assumptions: ["The audit log already has an invite resend event type"],
-      done_criteria_markdown: doneCriteriaMarkdown,
-      escalation_conditions: ["Invite resend ownership is split across services"],
-    },
+test("twenty concurrent writer pairs never observe a partial completion marker", async () => {
+  const value = fixture("concurrent-marker-stress");
+  const contractPath = path.join(value.root, "contract.json");
+  fs.writeFileSync(contractPath, JSON.stringify(contract()));
+  const pairs = await Promise.all(Array.from({ length: 20 }, async (_, index) => {
+    const requestId = `req-concurrent-marker-${index}`;
+    return Promise.all([
+      runChild({ ...value, contractPath, requestId }),
+      runChild({ ...value, contractPath, requestId }),
+    ]);
   }));
-  const requestArtifact = readRequestArtifact(result.requestPath);
-  const handoffArtifact = readRequestArtifact(result.handoffPath);
-
-  assert.equal(requestArtifact.data.source.kind, "raw_text");
-  assert.equal(handoffArtifact.data.done_criteria_path, result.doneCriteriaPath);
-  assert.equal(fs.readFileSync(result.doneCriteriaPath, "utf-8").trim(), doneCriteriaMarkdown.trim());
-  assert.deepEqual(
-    readEventNames(repoRoot, result.requestId),
-    ["request_persisted", "relay_ready_handoff_persisted"]
-  );
+  for (const [index, pair] of pairs.entries()) {
+    assert.deepEqual(pair.map((entry) => entry.status), [0, 0], `pair ${index}: ${pair.map((entry) => entry.stderr).join("\n")}`);
+    assert.doesNotMatch(pair.map((entry) => entry.stderr).join("\n"), /Unexpected end of JSON input/);
+  }
 });
 
-test("scenario: portable A/B/C plain-text interaction works without host-specific UI widgets", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260409131313000";
-  const requestText = "Triage the auth redirect work for the next relay run.";
-  const proposalChoices = [
-    "A. Keep one leaf",
-    "B. Split into two leaves",
-    "C. Other + free text",
-  ];
-  const questionChoices = [
-    "A. Fix the guard first",
-    "B. Add coverage first",
-    "C. Other + free text",
-  ];
-
-  propose(repoRoot, requestId, {
-    source_kind: "raw_text",
-    request_text: requestText,
-    proposal_summary: "Offer a plain-text proposal even when the host has no widget support.",
-    proposal_text: proposalChoices.join("\n"),
-    response_options: proposalChoices,
-  });
-  clarify(repoRoot, requestId, {
-    question_text: "Which leaf should land first?",
-    response_options: questionChoices,
-  });
-
-  const answered = answerQuestion(repoRoot, requestId, {
-    question_text: "Which leaf should land first?",
-    answer_text: "C. Other: fix the guard first, then add coverage.",
-    answer_choice: "C",
-  });
-  const events = readRequestEvents(repoRoot, requestId);
-
-  assert.deepEqual(events[1].response_options, proposalChoices);
-  assert.deepEqual(events[2].response_options, questionChoices);
-  assert.equal(answered.answer_choice, "C");
-  assert.equal(readRequest(repoRoot, requestId).data.next_action, "review_answer");
+test("two concurrent writers with conflicting bytes elect one immutable bundle", async () => {
+  const value = fixture("concurrent-conflict");
+  const firstPath = path.join(value.root, "first.json");
+  const secondPath = path.join(value.root, "second.json");
+  fs.writeFileSync(firstPath, JSON.stringify(contract()));
+  fs.writeFileSync(secondPath, JSON.stringify(contract({ handoff: { done_criteria_markdown: "- [ ] Other" } })));
+  const requestId = "req-concurrent-conflict";
+  const results = await Promise.all([
+    runChild({ ...value, contractPath: firstPath, requestId }),
+    runChild({ ...value, contractPath: secondPath, requestId }),
+  ]);
+  assert.deepEqual(results.map((entry) => entry.status).sort(), [0, 1]);
+  assert.match(results.find((entry) => entry.status === 1).stderr, /different immutable bundle/);
 });
 
-test("scenario: delegate fallback uses the portable plain-text path when gstack/superpowers are unavailable", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260409141414000";
-  const requestText = "Coordinate the shared auth middleware fix with the platform team.";
-  const hostCapabilities = {
-    gstack: false,
-    superpowers: false,
-  };
-
-  const delegated = proposeDelegateFallback(repoRoot, requestId, {
-    requestText,
-    hostCapabilities,
-  });
-  assert.equal(delegated.fallback, "portable_plain_text");
-  assert.equal(delegated.event, "proposal_presented");
-  assert.equal(delegated.structure_kind, "delegate");
-
-  const accepted = acceptProposal(repoRoot, requestId, {
-    proposal_summary: "Use the delegate fallback and continue with the portable handoff.",
-    acceptance_note: "Delegate the shared middleware work.",
-  });
-  assert.equal(accepted.event, "proposal_accepted");
-  assert.equal(readRequest(repoRoot, requestId).data.next_action, "relay_plan");
-
-  const events = readRequestEvents(repoRoot, requestId);
-  assert.equal(events[1].structure_kind, "delegate");
-  assert.deepEqual(events[1].response_options, ["A. Delegate", "B. Keep local", "C. Other + free text"]);
-  assert.match(events[1].reason, /gstack\/superpowers are unavailable/);
-  assert.deepEqual(
-    readEventNames(repoRoot, requestId),
-    ["request_persisted", "proposal_presented", "proposal_accepted"]
-  );
-});
-
-test("scenario: /relay keeps issue-first users on the fast path without intake overhead", () => {
-  const { repoRoot } = setupRepo();
-  const readiness = createReadiness({ risk: "low" });
-  const result = invokeRelayFrontDoor(repoRoot, {
-    hasStableReviewAnchor: true,
-    contract: createContract({
-      source: { kind: "github_issue" },
-      request_text: "Issue #132: Fix the login redirect loop for authenticated users.",
-      readiness,
-    }),
-  });
-
-  assert.equal(result.route, "bypass_intake");
-  assert.deepEqual(result.downstreamChain, ["relay-plan", "relay-dispatch"]);
-  assert.equal(result.sourceKind, "github_issue");
-  assert.equal(result.reviewAnchorSource, "github_issue");
-  assert.equal(result.leafId, "leaf-01");
-  assert.deepEqual(result.readiness, readiness);
-  assert.equal(result.requestId, undefined);
-  assert.equal(result.requestPath, undefined);
-  assert.equal(result.doneCriteriaPath, undefined);
-  assert.equal(fs.existsSync(getRequestsDir(repoRoot)), false);
-});
-
-test("persistRequestContract rejects duplicate leaf IDs within a multi-leaf request", () => {
-  const { repoRoot } = setupRepo();
-  const contract = createMultiLeafContract({
-    handoffs: [
-      { ...createMultiLeafContract().handoffs[0], leaf_id: "leaf-01" },
-      createMultiLeafContract().handoffs[1],
-    ],
-  });
-
+test("a crash before completion leaves a fail-closed incomplete bundle", () => {
+  const value = fixture("crash");
+  const requestId = "req-crash-01";
   assert.throws(
-    () => persistRequestContract(repoRoot, contract),
-    /leaf_id 'leaf-01' must be unique within a request/
-  );
-});
-
-test("persistRequestContract rejects request_id collisions before overwriting frozen artifacts", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260409040404000";
-  const first = persistRequestContract(repoRoot, createContract(), { requestId });
-  const originalDoneCriteria = fs.readFileSync(first.doneCriteriaPath, "utf-8");
-
-  assert.throws(
-    () => persistRequestContract(repoRoot, createContract({
-      request_text: "A different raw request that must not replace the original.",
-      handoff: {
-        ...createContract().handoff,
-        done_criteria_markdown: "# Done Criteria\n\n- Replacement snapshot that must never land\n",
-      },
-    }), { requestId }),
-    /already exists; refusing to overwrite existing request artifact/
-  );
-
-  assert.equal(fs.readFileSync(first.doneCriteriaPath, "utf-8"), originalDoneCriteria);
-  assert.equal(readRequestEvents(repoRoot, requestId).length, 2);
-});
-
-test("preflight helpers bootstrap a non-ready request artifact before relay-ready persistence", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260409050505000";
-  const initialReadiness = createReadiness({
-    clarity: "low",
-    granularity: "unclear",
-    dependency: "external",
-    verifiability: "low",
-    risk: "high",
-  });
-  const reassessedReadiness = createReadiness({ dependency: "internal" });
-
-  const proposal = propose(repoRoot, requestId, {
-    source_kind: "raw_text",
-    request_text: createContract().request_text,
-    readiness: initialReadiness,
-    proposal_summary: "Keep the work as a single auth redirect leaf.",
-    proposal_text: "A. Update the guard\nB. Add redirect tests\nC. Free text",
-    response_options: ["A", "B", "C + free text"],
-  });
-  assert.equal(proposal.event, "proposal_presented");
-  assert.equal(proposal.leaf_id, null);
-
-  const question = clarify(repoRoot, requestId, {
-    readiness: reassessedReadiness,
-    question_text: "Should guest deep links still route to /login?",
-    response_options: ["A. Yes", "B. No", "C. Other"],
-  });
-  assert.equal(question.event, "question_asked");
-  assert.equal(question.leaf_id, null);
-
-  const structured = structure(repoRoot, requestId, {
-    proposal_summary: "Restructure the intake around one guard change plus tests.",
-    proposal_kind: "structure",
-    structure_kind: "decompose",
-  });
-  assert.equal(structured.event, "proposal_presented");
-  assert.equal(structured.leaf_id, null);
-
-  const requestArtifact = readRequestArtifact(getRequestPath(repoRoot, requestId));
-  assert.equal(requestArtifact.data.state, "intake");
-  assert.equal(requestArtifact.data.leaf_id, undefined);
-  assert.equal(requestArtifact.data.next_action, "await_proposal_response");
-  assert.equal(requestArtifact.data.paths.handoff, undefined);
-  assert.deepEqual(requestArtifact.data.readiness, reassessedReadiness);
-  assert.equal(
-    fs.readFileSync(requestArtifact.data.paths.raw_request, "utf-8"),
-    `${createContract().request_text}\n`
-  );
-
-  const preflightEvents = readRequestEvents(repoRoot, requestId);
-  assert.deepEqual(
-    preflightEvents.map((event) => event.event),
-    ["request_persisted", "proposal_presented", "question_asked", "proposal_presented"]
-  );
-
-  const intake = persistRequestContract(repoRoot, createContract(), { requestId });
-  const promotedArtifact = readRequestArtifact(intake.requestPath);
-
-  assert.equal(promotedArtifact.data.state, "relay_ready");
-  assert.equal(promotedArtifact.data.leaf_id, "leaf-01");
-  assert.equal(promotedArtifact.data.next_action, "relay_plan");
-  assert.equal(promotedArtifact.data.paths.handoff, intake.handoffPath);
-  assert.deepEqual(promotedArtifact.data.readiness, reassessedReadiness);
-  assert.deepEqual(intake.readiness, reassessedReadiness);
-
-  const events = readRequestEvents(repoRoot, requestId);
-  assert.deepEqual(
-    events.map((event) => event.event),
-    [
-      "request_persisted",
-      "proposal_presented",
-      "question_asked",
-      "proposal_presented",
-      "relay_ready_handoff_persisted",
-    ]
-  );
-});
-
-test("preflight actions append typed events and update next_action without a second state machine", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260409060606000";
-  const reassessedReadiness = createReadiness({ granularity: "multi_task" });
-
-  const proposal = propose(repoRoot, requestId, {
-    source_kind: "raw_text",
-    request_text: createContract().request_text,
-    proposal_summary: "Keep the work as a single auth redirect leaf.",
-    proposal_text: "A. Update the guard\nB. Add redirect tests\nC. Free text",
-    response_options: ["A", "B", "C + free text"],
-  });
-  assert.equal(proposal.event, "proposal_presented");
-  assert.equal(proposal.request_id, requestId);
-  assert.equal(proposal.leaf_id, null);
-  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "await_proposal_response");
-
-  const question = clarify(repoRoot, requestId, {
-    readiness: reassessedReadiness,
-    question_text: "Should guest deep links still route to /login?",
-    response_options: ["A. Yes", "B. No", "C. Other"],
-  });
-  assert.equal(question.event, "question_asked");
-  assert.deepEqual(question.response_options, ["A. Yes", "B. No", "C. Other"]);
-  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "await_answer");
-  assert.deepEqual(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.readiness, reassessedReadiness);
-
-  const structured = structure(repoRoot, requestId, {
-    proposal_summary: "Restructure the handoff around one guard change plus tests.",
-    proposal_kind: "structure",
-    structure_kind: "decompose",
-  });
-  assert.equal(structured.event, "proposal_presented");
-  assert.equal(structured.structure_kind, "decompose");
-  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "await_proposal_response");
-
-  const structuredEdit = structure(repoRoot, requestId, {
-    proposal_summary: "Keep one leaf but tighten the handoff wording.",
-    edit_summary: "Fold the test wording into the main proposal summary.",
-    edits_existing_proposal: true,
-    structure_kind: "restructure",
-  });
-  assert.equal(structuredEdit.event, "proposal_edited");
-  assert.equal(structuredEdit.edit_summary, "Fold the test wording into the main proposal summary.");
-  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "await_proposal_response");
-
-  const events = readRequestEvents(repoRoot, requestId);
-  assert.deepEqual(
-    events.map((event) => event.event),
-    ["request_persisted", "proposal_presented", "question_asked", "proposal_presented", "proposal_edited"]
-  );
-});
-
-test("interaction event helpers persist portable fields for answers, edits, and acceptance", () => {
-  const { repoRoot } = setupRepo();
-  const requestId = "req-20260409070707000";
-  propose(repoRoot, requestId, {
-    source_kind: "raw_text",
-    request_text: createContract().request_text,
-    proposal_summary: "Keep one relay leaf for the redirect loop fix.",
-  });
-
-  const answered = answerQuestion(repoRoot, requestId, {
-    question_text: "Should guest deep links still route to /login?",
-    answer_text: "A. Yes, keep the guest login route as-is.",
-    answer_choice: "A",
-  });
-  assert.equal(answered.event, "question_answered");
-  assert.equal(answered.question_text, "Should guest deep links still route to /login?");
-  assert.equal(answered.answer_text, "A. Yes, keep the guest login route as-is.");
-  assert.equal(answered.answer_choice, "A");
-  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "review_answer");
-
-  const edited = editProposal(repoRoot, requestId, {
-    proposal_summary: "Keep one relay leaf for the redirect loop fix.",
-    edit_summary: "Add the cookie-session assumption to the proposal text.",
-    proposal_text: "Scope the work to the redirect guard and add tests.",
-  });
-  assert.equal(edited.event, "proposal_edited");
-  assert.equal(edited.edit_summary, "Add the cookie-session assumption to the proposal text.");
-  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "review_proposal_edits");
-
-  const accepted = acceptProposal(repoRoot, requestId, {
-    proposal_summary: "Keep one relay leaf for the redirect loop fix.",
-    acceptance_note: "Ship the single-leaf handoff.",
-    accepted_with_edits: true,
-  });
-  assert.equal(accepted.event, "proposal_accepted");
-  assert.equal(accepted.acceptance_note, "Ship the single-leaf handoff.");
-  assert.equal(accepted.accepted_with_edits, true);
-  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "relay_plan");
-
-  const events = readRequestEvents(repoRoot, requestId);
-  assert.deepEqual(
-    events.slice(-3).map((event) => event.event),
-    ["question_answered", "proposal_edited", "proposal_accepted"]
-  );
-});
-
-test("preflight helpers reject mutations after relay-ready persistence", () => {
-  const { repoRoot } = setupRepo();
-  const readiness = createReadiness({ risk: "low" });
-  const intake = persistRequestContract(repoRoot, createContract({ readiness }));
-  const initialArtifact = readRequestArtifact(intake.requestPath);
-  const initialEvents = readRequestEvents(repoRoot, intake.requestId);
-
-  assert.throws(
-    () => propose(repoRoot, intake.requestId, {
-      proposal_summary: "Try to reshape the frozen handoff.",
-    }),
-    /already relay_ready; preflight intake interactions cannot mutate a frozen handoff/
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), {
+      requestId,
+      fault(stage) { if (stage === "after:raw-request.md") throw new Error("simulated crash"); },
+    })),
+    /incomplete request bundle.*simulated crash/,
   );
   assert.throws(
-    () => clarify(repoRoot, intake.requestId, {
-      readiness: createReadiness({ risk: "high" }),
-      question_text: "Should this still be editable after the handoff exists?",
-    }),
-    /already relay_ready; preflight intake interactions cannot mutate a frozen handoff/
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId })),
+    /without a completion marker/,
   );
-  assert.throws(
-    () => structure(repoRoot, intake.requestId, {
-      proposal_summary: "Restructure the frozen request.",
-    }),
-    /already relay_ready; preflight intake interactions cannot mutate a frozen handoff/
-  );
-
-  const currentArtifact = readRequestArtifact(intake.requestPath);
-  assert.equal(currentArtifact.data.next_action, initialArtifact.data.next_action);
-  assert.deepEqual(currentArtifact.data.readiness, initialArtifact.data.readiness);
-  assert.deepEqual(readRequestEvents(repoRoot, intake.requestId), initialEvents);
 });
 
-test("scenario: /relay auto-routes raw text through intake, then continues to dispatch and review linkage", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const intake = invokeRelayFrontDoor(repoRoot, {
-    contract: createContract(),
-    hasStableReviewAnchor: false,
-  });
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    RELAY_HOME: relayHome,
-    PATH: `${binDir}:${process.env.PATH}`,
-  };
-  const rubricPath = path.join(repoRoot, "rubric.yaml");
-  fs.writeFileSync(rubricPath, "rubric:\n  factors:\n    - name: intake relay handoff\n      target: exit 0\n", "utf-8");
-
-  const dispatchStdout = execFileSync("node", [
-    DISPATCH_SCRIPT,
-    repoRoot,
-    "-b", "issue-127-raw-intake",
-    "--prompt-file", intake.handoffPath,
-    "--rubric-file", rubricPath,
-    "--request-id", intake.requestId,
-    "--leaf-id", intake.leafId,
-    "--done-criteria-file", intake.doneCriteriaPath,
-    "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  const dispatchResult = JSON.parse(dispatchStdout);
-  assert.equal(intake.route, "invoke_intake");
-  assert.deepEqual(intake.downstreamChain, ["relay-ready", "relay-plan", "relay-dispatch"]);
-  assert.deepEqual(
-    readEventNames(repoRoot, intake.requestId),
-    ["request_persisted", "relay_ready_handoff_persisted"]
+test("a fault after marker fsync but before publication exposes no marker bytes", () => {
+  const value = fixture("marker-before-publication");
+  const requestId = "req-marker-before-publication";
+  assert.throws(
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), {
+      requestId,
+      fault(stage) { if (stage === "after:bundle-complete.temp") throw new Error("marker publication fault"); },
+    })),
+    /incomplete request bundle.*marker publication fault/,
   );
-  assert.equal(dispatchResult.runState, "review_pending");
+  const requestDir = path.join(requestRepoDir(value.requests, value.repo), requestId);
+  assert.equal(fs.existsSync(path.join(requestDir, "bundle-complete.json")), false);
+  assert.deepEqual(fs.readdirSync(requestDir).filter((name) => name.includes("bundle-complete")), []);
+  assert.throws(
+    () => request.readRequestArtifact(path.join(path.dirname(requestDir), `${requestId}.md`)),
+    /without a completion marker/,
+  );
+});
 
-  const manifest = readManifest(dispatchResult.manifestPath).data;
-  const dispatchPrompt = fs.readFileSync(path.join(dispatchResult.runDir, "dispatch-prompt.md"), "utf-8");
-  assert.equal(manifest.source.request_id, intake.requestId);
-  assert.equal(manifest.source.leaf_id, intake.leafId);
-  assert.equal(manifest.anchor.done_criteria_path, intake.doneCriteriaPath);
-  assert.equal(manifest.anchor.done_criteria_source, "request_snapshot");
-  assert.match(dispatchPrompt, /Fix login redirect loop/);
+test("a malformed published completion marker fails closed immediately", () => {
+  const value = fixture("malformed-marker");
+  const requestId = "req-malformed-marker";
+  const requestsDir = requestRepoDir(value.requests, value.repo);
+  const requestDir = path.join(requestsDir, requestId);
+  fs.mkdirSync(requestsDir);
+  fs.mkdirSync(requestDir);
+  fs.writeFileSync(path.join(requestDir, "bundle-complete.json"), "{\n");
+  const started = Date.now();
+  assert.throws(
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId })),
+    /completion marker is malformed/,
+  );
+  assert.ok(Date.now() - started < 500, "malformed marker must fail without waiting for timeout");
+});
 
-  const diffPath = path.join(repoRoot, "pr.diff");
-  fs.writeFileSync(diffPath, "diff --git a/intake.txt b/intake.txt\n+ok\n", "utf-8");
+test("the public request artifact is unreadable until its matching completion marker verifies the whole bundle", () => {
+  const value = fixture("public-before-marker");
+  const requestId = "req-public-before-marker";
+  let requestPath;
+  assert.throws(
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), {
+      requestId,
+      fault(stage) { if (stage === "after:../request.md") throw new Error("simulated crash"); },
+    })),
+    /incomplete request bundle.*simulated crash/,
+  );
+  requestPath = path.join(requestRepoDir(value.requests, value.repo), `${requestId}.md`);
+  assert.throws(() => request.readRequestArtifact(requestPath), /without a completion marker/);
 
-  const reviewStdout = execFileSync("node", [
-    REVIEW_RUNNER_SCRIPT,
-    "--repo", repoRoot,
-    "--run-id", dispatchResult.runId,
-    "--pr", "123",
-    "--diff-file", diffPath,
-    "--prepare-only",
-    "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
+  const completed = withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId: "req-marker-integrity" }));
+  const markerPath = path.join(completed.requestDir, "bundle-complete.json");
+  const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+  delete marker.files["raw-request.md"];
+  fs.writeFileSync(markerPath, `${JSON.stringify(marker)}\n`);
+  assert.throws(() => request.readRequestArtifact(completed.requestPath), /incomplete or invalid inventory|digest does not match/);
+});
+
+test("request and leaf identifiers reject path traversal", () => {
+  const value = fixture("ids");
+  for (const requestId of ["../escape", "a/b", ".."] ) {
+    assert.throws(
+      () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId })),
+      /safe path-independent identifier/,
+    );
+  }
+  for (const leafId of ["../escape", "a/b", ".."] ) {
+    assert.throws(
+      () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract({ handoff: { leaf_id: leafId } }))),
+      /safe path-independent identifier/,
+    );
+  }
+});
+
+test("rejects a symlinked requests base, repo directory, or request directory", () => {
+  const value = fixture("symlink-dirs");
+  const target = path.join(value.root, "target");
+  fs.mkdirSync(target);
+  const baseLink = path.join(value.root, "requests-link");
+  fs.symlinkSync(target, baseLink);
+  assert.throws(
+    () => withBase(baseLink, () => request.persistRequestContract(value.repo, contract())),
+    /trusted request directory/,
+  );
+
+  const ancestorTarget = path.join(value.root, "ancestor-target");
+  const ancestorLink = path.join(value.root, "ancestor-link");
+  fs.mkdirSync(path.join(ancestorTarget, "requests"), { recursive: true });
+  fs.symlinkSync(ancestorTarget, ancestorLink);
+  assert.throws(
+    () => withBase(path.join(ancestorLink, "requests"), () => request.persistRequestContract(value.repo, contract())),
+    /symlink ancestors/,
+  );
+
+  const repoDir = requestRepoDir(value.requests, value.repo);
+  fs.symlinkSync(target, repoDir);
+  assert.throws(
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract())),
+    /trusted request directory/,
+  );
+
+  fs.unlinkSync(repoDir); fs.mkdirSync(repoDir);
+  fs.symlinkSync(target, path.join(repoDir, "req-link-01"));
+  assert.throws(
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId: "req-link-01" })),
+    /untrusted/,
+  );
+});
+
+test("completed bundles reject symlink and FIFO artifact replacement", () => {
+  const value = fixture("special");
+  const requestId = "req-special-01";
+  const result = withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId }));
+  const original = fs.readFileSync(result.doneCriteriaPath);
+  const target = path.join(value.root, "criteria-target.md");
+  fs.writeFileSync(target, original);
+  fs.unlinkSync(result.doneCriteriaPath);
+  fs.symlinkSync(target, result.doneCriteriaPath);
+  assert.throws(
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId })),
+    /symlink|ELOOP/,
+  );
+  fs.unlinkSync(result.doneCriteriaPath);
+  execFileSync("mkfifo", [result.doneCriteriaPath]);
+  assert.throws(
+    () => withBase(value.requests, () => request.persistRequestContract(value.repo, contract(), { requestId })),
+    /regular file/,
+  );
+});
+
+test("persist-request CLI validates and publishes the final contract only", () => {
+  const value = fixture("cli");
+  const contractPath = path.join(value.root, "contract.json");
+  fs.writeFileSync(contractPath, JSON.stringify(contract()));
+  const script = path.resolve(__dirname, "../../../skills/relay-ready/scripts/persist-request.js");
+  const output = execFileSync(process.execPath, [script, "--repo", value.repo, "--contract-file", contractPath, "--json"], {
+    encoding: "utf8",
+    env: { ...process.env, RELAY_REQUESTS_BASE: value.requests },
   });
-
-  const reviewResult = JSON.parse(reviewStdout);
-  const preparedDoneCriteria = fs.readFileSync(reviewResult.doneCriteriaPath, "utf-8");
-  const promptText = fs.readFileSync(reviewResult.promptPath, "utf-8");
-
-  assert.match(preparedDoneCriteria, /Authenticated users stay off \/login/);
-  assert.match(promptText, /source="request_snapshot"/);
+  const result = JSON.parse(output);
+  assert.equal(result.leafCount, 1);
+  assert.equal(git(value.repo, ["status", "--porcelain"]), "");
 });

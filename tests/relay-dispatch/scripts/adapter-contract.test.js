@@ -7,7 +7,7 @@ const assert = require("node:assert/strict");
 
 const contract = require("../../../skills/relay-dispatch/scripts/adapter-contract");
 const { getAdapter, listAdapters } = require("../../../skills/relay-dispatch/scripts/adapters");
-const { createGenericAdapter, validateSchema } = require("../../../skills/relay-dispatch/scripts/adapters/generic");
+const dispatch = require("../../../skills/relay-dispatch/scripts/dispatch");
 const transcripts = require("../fixtures/adapter-transcripts.json");
 
 let root;
@@ -17,6 +17,7 @@ let promptPath;
 let resultPath;
 let stdoutPath;
 let stderrPath;
+let schemaPath;
 
 before(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-adapter-contract-"));
@@ -34,7 +35,9 @@ before(() => {
   resultPath = path.join(root, "result output.txt");
   stdoutPath = path.join(root, "stdout.log");
   stderrPath = path.join(root, "stderr.log");
+  schemaPath = path.join(root, "review-schema.json");
   fs.writeFileSync(promptPath, "Do the thing; do not interpolate $HOME or $(whoami).\n");
+  fs.writeFileSync(schemaPath, '{"type":"object"}\n');
 });
 
 after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -44,7 +47,9 @@ function invocationFor(adapter, phase = "dispatch") {
     phase,
     cwd,
     promptPath,
+    promptBytes: fs.readFileSync(promptPath),
     resultPath,
+    schemaPath,
     model: "provider/model; literally-not-a-shell-command",
     timeoutMs: 123456,
     sandbox: adapter.name === "codex" ? "read-only" : "workspace-write",
@@ -65,11 +70,13 @@ test("new adapter registry preserves exactly the seven supported executors", () 
       `${name} must expose exactly the four adapter methods`
     );
     assert.ok(adapter.metadata.cliBinary);
+    assert.equal(adapter.metadata.processContainment, contract.PROCESS_CONTAINMENT);
     assert.ok(Number.isInteger(adapter.defaults.timeoutMs));
   }
 });
 
 test("every dispatch adapter returns argv-only invocations and preserves metacharacters as data", () => {
+  const stdinAdapters = new Set(["claude", "codex", "cursor", "opencode", "pi"]);
   for (const name of listAdapters()) {
     const adapter = getAdapter(name);
     const invocation = invocationFor(adapter);
@@ -80,7 +87,12 @@ test("every dispatch adapter returns argv-only invocations and preserves metacha
     assert.ok(!invocation.command.includes(" "), `${name} command is not a shell command`);
     const serialized = JSON.stringify(invocation.args);
     assert.match(serialized, /literally-not-a-shell-command|\$HOME/, name);
-    assert.match(serialized, /\$HOME|RELAY WORKTREE BOUNDARY|prompt-file/, name);
+    if (stdinAdapters.has(name)) {
+      assert.equal(invocation.stdinPath, promptPath, name);
+      assert.doesNotMatch(serialized, /Do the thing|\$HOME|RELAY WORKTREE BOUNDARY/, name);
+    } else {
+      assert.match(serialized, /\$HOME|RELAY WORKTREE BOUNDARY/, name);
+    }
   }
 });
 
@@ -89,6 +101,7 @@ test("Codex omits the reasoning override when the operator did not select one", 
     phase: "dispatch",
     cwd,
     promptPath,
+    promptBytes: fs.readFileSync(promptPath),
     resultPath,
     model: null,
     timeoutMs: 123456,
@@ -117,6 +130,7 @@ test("phase matrix is fail-closed before an invocation is built", () => {
       phase: "dispatch",
       cwd,
       promptPath,
+      promptBytes: fs.readFileSync(promptPath),
       resultPath,
       sandbox: "read-only",
       networkAccess: "enabled",
@@ -125,13 +139,49 @@ test("phase matrix is fail-closed before an invocation is built", () => {
   );
 });
 
-test("supported primary review roles use the same descriptor and a Node argv bridge, never a shell", () => {
+test("supported primary review roles build direct read-only CLI invocations, never wrapper or shell commands", () => {
   for (const name of ["codex", "claude", "cursor", "opencode", "pi", "antigravity"]) {
     const phase = "primary_review";
     const invocation = invocationFor(getAdapter(name), phase);
-    assert.equal(invocation.command, process.execPath, `${name}/${phase}`);
-    assert.ok(invocation.args.some((arg) => /invoke-reviewer-/.test(arg)), `${name}/${phase}`);
+    assert.notEqual(invocation.command, process.execPath, `${name}/${phase}`);
+    assert.equal(invocation.cwd, cwd, `${name}/${phase}`);
+    assert.equal(invocation.args.some((arg) => /invoke-reviewer-/.test(arg)), false, `${name}/${phase}`);
     assert.ok(!invocation.args.join("\u0000").includes("sh -c"), `${name}/${phase}`);
+    assert.ok(
+      invocation.stdinPath === promptPath
+      || invocation.args.includes(fs.readFileSync(promptPath, "utf8")),
+      `${name}/${phase}`
+    );
+  }
+});
+
+test("native invocation requires trusted prompt bytes and rejects invalid UTF-8 without reopening promptPath", () => {
+  const adapter = getAdapter("codex");
+  const input = {
+    phase: "dispatch",
+    cwd,
+    promptPath,
+    resultPath,
+    sandbox: "read-only",
+    networkAccess: "disabled",
+  };
+  assert.throws(() => adapter.buildInvocation(input), /promptBytes must be a Buffer/);
+  assert.throws(
+    () => adapter.buildInvocation({ ...input, promptBytes: Buffer.from([0xff, 0xfe]) }),
+    /valid canonical UTF-8/,
+  );
+
+  const trusted = Buffer.from("trusted bytes\n", "utf8");
+  const original = fs.readFileSync(promptPath);
+  fs.writeFileSync(promptPath, "attacker path bytes\n");
+  try {
+    const invocation = adapter.buildInvocation({ ...input, promptBytes: trusted });
+    assert.equal(invocation.stdinPath, promptPath);
+    assert.equal(invocation.stdinSha256, require("node:crypto").createHash("sha256").update(trusted).digest("hex"));
+    assert.equal(invocation.args.includes("trusted bytes\n"), false);
+    assert.equal(invocation.args.includes("attacker path bytes\n"), false);
+  } finally {
+    fs.writeFileSync(promptPath, original);
   }
 });
 
@@ -193,108 +243,107 @@ test("native probe is argv-only and reports unavailable CLIs as an explicit skip
   }
 });
 
-test("each native adapter has a golden command and argv marker", () => {
+test("all seven native adapters preserve full dispatch argv order and policy inputs", () => {
+  const prompt = fs.readFileSync(promptPath, "utf8");
+  const model = "provider/model; literally-not-a-shell-command";
+  const commonDir = path.resolve(cwd, execFileSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { encoding: "utf8" }).trim());
+  const opencodePrompt = ["[RELAY WORKTREE BOUNDARY]", `Repository worktree: ${cwd}`, "Run every shell command from that repository worktree.", "Do not read, write, git add, git commit, or create files outside that repository worktree.", "If a tool starts elsewhere, first change directory to the repository worktree before touching files.", "", prompt].join("\n");
+  const antigravityPrompt = ["[RELAY WORKTREE BOUNDARY]", `Repository worktree: ${cwd}`, `Before doing anything, run: cd ${cwd}`, "Create and edit source files only in that repository worktree. You may inspect git status, but do not run git add, git commit, git push, or create a PR; canonical relay recovery owns Git metadata and publication.", "Do not create, edit, or report source files under ~/.gemini, scratch directories, or any path outside the repository worktree.", "If a tool starts elsewhere, first change directory to the repository worktree before touching files.", "", prompt].join("\n");
+  const clinePrompt = ["[RELAY WORKTREE BOUNDARY]", `Repository worktree: ${cwd}`, "Run every shell command from that repository worktree.", "Do not read, write, git add, git commit, or create files outside that repository worktree.", "Do not use cline --worktree; relay already created and owns this worktree.", "", prompt].join("\n");
   const golden = {
-    codex: { command: "codex", marker: "exec" },
-    claude: { command: "claude", marker: "--output-format" },
-    cursor: { command: "agent", marker: "--workspace" },
-    opencode: { command: "opencode", marker: "run" },
-    pi: { command: "pi", marker: "--no-session" },
-    antigravity: { command: "agy", marker: "--prompt" },
-    cline: { command: "cline", marker: "--json" },
+    codex: { command: "codex", args: ["exec", "-C", cwd, "--color", "never", "-o", resultPath, "-c", "model_reasoning_effort=high", "-m", model, "--sandbox", "read-only", "-"] },
+    claude: { command: "claude", args: ["-p", "--dangerously-skip-permissions", "--output-format", "text", "--model", model] },
+    cursor: { command: "agent", args: ["--print", "--trust", "--force", "--workspace", cwd, "--output-format", "text", "--sandbox", "enabled", "--model", model] },
+    opencode: { command: "opencode", args: ["run", "--dir", cwd, "-m", model] },
+    pi: { command: "pi", args: ["--no-session", "--model", model, "--thinking", "high", "--print"] },
+    antigravity: { command: "agy", args: ["--prompt", antigravityPrompt, "--print-timeout", "123s", "--sandbox"] },
+    cline: { command: "cline", args: ["--json", "-P", "provider", "-m", model, "--cwd", cwd, "--timeout", "123", clinePrompt] },
   };
   for (const [name, expected] of Object.entries(golden)) {
     const invocation = invocationFor(getAdapter(name));
     assert.equal(invocation.command, expected.command, name);
-    assert.ok(invocation.args.includes(expected.marker), `${name}: missing ${expected.marker}`);
+    assert.deepEqual([...invocation.args], expected.args, name);
+    assert.equal(invocation.cwd, cwd, name);
+    if (!["antigravity", "cline"].includes(name)) {
+      assert.equal(invocation.stdinPath, promptPath, name);
+      assert.equal(invocation.stdinSha256, require("node:crypto").createHash("sha256").update(prompt).digest("hex"), name);
+    }
   }
 });
 
-test("generic adapter only accepts closed argv templates and registered output protocols", () => {
-  const generic = createGenericAdapter({
-    name: "future-agent",
-    command: "future-agent",
-    args: ["run", "--model", "{model}", "--prompt-file", "{promptPath}", "--timeout", "{timeoutMs}"],
-    cwd: "{cwd}",
-    output_protocol: "json_result",
-    capabilities: { write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "json" },
+test("dry-run uses the same real adapter builder and argv as launch for all seven executors", () => {
+  function normalize(args) {
+    return [...args].map((value) => (
+      value === resultPath || /relay-dispatch-dry-run-[^/]+\/executor-output$/.test(value)
+        ? "<RESULT>"
+        : value
+    ));
+  }
+  for (const name of listAdapters()) {
+    const adapter = getAdapter(name);
+    const values = {
+      branch: null,
+      copy: null,
+      model: "provider/model; literally-not-a-shell-command",
+      reasoning: "high",
+      sandbox: name === "codex" ? "read-only" : "workspace-write",
+      "network-access": "disabled",
+    };
+    const cli = { creating: false, runId: `dry-${name}`, timeoutSeconds: 123, values };
+    const actual = dispatch.dryRunInvocation({
+      cli,
+      identity: { checkout: cwd, repoRoot: repo },
+      adapter,
+      inputs: { prompt: { path: promptPath, bytes: fs.readFileSync(promptPath) }, rubric: null },
+    });
+    const launched = adapter.buildInvocation({
+      phase: "dispatch",
+      cwd,
+      promptPath,
+      promptBytes: fs.readFileSync(promptPath),
+      resultPath,
+      model: values.model,
+      timeoutMs: 123_000,
+      sandbox: values.sandbox,
+      networkAccess: values["network-access"],
+      reasoning: values.reasoning,
+    });
+    assert.equal(actual.command, launched.command, name);
+    assert.equal(actual.cwd, launched.cwd, name);
+    assert.deepEqual(normalize(actual.args), normalize(launched.args), name);
+    assert.equal(actual.validation, "adapter_build_invocation", name);
+  }
+});
+
+test("adapter metadata is static and carries no integration side channel", () => {
+  for (const name of listAdapters()) {
+    const adapter = getAdapter(name);
+    assert.equal(Object.hasOwn(adapter, "integrations"), false, name);
+    assert.equal(Object.values(adapter.metadata).some((value) => typeof value === "function"), false, `${name} metadata must be static`);
+    assert.ok(Array.isArray(adapter.metadata.credentials.files), `${name} credential files`);
+    assert.ok(Array.isArray(adapter.metadata.credentials.envHints), `${name} credential env hints`);
+    for (const file of adapter.metadata.credentials.files) {
+      assert.deepEqual(Object.keys(file).sort(), ["access", "id", "recommendedSource", "targetRel", "targetRoot"], name);
+    }
+  }
+});
+
+test("credential requests are value-free, catalog-bound, and reject reserved or ambiguous inputs", () => {
+  const metadata = getAdapter("codex").metadata.credentials;
+  const missingSource = path.join(root, "not-opened-auth.json");
+  const request = contract.credentialRequest(metadata, {
+    envNames: ["OPENAI_API_KEY"], fileSpecs: [`auth=${missingSource}`],
   });
-  const invocation = generic.buildInvocation({ phase: "dispatch", cwd, promptPath, resultPath, model: "vendor/model; not executed", timeoutMs: 9000 });
-  assert.deepEqual(invocation.args.slice(0, 4), ["run", "--model", "vendor/model; not executed", "--prompt-file"]);
-  const omittedModel = generic.buildInvocation({ phase: "dispatch", cwd, promptPath, resultPath, model: null, timeoutMs: 9000 });
-  assert.ok(!omittedModel.args.includes("--model"));
-  fs.writeFileSync(resultPath, transcripts.json_success);
-  assert.deepEqual(generic.parseOutcome({ exitCode: 0, stdoutPath, stderrPath, resultPath }).output, { verdict: "pass" });
-  assert.throws(() => generic.buildInvocation({ phase: "dispatch", cwd, promptPath, resultPath, model: "--unsafe" }), /non-flag string/);
-  assert.throws(() => validateSchema({ name: "bad", command: "agent", args: ["--x={model}"], cwd: "{cwd}", output_protocol: "text_stdout", capabilities: {} }), /whole argv item/);
-  assert.throws(() => validateSchema({ name: "bad", command: "agent", args: [], cwd: "{cwd}", output_protocol: "shell", capabilities: {} }), /output_protocol/);
-  assert.throws(() => validateSchema({
-    name: "bad",
-    command: "agent",
-    args: [],
-    cwd: "{cwd}",
-    output_protocol: "text_stdout",
-    capabilities: { write: true, readOnly: false, networkControl: "native", cancellation: "process", structuredOutput: "text", extra: true },
-  }), /must contain exactly/);
-  assert.throws(() => validateSchema({
-    name: "bad",
-    command: "agent",
-    args: [],
-    cwd: "{cwd}",
-    output_protocol: "text_stdout",
-    capabilities: { write: "yes", readOnly: false, networkControl: "native", cancellation: "process", structuredOutput: "text" },
-  }), /must be booleans/);
+  assert.deepEqual(request.summary, { env_names: ["OPENAI_API_KEY"], file_ids: ["auth"] });
+  assert.equal(fs.existsSync(missingSource), false, "normalization must not open a credential source");
+  assert.throws(() => contract.credentialRequest(metadata, { envNames: ["HOME"] }), /unsafe, reserved/);
+  assert.throws(() => contract.credentialRequest(metadata, { envNames: ["TOKEN", "TOKEN"] }), /duplicated/);
+  assert.throws(() => contract.credentialRequest(metadata, { fileSpecs: [`unknown=${missingSource}`] }), /declared/);
+  assert.throws(() => contract.credentialRequest(metadata, { fileSpecs: ["auth=relative"] }), /absolute/);
+  assert.throws(() => contract.credentialRequest(metadata, { fileSpecs: [`auth=${missingSource}`, `auth=${missingSource}`] }), /collision/);
 });
 
-test("generic absolute commands cannot escape the approved directory through parent paths or symlinks", () => {
-  const approved = path.join(root, "approved");
-  const outside = path.join(root, "outside-agent");
-  fs.mkdirSync(approved);
-  fs.writeFileSync(outside, "#!/bin/sh\n");
-  fs.chmodSync(outside, 0o755);
-  const link = path.join(approved, "linked-agent");
-  fs.symlinkSync(outside, link);
-  const schema = {
-    name: "contained",
-    command: link,
-    args: [],
-    cwd: "{cwd}",
-    output_protocol: "text_stdout",
-    capabilities: { write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" },
-  };
-  assert.throws(() => createGenericAdapter(schema, { approvedAdapterDir: approved }), /escapes approvedAdapterDir/);
-  assert.throws(() => createGenericAdapter({ ...schema, command: path.join(approved, "..", "outside-agent") }, { approvedAdapterDir: approved }), /escapes approvedAdapterDir/);
-});
-
-test("generic invocation pins canonical command identity and detects an inode swap before execution", () => {
-  const approved = path.join(root, "identity-approved");
-  fs.mkdirSync(approved);
-  const original = path.join(approved, "agent-v1");
-  const replacement = path.join(approved, "agent-v2");
-  const commandLink = path.join(approved, "agent");
-  fs.writeFileSync(original, "#!/bin/sh\nexit 0\n");
-  fs.writeFileSync(replacement, "#!/bin/sh\nexit 0\n");
-  fs.chmodSync(original, 0o755);
-  fs.chmodSync(replacement, 0o755);
-  fs.symlinkSync(original, commandLink);
-  const generic = createGenericAdapter({
-    name: "identity-agent",
-    command: commandLink,
-    args: [],
-    cwd: "{cwd}",
-    output_protocol: "text_stdout",
-    capabilities: { write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" },
-  }, { approvedAdapterDir: approved });
-  const invocation = generic.buildInvocation({ phase: "dispatch", cwd, promptPath, resultPath });
-  assert.equal(invocation.command, fs.realpathSync(original));
-  fs.unlinkSync(commandLink);
-  fs.symlinkSync(path.join(root, "outside-agent"), commandLink);
-  assert.doesNotThrow(() => contract.assertInvocationIdentity(invocation), "symlink swap cannot redirect a canonical command");
-  fs.renameSync(replacement, original);
-  assert.throws(() => contract.assertInvocationIdentity(invocation), /identity changed after validation/);
-});
-
-test("review control invocation rejects tampering and remains immutable", () => {
+test("review invocation is an immutable direct descriptor without hidden lifecycle hooks", () => {
   assert.throws(() => contract.assertInvocationShape({
     command: process.execPath,
     args: ["wrapper.js"],
@@ -305,45 +354,50 @@ test("review control invocation rejects tampering and remains immutable", () => 
       cwd: repo,
     },
   }), /must be bound by the adapter contract/);
-  const mismatchedAdapter = contract.makeLegacyCliAdapter({
-    name: "mismatched-reviewer",
-    legacy: {
-      cliBinary: "mismatched",
-      defaultTimeout: 1,
-      probe() {},
-      buildExecCommand() { return { cmd: "mismatched", args: [], cwd }; },
-    },
-    outputProtocol: "text_stdout",
-    reviewScript: path.join(root, "review-wrapper.js"),
-    buildReviewControlInvocation: () => ({
-      command: "mismatched",
-      args: ["--sandbox", "read-only"],
-      cwd: repo,
-    }),
-    phases: {
-      primary_review: {
-        supported: true,
-        write: false,
-        readOnly: true,
-        networkControl: "informational",
-        cancellation: "process",
-        structuredOutput: "json",
-      },
-    },
-  });
-  assert.throws(() => mismatchedAdapter.buildInvocation({
+  const piInvocation = invocationFor(getAdapter("pi"), "primary_review");
+  assert.equal(piInvocation.command, "pi");
+  assert.equal(piInvocation.stdinPath, promptPath);
+  assert.equal(piInvocation.controlInvocation, undefined);
+  assert.ok(Object.isFrozen(piInvocation));
+  assert.ok(Object.isFrozen(piInvocation.args));
+  assert.throws(() => piInvocation.args.push("--write"), TypeError);
+});
+
+test("Antigravity review transports exact staged prompt bytes as one argv value", () => {
+  const prompt = fs.readFileSync(promptPath, "utf8");
+  const invocation = invocationFor(getAdapter("antigravity"), "primary_review");
+  const promptIndex = invocation.args.indexOf("--prompt");
+  assert.notEqual(promptIndex, -1);
+  assert.equal(invocation.args[promptIndex + 1], prompt);
+  assert.equal(invocation.args.some((value) => value === `@${promptPath}`), false);
+  assert.deepEqual(invocation.args.slice(-5), ["--output-format", "text", "--mode", "plan", "--disable-slash-commands", "--sandbox"].slice(-5));
+});
+
+test("Antigravity rejects prompts above its conservative argv budget before process-list exposure", () => {
+  assert.throws(() => getAdapter("antigravity").buildInvocation({
     phase: "primary_review",
     cwd,
     promptPath,
+    promptBytes: Buffer.alloc(256 * 1024, "x"),
     resultPath,
+    schemaPath,
+    timeoutMs: 123_000,
     sandbox: "read-only",
     networkAccess: "disabled",
-  }), /control invocation cwd must match/);
+  }), /argv.*256 KiB.*process list/i);
+  assert.equal(getAdapter("antigravity").metadata.promptTransport, "argv_visible");
+  assert.match(getAdapter("antigravity").metadata.promptTransportWarning, /process list.*256 KiB/i);
+});
 
-  const piInvocation = invocationFor(getAdapter("pi"), "primary_review");
-  assert.ok(Object.isFrozen(piInvocation.controlInvocation));
-  assert.ok(Object.isFrozen(piInvocation.controlInvocation.args));
-  assert.throws(() => piInvocation.controlInvocation.args.push("--write"), TypeError);
+test("argv-visible prompt exceptions are exactly Cline and Antigravity and are declarative bounded warnings", () => {
+  const exceptions = listAdapters().filter((name) => getAdapter(name).metadata.promptTransport === "argv_visible");
+  assert.deepEqual([...exceptions].sort(), ["antigravity", "cline"]);
+  for (const name of exceptions) assert.match(getAdapter(name).metadata.promptTransportWarning, /process list.*256 KiB/i, name);
+  for (const name of ["claude", "codex", "cursor", "opencode", "pi"]) {
+    assert.match(getAdapter(name).metadata.promptTransport, /^stdin/);
+    const invocation = invocationFor(getAdapter(name));
+    assert.equal(invocation.args.includes(fs.readFileSync(promptPath, "utf8")), false, name);
+  }
 });
 
 test("all supported primary review adapters pass capability negotiation", () => {
@@ -361,8 +415,16 @@ test("all supported primary review adapters pass capability negotiation", () => 
 test("production dispatch and review integration contain no concrete executor-name branches", () => {
   const files = [
     path.join(__dirname, "../../../skills/relay-dispatch/scripts/dispatch.js"),
-    path.join(__dirname, "../../../skills/relay-review/scripts/review-runner/reviewer-invoke.js"),
+    path.join(__dirname, "../../../skills/relay-review/scripts/review-runner.js"),
   ];
   const branchPattern = /(?:===|!==|case)\s*["'](?:codex|claude|cursor|opencode|pi|antigravity|cline)["']/;
   for (const file of files) assert.doesNotMatch(fs.readFileSync(file, "utf8"), branchPattern, file);
+});
+
+test("native adapter sources have no reverse imports into relay-review", () => {
+  const adaptersDir = path.join(__dirname, "../../../skills/relay-dispatch/scripts/adapters");
+  for (const file of fs.readdirSync(adaptersDir).filter((name) => name.endsWith(".js"))) {
+    const source = fs.readFileSync(path.join(adaptersDir, file), "utf8");
+    assert.doesNotMatch(source, /require\([^\n]*relay-review/, file);
+  }
 });

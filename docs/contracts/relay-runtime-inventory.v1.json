@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "purpose": "Baseline vNext runtime-reset inventory. Every shipped relay script and cross-skill runtime edge is enumerated before lifecycle behavior changes.",
+  "purpose": "Current vNext runtime inventory. Every shipped relay script and cross-skill runtime edge is enumerated from the filesystem.",
   "scope": {
     "skills": [
       "relay",
@@ -15,53 +15,413 @@
     "include": "skills/<relay-skill>/scripts/**/*.js"
   },
   "retiredArtifacts": [
-    { "path": "skills/relay-plan/scripts/earned-rubric.js", "removalIssue": "#1134", "replacement": "Direct Done Criteria and rubric reference contract", "deletedEvidence": ["tests/relay-plan/scripts/earned-rubric.test.js", "tests/relay-plan/scripts/rubric-reference-contract.test.js"] },
-    { "path": "skills/relay-plan/scripts/observation-context.js", "removalIssue": "#1134", "replacement": "Planner prompt contract without runtime observation synthesis", "deletedEvidence": ["tests/relay-plan/scripts/observation-context.test.js", "tests/relay-plan/scripts/dispatch-prompt-emit.test.js"] },
-    { "path": "skills/relay-plan/scripts/rubric-validation.js", "removalIssue": "#1134", "replacement": "Human-readable rubric checklist and direct Done Criteria contract", "deletedEvidence": ["tests/relay-plan/scripts/ready-light-rubric-validation.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/advisory-timing.js", "removalIssue": "#1134", "replacement": "One primary-review lifecycle with no advisory lane state", "deletedEvidence": ["tests/relay-review/scripts/advisory-orchestration.test.js", "docs/comparison-and-secondary-work.md"] },
-    { "path": "skills/relay-dispatch/scripts/agent-adapters/cline-model-route.js", "removalIssue": "#1134", "replacement": "Explicit immutable executor/model binding and adapter defaults", "deletedEvidence": ["tests/relay-dispatch/scripts/model-resolver.test.js", "docs/model-resolution-prd.md"] },
-    { "path": "skills/relay-dispatch/scripts/agent-adapters/policy.js", "removalIssue": "#1134", "replacement": "Direct adapter capability negotiation", "deletedEvidence": ["tests/relay-dispatch/scripts/agent-adapter-policy.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/cli-schema.js", "removalIssue": "#1134", "replacement": "Caller-local closed flag taxonomies", "deletedEvidence": ["tests/relay-dispatch/scripts/cli-schema.test.js", "tests/relay-dispatch/fixtures/cli-schema-reader.js", "skills/relay-dispatch/references/cli-schema.md"] },
-    { "path": "skills/relay-dispatch/scripts/evaluation-contract.js", "removalIssue": "#1134", "replacement": "Direct closed-shape review validation", "deletedEvidence": ["tests/relay-dispatch/scripts/evaluation-contract.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/executor-model-config.js", "removalIssue": "#1134", "replacement": "Explicit immutable executor/model binding and adapter defaults", "deletedEvidence": ["tests/relay-dispatch/scripts/executor-model-config.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/extend-review-policy.js", "removalIssue": "#1134", "replacement": "One immutable primary reviewer binding", "deletedEvidence": ["tests/relay-dispatch/scripts/extend-review-policy.test.js", "skills/relay-dispatch/references/review-policy-extension.md"] },
-    { "path": "skills/relay-dispatch/scripts/manifest/fleet.js", "removalIssue": "#1134", "replacement": "Immutable cohort plus child run records and fact folds", "deletedEvidence": ["tests/relay-dispatch/scripts/manifest/fleet.test.js", "tests/relay-fleet/scripts/fleet.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/manifest/guidance.js", "removalIssue": "#1134", "replacement": "Direct dispatch prompt contract", "deletedEvidence": ["tests/relay-dispatch/scripts/guidance-risk-assurance.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/manifest/review-assurance.js", "removalIssue": "#1134", "replacement": "Blocking primary-review verdict", "deletedEvidence": ["tests/relay-dispatch/scripts/risk-assurance-policy.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/manifest/review-budget.js", "removalIssue": "#1134", "replacement": "Lifecycle state without round-budget mutation", "deletedEvidence": ["tests/relay-review/scripts/review-runner-reviewer-swap.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/manifest/risk-assurance.js", "removalIssue": "#1134", "replacement": "Direct lifecycle invariants", "deletedEvidence": ["tests/relay-dispatch/scripts/dispatch-risk-assurance.test.js", "skills/relay-dispatch/references/risk-calibration.md"] },
-    { "path": "skills/relay-dispatch/scripts/model-catalog.js", "removalIssue": "#1134", "replacement": "Adapter provider defaults", "deletedEvidence": ["tests/relay-dispatch/scripts/model-resolver.test.js", "skills/relay-config/references/model-catalog.md"] },
-    { "path": "skills/relay-dispatch/scripts/model-hints.js", "removalIssue": "#1134", "replacement": "Explicit model selection", "deletedEvidence": ["tests/relay-dispatch/scripts/model-resolver.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/model-resolver.js", "removalIssue": "#1134", "replacement": "Explicit immutable model binding or provider default", "deletedEvidence": ["tests/relay-dispatch/scripts/model-resolver.test.js", "docs/model-resolution-prd.md"] },
-    { "path": "skills/relay-dispatch/scripts/project-config.js", "removalIssue": "#1134", "replacement": "No project routing/config precedence layer", "deletedEvidence": ["tests/relay-dispatch/scripts/project-config.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/reconcile-advisory.js", "removalIssue": "#1134", "replacement": "Primary lifecycle reconciliation only", "deletedEvidence": ["tests/relay-review/scripts/advisory-lane-lifecycle-988.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/relay-policy-gate.js", "removalIssue": "#1134", "replacement": "Direct adapter capability negotiation", "deletedEvidence": ["tests/relay-dispatch/scripts/relay-policy-gate.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/relay-policy.js", "removalIssue": "#1134", "replacement": "Explicit immutable runtime bindings", "deletedEvidence": ["tests/relay-dispatch/scripts/relay-policy.test.js", "docs/decisions/0007-routes-single-concept.md"] },
-    { "path": "skills/relay-dispatch/scripts/relay-routing.js", "removalIssue": "#1134", "replacement": "Explicit executor/model CLI selection", "deletedEvidence": ["tests/relay-dispatch/scripts/relay-routing.test.js", "docs/route-config-simplification-design.md"] },
-    { "path": "skills/relay-dispatch/scripts/reliability-report.js", "removalIssue": "#1134", "replacement": "Raw durable facts for offline analysis", "deletedEvidence": ["tests/relay-dispatch/scripts/reliability-report.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/reliability/calibration.js", "removalIssue": "#1134", "replacement": "Raw durable facts for offline analysis", "deletedEvidence": ["tests/relay-dispatch/scripts/reliability-calibration.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/reliability/legacy-mechanisms.js", "removalIssue": "#1134", "replacement": "Raw durable facts for offline analysis", "deletedEvidence": ["tests/relay-dispatch/scripts/reliability-calibration-reference.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/reliability/task-class.js", "removalIssue": "#1134", "replacement": "No installed runtime analytics classification", "deletedEvidence": ["tests/relay-dispatch/scripts/reliability-calibration.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/route-failure-hints.js", "removalIssue": "#1134", "replacement": "Direct adapter error reporting", "deletedEvidence": ["tests/relay-dispatch/scripts/dispatch-route-plan.test.js"] },
-    { "path": "skills/relay-dispatch/scripts/rubric-size.js", "removalIssue": "#1134", "replacement": "Direct planner rubric rules", "deletedEvidence": ["skills/relay-plan/references/rubric-design-guide.md"] },
-    { "path": "skills/relay-fleet/scripts/merge-queue.js", "removalIssue": "#1134", "replacement": "Serial merge derived from immutable cohort and child facts", "deletedEvidence": ["tests/relay-fleet/scripts/merge-queue.test.js", "tests/relay-fleet/scripts/relay-fleet.test.js"] },
-    { "path": "skills/relay-review/scripts/advisory-review-schema.js", "removalIssue": "#1134", "replacement": "One primary-review result schema", "deletedEvidence": ["tests/relay-review/scripts/advisory-review-schema.test.js"] },
-    { "path": "skills/relay-review/scripts/advisory-worker.js", "removalIssue": "#1134", "replacement": "One primary reviewer invocation", "deletedEvidence": ["tests/relay-review/scripts/advisory-orchestration.test.js"] },
-    { "path": "skills/relay-review/scripts/invoke-reviewer-cline.js", "removalIssue": "#1134", "replacement": "Capability preflight rejects unsupported primary review", "deletedEvidence": ["tests/relay-review/scripts/invoke-reviewer.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/advisory-gates.js", "removalIssue": "#1134", "replacement": "Primary verdict gate", "deletedEvidence": ["tests/relay-review/scripts/reviewer-score-authority.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/advisory-lane-reap.js", "removalIssue": "#1134", "replacement": "No secondary lane process lifecycle", "deletedEvidence": ["tests/relay-review/scripts/advisory-lane-lease.test.js", "tests/relay-merge/scripts/finalize-run-advisory-lane-reap.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/advisory-orchestration.js", "removalIssue": "#1134", "replacement": "One primary reviewer invocation", "deletedEvidence": ["tests/relay-review/scripts/advisory-orchestration.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/advisory-prompt.js", "removalIssue": "#1134", "replacement": "Primary reviewer prompt only", "deletedEvidence": ["tests/relay-review/scripts/review-runner-advisory.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/advisory.js", "removalIssue": "#1134", "replacement": "Primary review lifecycle only", "deletedEvidence": ["tests/relay-review/scripts/review-runner-advisory.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/assurance.js", "removalIssue": "#1134", "replacement": "Direct blocking primary verdict", "deletedEvidence": ["tests/relay-review/scripts/reviewer-score-authority.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/confidence-downgrade.js", "removalIssue": "#1134", "replacement": "Low-confidence changes_requested remains blocking", "deletedEvidence": ["tests/relay-review/scripts/reviewer-score-authority.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/evaluation-channels.js", "removalIssue": "#1134", "replacement": "Direct Done Criteria verdict", "deletedEvidence": ["tests/relay-review/scripts/build-lane-reap-field-996.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/reviewer-swap.js", "removalIssue": "#1134", "replacement": "Immutable reviewer binding plus explicit invocation override", "deletedEvidence": ["tests/relay-review/scripts/review-runner-reviewer-swap.test.js"] },
-    { "path": "skills/relay-review/scripts/review-runner/round-cap.js", "removalIssue": "#1134", "replacement": "Lifecycle-driven review rounds without budget state", "deletedEvidence": ["tests/relay-review/scripts/reviewer-score-authority.test.js"] }
+    {
+      "path": "skills/relay-dispatch/scripts/adapters/generic.js",
+      "removalIssue": "#1136",
+      "replacement": "One native four-method descriptor per supported executor",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/adapter-contract.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-plan/scripts/earned-rubric.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct Done Criteria and rubric reference contract",
+      "deletedEvidence": [
+        "tests/relay-plan/scripts/earned-rubric.test.js",
+        "tests/relay-plan/scripts/rubric-reference-contract.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-plan/scripts/observation-context.js",
+      "removalIssue": "#1134",
+      "replacement": "Planner prompt contract without runtime observation synthesis",
+      "deletedEvidence": [
+        "tests/relay-plan/scripts/observation-context.test.js",
+        "tests/relay-plan/scripts/dispatch-prompt-emit.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-plan/scripts/rubric-validation.js",
+      "removalIssue": "#1134",
+      "replacement": "Human-readable rubric checklist and direct Done Criteria contract",
+      "deletedEvidence": [
+        "tests/relay-plan/scripts/ready-light-rubric-validation.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/advisory-timing.js",
+      "removalIssue": "#1134",
+      "replacement": "One primary-review lifecycle with no advisory lane state",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/advisory-orchestration.test.js",
+        "docs/comparison-and-secondary-work.md"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/agent-adapters/cline-model-route.js",
+      "removalIssue": "#1134",
+      "replacement": "Explicit immutable executor/model binding and adapter defaults",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/model-resolver.test.js",
+        "docs/model-resolution-prd.md"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/agent-adapters/policy.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct adapter capability negotiation",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/agent-adapter-policy.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/cli-schema.js",
+      "removalIssue": "#1134",
+      "replacement": "Caller-local closed flag taxonomies",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/cli-schema.test.js",
+        "tests/relay-dispatch/fixtures/cli-schema-reader.js",
+        "skills/relay-dispatch/references/cli-schema.md"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/evaluation-contract.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct closed-shape review validation",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/evaluation-contract.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/executor-model-config.js",
+      "removalIssue": "#1134",
+      "replacement": "Explicit immutable executor/model binding and adapter defaults",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/executor-model-config.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/extend-review-policy.js",
+      "removalIssue": "#1134",
+      "replacement": "One immutable primary reviewer binding",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/extend-review-policy.test.js",
+        "skills/relay-dispatch/references/review-policy-extension.md"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/manifest/fleet.js",
+      "removalIssue": "#1134",
+      "replacement": "Immutable cohort plus child run records and fact folds",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/manifest/fleet.test.js",
+        "tests/relay-fleet/scripts/fleet.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/manifest/guidance.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct dispatch prompt contract",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/guidance-risk-assurance.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/manifest/review-assurance.js",
+      "removalIssue": "#1134",
+      "replacement": "Blocking primary-review verdict",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/risk-assurance-policy.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/manifest/review-budget.js",
+      "removalIssue": "#1134",
+      "replacement": "Lifecycle state without round-budget mutation",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/review-runner-reviewer-swap.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/manifest/risk-assurance.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct lifecycle invariants",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/dispatch-risk-assurance.test.js",
+        "skills/relay-dispatch/references/risk-calibration.md"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/model-catalog.js",
+      "removalIssue": "#1134",
+      "replacement": "Adapter provider defaults",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/model-resolver.test.js",
+        "skills/relay-config/references/model-catalog.md"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/model-hints.js",
+      "removalIssue": "#1134",
+      "replacement": "Explicit model selection",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/model-resolver.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/model-resolver.js",
+      "removalIssue": "#1134",
+      "replacement": "Explicit immutable model binding or provider default",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/model-resolver.test.js",
+        "docs/model-resolution-prd.md"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/project-config.js",
+      "removalIssue": "#1134",
+      "replacement": "No project routing/config precedence layer",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/project-config.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/reconcile-advisory.js",
+      "removalIssue": "#1134",
+      "replacement": "Primary lifecycle reconciliation only",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/advisory-lane-lifecycle-988.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/relay-policy-gate.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct adapter capability negotiation",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/relay-policy-gate.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/relay-policy.js",
+      "removalIssue": "#1134",
+      "replacement": "Explicit immutable runtime bindings",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/relay-policy.test.js",
+        "docs/decisions/0007-routes-single-concept.md"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/relay-routing.js",
+      "removalIssue": "#1134",
+      "replacement": "Explicit executor/model CLI selection",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/relay-routing.test.js",
+        "docs/route-config-simplification-design.md"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/reliability-report.js",
+      "removalIssue": "#1134",
+      "replacement": "Raw durable facts for offline analysis",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/reliability-report.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/reliability/calibration.js",
+      "removalIssue": "#1134",
+      "replacement": "Raw durable facts for offline analysis",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/reliability-calibration.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/reliability/legacy-mechanisms.js",
+      "removalIssue": "#1134",
+      "replacement": "Raw durable facts for offline analysis",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/reliability-calibration-reference.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/reliability/task-class.js",
+      "removalIssue": "#1134",
+      "replacement": "No installed runtime analytics classification",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/reliability-calibration.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/route-failure-hints.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct adapter error reporting",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/dispatch-route-plan.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/rubric-size.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct planner rubric rules",
+      "deletedEvidence": [
+        "skills/relay-plan/references/rubric-design-guide.md"
+      ]
+    },
+    {
+      "path": "skills/relay-fleet/scripts/merge-queue.js",
+      "removalIssue": "#1134",
+      "replacement": "Serial merge derived from immutable cohort and child facts",
+      "deletedEvidence": [
+        "tests/relay-fleet/scripts/merge-queue.test.js",
+        "tests/relay-fleet/scripts/relay-fleet.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/advisory-review-schema.js",
+      "removalIssue": "#1134",
+      "replacement": "One primary-review result schema",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/advisory-review-schema.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/advisory-worker.js",
+      "removalIssue": "#1134",
+      "replacement": "One primary reviewer invocation",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/advisory-orchestration.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/invoke-reviewer-cline.js",
+      "removalIssue": "#1134",
+      "replacement": "Capability preflight rejects unsupported primary review",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/invoke-reviewer.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/advisory-gates.js",
+      "removalIssue": "#1134",
+      "replacement": "Primary verdict gate",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/reviewer-score-authority.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/advisory-lane-reap.js",
+      "removalIssue": "#1134",
+      "replacement": "No secondary lane process lifecycle",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/advisory-lane-lease.test.js",
+        "tests/relay-merge/scripts/finalize-run-advisory-lane-reap.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/advisory-orchestration.js",
+      "removalIssue": "#1134",
+      "replacement": "One primary reviewer invocation",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/advisory-orchestration.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/advisory-prompt.js",
+      "removalIssue": "#1134",
+      "replacement": "Primary reviewer prompt only",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/review-runner-advisory.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/advisory.js",
+      "removalIssue": "#1134",
+      "replacement": "Primary review lifecycle only",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/review-runner-advisory.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/assurance.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct blocking primary verdict",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/reviewer-score-authority.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/confidence-downgrade.js",
+      "removalIssue": "#1134",
+      "replacement": "Low-confidence changes_requested remains blocking",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/reviewer-score-authority.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/evaluation-channels.js",
+      "removalIssue": "#1134",
+      "replacement": "Direct Done Criteria verdict",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/build-lane-reap-field-996.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/reviewer-swap.js",
+      "removalIssue": "#1134",
+      "replacement": "Immutable reviewer binding plus explicit invocation override",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/review-runner-reviewer-swap.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-review/scripts/review-runner/round-cap.js",
+      "removalIssue": "#1134",
+      "replacement": "Lifecycle-driven review rounds without budget state",
+      "deletedEvidence": [
+        "tests/relay-review/scripts/reviewer-score-authority.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/cli-args.js",
+      "removalIssue": "#1136",
+      "replacement": "Closed parsers local to their public vNext command surfaces",
+      "deletedEvidence": ["tests/relay-dispatch/scripts/cli-args.test.js"]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/dispatch-publish.js",
+      "removalIssue": "#1136",
+      "replacement": "Canonical inspect/recover publication action",
+      "deletedEvidence": ["tests/relay-dispatch/scripts/publish-run.test.js"]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/manifest/inflight-runs.js",
+      "removalIssue": "#1136",
+      "replacement": "Derived inspection of immutable run facts",
+      "deletedEvidence": ["tests/relay-dispatch/scripts/inflight-runs.test.js"]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/manifest/pr-number-stamp.js",
+      "removalIssue": "#1136",
+      "replacement": "Immutable pull_request_recorded fact",
+      "deletedEvidence": ["tests/relay-dispatch/scripts/dispatch.test.js"]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/relay-config.js",
+      "removalIssue": "#1136",
+      "replacement": "Dedicated read-only relay-config command",
+      "deletedEvidence": ["tests/relay-config/scripts/relay-config.test.js"]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/wait-for-check.js",
+      "removalIssue": "#1136",
+      "replacement": "Fresh inspection and explicit verification fact",
+      "deletedEvidence": ["tests/relay-dispatch/scripts/wait-for-check.test.js"]
+    }
   ],
   "roleModel": {
-    "detected": "Conservative lexical signals for direct CLI/store/event/evidence/Done Criteria/host access. This is not claimed to be semantically exhaustive.",
-    "reviewedSemantic": "Human-reviewed seed contract for indirect or delegated runtime access that lexical scanning cannot infer. The CI checker owns an independent copy and requires every seed here."
+    "detected": "Conservative lexical signals for direct vNext CLI, Done Criteria, and host access.",
+    "reviewedSemantic": "No handwritten semantic seeds are needed after legacy manifest and execution-evidence paths were removed."
   },
   "roleVocabulary": {
     "cli-entry": "Executable CLI surface detected from direct process.argv/main-module access.",
@@ -77,44 +437,6 @@
       "disposition": "retain",
       "artifacts": [
         {
-          "path": "skills/relay-dispatch/scripts/exec.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/worktree-health.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/worktreeinclude.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/reconcile-findings.js",
-          "roles": {
-            "detected": [
-              "host:observe",
-              "host:read",
-              "manifest:read",
-              "run-record:read"
-            ],
-            "reviewedSemantic": []
-          }
-        }
-      ]
-    },
-    {
-      "disposition": "migrate",
-      "artifacts": [
-        {
           "path": "skills/relay-config/scripts/relay-config.js",
           "roles": {
             "detected": [
@@ -124,39 +446,9 @@
           }
         },
         {
-          "path": "skills/relay-dispatch/scripts/agent-adapters/cline-jsonl.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/agent-adapters/index.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/agent-adapters/transport.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
           "path": "skills/relay-dispatch/scripts/adapter-contract.js",
           "roles": {
             "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/adapter-live-canary.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
             "reviewedSemantic": []
           }
         },
@@ -196,13 +488,6 @@
           }
         },
         {
-          "path": "skills/relay-dispatch/scripts/adapters/generic.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
           "path": "skills/relay-dispatch/scripts/adapters/index.js",
           "roles": {
             "detected": [],
@@ -224,116 +509,22 @@
           }
         },
         {
-          "path": "skills/relay-dispatch/scripts/claude-app-register.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/cleanup-worktrees.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "event:append",
-              "event:read",
-              "host:write",
-              "manifest:create",
-              "manifest:read",
-              "manifest:write",
-              "run-record:create",
-              "run-record:read",
-              "run-record:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/cli-args.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/close-run.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "event:append",
-              "event:read",
-              "host:read",
-              "manifest:read",
-              "manifest:write",
-              "run-record:read",
-              "run-record:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/codex-app-register.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/create-worktree.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/dispatch-publish.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
           "path": "skills/relay-dispatch/scripts/dispatch.js",
           "roles": {
             "detected": [
               "cli-entry",
               "done-criteria:read",
               "done-criteria:write",
-              "event:append",
-              "event:read",
-              "evidence:read",
-              "evidence:write",
-              "host:create",
-              "host:observe",
-              "host:read",
-              "host:write",
-              "manifest:create",
-              "manifest:read",
-              "manifest:write",
-              "run-record:create",
-              "run-record:read",
-              "run-record:write"
+              "host:create"
             ],
-            "reviewedSemantic": [
-              "done-criteria:read",
-              "done-criteria:write",
-              "evidence:write"
-            ]
+            "reviewedSemantic": []
           }
         },
         {
-          "path": "skills/relay-dispatch/scripts/execution-evidence.js",
+          "path": "skills/relay-dispatch/scripts/exec.js",
           "roles": {
-            "detected": [
-              "evidence:read",
-              "evidence:write"
-            ],
-            "reviewedSemantic": [
-              "evidence:read",
-              "evidence:write"
-            ]
+            "detected": [],
+            "reviewedSemantic": []
           }
         },
         {
@@ -343,62 +534,6 @@
               "done-criteria:read",
               "done-criteria:write"
             ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/executors/antigravity.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/executors/claude.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/executors/cline.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/executors/codex.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/executors/cursor.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/executors/index.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/executors/opencode.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/executors/pi.js",
-          "roles": {
-            "detected": [],
             "reviewedSemantic": []
           }
         },
@@ -413,169 +548,21 @@
           }
         },
         {
-          "path": "skills/relay-dispatch/scripts/live-dogfood.js",
+          "path": "skills/relay-dispatch/scripts/inspect.js",
           "roles": {
             "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/manifest/attempts.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/manifest/cleanup.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/manifest/environment.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/manifest/inflight-runs.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": [
-              "event:read"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/manifest/lifecycle.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/manifest/paths.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/manifest/pr-number-stamp.js",
-          "roles": {
-            "detected": [
-              "event:append",
-              "event:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/manifest/rubric.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": [
               "done-criteria:read"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/manifest/store.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read",
-              "done-criteria:write",
-              "manifest:create",
-              "manifest:read",
-              "manifest:write",
-              "run-record:create",
-              "run-record:read",
-              "run-record:write"
             ],
             "reviewedSemantic": []
           }
         },
         {
-          "path": "skills/relay-dispatch/scripts/ownership.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/publish-run.js",
+          "path": "skills/relay-dispatch/scripts/recover.js",
           "roles": {
             "detected": [
               "cli-entry",
-              "event:append",
-              "event:read",
-              "manifest:read",
-              "manifest:write",
-              "run-record:read",
-              "run-record:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/relay-config.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/relay-events.js",
-          "roles": {
-            "detected": [
-              "event:append",
-              "event:read",
-              "manifest:create",
-              "manifest:read",
-              "manifest:write",
-              "run-record:create",
-              "run-record:read",
-              "run-record:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/run-fold.js",
-          "roles": {
-            "detected": [
+              "done-criteria:read",
               "done-criteria:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/run-observer.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "done-criteria:read",
-              "host:observe",
-              "host:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/run-runtime-state.js",
-          "roles": {
-            "detected": [
-              "event:read",
-              "host:observe",
-              "host:read",
-              "host:write"
             ],
             "reviewedSemantic": []
           }
@@ -591,46 +578,9 @@
           }
         },
         {
-          "path": "skills/relay-dispatch/scripts/runtime-dirt.js",
+          "path": "skills/relay-fleet/scripts/ownership.js",
           "roles": {
             "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/runtime-vnext.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read",
-              "done-criteria:write",
-              "manifest:read",
-              "run-record:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/sprint-state.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/wait-for-check.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/worktree-runtime.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read"
-            ],
             "reviewedSemantic": []
           }
         },
@@ -640,16 +590,15 @@
             "detected": [
               "cli-entry",
               "done-criteria:read",
-              "done-criteria:write",
-              "event:read",
-              "host:observe",
-              "host:read",
-              "host:write",
-              "manifest:read",
-              "manifest:write",
-              "run-record:read",
-              "run-record:write"
+              "done-criteria:write"
             ],
+            "reviewedSemantic": []
+          }
+        },
+        {
+          "path": "skills/relay-fleet/scripts/sprint-state.js",
+          "roles": {
+            "detected": [],
             "reviewedSemantic": []
           }
         },
@@ -667,15 +616,8 @@
           "roles": {
             "detected": [
               "cli-entry",
-              "event:append",
-              "event:read",
-              "host:observe",
-              "host:read",
-              "host:write",
-              "manifest:read",
-              "manifest:write",
-              "run-record:read",
-              "run-record:write"
+              "done-criteria:read",
+              "done-criteria:write"
             ],
             "reviewedSemantic": []
           }
@@ -685,26 +627,7 @@
           "roles": {
             "detected": [
               "cli-entry",
-              "event:append"
-            ],
-            "reviewedSemantic": [
-              "done-criteria:read",
-              "manifest:read",
-              "run-record:read"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-merge/scripts/relay-reconcile-artifact.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "event:append",
-              "event:read",
-              "manifest:read",
-              "manifest:write",
-              "run-record:read",
-              "run-record:write"
+              "done-criteria:read"
             ],
             "reviewedSemantic": []
           }
@@ -713,13 +636,9 @@
           "path": "skills/relay-merge/scripts/review-gate.js",
           "roles": {
             "detected": [
-              "evidence:read"
+              "done-criteria:read"
             ],
-            "reviewedSemantic": [
-              "done-criteria:read",
-              "event:read",
-              "evidence:read"
-            ]
+            "reviewedSemantic": []
           }
         },
         {
@@ -733,20 +652,14 @@
           }
         },
         {
-          "path": "skills/relay-merge/scripts/sprint-close-report.js",
+          "path": "skills/relay-merge/scripts/sprint-owner.js",
           "roles": {
-            "detected": [
-              "cli-entry",
-              "manifest:read",
-              "run-record:read"
-            ],
-            "reviewedSemantic": [
-              "done-criteria:read"
-            ]
+            "detected": [],
+            "reviewedSemantic": []
           }
         },
         {
-          "path": "skills/relay-merge/scripts/sprint-owner.js",
+          "path": "skills/relay-merge/scripts/sprint-state.js",
           "roles": {
             "detected": [],
             "reviewedSemantic": []
@@ -769,9 +682,7 @@
               "done-criteria:read",
               "done-criteria:write"
             ],
-            "reviewedSemantic": [
-              "done-criteria:write"
-            ]
+            "reviewedSemantic": []
           }
         },
         {
@@ -812,12 +723,9 @@
           "path": "skills/relay-ready/scripts/probe-readiness.js",
           "roles": {
             "detected": [
-              "cli-entry",
-              "event:read"
+              "cli-entry"
             ],
-            "reviewedSemantic": [
-              "done-criteria:read"
-            ]
+            "reviewedSemantic": []
           }
         },
         {
@@ -825,15 +733,9 @@
           "roles": {
             "detected": [
               "done-criteria:read",
-              "done-criteria:write",
-              "manifest:read",
-              "manifest:write",
-              "run-record:read",
-              "run-record:write"
-            ],
-            "reviewedSemantic": [
               "done-criteria:write"
-            ]
+            ],
+            "reviewedSemantic": []
           }
         },
         {
@@ -846,453 +748,12 @@
           }
         },
         {
-          "path": "skills/relay-review/scripts/invoke-reviewer-antigravity.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/invoke-reviewer-claude.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/invoke-reviewer-codex.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/invoke-reviewer-cursor.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/invoke-reviewer-opencode.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/invoke-reviewer-pi.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/reviewer-control-invocations.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
           "path": "skills/relay-review/scripts/review-runner.js",
           "roles": {
             "detected": [
               "cli-entry",
               "done-criteria:read",
-              "done-criteria:write",
-              "evidence:read"
-            ],
-            "reviewedSemantic": [
-              "done-criteria:read",
-              "evidence:read"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/check-wait.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/cli.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/comment.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/common.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/context.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read",
               "done-criteria:write"
-            ],
-            "reviewedSemantic": [
-              "done-criteria:read"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/convergence.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/detach.js",
-          "roles": {
-            "detected": [
-              "host:create",
-              "host:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/divergence.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/entry-preflight.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/execution-evidence.js",
-          "roles": {
-            "detected": [
-              "evidence:read"
-            ],
-            "reviewedSemantic": [
-              "done-criteria:read",
-              "evidence:read"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/failure-output.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/finalize-round.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/manifest-apply.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/output.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/pr-body-snapshot.js",
-          "roles": {
-            "detected": [
-              "event:append",
-              "event:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/preflight.js",
-          "roles": {
-            "detected": [
-              "event:append",
-              "event:read",
-              "evidence:read"
-            ],
-            "reviewedSemantic": [
-              "evidence:read"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/prompt.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read",
-              "evidence:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/redispatch.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read"
-            ],
-            "reviewedSemantic": [
-              "event:read"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-          "roles": {
-            "detected": [
-              "event:append",
-              "event:read",
-              "manifest:write",
-              "run-record:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/round-analysis.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": [
-              "done-criteria:read"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/round-artifact-finalize.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/round-artifacts.js",
-          "roles": {
-            "detected": [
-              "done-criteria:read"
-            ],
-            "reviewedSemantic": [
-              "done-criteria:read",
-              "done-criteria:write"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/round-persistence.js",
-          "roles": {
-            "detected": [
-              "event:append",
-              "event:read",
-              "manifest:read",
-              "manifest:write",
-              "run-record:read",
-              "run-record:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/score-utils.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-runner/verdict.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/review-schema.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/reviewer-helpers.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-review/scripts/reviewer-prompt-transport.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay/scripts/relay-status.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "manifest:read",
-              "run-record:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay/scripts/run-preflight.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "event:read",
-              "manifest:read",
-              "run-record:read"
-            ],
-            "reviewedSemantic": []
-          }
-        }
-      ]
-    },
-    {
-      "disposition": "historical-reader-only",
-      "artifacts": [
-        {
-          "path": "skills/relay-dispatch/scripts/rebrand-evidence.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "event:append",
-              "event:read",
-              "evidence:read",
-              "evidence:write"
-            ],
-            "reviewedSemantic": [
-              "evidence:read",
-              "evidence:write"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/reconcile-run.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "event:append",
-              "event:read",
-              "evidence:read",
-              "evidence:write",
-              "host:observe",
-              "host:read",
-              "host:write",
-              "manifest:read",
-              "manifest:write",
-              "run-record:read",
-              "run-record:write"
-            ],
-            "reviewedSemantic": [
-              "evidence:read",
-              "evidence:write"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/recover-commit.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "event:append",
-              "event:read",
-              "evidence:read",
-              "evidence:write",
-              "host:observe",
-              "host:read",
-              "manifest:write",
-              "run-record:write"
-            ],
-            "reviewedSemantic": [
-              "evidence:read",
-              "evidence:write"
-            ]
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/recover-state.js",
-          "roles": {
-            "detected": [
-              "cli-entry",
-              "event:append",
-              "event:read",
-              "manifest:read",
-              "manifest:write",
-              "run-record:read",
-              "run-record:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/relay-manifest.js",
-          "roles": {
-            "detected": [
-              "manifest:read",
-              "run-record:read"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/relay-resolver.js",
-          "roles": {
-            "detected": [
-              "manifest:read",
-              "run-record:read"
             ],
             "reviewedSemantic": []
           }
@@ -1305,62 +766,59 @@
             ],
             "reviewedSemantic": []
           }
+        },
+        {
+          "path": "skills/relay/scripts/relay-status.js",
+          "roles": {
+            "detected": [
+              "cli-entry"
+            ],
+            "reviewedSemantic": []
+          }
+        },
+        {
+          "path": "skills/relay/scripts/run-preflight.js",
+          "roles": {
+            "detected": [
+              "cli-entry"
+            ],
+            "reviewedSemantic": []
+          }
+        }
+      ]
+    },
+    {
+      "disposition": "migrate",
+      "artifacts": [
+        {
+          "path": "skills/relay-dispatch/scripts/legacy-recovery-shim.js",
+          "roles": {
+            "detected": [],
+            "reviewedSemantic": []
+          }
+        },
+        {
+          "path": "skills/relay-dispatch/scripts/runtime-generation.js",
+          "roles": {
+            "detected": [],
+            "reviewedSemantic": []
+          }
         }
       ]
     }
   ],
   "crossSkillStaticImports": [
     {
-      "from": "skills/relay-dispatch/scripts/adapters/antigravity.js",
-      "to": "skills/relay-review/scripts/reviewer-control-invocations.js"
+      "from": "skills/relay-config/scripts/relay-config.js",
+      "to": "skills/relay-dispatch/scripts/adapter-contract.js"
     },
     {
-      "from": "skills/relay-dispatch/scripts/adapters/claude.js",
-      "to": "skills/relay-review/scripts/review-schema.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/claude.js",
-      "to": "skills/relay-review/scripts/reviewer-control-invocations.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/codex.js",
-      "to": "skills/relay-review/scripts/reviewer-control-invocations.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/cursor.js",
-      "to": "skills/relay-review/scripts/reviewer-control-invocations.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/opencode.js",
-      "to": "skills/relay-review/scripts/reviewer-control-invocations.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/pi.js",
-      "to": "skills/relay-review/scripts/reviewer-control-invocations.js"
+      "from": "skills/relay-config/scripts/relay-config.js",
+      "to": "skills/relay-dispatch/scripts/adapters/index.js"
     },
     {
       "from": "skills/relay-fleet/scripts/relay-fleet.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-fleet/scripts/relay-fleet.js",
-      "to": "skills/relay-dispatch/scripts/facts.js"
-    },
-    {
-      "from": "skills/relay-fleet/scripts/relay-fleet.js",
-      "to": "skills/relay-dispatch/scripts/manifest/lifecycle.js"
-    },
-    {
-      "from": "skills/relay-fleet/scripts/relay-fleet.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
-    },
-    {
-      "from": "skills/relay-fleet/scripts/relay-fleet.js",
-      "to": "skills/relay-dispatch/scripts/manifest/store.js"
-    },
-    {
-      "from": "skills/relay-fleet/scripts/relay-fleet.js",
-      "to": "skills/relay-dispatch/scripts/ownership.js"
+      "to": "skills/relay-dispatch/scripts/recover.js"
     },
     {
       "from": "skills/relay-fleet/scripts/relay-fleet.js",
@@ -1368,417 +826,97 @@
     },
     {
       "from": "skills/relay-fleet/scripts/relay-fleet.js",
-      "to": "skills/relay-dispatch/scripts/run-fold.js"
+      "to": "skills/relay-dispatch/scripts/runtime-generation.js"
     },
     {
       "from": "skills/relay-merge/scripts/finalize-run.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
+      "to": "skills/relay-dispatch/scripts/facts.js"
     },
     {
       "from": "skills/relay-merge/scripts/finalize-run.js",
-      "to": "skills/relay-dispatch/scripts/exec.js"
+      "to": "skills/relay-dispatch/scripts/host.js"
     },
     {
       "from": "skills/relay-merge/scripts/finalize-run.js",
-      "to": "skills/relay-dispatch/scripts/manifest/cleanup.js"
+      "to": "skills/relay-dispatch/scripts/recover.js"
     },
     {
       "from": "skills/relay-merge/scripts/finalize-run.js",
-      "to": "skills/relay-dispatch/scripts/manifest/lifecycle.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/finalize-run.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/finalize-run.js",
-      "to": "skills/relay-dispatch/scripts/manifest/store.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/finalize-run.js",
-      "to": "skills/relay-dispatch/scripts/relay-events.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/finalize-run.js",
-      "to": "skills/relay-dispatch/scripts/relay-resolver.js"
+      "to": "skills/relay-dispatch/scripts/runtime-generation.js"
     },
     {
       "from": "skills/relay-merge/scripts/gate-check.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/gate-check.js",
-      "to": "skills/relay-dispatch/scripts/exec.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/gate-check.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/gate-check.js",
-      "to": "skills/relay-dispatch/scripts/manifest/pr-number-stamp.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/gate-check.js",
-      "to": "skills/relay-dispatch/scripts/manifest/rubric.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/gate-check.js",
-      "to": "skills/relay-dispatch/scripts/relay-events.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/gate-check.js",
-      "to": "skills/relay-dispatch/scripts/relay-resolver.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/relay-reconcile-artifact.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/relay-reconcile-artifact.js",
-      "to": "skills/relay-dispatch/scripts/manifest/lifecycle.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/relay-reconcile-artifact.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/relay-reconcile-artifact.js",
-      "to": "skills/relay-dispatch/scripts/manifest/store.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/relay-reconcile-artifact.js",
-      "to": "skills/relay-dispatch/scripts/relay-events.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/relay-reconcile-artifact.js",
-      "to": "skills/relay-dispatch/scripts/relay-resolver.js"
+      "to": "skills/relay-dispatch/scripts/recover.js"
     },
     {
       "from": "skills/relay-merge/scripts/review-gate.js",
-      "to": "skills/relay-dispatch/scripts/execution-evidence.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/review-gate.js",
-      "to": "skills/relay-dispatch/scripts/manifest/rubric.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/review-gate.js",
-      "to": "skills/relay-review/scripts/review-runner/execution-evidence.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/run-full-gate.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/sprint-close-report.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/sprint-close-report.js",
-      "to": "skills/relay-dispatch/scripts/manifest/store.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/sprint-close-report.js",
-      "to": "skills/relay-plan/scripts/tdd-flavor.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/sprint-close-report.js",
-      "to": "skills/relay-review/scripts/review-runner/divergence.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/sprint-owner.js",
-      "to": "skills/relay-dispatch/scripts/sprint-state.js"
-    },
-    {
-      "from": "skills/relay-plan/scripts/match-template.js",
-      "to": "skills/relay-dispatch/scripts/manifest/rubric.js"
-    },
-    {
-      "from": "skills/relay-plan/scripts/persist-done-criteria.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-plan/scripts/persist-done-criteria.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
+      "to": "skills/relay-dispatch/scripts/run-store.js"
     },
     {
       "from": "skills/relay-plan/scripts/probe-executor-env.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-plan/scripts/probe-executor-env.js",
-      "to": "skills/relay-dispatch/scripts/executors/index.js"
-    },
-    {
-      "from": "skills/relay-ready/scripts/persist-request.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-ready/scripts/probe-readiness.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-ready/scripts/probe-readiness.js",
-      "to": "skills/relay-dispatch/scripts/relay-events.js"
-    },
-    {
-      "from": "skills/relay-ready/scripts/relay-request.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
-    },
-    {
-      "from": "skills/relay-ready/scripts/relay-request.js",
-      "to": "skills/relay-dispatch/scripts/relay-manifest.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/invoke-reviewer-antigravity.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/invoke-reviewer-claude.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/invoke-reviewer-codex.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/invoke-reviewer-cursor.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/invoke-reviewer-opencode.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/invoke-reviewer-pi.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner.js",
-      "to": "skills/relay-dispatch/scripts/manifest/lifecycle.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner.js",
-      "to": "skills/relay-dispatch/scripts/manifest/rubric.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/check-wait.js",
-      "to": "skills/relay-dispatch/scripts/wait-for-check.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/cli.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/common.js",
-      "to": "skills/relay-dispatch/scripts/exec.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/context.js",
-      "to": "skills/relay-dispatch/scripts/exec.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/context.js",
-      "to": "skills/relay-dispatch/scripts/manifest/lifecycle.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/context.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/context.js",
-      "to": "skills/relay-dispatch/scripts/relay-resolver.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/detach.js",
-      "to": "skills/relay-dispatch/scripts/run-runtime-state.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/execution-evidence.js",
-      "to": "skills/relay-dispatch/scripts/execution-evidence.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/execution-evidence.js",
-      "to": "skills/relay-dispatch/scripts/manifest/rubric.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/manifest-apply.js",
-      "to": "skills/relay-dispatch/scripts/manifest/lifecycle.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/pr-body-snapshot.js",
-      "to": "skills/relay-dispatch/scripts/relay-events.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/preflight.js",
-      "to": "skills/relay-dispatch/scripts/relay-events.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-dispatch/scripts/adapter-contract.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
       "to": "skills/relay-dispatch/scripts/adapters/index.js"
     },
     {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-dispatch/scripts/manifest/lifecycle.js"
+      "from": "skills/relay-review/scripts/review-runner.js",
+      "to": "skills/relay-dispatch/scripts/adapter-contract.js"
     },
     {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-dispatch/scripts/manifest/store.js"
+      "from": "skills/relay-review/scripts/review-runner.js",
+      "to": "skills/relay-dispatch/scripts/adapters/index.js"
     },
     {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-dispatch/scripts/relay-events.js"
+      "from": "skills/relay-review/scripts/review-runner.js",
+      "to": "skills/relay-dispatch/scripts/facts.js"
     },
     {
-      "from": "skills/relay-review/scripts/review-runner/round-analysis.js",
-      "to": "skills/relay-dispatch/scripts/manifest/rubric.js"
+      "from": "skills/relay-review/scripts/review-runner.js",
+      "to": "skills/relay-dispatch/scripts/host.js"
     },
     {
-      "from": "skills/relay-review/scripts/review-runner/round-artifacts.js",
-      "to": "skills/relay-dispatch/scripts/manifest/rubric.js"
+      "from": "skills/relay-review/scripts/review-runner.js",
+      "to": "skills/relay-dispatch/scripts/recover.js"
     },
     {
-      "from": "skills/relay-review/scripts/review-runner/round-persistence.js",
-      "to": "skills/relay-dispatch/scripts/manifest/store.js"
+      "from": "skills/relay-review/scripts/review-runner.js",
+      "to": "skills/relay-dispatch/scripts/run-store.js"
     },
     {
-      "from": "skills/relay-review/scripts/review-runner/round-persistence.js",
-      "to": "skills/relay-dispatch/scripts/relay-events.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/verdict.js",
-      "to": "skills/relay-dispatch/scripts/agent-adapters/transport.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/reviewer-helpers.js",
-      "to": "skills/relay-dispatch/scripts/agent-adapters/transport.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/reviewer-helpers.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
+      "from": "skills/relay-review/scripts/review-runner.js",
+      "to": "skills/relay-dispatch/scripts/runtime-generation.js"
     },
     {
       "from": "skills/relay/scripts/relay-recover.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
+      "to": "skills/relay-dispatch/scripts/legacy-recovery-shim.js"
     },
     {
       "from": "skills/relay/scripts/relay-recover.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
+      "to": "skills/relay-dispatch/scripts/recover.js"
     },
     {
       "from": "skills/relay/scripts/relay-recover.js",
-      "to": "skills/relay-dispatch/scripts/run-observer.js"
+      "to": "skills/relay-dispatch/scripts/run-store.js"
     },
     {
       "from": "skills/relay/scripts/relay-status.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
+      "to": "skills/relay-dispatch/scripts/recover.js"
     },
     {
       "from": "skills/relay/scripts/relay-status.js",
-      "to": "skills/relay-dispatch/scripts/manifest/lifecycle.js"
-    },
-    {
-      "from": "skills/relay/scripts/relay-status.js",
-      "to": "skills/relay-dispatch/scripts/manifest/paths.js"
-    },
-    {
-      "from": "skills/relay/scripts/relay-status.js",
-      "to": "skills/relay-dispatch/scripts/manifest/store.js"
-    },
-    {
-      "from": "skills/relay/scripts/relay-status.js",
-      "to": "skills/relay-dispatch/scripts/run-observer.js"
+      "to": "skills/relay-dispatch/scripts/run-store.js"
     },
     {
       "from": "skills/relay/scripts/run-preflight.js",
-      "to": "skills/relay-dispatch/scripts/cli-args.js"
-    },
-    {
-      "from": "skills/relay/scripts/run-preflight.js",
-      "to": "skills/relay-dispatch/scripts/manifest/inflight-runs.js"
-    },
-    {
-      "from": "skills/relay/scripts/run-preflight.js",
-      "to": "skills/relay-dispatch/scripts/manifest/store.js"
-    },
-    {
-      "from": "skills/relay/scripts/run-preflight.js",
-      "to": "skills/relay-dispatch/scripts/reconcile-findings.js"
-    },
-    {
-      "from": "skills/relay/scripts/run-preflight.js",
-      "to": "skills/relay-dispatch/scripts/relay-events.js"
-    },
-    {
-      "from": "skills/relay/scripts/run-preflight.js",
-      "to": "skills/relay-dispatch/scripts/relay-resolver.js"
+      "to": "skills/relay-dispatch/scripts/recover.js"
     }
   ],
   "dynamicInvocationEdges": [
     {
-      "from": "skills/relay-config/scripts/relay-config.js",
-      "to": "skills/relay-dispatch/scripts/relay-config.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapter-live-canary.js",
-      "to": "skills/relay-dispatch/scripts/adapter-live-canary.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/antigravity.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-antigravity.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/claude.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-claude.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/codex.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-codex.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/cursor.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-cursor.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/opencode.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-opencode.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/adapters/pi.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-pi.js"
-    },
-    {
       "from": "skills/relay-dispatch/scripts/dispatch.js",
-      "to": "skills/relay-dispatch/scripts/recover-commit.js"
+      "to": "skills/relay-dispatch/scripts/dispatch.js"
     },
     {
       "from": "skills/relay-dispatch/scripts/host.js",
       "to": "skills/relay-dispatch/scripts/host.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/live-dogfood.js",
-      "to": "skills/relay-dispatch/scripts/dispatch.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/live-dogfood.js",
-      "to": "skills/relay-plan/scripts/probe-executor-env.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/reconcile-findings.js",
-      "to": "skills/relay-dispatch/scripts/reconcile-run.js"
-    },
-    {
-      "from": "skills/relay-dispatch/scripts/reconcile-run.js",
-      "to": "skills/relay-dispatch/scripts/recover-commit.js"
     },
     {
       "from": "skills/relay-fleet/scripts/relay-fleet.js",
@@ -1795,34 +933,6 @@
     {
       "from": "skills/relay-merge/scripts/run-full-gate.js",
       "to": "skills/relay-merge/scripts/run-full-gate.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-antigravity.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-claude.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-codex.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-cursor.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-opencode.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner/reviewer-invoke.js",
-      "to": "skills/relay-review/scripts/invoke-reviewer-pi.js"
-    },
-    {
-      "from": "skills/relay/scripts/relay-recover.js",
-      "to": "skills/relay-dispatch/scripts/reconcile-run.js"
     },
     {
       "from": "skills/relay/scripts/run-preflight.js",

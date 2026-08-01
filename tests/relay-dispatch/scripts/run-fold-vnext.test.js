@@ -6,16 +6,14 @@ const os = require("os");
 const path = require("path");
 
 const {
-  compareShadow,
   foldRunFacts,
-  projectLegacyRun,
-} = require("../../../skills/relay-dispatch/scripts/run-fold");
-const runtime = require("../../../skills/relay-dispatch/scripts/runtime-vnext");
+} = require("../../../skills/relay-dispatch/scripts/inspect");
 
 const START = "a".repeat(40);
 const HEAD = "b".repeat(40);
 const TARGET = "c".repeat(40);
 const HASH = "d".repeat(64);
+const TREE = "e".repeat(40);
 
 function runRecord() {
   return {
@@ -57,6 +55,24 @@ function pr(index = 3) {
   return fact("pull_request_recorded", index, {
     pr_number: 42, repo: "owner/repo", head_ref: "work", base_ref: "main",
     head_sha: HEAD, created_by_relay: true,
+  });
+}
+
+function verification(index = 4, overrides = {}) {
+  return fact("verification_recorded", index, {
+    head_sha: HEAD,
+    tree_sha: TREE,
+    done_criteria_sha256: HASH,
+    command: "node --test",
+    verification_request_sha256: "1".repeat(64),
+    declared_command_count: 1,
+    completed_command_count: 1,
+    result_path: "/r/verification.log",
+    result_sha256: "f".repeat(64),
+    exit_code: 0,
+    status: "passed",
+    operator: "owner",
+    ...overrides,
   });
 }
 
@@ -109,12 +125,13 @@ test("fold implements active, publication, review, stale, changes, and ready pre
       facts: [started(), finished(), pr()],
       githubFacts: livePrFacts(),
     }).reason,
-    "review_missing",
+    "verification_missing",
   );
   assert.equal(
     foldRunFacts({
       runRecord: runRecord(),
-      facts: [pr(), review("pass", 4, START)],
+      facts: [pr(), verification(), review("pass", 5, START)],
+      gitFacts: { head_sha: HEAD, tree_sha: TREE },
       githubFacts: livePrFacts(),
     }).reason,
     "review_stale",
@@ -123,23 +140,25 @@ test("fold implements active, publication, review, stale, changes, and ready pre
     foldRunFacts({
       runRecord: runRecord(),
       facts: [pr(), review("changes_requested")],
+      gitFacts: { head_sha: HEAD, tree_sha: TREE },
       githubFacts: livePrFacts(),
     }).action,
     "redispatch",
   );
   const ready = foldRunFacts({
     runRecord: runRecord(),
-    facts: [pr(), review("pass")],
+    facts: [pr(), verification(), review("pass", 5)],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
     githubFacts: livePrFacts(),
   });
   assert.equal(ready.action, "merge");
   assert.equal(ready.reason, "ready_to_merge");
 });
-
 test("exact criteria binding, external revalidation, and identity conflicts fail closed", () => {
   const staleCriteria = foldRunFacts({
     runRecord: runRecord(),
-    facts: [pr(), review("pass", 4, HEAD, "e".repeat(64))],
+    facts: [pr(), verification(), review("pass", 5, HEAD, "f".repeat(64))],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
     githubFacts: livePrFacts(),
   });
   assert.equal(staleCriteria.action, "review");
@@ -147,7 +166,8 @@ test("exact criteria binding, external revalidation, and identity conflicts fail
 
   const unavailable = foldRunFacts({
     runRecord: runRecord(),
-    facts: [pr(), review("pass")],
+    facts: [pr(), verification(), review("pass", 5)],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
     githubFacts: { available: false, pr_head_sha: HEAD },
   });
   assert.equal(unavailable.action, "none");
@@ -166,7 +186,8 @@ test("exact criteria binding, external revalidation, and identity conflicts fail
     delete incomplete[missing];
     const result = foldRunFacts({
       runRecord: runRecord(),
-      facts: [pr(), review("pass")],
+      facts: [pr(), verification(), review("pass", 5)],
+      gitFacts: { head_sha: HEAD, tree_sha: TREE },
       githubFacts: incomplete,
     });
     assert.equal(result.action, "none", missing);
@@ -178,7 +199,7 @@ test("exact criteria binding, external revalidation, and identity conflicts fail
     githubFacts: livePrFacts(42, { pr_state: "CLOSED" }),
   });
   assert.equal(closedPr.action, "none");
-  assert.equal(closedPr.reason, "fact_conflict");
+  assert.equal(closedPr.reason, "github_pr_closed_unmerged");
 
   const branchConflict = foldRunFacts({
     runRecord: runRecord(),
@@ -189,7 +210,8 @@ test("exact criteria binding, external revalidation, and identity conflicts fail
 
   const staleRequested = foldRunFacts({
     runRecord: runRecord(),
-    facts: [pr(), review("changes_requested", 4, HEAD, "e".repeat(64))],
+    facts: [pr(), verification(), review("changes_requested", 5, HEAD, "f".repeat(64))],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
     githubFacts: livePrFacts(),
   });
   assert.equal(staleRequested.action, "review");
@@ -262,15 +284,16 @@ test("terminal facts are irreversible and conflicting terminal history fails clo
 });
 
 test("fold replay is deterministic and append position, not timestamps, controls precedence", () => {
-  const facts = [pr(), review("changes_requested")];
+  const facts = [pr(), verification(), review("changes_requested", 5)];
   const input = {
     runRecord: runRecord(),
     facts,
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
     githubFacts: livePrFacts(),
   };
   assert.deepEqual(foldRunFacts(input), foldRunFacts(JSON.parse(JSON.stringify(input))));
   const passWithOlderTimestamp = {
-    ...review("pass", 5),
+    ...review("pass", 6),
     at: "2020-01-01T00:00:00Z",
   };
   assert.equal(
@@ -279,15 +302,109 @@ test("fold replay is deterministic and append position, not timestamps, controls
   );
 });
 
-test("a live PR head advance is review staleness, not an identity conflict", () => {
+test("a live PR head advance invalidates the local tree observation", () => {
   const advanced = "f".repeat(40);
   const result = foldRunFacts({
     runRecord: runRecord(),
-    facts: [pr(), review("pass")],
+    facts: [pr(), verification(4, { tree_sha: TREE }), review("pass", 5)],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
     githubFacts: livePrFacts(42, { pr_head_sha: advanced }),
   });
-  assert.equal(result.reason, "review_stale");
-  assert.equal(result.action, "review");
+  assert.equal(result.reason, "verification_observation_incomplete");
+  assert.equal(result.action, "recover");
+});
+
+test("#1113 stale verification proof cannot be rebranded into a merge approval", () => {
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [
+      pr(),
+      verification(4, { head_sha: START, tree_sha: START }),
+      review("pass", 5),
+    ],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
+    githubFacts: livePrFacts(),
+  });
+  assert.equal(result.action, "recover");
+  assert.equal(result.reason, "verification_stale");
+  assert.equal(result.diagnostics.at(-1).code, "verification_proof_stale");
+});
+
+test("#1114 verification before a salvage commit cannot approve the post-commit head", () => {
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [
+      pr(),
+      verification(4, { head_sha: START, tree_sha: TREE }),
+      review("pass", 5),
+    ],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
+    githubFacts: livePrFacts(),
+  });
+  assert.equal(result.action, "recover");
+  assert.equal(result.reason, "verification_stale");
+  assert.notEqual(result.action, "merge");
+});
+
+test("#1118 executor success cannot turn incomplete declared verification into approval", () => {
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [
+      // This is the executor process outcome: success alone is not the
+      // declared two-command verification result.
+      finished(),
+      pr(),
+      verification(4, {
+        declared_command_count: 2,
+        completed_command_count: 1,
+        status: "incomplete",
+        exit_code: null,
+      }),
+      review("pass", 5),
+    ],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
+    githubFacts: livePrFacts(),
+  });
+  assert.equal(result.action, "recover");
+  assert.equal(result.reason, "verification_not_passing");
+  assert.equal(result.diagnostics.at(-1).code, "verification_proof_not_passing");
+});
+
+test("a declared attempt without a content-addressed proof fails closed", () => {
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [pr(), finished(), review("pass", 4)],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
+    githubFacts: livePrFacts(),
+  });
+  assert.equal(result.action, "recover");
+  assert.equal(result.reason, "verification_missing");
+  assert.equal(result.diagnostics.at(-1).code, "verification_proof_missing");
+});
+
+test("a PR pass review without any verification fact fails closed by default", () => {
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [pr(), review("pass", 4)],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
+    githubFacts: livePrFacts(),
+  });
+  assert.equal(result.action, "recover");
+  assert.equal(result.reason, "verification_missing");
+  assert.equal(result.diagnostics.at(-1).code, "verification_proof_missing");
+});
+
+test("a Git tree is trusted only when observed at the live PR head", () => {
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [pr(), verification(), review("pass", 5)],
+    gitFacts: { head_sha: START, tree_sha: TREE },
+    githubFacts: livePrFacts(),
+  });
+  assert.equal(result.action, "recover");
+  assert.equal(result.reason, "verification_observation_incomplete");
+  assert.equal(result.diagnostics.at(-1).code, "verification_tree_observation_incomplete");
+  assert.notEqual(result.action, "merge");
 });
 
 test("property replay preserves ordering, rejects duplicate delivery, and never leaves terminal", () => {
@@ -302,12 +419,14 @@ test("property replay preserves ordering, rejects duplicate delivery, and never 
     const secondVerdict = firstVerdict === "pass" ? "changes_requested" : "pass";
     const sequence = [
       pr(),
+      verification(),
       { ...review(firstVerdict, 5), event_id: `property-first-${iteration}` },
       { ...review(secondVerdict, 6), event_id: `property-second-${iteration}` },
     ];
     const input = {
       runRecord: runRecord(),
       facts: sequence,
+      gitFacts: { head_sha: HEAD, tree_sha: TREE },
       githubFacts: livePrFacts(),
     };
     const folded = foldRunFacts(input);
@@ -329,289 +448,4 @@ test("property replay preserves ordering, rejects duplicate delivery, and never 
     assert.equal(terminal.terminal, true);
     assert.equal(terminal.action, "none");
   }
-});
-
-test("legacy projection and shadow comparison write telemetry only", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-shadow-"));
-  const telemetryPath = path.join(root, "shadow-comparisons.jsonl");
-  const legacyEventsPath = path.join(root, "events.jsonl");
-  fs.writeFileSync(legacyEventsPath, "legacy bytes\n");
-  const before = fs.readFileSync(legacyEventsPath);
-  const manifest = {
-    run_id: "r1",
-    state: "ready_to_merge",
-    git: { working_branch: "work", base_branch: "main", pr_number: 42, head_sha: HEAD },
-    paths: { repo_root: "/repo", worktree: "/wt" },
-    anchor: { done_criteria_path: "/run/done.md", done_criteria_sha256: HASH },
-    roles: { orchestrator: "codex", executor: "cursor", reviewer: "claude" },
-    review: { rounds: 1, latest_verdict: "lgtm", last_reviewed_sha: HEAD, last_reviewer: "claude" },
-    timestamps: { created_at: "2026-07-31T00:00:00Z" },
-  };
-  const projection = projectLegacyRun({
-    manifest,
-    observations: {
-      remote: "owner/repo",
-      gitFacts: { head_sha: HEAD },
-      githubFacts: { pr_number: 42, pr_head_sha: HEAD },
-      doneCriteriaSha256: HASH,
-    },
-  });
-  const comparison = compareShadow({
-    legacyDecision: { state: "ready_to_merge" },
-    ...projection,
-    githubFacts: livePrFacts(),
-    telemetryPath,
-    at: "2026-07-31T00:00:00Z",
-  });
-  assert.equal(comparison.agree, true);
-  assert.equal(comparison.vnext.action, "merge");
-  assert.deepEqual(fs.readFileSync(legacyEventsPath), before);
-  assert.equal(fs.existsSync(path.join(root, "run.json")), false);
-  assert.equal(fs.readFileSync(telemetryPath, "utf8").trim().length > 0, true);
-});
-
-test("first shadow telemetry creation fsyncs file and directory and surfaces boundary faults", () => {
-  const manifest = {
-    run_id: "r1",
-    state: "draft",
-    git: { working_branch: "work", base_branch: "main", head_sha: HEAD },
-    paths: { repo_root: "/repo", worktree: "/wt" },
-    anchor: { done_criteria_path: "/run/done.md", done_criteria_sha256: HASH },
-    roles: { orchestrator: "codex", executor: "codex", reviewer: "claude" },
-    timestamps: { created_at: "2026-07-31T00:00:00Z" },
-  };
-  const projection = projectLegacyRun({
-    manifest,
-    observations: {
-      remote: "owner/repo",
-      gitFacts: { head_sha: HEAD },
-      doneCriteriaSha256: HASH,
-    },
-  });
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-shadow-durability-"));
-  let fileSyncs = 0;
-  let directorySyncs = 0;
-  const fsSpy = {
-    ...fs,
-    fsyncSync(fd) {
-      if (fs.fstatSync(fd).isDirectory()) directorySyncs += 1;
-      else fileSyncs += 1;
-      return fs.fsyncSync(fd);
-    },
-  };
-  const result = compareShadow({
-    legacyDecision: { state: "draft" },
-    ...projection,
-    telemetryPath: path.join(root, "telemetry", "shadow.jsonl"),
-    telemetryIo: { fsModule: fsSpy },
-  });
-  assert.equal(result.telemetry_error, undefined);
-  assert.equal(fileSyncs, 1);
-  assert.equal(directorySyncs, 1);
-  for (const stage of ["open", "write", "fsync", "dir_fsync"]) {
-    const failed = compareShadow({
-      legacyDecision: { state: "draft" },
-      ...projection,
-      telemetryPath: path.join(root, `fault-${stage}`, "shadow.jsonl"),
-      telemetryIo: {
-        fault(current) {
-          if (current === stage) throw new Error(`injected ${stage}`);
-        },
-      },
-    });
-    assert.match(failed.telemetry_error, new RegExp(`injected ${stage}`));
-  }
-});
-
-test("shadow source reader derives manifest/events bytes and durably emits provenance telemetry", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-production-shadow-"));
-  const telemetryDirectory = path.join(root, "telemetry");
-  const runId = "shadow-r1-20260731000000000";
-  const manifestPath = path.join(root, `${runId}.md`);
-  const eventsPath = path.join(root, runId, "events.jsonl");
-  fs.mkdirSync(path.dirname(eventsPath));
-  const manifest = {
-    run_id: runId,
-    state: "ready_to_merge",
-    git: { working_branch: "work", base_branch: "main", pr_number: 42, head_sha: HEAD },
-    paths: { repo_root: "/repo", worktree: "/wt" },
-    anchor: { done_criteria_path: "/run/done.md", done_criteria_sha256: HASH },
-    roles: { orchestrator: "codex", executor: "codex", reviewer: "claude" },
-    review: {
-      rounds: 1,
-      latest_verdict: "lgtm",
-      last_reviewed_sha: HEAD,
-      last_reviewer: "claude",
-    },
-    timestamps: { created_at: "2026-07-31T00:00:00Z" },
-  };
-  const store = require("../../../skills/relay-dispatch/scripts/manifest/store");
-  store.writeManifest(manifestPath, manifest);
-  fs.writeFileSync(eventsPath, "");
-  const telemetryPath = path.join(telemetryDirectory, `${runId}.jsonl`);
-  runtime.evaluateLegacyShadow({
-    manifestPath,
-    eventsPath,
-    observations: {
-      remote: "owner/repo",
-      doneCriteriaSha256: HASH,
-      gitFacts: { head_sha: HEAD, branch: "work", base_branch: "main" },
-      githubFacts: livePrFacts(),
-      hostFacts: {},
-    },
-    legacyDecision: { state: "ready_to_merge" },
-    telemetryPath,
-  });
-  const persisted = JSON.parse(fs.readFileSync(telemetryPath, "utf8"));
-  assert.equal(persisted.provenance.kind, "production-source-bytes");
-  assert.equal(
-    persisted.provenance.manifest_sha256,
-    crypto.createHash("sha256").update(fs.readFileSync(manifestPath)).digest("hex"),
-  );
-  assert.throws(() => runtime.evaluateLegacyShadow({
-    manifestPath,
-    eventsPath,
-    expectedManifest: { ...manifest, state: "closed" },
-    observations: {},
-    telemetryPath,
-  }), /does not match source bytes/);
-  assert.throws(() => runtime.evaluateLegacyShadow({
-    manifestPath,
-    eventsPath,
-    expectedEvents: [{ event: "forged" }],
-    observations: {},
-    telemetryPath,
-  }), /events do not match source bytes/);
-  assert.throws(() => runtime.evaluateLegacyShadow({
-    manifestPath,
-    eventsPath,
-    observations: {},
-    legacyDecision: { state: "closed" },
-    telemetryPath,
-  }), /decision does not match manifest source state/);
-});
-
-test("shadow parity agrees for 30 representative comparable legacy runs", () => {
-  const corpusPath = path.resolve(
-    __dirname,
-    "../fixtures/vnext-shadow-parity-corpus.json",
-  );
-  const variants = JSON.parse(fs.readFileSync(corpusPath, "utf8"));
-  assert.equal(variants.length, 30);
-  assert.equal(new Set(variants.map((entry) => entry.id)).size, 30);
-  assert.equal(new Set(variants.map((entry) => entry.provenance.scenario)).size, 30);
-  const comparisons = [];
-  for (const [index, variant] of variants.entries()) {
-    const sourceRef = variant.provenance.source;
-    let sourcePath;
-    if (sourceRef.startsWith("manifest/")) {
-      sourcePath = path.resolve(__dirname, "../../../skills/relay-dispatch/scripts", sourceRef.split(":")[0]);
-    } else if (sourceRef.startsWith("finalize-run") || sourceRef.startsWith("review-gate")) {
-      sourcePath = path.resolve(__dirname, "../../../skills/relay-merge/scripts", sourceRef.split(":")[0]);
-    } else if (sourceRef.startsWith("review-runner/")) {
-      sourcePath = path.resolve(__dirname, "../../../skills/relay-review/scripts", sourceRef.split(":")[0]);
-    } else if (sourceRef === "review-runner.js") {
-      sourcePath = path.resolve(__dirname, "../../../skills/relay-review/scripts/review-runner.js");
-    } else if (sourceRef.startsWith("relay-fleet")) {
-      sourcePath = path.resolve(__dirname, "../../../skills/relay-fleet/scripts/relay-fleet.js");
-    } else {
-      sourcePath = path.resolve(
-        __dirname,
-        "../../../skills/relay-dispatch/scripts",
-        sourceRef.split(":")[0],
-      );
-    }
-    assert.equal(variant.provenance.kind, "legacy-golden", `sample ${index + 1} kind`);
-    assert.equal(fs.existsSync(sourcePath), true, `sample ${index + 1} source ${sourceRef}`);
-    assert.equal(typeof variant.provenance.scenario, "string", `sample ${index + 1} scenario`);
-    assert.equal(
-      crypto.createHash("sha256").update(variant.golden_snapshot.manifest_bytes).digest("hex"),
-      variant.golden_snapshot.manifest_sha256,
-      `sample ${index + 1} manifest bytes`,
-    );
-    assert.equal(
-      crypto.createHash("sha256").update(variant.golden_snapshot.events_bytes).digest("hex"),
-      variant.golden_snapshot.events_sha256,
-      `sample ${index + 1} event bytes`,
-    );
-    const { parseFrontmatter } = require("../../../skills/relay-dispatch/scripts/manifest/store");
-    const capturedManifest = parseFrontmatter(variant.golden_snapshot.manifest_bytes).data;
-    assert.equal(capturedManifest.state, variant.state, `sample ${index + 1} captured state`);
-    assert.match(variant.golden_snapshot.source_commit, /^[0-9a-f]{40}$/);
-    const manifest = capturedManifest;
-    const legacyEvents = variant.golden_snapshot.events_bytes
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-    const prRequired = Number.isInteger(manifest.git.pr_number);
-    const active = variant.shape.startsWith("active-live");
-    const interrupted = variant.shape.startsWith("interrupted");
-    const reviewableWork = variant.shape.startsWith("publication")
-      || variant.shape === "interrupted-work";
-    const githubFacts = variant.pr
-      ? livePrFacts(manifest.git.pr_number, {
-        head_ref: manifest.git.working_branch,
-        pr_state: variant.state === "merged" ? "MERGED" : "OPEN",
-        merge_sha: variant.state === "merged" ? TARGET : undefined,
-      })
-      : {
-        available: true,
-        pr_lookup_complete: true,
-      };
-    if (prRequired) {
-      Object.assign(githubFacts, livePrFacts(manifest.git.pr_number, {
-        head_ref: manifest.git.working_branch,
-        pr_state: variant.state === "merged" ? "MERGED" : "OPEN",
-        merge_sha: variant.state === "merged" ? TARGET : undefined,
-      }));
-    }
-    const projection = projectLegacyRun({
-      manifest,
-      events: legacyEvents,
-      observations: {
-        remote: "owner/repo",
-        gitFacts: { head_sha: HEAD },
-        githubFacts,
-        doneCriteriaSha256: HASH,
-        merge_sha: TARGET,
-        mergeMethod: variant.shape === "merged-rebase" ? "rebase" : "squash",
-      },
-    });
-    const comparison = compareShadow({
-      legacyDecision: {
-        state: variant.state,
-        host_live: active ? true : (interrupted ? false : undefined),
-        reviewable_work: reviewableWork,
-      },
-      ...projection,
-      gitFacts: {
-        head_sha: HEAD,
-        reviewable_work: reviewableWork,
-        tree_differs_from_start: variant.shape === "publication-tree",
-        branch_commit_exists: variant.shape === "publication-commit",
-        result_artifact_regular: variant.shape === "publication-result",
-      },
-      githubFacts,
-      hostFacts: { live: active ? true : (interrupted ? false : undefined) },
-      at: "2026-07-31T00:02:00Z",
-      provenance: variant.provenance,
-      expectedDiscrepancy: variant.expected_discrepancy,
-    });
-    assert.equal(comparison.vnext.action, variant.expected, `sample ${index + 1}`);
-    assert.equal(comparison.comparable, true, `sample ${index + 1}`);
-    assert.equal(comparison.agree, true, `sample ${index + 1}`);
-    assert.deepEqual(comparison.provenance, variant.provenance, `sample ${index + 1}`);
-    assert.equal(
-      comparison.expected_discrepancy,
-      variant.expected_discrepancy,
-      `sample ${index + 1}`,
-    );
-    comparisons.push({
-      fixture_id: variant.id,
-      provenance: variant.provenance,
-      expected_discrepancy: variant.expected_discrepancy,
-      comparison,
-    });
-  }
-  assert.equal(comparisons.length, 30);
 });

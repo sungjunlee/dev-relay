@@ -157,11 +157,13 @@ test("coverage guard flags a filesystem suite omitted from the matrix", () => {
 });
 
 test("workflow recursively includes nested test files", () => {
-  const workflow = fs.readFileSync(WORKFLOW_PATH, "utf-8");
-  assertMatrixRunsGuardedSuiteGlob(workflow);
-  assert.equal(
-    discoverTestsRecursively(path.join(TESTS_DIR, "relay-dispatch", "scripts", "manifest")).length,
-    8,
-    "the eight nested manifest tests must stay visible to CI",
-  );
+  const { testsDir, workflow } = buildFixture({ wired: true });
+  try {
+    assertMatrixRunsGuardedSuiteGlob(workflow);
+    const scriptsDir = path.join(testsDir, "newskill", "scripts");
+    assert.equal(discoverTestsRecursively(scriptsDir).length, 2);
+    assert.equal(discoverTestsRecursively(path.join(scriptsDir, "nested")).length, 1);
+  } finally {
+    fs.rmSync(testsDir, { recursive: true, force: true });
+  }
 });

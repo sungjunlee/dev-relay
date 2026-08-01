@@ -9,19 +9,19 @@ instructions that the skill follows without carrying route prose inline.
 Run:
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route --repo . --issue-number "$ISSUE_NUMBER" --branch "$BRANCH" --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --json
+node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route --repo . --issue-number "$ISSUE_NUMBER" --branch "$BRANCH" --body-file "$ISSUE_BODY_FILE" --json
 ```
 
 ### In-flight PR/run guard
 
 - Firing condition: an issue-numbered task is entering Step 1 routing.
-- Signals read: `gh pr list --head <branch> --state all --json number,state,mergedAt,headRefName,url`; non-terminal manifests for the issue via relay-dispatch manifest storage.
+- Signals read: `gh pr list --head <branch> --state all --json number,state,mergedAt,headRefName,url`; validated vNext `run.json` records and canonical `runtime.inspectRun` actions for issue-matching runs.
 - Events emitted: none by this guard.
 - Instruction field: every in-flight route includes `inflight.instruction`, a one-sentence operator next action.
 - Branch labels:
   - `existing-open-pr`: `instruction` tells the operator to review the existing open PR instead of planning or dispatching a new run.
   - `existing-merged-pr`: `instruction` tells the operator to mark the sprint item done if present and stop because the PR is already merged.
-  - `inflight-run`: `instruction` tells the operator to resume or inspect the existing inflight run and continue from its manifest state.
+  - `inflight-run`: `instruction` tells the operator to resume or inspect the existing run using its derived vNext action.
   - `continue`: `instruction` tells the operator to continue to readiness handling before planning or dispatch.
 
 ### Readiness probe + chain prompt guard
@@ -66,23 +66,27 @@ Run after relay-review to compare:
 node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage review --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --previous-rounds "$PREVIOUS_ROUNDS" --previous-verdict "$PREVIOUS_VERDICT" --json
 ```
 
+Use `--stage merge` at the merge boundary. It resolves and inspects the run
+through the same code path; only the response's `stage` label differs.
+
 ### Stale-review guard
 
 - Firing condition: Step 4 is about to invoke relay-review, then again immediately after relay-review returns.
-- Signals read: target manifest `review.rounds`, `review.latest_verdict`, `git.head_sha`, and `review.last_reviewed_sha`; for `ready_to_merge` runs, live PR `headRefOid` from GitHub.
+- Signals read: immutable `run.json`, append-only review facts, and the fresh Git/GitHub/worktree observations returned by canonical `runtime.inspectRun`.
 - Events emitted: none by this guard; relay-review emits its normal review events.
 - Branch labels:
   - `snapshot`: before review, store `.snapshot.rounds` and `.snapshot.latest_verdict`.
   - `advanced`: after review, `.comparison.rounds_advanced` or `.comparison.verdict_changed` is true; proceed to Step 5.
   - `stale`: after review, neither value changed; treat the review as stalled and run `review-runner.js` directly in the foreground, then repeat the same comparison.
-  - `stale_ready`: when `.snapshot.state == "ready_to_merge"` and `.ready_status.status == "stale_ready"`, the PR advanced after the passing review; run `recover-state.js --to review_pending --reason <why>` and then run relay-review again.
-  - `merge_ready`: when `.snapshot.state == "ready_to_merge"` and `.ready_status.status == "merge_ready"`, the live PR HEAD still matches the reviewed/manifest SHA.
+  - `stale_ready`: canonical inspect returns `action=review` with `reason=review_stale`; rerun relay-review for the observed head.
+  - `merge_ready`: canonical inspect returns `action=merge`; the observed PR head is bound to the current passing review.
 
 The JSON also reports `.snapshot.sha_state` / `.comparison.sha_state` as
 `reviewed_current_head`, `stale_reviewed_sha`, `not_reviewed`, or
-`missing_head_sha` so operators can see whether the manifest's review SHA is
+`missing_head_sha` so operators can see whether the folded review SHA is
 current without changing the round/verdict advancement rule.
 
 For ready runs, `.ready_status` includes `pr_number`, `old_sha`, `new_sha`,
-`reviewed_sha`, `manifest_head_sha`, and `next_action` so recovery can be
-audited without manually editing the manifest.
+`reviewed_sha`, `observed_head_sha`, and `next_action`. Recovery is available
+only through `--recover`/`--reconcile` with an explicit `--reason`; both invoke
+canonical `runtime.recoverRun` and never assign lifecycle state.

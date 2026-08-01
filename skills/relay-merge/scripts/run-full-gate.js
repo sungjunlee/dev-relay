@@ -11,11 +11,6 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const {
-  bindCliArgs,
-  findUnknownFlags,
-  modeLabel: formatCliModeLabel,
-} = require("../../relay-dispatch/scripts/cli-args");
 
 const DEFAULT_SUITES = [
   "tests/relay-ready/scripts/*.test.js",
@@ -36,6 +31,13 @@ const CLI_ARG_OPTIONS = {
   booleanFlags: ["--json", "--help", "-h"],
   verbatimValueFlags: ["--repo", "--suites", "--output"],
 };
+function parseCli(argv) {
+  const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_ARG_OPTIONS.booleanFlags), verbatim = new Set(CLI_ARG_OPTIONS.verbatimValueFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (flag, value) => value !== undefined && (verbatim.has(flag) || (!String(value).startsWith("--") && !known.has(String(value))));
+  argv.forEach((token, index) => { const flag = name(token); if (known.has(flag) && !bool.has(flag) && !String(token).includes("=") && accepts(flag, argv[index + 1])) consumed.add(index + 1); });
+  const unknown = argv.filter((token, index) => !consumed.has(index) && String(token).startsWith("-") && !known.has(name(token))); if (unknown.length) throw new Error(`unknown flags: ${unknown.join(", ")}`);
+  return { hasFlag: (flag) => argv.some((token, index) => !consumed.has(index) && (token === flag || String(token).startsWith(`${flag}=`))), getArg: (flag, fallback) => { for (let index = 0; index < argv.length; index += 1) { if (consumed.has(index)) continue; const token = String(argv[index]); if (token === flag || token.startsWith(`${flag}=`)) { const value = token === flag ? argv[index + 1] : token.slice(flag.length + 1); if (!accepts(flag, value)) return fallback; if (verbatim.has(flag) && !String(value).trim()) throw new Error(`${flag} requires a non-empty value`); return value; } } return fallback; } };
+}
+const formatCliModeLabel = (flag) => CLI_ARG_OPTIONS.booleanFlags.includes(flag) ? "[boolean]" : "[value]";
 const LOCK_POLL_MS = 100;
 const SENTINEL_POLL_MS = 100;
 const DEFAULT_LOCK_TIMEOUT_SECONDS = 600;
@@ -330,9 +332,7 @@ function parseNonNegativeSeconds(value) {
 }
 
 function parsePublicArgs(args) {
-  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
-  if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
-  const cli = bindCliArgs(args, CLI_ARG_OPTIONS);
+  const cli = parseCli(args);
   const repoArg = cli.getArg("--repo");
   if (!repoArg) throw new Error("--repo <worktree> is required");
   const repo = path.resolve(repoArg);

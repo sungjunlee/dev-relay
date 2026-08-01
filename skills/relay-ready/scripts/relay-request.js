@@ -1,965 +1,513 @@
-const fs = require("fs");
-const path = require("path");
+"use strict";
 
-const {
-  getActorName,
-  getRelayHome,
-  getRepoSlug,
-  parseFrontmatter,
-  writeManifest,
-} = require("../../relay-dispatch/scripts/relay-manifest");
-const { nowIso } = require("../../relay-dispatch/scripts/manifest/paths");
+/** Publish one immutable relay-ready request bundle. Conversation state is transient. */
 
-const READINESS_LEVELS = {
+const crypto = require("node:crypto");
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,126}$/;
+const COMPLETION = "bundle-complete.json";
+const WAIT_MS = 1000;
+const READINESS_LEVELS = Object.freeze({
   clarity: new Set(["high", "medium", "low"]),
   granularity: new Set(["single_task", "multi_task", "unclear"]),
   dependency: new Set(["none", "internal", "external"]),
   verifiability: new Set(["high", "medium", "low"]),
   risk: new Set(["low", "medium", "high"]),
-};
+});
 
-const DEFAULT_NEXT_ACTIONS = {
-  acceptProposal: "relay_plan",
-  answerQuestion: "review_answer",
-  clarify: "await_answer",
-  editProposal: "review_proposal_edits",
-  persist: "relay_plan",
-  propose: "await_proposal_response",
-  structure: "await_proposal_response",
-};
-
-function createRequestId(timestamp = new Date()) {
-  const iso = timestamp.toISOString().replace(/[-:TZ.]/g, "").slice(0, 17);
-  return `req-${iso}`;
+function fail(message, code = "REQUEST_PERSIST_FAILED") {
+  const error = new Error(message);
+  error.code = code;
+  throw error;
 }
 
-function getRequestsBase() {
-  return process.env.RELAY_REQUESTS_BASE || path.join(getRelayHome(), "requests");
+function canonicalRepoRoot(input) {
+  const checkout = fs.realpathSync(path.resolve(input));
+  const common = execFileSync("git", [
+    "-C", checkout, "rev-parse", "--path-format=absolute", "--git-common-dir",
+  ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return fs.realpathSync(path.dirname(path.resolve(checkout, common)));
+}
+
+function repoSlug(repoRoot) {
+  const root = canonicalRepoRoot(repoRoot);
+  const base = path.basename(root).toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+  return `${base}-${crypto.createHash("sha256").update(root).digest("hex").slice(0, 8)}`;
+}
+
+function assertSafeId(value, label) {
+  if (typeof value !== "string" || !SAFE_ID_RE.test(value) || value === "." || value === "..") {
+    fail(`${label} must be a safe path-independent identifier`, "REQUEST_ID_INVALID");
+  }
+  return value;
+}
+
+function fsyncDirectory(directory) {
+  const descriptor = fs.openSync(directory, fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0));
+  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+}
+
+function ensurePrivateDirectory(directory) {
+  try { fs.mkdirSync(directory, { mode: 0o700 }); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    fail(`trusted request directory must be a real directory: ${directory}`, "REQUEST_PATH_UNTRUSTED");
+  }
+  return fs.realpathSync(directory);
+}
+
+function trustedRequestsBase() {
+  const explicitBase = process.env.RELAY_REQUESTS_BASE;
+  const relayHome = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  const configured = explicitBase || path.join(relayHome, "requests");
+  if (!path.isAbsolute(configured)) {
+    fail("request storage base must be absolute", "REQUEST_PATH_UNTRUSTED");
+  }
+  const parent = path.dirname(configured);
+  if (!fs.existsSync(parent)) {
+    if (explicitBase || path.dirname(relayHome) !== fs.realpathSync(os.homedir())) {
+      fail("request storage parent must already exist", "REQUEST_PATH_UNTRUSTED");
+    }
+    ensurePrivateDirectory(parent);
+  }
+  const parentStat = fs.lstatSync(parent);
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || fs.realpathSync(parent) !== path.resolve(parent)) {
+    fail("request storage parent must be canonical and contain no symlink ancestors", "REQUEST_PATH_UNTRUSTED");
+  }
+  const base = ensurePrivateDirectory(path.join(fs.realpathSync(parent), path.basename(configured)));
+  fsyncDirectory(path.dirname(base));
+  return base;
 }
 
 function getRequestsDir(repoRoot) {
-  return path.join(getRequestsBase(), getRepoSlug(repoRoot));
+  const base = trustedRequestsBase();
+  const directory = path.join(base, repoSlug(repoRoot));
+  const canonical = ensurePrivateDirectory(directory);
+  if (path.dirname(canonical) !== base) {
+    fail("repository request directory escapes the trusted base", "REQUEST_PATH_UNTRUSTED");
+  }
+  fsyncDirectory(base);
+  return canonical;
 }
 
-function getRequestDir(repoRoot, requestId) {
-  return path.join(getRequestsDir(repoRoot), requestId);
+function createRequestId(timestamp = new Date()) {
+  const iso = timestamp.toISOString().replace(/[-:TZ.]/g, "").slice(0, 17);
+  return `req-${iso}-${crypto.randomBytes(8).toString("hex")}`;
 }
 
-function getRequestPath(repoRoot, requestId) {
-  return path.join(getRequestsDir(repoRoot), `${requestId}.md`);
+function readRegular(file, label = path.basename(file)) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(
+      file,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0),
+    );
+  } catch (error) {
+    if (error.code === "ELOOP") fail(`${label} must not be a symlink`, "REQUEST_PATH_UNTRUSTED");
+    throw error;
+  }
+  try {
+    const before = fs.fstatSync(descriptor);
+    if (!before.isFile()) fail(`${label} must be a regular file`, "REQUEST_PATH_UNTRUSTED");
+    const bytes = fs.readFileSync(descriptor);
+    const after = fs.fstatSync(descriptor);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size) {
+      fail(`${label} changed while being read`, "REQUEST_PATH_UNTRUSTED");
+    }
+    return bytes;
+  } finally { fs.closeSync(descriptor); }
 }
 
-function getRequestEventsPath(repoRoot, requestId) {
-  return path.join(getRequestDir(repoRoot, requestId), "events.jsonl");
+function writeExclusive(file, bytes, label) {
+  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  let descriptor;
+  try {
+    descriptor = fs.openSync(
+      file,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0),
+      0o600,
+    );
+    const written = fs.writeSync(descriptor, buffer, 0, buffer.length);
+    if (written !== buffer.length) fail(`short write for ${label}`, "REQUEST_SHORT_WRITE");
+    fs.fsyncSync(descriptor);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    if (!readRegular(file, label).equals(buffer)) {
+      fail(`immutable ${label} already exists with different bytes`, "REQUEST_ARTIFACT_CONFLICT");
+    }
+  } finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+  fsyncDirectory(path.dirname(file));
+  return file;
 }
 
-function ensureRequestLayout(repoRoot, requestId) {
-  if (!requestId) {
-    throw new Error("request_id is required to create relay-ready layout");
+function publishAtomicExclusive(file, bytes, label, beforePublish) {
+  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const directory = path.dirname(file);
+  const temporary = path.join(
+    directory,
+    `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`,
+  );
+  let descriptor;
+  let temporaryCreated = false;
+  try {
+    descriptor = fs.openSync(
+      temporary,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0),
+      0o600,
+    );
+    temporaryCreated = true;
+    let offset = 0;
+    while (offset < buffer.length) offset += fs.writeSync(descriptor, buffer, offset, buffer.length - offset);
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    beforePublish?.();
+    try {
+      // Hard-link publication is atomic and cannot replace an immutable marker.
+      fs.linkSync(temporary, file);
+      fsyncDirectory(directory);
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (!readRegular(file, label).equals(buffer)) {
+        fail(`immutable ${label} already exists with different bytes`, "REQUEST_ARTIFACT_CONFLICT");
+      }
+    }
+  } finally {
+    if (descriptor !== undefined) try { fs.closeSync(descriptor); } catch {}
+    if (temporaryCreated) {
+      try { fs.unlinkSync(temporary); fsyncDirectory(directory); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+    }
+  }
+  return file;
+}
+
+function scalar(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function frontmatter(data, indent = 0) {
+  return Object.entries(data).map(([key, value]) => {
+    const prefix = " ".repeat(indent);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return `${prefix}${key}:\n${frontmatter(value, indent + 2)}`;
+    }
+    return `${prefix}${key}: ${scalar(value)}`;
+  }).join("\n");
+}
+
+function artifactBytes(data, body = "") {
+  return Buffer.from(`---\n${frontmatter(data)}\n---\n${body.endsWith("\n") ? body : `${body}\n`}`);
+}
+
+function parseScalar(value) {
+  if (value === "null") return null;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value.startsWith("[") && value.endsWith("]")) return JSON.parse(value);
+  if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1).replace(/''/g, "'");
+  return value;
+}
+
+function parseFrontmatter(text) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines[0] !== "---") return { data: {}, body: text };
+  const close = lines.indexOf("---", 1);
+  if (close < 0) fail("invalid request artifact frontmatter", "REQUEST_ARTIFACT_INVALID");
+  const source = lines.slice(1, close);
+  function block(start, indent) {
+    const data = {};
+    let index = start;
+    while (index < source.length) {
+      const raw = source[index];
+      if (!raw.trim()) { index += 1; continue; }
+      const current = raw.match(/^ */)[0].length;
+      if (current < indent) break;
+      if (current > indent) fail("invalid request artifact indentation", "REQUEST_ARTIFACT_INVALID");
+      const separator = raw.trim().indexOf(":");
+      if (separator < 0) fail("invalid request artifact entry", "REQUEST_ARTIFACT_INVALID");
+      const entry = raw.trim();
+      const key = entry.slice(0, separator).trim();
+      const rest = entry.slice(separator + 1).trim();
+      if (!rest) {
+        const nested = block(index + 1, indent + 2);
+        data[key] = nested.data;
+        index = nested.index;
+      } else {
+        data[key] = parseScalar(rest);
+        index += 1;
+      }
+    }
+    return { data, index };
+  }
+  return { data: block(0, 0).data, body: lines.slice(close + 1).join("\n") };
+}
+
+function readRequestArtifact(requestPath) {
+  // The public request file is deliberately outside its bundle directory for
+  // operator ergonomics. It is not, on its own, an authority: a writer can
+  // crash after publishing it and before publishing the final marker.
+  const publicPath = path.resolve(requestPath);
+  const requestId = assertSafeId(path.basename(publicPath, ".md"), "request_id");
+  if (path.basename(publicPath) !== `${requestId}.md`) {
+    fail("request artifact filename must match its request_id", "REQUEST_PATH_UNTRUSTED");
+  }
+  const requestsDir = path.dirname(publicPath);
+  const requestsStat = fs.lstatSync(requestsDir);
+  if (!requestsStat.isDirectory() || requestsStat.isSymbolicLink() || fs.realpathSync(requestsDir) !== requestsDir) {
+    fail("request artifact parent must be a real directory", "REQUEST_PATH_UNTRUSTED");
+  }
+  const requestDir = path.join(requestsDir, requestId);
+  const requestDirStat = fs.lstatSync(requestDir);
+  if (!requestDirStat.isDirectory() || requestDirStat.isSymbolicLink() || fs.realpathSync(requestDir) !== requestDir) {
+    fail("request bundle path is untrusted", "REQUEST_PATH_UNTRUSTED");
   }
 
-  const requestsDir = getRequestsDir(repoRoot);
-  const requestDir = getRequestDir(repoRoot, requestId);
-  const relayReadyDir = path.join(requestDir, "relay-ready");
-  const doneCriteriaDir = path.join(requestDir, "done-criteria");
-
-  fs.mkdirSync(requestsDir, { recursive: true });
-  fs.mkdirSync(requestDir, { recursive: true });
-  fs.mkdirSync(relayReadyDir, { recursive: true });
-  fs.mkdirSync(doneCriteriaDir, { recursive: true });
-
-  return {
-    requestsDir,
-    requestDir,
-    requestPath: getRequestPath(repoRoot, requestId),
-    eventsPath: getRequestEventsPath(repoRoot, requestId),
-    rawRequestPath: path.join(requestDir, "raw-request.md"),
-    relayReadyDir,
-    doneCriteriaDir,
+  let completion;
+  try { completion = JSON.parse(readRegular(path.join(requestDir, COMPLETION), "request completion marker").toString("utf8")); }
+  catch (error) {
+    if (error.code === "ENOENT") fail("request bundle exists without a completion marker", "REQUEST_BUNDLE_INCOMPLETE");
+    if (error instanceof SyntaxError) fail("invalid request completion marker", "REQUEST_ARTIFACT_INVALID");
+    throw error;
+  }
+  if (!completion || typeof completion !== "object" || Array.isArray(completion)
+    || completion.schema_version !== 1 || completion.request_id !== requestId
+    || typeof completion.bundle_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(completion.bundle_sha256)
+    || !completion.files || typeof completion.files !== "object" || Array.isArray(completion.files)) {
+    fail("invalid request completion marker", "REQUEST_ARTIFACT_INVALID");
+  }
+  const entries = Object.entries(completion.files);
+  const safeInventoryName = (name) => name === "../request.md" || name === "raw-request.md"
+    || /^(?:done-criteria|relay-ready)\/[A-Za-z0-9][A-Za-z0-9._-]{0,126}\.md$/.test(name);
+  if (!entries.length || entries.some(([name, digest]) => !safeInventoryName(name)
+    || typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest))) {
+    fail("request completion marker has an invalid inventory", "REQUEST_ARTIFACT_INVALID");
+  }
+  const verified = new Map();
+  for (const [name, digest] of entries) {
+    const target = name === "../request.md" ? publicPath : path.join(requestDir, name);
+    const bytes = readRegular(target, name);
+    if (sha256(bytes) !== digest) fail(`completed request artifact changed: ${name}`, "REQUEST_ARTIFACT_CONFLICT");
+    verified.set(name, bytes);
+  }
+  if (sha256(Buffer.from(JSON.stringify([...verified.entries()].map(([name, bytes]) => [name, sha256(bytes)]).sort()))) !== completion.bundle_sha256) {
+    fail("request completion marker digest does not match its bundle", "REQUEST_ARTIFACT_CONFLICT");
+  }
+  const requestBytes = verified.get("../request.md");
+  if (!requestBytes) fail("request completion marker has an incomplete inventory", "REQUEST_ARTIFACT_INVALID");
+  const artifact = parseFrontmatter(requestBytes.toString("utf8"));
+  const data = artifact.data;
+  if (data.request_id !== requestId || !Number.isInteger(data.leaf_count) || data.leaf_count < 1) {
+    fail("request artifact does not match its bundle", "REQUEST_ARTIFACT_INVALID");
+  }
+  const leafIds = data.leaf_count === 1
+    ? [assertSafeId(data.leaf_id, "leaf_id")]
+    : (Array.isArray(data.decomposition?.leaf_order) && data.decomposition.leaf_order.map((leafId) => assertSafeId(leafId, "leaf_id")));
+  if (!leafIds || leafIds.length !== data.leaf_count || new Set(leafIds).size !== leafIds.length) {
+    fail("request artifact has an invalid leaf inventory", "REQUEST_ARTIFACT_INVALID");
+  }
+  const expectedPaths = {
+    raw_request: path.join(requestDir, "raw-request.md"),
+    handoffs: leafIds.map((leafId) => path.join(requestDir, "relay-ready", `${leafId}.md`)),
+    done_criteria: leafIds.map((leafId) => path.join(requestDir, "done-criteria", `${leafId}.md`)),
   };
+  const paths = data.paths;
+  const pathMatches = paths && paths.raw_request === expectedPaths.raw_request && (data.leaf_count === 1
+    ? paths.handoff === expectedPaths.handoffs[0] && paths.done_criteria === expectedPaths.done_criteria[0]
+    : Array.isArray(paths.handoffs) && Array.isArray(paths.done_criteria)
+      && JSON.stringify(paths.handoffs) === JSON.stringify(expectedPaths.handoffs)
+      && JSON.stringify(paths.done_criteria) === JSON.stringify(expectedPaths.done_criteria));
+  if (!pathMatches) fail("request artifact paths do not match its bundle", "REQUEST_ARTIFACT_INVALID");
+  const expectedNames = new Set(["../request.md", "raw-request.md"]);
+  for (const leafId of leafIds) {
+    expectedNames.add(path.posix.join("done-criteria", `${leafId}.md`));
+    expectedNames.add(path.posix.join("relay-ready", `${leafId}.md`));
+  }
+  if (entries.length !== expectedNames.size || entries.some(([name]) => !expectedNames.has(name))) {
+    fail("request completion marker has an incomplete or invalid inventory", "REQUEST_ARTIFACT_INVALID");
+  }
+  return artifact;
 }
 
-function normalizeStringArray(value, fieldName) {
-  if (!Array.isArray(value)) {
-    throw new Error(`${fieldName} must be an array of strings`);
-  }
+function stringArray(value, field) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) fail(`${field} must be an array of strings`, "REQUEST_CONTRACT_INVALID");
   return value.map((entry, index) => {
     if (typeof entry !== "string" || !entry.trim()) {
-      throw new Error(`${fieldName}[${index}] must be a non-empty string`);
+      fail(`${field}[${index}] must be a non-empty string`, "REQUEST_CONTRACT_INVALID");
     }
     return entry.trim();
   });
 }
 
-function normalizeOptionalStringArray(value, fieldName) {
-  if (value === undefined) return undefined;
-  return normalizeStringArray(value, fieldName);
-}
-
-function normalizeRequiredString(value, fieldName) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`${fieldName} is required`);
-  }
+function requiredString(value, field) {
+  if (typeof value !== "string" || !value.trim()) fail(`${field} is required`, "REQUEST_CONTRACT_INVALID");
   return value.trim();
 }
 
-function normalizeOptionalString(value, fieldName) {
-  if (value === undefined || value === null) return undefined;
-  return normalizeRequiredString(value, fieldName);
-}
-
-function normalizeOptionalBoolean(value, fieldName) {
+function normalizeReadiness(value) {
   if (value === undefined) return undefined;
-  if (typeof value !== "boolean") {
-    throw new Error(`${fieldName} must be a boolean`);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    fail("readiness must be an object", "REQUEST_CONTRACT_INVALID");
   }
-  return value;
+  return Object.fromEntries(Object.entries(READINESS_LEVELS).map(([field, allowed]) => {
+    const selected = requiredString(value[field], `readiness.${field}`);
+    if (!allowed.has(selected)) fail(`readiness.${field} is invalid`, "REQUEST_CONTRACT_INVALID");
+    return [field, selected];
+  }));
 }
 
-function normalizePositiveInteger(value, fieldName) {
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`${fieldName} must be a positive integer`);
+function normalizeLeaf(value, field, defaultOrder) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    fail(`${field} must be an object`, "REQUEST_CONTRACT_INVALID");
   }
-  return value;
-}
-
-function normalizeEnum(value, values, fieldName) {
-  const normalized = normalizeRequiredString(value, fieldName);
-  if (!values.has(normalized)) {
-    throw new Error(`${fieldName} must be one of: ${[...values].join(", ")}`);
-  }
-  return normalized;
-}
-
-function normalizeReadiness(readiness) {
-  if (readiness === undefined) return undefined;
-  if (!readiness || typeof readiness !== "object" || Array.isArray(readiness)) {
-    throw new Error("readiness must be an object");
-  }
-
-  return Object.fromEntries(
-    Object.entries(READINESS_LEVELS).map(([field, values]) => [
-      field,
-      normalizeEnum(readiness[field], values, `readiness.${field}`),
-    ])
-  );
-}
-
-function normalizeNextAction(value, fallback) {
-  if (value === undefined || value === null || value === "") {
-    return fallback;
-  }
-  return normalizeRequiredString(value, "next_action");
-}
-
-function collectContractHandoffs(contract) {
-  if (Array.isArray(contract.handoffs)) {
-    if (!contract.handoffs.length) {
-      throw new Error("handoffs must include at least one leaf");
-    }
-    return contract.handoffs;
-  }
-  if (contract.handoff !== undefined) {
-    return [contract.handoff];
-  }
-  throw new Error("handoff is required");
-}
-
-function normalizeLeafHandoff(handoff, fieldName, defaultOrder) {
-  if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) {
-    throw new Error(`${fieldName} must be an object`);
-  }
-
-  const requiredStrings = ["leaf_id", "title", "goal", "done_criteria_markdown"];
-  for (const field of requiredStrings) {
-    if (typeof handoff[field] !== "string" || !handoff[field].trim()) {
-      throw new Error(`${fieldName}.${field} is required`);
-    }
-  }
-
-  const order = handoff.order === undefined
-    ? defaultOrder
-    : normalizePositiveInteger(handoff.order, `${fieldName}.order`);
-  if (order === undefined) {
-    throw new Error(`${fieldName}.order is required`);
-  }
-
+  const leafId = assertSafeId(requiredString(value.leaf_id, `${field}.leaf_id`), "leaf_id");
+  const order = value.order === undefined ? defaultOrder : value.order;
+  if (!Number.isInteger(order) || order < 1) fail(`${field}.order must be a positive integer`, "REQUEST_CONTRACT_INVALID");
   return {
-    leafId: handoff.leaf_id.trim(),
-    title: handoff.title.trim(),
-    goal: handoff.goal.trim(),
+    leafId,
+    title: requiredString(value.title, `${field}.title`),
+    goal: requiredString(value.goal, `${field}.goal`),
     order,
-    dependsOn: normalizeOptionalStringArray(handoff.depends_on, `${fieldName}.depends_on`) || [],
-    inScope: normalizeStringArray(handoff.in_scope || [], `${fieldName}.in_scope`),
-    outOfScope: normalizeStringArray(handoff.out_of_scope || [], `${fieldName}.out_of_scope`),
-    assumptions: normalizeStringArray(handoff.assumptions || [], `${fieldName}.assumptions`),
-    doneCriteriaMarkdown: handoff.done_criteria_markdown.trim(),
-    escalationConditions: normalizeStringArray(
-      handoff.escalation_conditions || [],
-      `${fieldName}.escalation_conditions`
-    ),
-    readiness: normalizeReadiness(handoff.readiness),
+    dependsOn: stringArray(value.depends_on, `${field}.depends_on`),
+    inScope: stringArray(value.in_scope, `${field}.in_scope`),
+    outOfScope: stringArray(value.out_of_scope, `${field}.out_of_scope`),
+    assumptions: stringArray(value.assumptions, `${field}.assumptions`),
+    escalationConditions: stringArray(value.escalation_conditions, `${field}.escalation_conditions`),
+    doneCriteriaMarkdown: requiredString(value.done_criteria_markdown, `${field}.done_criteria_markdown`),
+    readiness: normalizeReadiness(value.readiness),
   };
-}
-
-function sameValue(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function resolveContractReadiness(contractReadiness, handoffs) {
-  const leafReadiness = handoffs
-    .map((handoff) => handoff.readiness)
-    .filter(Boolean);
-  const [firstLeafReadiness] = leafReadiness;
-
-  for (const readiness of leafReadiness.slice(1)) {
-    if (!sameValue(readiness, firstLeafReadiness)) {
-      throw new Error("readiness must not conflict across handoffs");
-    }
-  }
-  if (contractReadiness && firstLeafReadiness && !sameValue(contractReadiness, firstLeafReadiness)) {
-    throw new Error("readiness must not conflict between contract.readiness and handoff.readiness");
-  }
-  return contractReadiness || firstLeafReadiness;
-}
-
-function assertUniqueLeafIds(handoffs) {
-  const seen = new Set();
-  for (const handoff of handoffs) {
-    if (seen.has(handoff.leafId)) {
-      throw new Error(`leaf_id '${handoff.leafId}' must be unique within a request`);
-    }
-    seen.add(handoff.leafId);
-  }
-}
-
-function assertUniqueLeafOrder(handoffs) {
-  const seen = new Map();
-  for (const handoff of handoffs) {
-    if (seen.has(handoff.order)) {
-      throw new Error(`order '${handoff.order}' must be unique within a request`);
-    }
-    seen.set(handoff.order, handoff.leafId);
-  }
-}
-
-function assertValidDependencies(handoffs) {
-  const orderByLeafId = new Map(handoffs.map((handoff) => [handoff.leafId, handoff.order]));
-  for (const handoff of handoffs) {
-    const seen = new Set();
-    for (const dependency of handoff.dependsOn) {
-      if (dependency === handoff.leafId) {
-        throw new Error(`leaf '${handoff.leafId}' cannot depend on itself`);
-      }
-      if (seen.has(dependency)) {
-        throw new Error(`leaf '${handoff.leafId}' must not repeat depends_on '${dependency}'`);
-      }
-      if (!orderByLeafId.has(dependency)) {
-        throw new Error(`leaf '${handoff.leafId}' depends_on unknown leaf '${dependency}'`);
-      }
-      if (orderByLeafId.get(dependency) >= handoff.order) {
-        throw new Error(`leaf '${handoff.leafId}' depends_on '${dependency}' but order does not respect that dependency`);
-      }
-      seen.add(dependency);
-    }
-  }
-}
-
-function sortHandoffsByOrder(handoffs) {
-  return [...handoffs].sort((left, right) => left.order - right.order);
-}
-
-function buildDecomposition(handoffs) {
-  return {
-    leaf_order: handoffs.map((handoff) => handoff.leafId),
-    dependencies: Object.fromEntries(
-      handoffs
-        .filter((handoff) => handoff.dependsOn.length)
-        .map((handoff) => [handoff.leafId, handoff.dependsOn])
-    ),
-  };
-}
-
-function stripLeafReadiness(handoff) {
-  const { readiness, ...rest } = handoff;
-  return rest;
 }
 
 function normalizeRequestContract(contract) {
-  if (!contract || typeof contract !== "object") {
-    throw new Error("contract must be an object");
+  if (!contract || typeof contract !== "object" || Array.isArray(contract)) {
+    fail("contract must be an object", "REQUEST_CONTRACT_INVALID");
   }
-
-  if (!contract.source || typeof contract.source !== "object") {
-    throw new Error("source is required");
-  }
-  if (typeof contract.source.kind !== "string" || !contract.source.kind.trim()) {
-    throw new Error("source.kind is required");
-  }
-  if (typeof contract.request_text !== "string" || !contract.request_text.trim()) {
-    throw new Error("request_text is required");
-  }
-
-  const rawHandoffs = collectContractHandoffs(contract);
-  const contractReadiness = normalizeReadiness(contract.readiness);
-  const defaultOrder = rawHandoffs.length === 1 ? 1 : undefined;
-  const handoffs = rawHandoffs.map((handoff, index) => normalizeLeafHandoff(
-    handoff,
+  const sourceKind = requiredString(contract.source?.kind, "source.kind");
+  const requestText = requiredString(contract.request_text, "request_text");
+  const raw = Array.isArray(contract.handoffs)
+    ? contract.handoffs
+    : contract.handoff ? [contract.handoff] : [];
+  if (!raw.length) fail("handoff is required", "REQUEST_CONTRACT_INVALID");
+  const handoffs = raw.map((leaf, index) => normalizeLeaf(
+    leaf,
     Array.isArray(contract.handoffs) ? `handoffs[${index}]` : "handoff",
-    defaultOrder
-  ));
-  const orderedHandoffs = sortHandoffsByOrder(handoffs);
-
-  assertUniqueLeafIds(orderedHandoffs);
-  assertUniqueLeafOrder(orderedHandoffs);
-  assertValidDependencies(orderedHandoffs);
-
-  return {
-    source: {
-      kind: contract.source.kind.trim(),
-    },
-    requestText: contract.request_text.trim(),
-    readiness: resolveContractReadiness(contractReadiness, orderedHandoffs),
-    handoffs: orderedHandoffs.map(stripLeafReadiness),
-    leafCount: orderedHandoffs.length,
-    decomposition: buildDecomposition(orderedHandoffs),
-  };
+    raw.length === 1 ? 1 : undefined,
+  )).sort((left, right) => left.order - right.order);
+  const ids = new Set();
+  const orders = new Set();
+  for (const leaf of handoffs) {
+    if (ids.has(leaf.leafId)) fail(`duplicate leaf_id '${leaf.leafId}'`, "REQUEST_CONTRACT_INVALID");
+    if (orders.has(leaf.order)) fail(`duplicate leaf order '${leaf.order}'`, "REQUEST_CONTRACT_INVALID");
+    ids.add(leaf.leafId); orders.add(leaf.order);
+  }
+  const orderById = new Map(handoffs.map((leaf) => [leaf.leafId, leaf.order]));
+  for (const leaf of handoffs) {
+    const dependencies = new Set();
+    for (const dependency of leaf.dependsOn) {
+      if (!orderById.has(dependency) || orderById.get(dependency) >= leaf.order || dependencies.has(dependency)) {
+        fail(`invalid dependency '${dependency}' for leaf '${leaf.leafId}'`, "REQUEST_CONTRACT_INVALID");
+      }
+      dependencies.add(dependency);
+    }
+  }
+  const requestReadiness = normalizeReadiness(contract.readiness);
+  const leafReadiness = handoffs.map((leaf) => leaf.readiness).filter(Boolean);
+  for (const readiness of leafReadiness.slice(1)) {
+    if (JSON.stringify(readiness) !== JSON.stringify(leafReadiness[0])) {
+      fail("leaf readiness values conflict", "REQUEST_CONTRACT_INVALID");
+    }
+  }
+  for (const leaf of handoffs) {
+    if (requestReadiness && leaf.readiness && JSON.stringify(requestReadiness) !== JSON.stringify(leaf.readiness)) {
+      fail("request and leaf readiness conflict", "REQUEST_CONTRACT_INVALID");
+    }
+  }
+  return { sourceKind, requestText, readiness: requestReadiness || leafReadiness[0], handoffs };
 }
 
 function normalizeSingleLeafContract(contract) {
   const normalized = normalizeRequestContract(contract);
-  if (normalized.leafCount !== 1) {
-    throw new Error(`contract must resolve to exactly one handoff; received ${normalized.leafCount}`);
-  }
+  if (normalized.handoffs.length !== 1) fail("contract must contain exactly one leaf", "REQUEST_CONTRACT_INVALID");
   return {
-    source: normalized.source,
+    source: { kind: normalized.sourceKind },
     requestText: normalized.requestText,
     readiness: normalized.readiness,
     handoff: normalized.handoffs[0],
   };
 }
 
-function formatBulletList(items) {
-  if (!items.length) return "- None";
-  return items.map((item) => `- ${item}`).join("\n");
-}
+function bullets(items) { return items.length ? items.map((item) => `- ${item}`).join("\n") : "- None"; }
 
-function buildRequestBody({
-  sourceKind,
-  requestText,
-  relayReadyLeaves = [],
-  doneCriteriaSnapshots = [],
-}) {
+function handoffBody(leaf) {
   return [
-    "# Relay Intake Request",
-    "",
-    "## Source",
-    `Kind: ${sourceKind}`,
-    "",
-    "## Raw Request",
-    requestText,
-    "",
-    "## Relay-Ready Leaves",
-    formatBulletList(relayReadyLeaves),
-    "",
-    "## Frozen Done Criteria",
-    formatBulletList(doneCriteriaSnapshots),
-    "",
+    "# Relay-Ready Handoff", "", "## Goal", leaf.goal, "", "## In Scope", bullets(leaf.inScope), "",
+    "## Out of Scope", bullets(leaf.outOfScope), "", "## Assumptions", bullets(leaf.assumptions), "",
+    "## Escalation Conditions", bullets(leaf.escalationConditions), "",
   ].join("\n");
 }
 
-function buildHandoffBody(handoff) {
+function requestBody(normalized, leaves) {
   return [
-    "# Relay-Ready Handoff",
-    "",
-    "## Goal",
-    handoff.goal,
-    "",
-    "## In Scope",
-    formatBulletList(handoff.inScope),
-    "",
-    "## Out of Scope",
-    formatBulletList(handoff.outOfScope),
-    "",
-    "## Assumptions",
-    formatBulletList(handoff.assumptions),
-    "",
-    "## Escalation Conditions",
-    formatBulletList(handoff.escalationConditions),
-    "",
+    "# Relay Intake Request", "", "## Source", `Kind: ${normalized.sourceKind}`, "", "## Raw Request",
+    normalized.requestText, "", "## Relay-Ready Leaves", bullets(leaves.map((leaf) => (
+      `${leaf.leafId} [order ${leaf.order}] ${leaf.title}: ${leaf.handoffRelative}`
+    ))), "", "## Frozen Done Criteria", bullets(leaves.map((leaf) => `${leaf.leafId}: ${leaf.criteriaRelative}`)), "",
   ].join("\n");
 }
 
-function shouldParseStructuredValue(value) {
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  return trimmed.startsWith("[") || trimmed.startsWith("{");
+function sha256(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex"); }
+
+function bundleDigest(files) {
+  const inventory = [...files.entries()].map(([name, bytes]) => [name, sha256(bytes)]).sort();
+  return { inventory, digest: sha256(Buffer.from(JSON.stringify(inventory))) };
 }
 
-function parseStructuredValue(value, fieldName) {
-  if (!shouldParseStructuredValue(value)) return value;
-  try {
-    return JSON.parse(value);
-  } catch (error) {
-    throw new Error(`invalid serialized ${fieldName}: ${error.message}`);
-  }
-}
-
-function serializeStructuredFields(data) {
-  const next = { ...data };
-  if (next.paths && typeof next.paths === "object" && !Array.isArray(next.paths)) {
-    next.paths = {
-      ...next.paths,
-      ...(Array.isArray(next.paths.handoffs)
-        ? { handoffs: JSON.stringify(next.paths.handoffs) }
-        : {}),
-      ...(Array.isArray(next.paths.done_criteria)
-        ? { done_criteria: JSON.stringify(next.paths.done_criteria) }
-        : {}),
-    };
-  }
-  if (next.decomposition && typeof next.decomposition === "object" && !Array.isArray(next.decomposition)) {
-    next.decomposition = {
-      ...next.decomposition,
-      ...(Array.isArray(next.decomposition.leaf_order)
-        ? { leaf_order: JSON.stringify(next.decomposition.leaf_order) }
-        : {}),
-      ...(next.decomposition.dependencies
-        ? { dependencies: JSON.stringify(next.decomposition.dependencies) }
-        : {}),
-    };
-  }
-  if (Array.isArray(next.depends_on)) {
-    next.depends_on = JSON.stringify(next.depends_on);
-  }
-  return next;
-}
-
-function hydrateStructuredFields(data) {
-  const next = { ...data };
-  if (next.paths && typeof next.paths === "object" && !Array.isArray(next.paths)) {
-    next.paths = {
-      ...next.paths,
-      handoffs: parseStructuredValue(next.paths.handoffs, "paths.handoffs"),
-      done_criteria: parseStructuredValue(next.paths.done_criteria, "paths.done_criteria"),
-    };
-  }
-  if (next.decomposition && typeof next.decomposition === "object" && !Array.isArray(next.decomposition)) {
-    next.decomposition = {
-      ...next.decomposition,
-      leaf_order: parseStructuredValue(next.decomposition.leaf_order, "decomposition.leaf_order"),
-      dependencies: parseStructuredValue(next.decomposition.dependencies, "decomposition.dependencies"),
-    };
-  }
-  next.depends_on = parseStructuredValue(next.depends_on, "depends_on");
-  return next;
-}
-
-function writeRequestManifest(manifestPath, data, body) {
-  writeManifest(manifestPath, serializeStructuredFields(data), body);
-}
-
-function pickDefinedEntries(object) {
-  return Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
-}
-
-function getRequestRecord(repoRoot, requestId) {
-  const requestPath = getRequestPath(repoRoot, requestId);
-  if (!fs.existsSync(requestPath)) {
-    throw new Error(`request artifact not found: ${requestPath}`);
-  }
-  return { requestPath, artifact: readRequestArtifact(requestPath) };
-}
-
-function isRelayReadyRequestArtifact(artifact) {
-  return (
-    artifact.data?.state === "relay_ready" ||
-    Boolean(artifact.data?.paths?.handoff) ||
-    Array.isArray(artifact.data?.paths?.handoffs) ||
-    artifact.data?.leaf_count > 0
-  );
-}
-
-function assertPreflightMutable(requestId, requestRecord) {
-  if (!isRelayReadyRequestArtifact(requestRecord.artifact)) {
-    return;
-  }
-
-  throw new Error(
-    `request_id '${requestId}' is already relay_ready; preflight intake interactions cannot mutate a frozen handoff`
-  );
-}
-
-function resolveRequestLeafId(artifact, leafId) {
-  if (leafId) return leafId;
-  if (artifact.data?.leaf_id) return artifact.data.leaf_id;
-
-  const handoffPaths = artifact.data?.paths?.handoff
-    ? [artifact.data.paths.handoff]
-    : artifact.data?.paths?.handoffs;
-  if (!Array.isArray(handoffPaths) || !handoffPaths.length) {
-    return null;
-  }
-  if (handoffPaths.length !== 1 || !fs.existsSync(handoffPaths[0])) {
-    throw new Error("leaf_id is required");
-  }
-
-  return normalizeRequiredString(readRequestArtifact(handoffPaths[0]).data?.leaf_id, "leaf_id");
-}
-
-function updateRequestArtifact(repoRoot, requestId, patch, requestRecord = getRequestRecord(repoRoot, requestId)) {
-  writeRequestManifest(requestRecord.requestPath, {
-    ...requestRecord.artifact.data,
-    ...patch,
-    timestamps: {
-      ...(requestRecord.artifact.data.timestamps || {}),
-      updated_at: nowIso(),
-    },
-  }, requestRecord.artifact.body);
-  return readRequestArtifact(requestRecord.requestPath);
-}
-
-function appendRequestEvent(repoRoot, requestId, eventData) {
-  if (!requestId) {
-    throw new Error("request_id is required to append a relay-ready event");
-  }
-  if (!String(eventData?.event || "").trim()) {
-    throw new Error("event is required to append a relay-ready event");
-  }
-
-  const { eventsPath } = ensureRequestLayout(repoRoot, requestId);
-  const record = {
-    ...pickDefinedEntries(eventData),
-    ts: eventData.ts || nowIso(),
-    event: eventData.event,
-    actor: getActorName(repoRoot),
-    request_id: requestId,
-    leaf_id: eventData.leaf_id || null,
-    source_kind: eventData.source_kind || null,
-    handoff_path: eventData.handoff_path || null,
-    done_criteria_path: eventData.done_criteria_path || null,
-    reason: eventData.reason || null,
-  };
-
-  fs.appendFileSync(eventsPath, `${JSON.stringify(record)}\n`, "utf-8");
-  return record;
-}
-
-function readRequestEvents(repoRoot, requestId) {
-  const eventsPath = getRequestEventsPath(repoRoot, requestId);
-  if (!fs.existsSync(eventsPath)) return [];
-  return fs.readFileSync(eventsPath, "utf-8")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
-
-function readRequestArtifact(requestPath) {
-  const text = fs.readFileSync(requestPath, "utf-8");
-  const artifact = parseFrontmatter(text);
-  return {
-    ...artifact,
-    data: hydrateStructuredFields(artifact.data),
-  };
-}
-
-function assertRequestArtifactsAbsent(requestId, artifactPaths) {
-  for (const [label, artifactPath] of artifactPaths) {
-    if (fs.existsSync(artifactPath)) {
-      throw new Error(
-        `request_id '${requestId}' already exists; refusing to overwrite existing ${label}: ${artifactPath}`
-      );
+function waitForCompletion(marker) {
+  const deadline = Date.now() + WAIT_MS;
+  while (Date.now() < deadline) {
+    try { return JSON.parse(readRegular(marker, "request completion marker").toString("utf8")); }
+    catch (error) {
+      if (error instanceof SyntaxError) fail("request completion marker is malformed", "REQUEST_ARTIFACT_INVALID");
+      if (error.code !== "ENOENT") throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
   }
-}
-
-function appendInteractionEvent(repoRoot, requestId, eventData, nextAction, bootstrapData = {}) {
-  const requestRecord = ensurePreflightRequestArtifact(repoRoot, requestId, bootstrapData, nextAction);
-  const leafId = resolveRequestLeafId(requestRecord.artifact, eventData.leaf_id);
-  const record = appendRequestEvent(repoRoot, requestId, { ...eventData, leaf_id: leafId });
-
-  if (nextAction !== undefined) {
-    updateRequestArtifact(repoRoot, requestId, { next_action: nextAction }, requestRecord);
-  }
-
-  return record;
-}
-
-function normalizeProposalFields(data = {}, fieldName = "proposal_summary") {
-  return pickDefinedEntries({
-    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
-    proposal_summary: normalizeRequiredString(data[fieldName], fieldName),
-    proposal_text: normalizeOptionalString(data.proposal_text, "proposal_text"),
-    proposal_kind: normalizeOptionalString(data.proposal_kind, "proposal_kind"),
-    response_options: normalizeOptionalStringArray(data.response_options, "response_options"),
-    reason: normalizeOptionalString(data.reason, "reason"),
-  });
-}
-
-function normalizeQuestionFields(data = {}) {
-  return pickDefinedEntries({
-    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
-    question_text: normalizeRequiredString(data.question_text, "question_text"),
-    response_options: normalizeOptionalStringArray(data.response_options, "response_options"),
-    reason: normalizeOptionalString(data.reason, "reason"),
-  });
-}
-
-function normalizeQuestionAnswerFields(data = {}) {
-  return pickDefinedEntries({
-    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
-    question_text: normalizeRequiredString(data.question_text, "question_text"),
-    answer_text: normalizeRequiredString(data.answer_text, "answer_text"),
-    answer_choice: normalizeOptionalString(data.answer_choice, "answer_choice"),
-    reason: normalizeOptionalString(data.reason, "reason"),
-  });
-}
-
-function normalizeProposalAcceptanceFields(data = {}) {
-  return pickDefinedEntries({
-    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
-    proposal_summary: normalizeRequiredString(data.proposal_summary, "proposal_summary"),
-    acceptance_note: normalizeOptionalString(data.acceptance_note, "acceptance_note"),
-    accepted_with_edits: normalizeOptionalBoolean(data.accepted_with_edits, "accepted_with_edits"),
-    reason: normalizeOptionalString(data.reason, "reason"),
-  });
-}
-
-function normalizeProposalEditFields(data = {}) {
-  return pickDefinedEntries({
-    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
-    proposal_summary: normalizeRequiredString(data.proposal_summary, "proposal_summary"),
-    edit_summary: normalizeRequiredString(data.edit_summary, "edit_summary"),
-    proposal_text: normalizeOptionalString(data.proposal_text, "proposal_text"),
-    reason: normalizeOptionalString(data.reason, "reason"),
-  });
-}
-
-function normalizeRequestBootstrapData(data = {}) {
-  const source = data.source;
-  if (source !== undefined && (!source || typeof source !== "object" || Array.isArray(source))) {
-    throw new Error("source must be an object");
-  }
-
-  const sourceKind = normalizeOptionalString(
-    data.source_kind ?? source?.kind,
-    "source_kind"
-  );
-  const requestText = normalizeOptionalString(data.request_text, "request_text");
-  const readiness = normalizeReadiness(data.readiness);
-  const hasBootstrapIdentity = sourceKind !== undefined || requestText !== undefined;
-
-  if (hasBootstrapIdentity && (sourceKind === undefined || requestText === undefined)) {
-    throw new Error("source_kind and request_text are required together to bootstrap a request artifact");
-  }
-
-  return { sourceKind, requestText, readiness };
-}
-
-function readRawRequestText(rawRequestPath) {
-  return fs.readFileSync(rawRequestPath, "utf-8").replace(/\r?\n$/, "");
-}
-
-function validateBootstrapData(repoRoot, requestId, requestRecord, bootstrapData) {
-  if (!bootstrapData.sourceKind && !bootstrapData.requestText && bootstrapData.readiness === undefined) {
-    return;
-  }
-
-  const existingSourceKind = requestRecord.artifact.data?.source?.kind;
-  if (bootstrapData.sourceKind && existingSourceKind && bootstrapData.sourceKind !== existingSourceKind) {
-    throw new Error(
-      `request_id '${requestId}' already exists with source.kind '${existingSourceKind}'`
-    );
-  }
-
-  const rawRequestPath = requestRecord.artifact.data?.paths?.raw_request
-    || path.join(getRequestDir(repoRoot, requestId), "raw-request.md");
-  if (bootstrapData.requestText && fs.existsSync(rawRequestPath)) {
-    const existingRequestText = readRawRequestText(rawRequestPath);
-    if (existingRequestText !== bootstrapData.requestText) {
-      throw new Error(`request_id '${requestId}' already exists with a different raw request`);
-    }
-  }
-}
-
-function applyBootstrapDataPatch(repoRoot, requestId, requestRecord, bootstrapData) {
-  if (bootstrapData.readiness === undefined) {
-    return requestRecord;
-  }
-
-  const existingReadiness = requestRecord.artifact.data?.readiness;
-  if (JSON.stringify(existingReadiness) === JSON.stringify(bootstrapData.readiness)) {
-    return requestRecord;
-  }
-
-  return {
-    requestPath: requestRecord.requestPath,
-    artifact: updateRequestArtifact(repoRoot, requestId, {
-      readiness: bootstrapData.readiness,
-    }, requestRecord),
-  };
-}
-
-function buildRequestArtifactData({
-  requestId,
-  state,
-  leafId,
-  leafArtifacts = [],
-  nextAction,
-  sourceKind,
-  readiness,
-  rawRequestPath,
-  createdAt,
-  updatedAt,
-}) {
-  const isSingleLeaf = leafArtifacts.length === 1;
-  const decomposition = leafArtifacts.length > 1
-    ? {
-      leaf_order: leafArtifacts.map((leaf) => leaf.leafId),
-      dependencies: Object.fromEntries(
-        leafArtifacts
-          .filter((leaf) => leaf.dependsOn.length)
-          .map((leaf) => [leaf.leafId, leaf.dependsOn])
-      ),
-    }
-    : undefined;
-
-  return pickDefinedEntries({
-    request_id: requestId,
-    state,
-    leaf_id: leafId,
-    next_action: nextAction,
-    source: {
-      kind: sourceKind,
-    },
-    ...(readiness ? { readiness } : {}),
-    leaf_count: leafArtifacts.length,
-    paths: pickDefinedEntries({
-      raw_request: rawRequestPath,
-      ...(isSingleLeaf
-        ? {
-          handoff: leafArtifacts[0].handoffPath,
-          done_criteria: leafArtifacts[0].doneCriteriaPath,
-        }
-        : {}),
-      ...(leafArtifacts.length > 1
-        ? {
-          handoffs: leafArtifacts.map((leaf) => leaf.handoffPath),
-          done_criteria: leafArtifacts.map((leaf) => leaf.doneCriteriaPath),
-        }
-        : {}),
-    }),
-    decomposition,
-    timestamps: {
-      created_at: createdAt,
-      updated_at: updatedAt,
-    },
-  });
-}
-
-function buildLeafArtifacts(layout, requestArtifactDir, handoffs) {
-  return handoffs.map((handoff) => {
-    const fileName = `${handoff.leafId}.md`;
-    const handoffPath = path.join(layout.relayReadyDir, fileName);
-    const doneCriteriaPath = path.join(layout.doneCriteriaDir, fileName);
-    return {
-      ...handoff,
-      handoffPath,
-      doneCriteriaPath,
-      handoffRelativePath: path.relative(requestArtifactDir, handoffPath),
-      doneCriteriaRelativePath: path.relative(requestArtifactDir, doneCriteriaPath),
-    };
-  });
-}
-
-function buildPersistResult({
-  requestId,
-  requestPath,
-  requestDir,
-  rawRequestPath,
-  leafArtifacts,
-  nextAction,
-  readiness,
-  sourceKind,
-}) {
-  const result = {
-    requestId,
-    requestPath,
-    requestDir,
-    rawRequestPath,
-    leafIds: leafArtifacts.map((leaf) => leaf.leafId),
-    handoffPaths: leafArtifacts.map((leaf) => leaf.handoffPath),
-    doneCriteriaPaths: leafArtifacts.map((leaf) => leaf.doneCriteriaPath),
-    leafCount: leafArtifacts.length,
-    nextAction,
-    readiness: readiness || null,
-    sourceKind,
-  };
-
-  if (leafArtifacts.length === 1) {
-    result.leafId = leafArtifacts[0].leafId;
-    result.handoffPath = leafArtifacts[0].handoffPath;
-    result.doneCriteriaPath = leafArtifacts[0].doneCriteriaPath;
-    result.title = leafArtifacts[0].title;
-  }
-  return result;
-}
-
-function bootstrapRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
-  if (!requestId) {
-    throw new Error("request_id is required");
-  }
-
-  const layout = ensureRequestLayout(repoRoot, requestId);
-  const bootstrapData = normalizeRequestBootstrapData(data);
-  if (fs.existsSync(layout.requestPath)) {
-    const requestRecord = getRequestRecord(repoRoot, requestId);
-    validateBootstrapData(repoRoot, requestId, requestRecord, bootstrapData);
-    return applyBootstrapDataPatch(repoRoot, requestId, requestRecord, bootstrapData);
-  }
-
-  if (!bootstrapData.sourceKind || !bootstrapData.requestText) {
-    throw new Error(
-      `request artifact not found: ${layout.requestPath}; source_kind and request_text are required to bootstrap it`
-    );
-  }
-
-  const createdAt = nowIso();
-  assertRequestArtifactsAbsent(requestId, [
-    ["request artifact", layout.requestPath],
-    ["request event log", layout.eventsPath],
-    ["raw request artifact", layout.rawRequestPath],
-  ]);
-
-  fs.writeFileSync(layout.rawRequestPath, `${bootstrapData.requestText}\n`, "utf-8");
-  writeRequestManifest(layout.requestPath, buildRequestArtifactData({
-    requestId,
-    state: "intake",
-    nextAction,
-    sourceKind: bootstrapData.sourceKind,
-    readiness: bootstrapData.readiness,
-    rawRequestPath: layout.rawRequestPath,
-    leafArtifacts: [],
-    createdAt,
-    updatedAt: createdAt,
-  }), buildRequestBody({
-    sourceKind: bootstrapData.sourceKind,
-    requestText: bootstrapData.requestText,
-  }));
-
-  appendRequestEvent(repoRoot, requestId, {
-    event: "request_persisted",
-    source_kind: bootstrapData.sourceKind,
-  });
-
-  return getRequestRecord(repoRoot, requestId);
-}
-
-function ensureRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
-  return bootstrapRequestArtifact(repoRoot, requestId, data, nextAction);
-}
-
-function ensurePreflightRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
-  const requestPath = getRequestPath(repoRoot, requestId);
-  if (!fs.existsSync(requestPath)) {
-    return bootstrapRequestArtifact(repoRoot, requestId, data, nextAction);
-  }
-
-  const requestRecord = getRequestRecord(repoRoot, requestId);
-  assertPreflightMutable(requestId, requestRecord);
-  const bootstrapData = normalizeRequestBootstrapData(data);
-  validateBootstrapData(repoRoot, requestId, requestRecord, bootstrapData);
-  return applyBootstrapDataPatch(repoRoot, requestId, requestRecord, bootstrapData);
-}
-
-function propose(repoRoot, requestId, data = {}) {
-  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.propose);
-  return appendInteractionEvent(repoRoot, requestId, {
-    event: "proposal_presented",
-    ...normalizeProposalFields(data),
-  }, nextAction, data);
-}
-
-function clarify(repoRoot, requestId, data = {}) {
-  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.clarify);
-  return appendInteractionEvent(repoRoot, requestId, {
-    event: "question_asked",
-    ...normalizeQuestionFields(data),
-  }, nextAction, data);
-}
-
-function structure(repoRoot, requestId, data = {}) {
-  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.structure);
-  const event = data.edits_existing_proposal ? "proposal_edited" : "proposal_presented";
-  const details = data.edits_existing_proposal
-    ? normalizeProposalEditFields(data)
-    : normalizeProposalFields(data);
-
-  return appendInteractionEvent(repoRoot, requestId, {
-    event,
-    structure_kind: normalizeOptionalString(data.structure_kind, "structure_kind") || "restructure",
-    ...details,
-  }, nextAction, data);
-}
-
-function answerQuestion(repoRoot, requestId, data = {}) {
-  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.answerQuestion);
-  return appendInteractionEvent(repoRoot, requestId, {
-    event: "question_answered",
-    ...normalizeQuestionAnswerFields(data),
-  }, nextAction, data);
-}
-
-function acceptProposal(repoRoot, requestId, data = {}) {
-  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.acceptProposal);
-  return appendInteractionEvent(repoRoot, requestId, {
-    event: "proposal_accepted",
-    ...normalizeProposalAcceptanceFields(data),
-  }, nextAction, data);
-}
-
-function editProposal(repoRoot, requestId, data = {}) {
-  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.editProposal);
-  return appendInteractionEvent(repoRoot, requestId, {
-    event: "proposal_edited",
-    ...normalizeProposalEditFields(data),
-  }, nextAction, data);
+  fail("request bundle exists without a completion marker", "REQUEST_BUNDLE_INCOMPLETE");
 }
 
 function persistRequestContract(repoRoot, contract, options = {}) {
   const normalized = normalizeRequestContract(contract);
-  const requestId = options.requestId || createRequestId();
-  if (fs.existsSync(getRequestPath(repoRoot, requestId))) {
-    const existingRequest = getRequestRecord(repoRoot, requestId);
-    if (isRelayReadyRequestArtifact(existingRequest.artifact)) {
-      throw new Error(
-        `request_id '${requestId}' already exists; refusing to overwrite existing request artifact: ${existingRequest.requestPath}`
-      );
-    }
-  }
-  const requestRecord = bootstrapRequestArtifact(repoRoot, requestId, {
-    source_kind: normalized.source.kind,
-    request_text: normalized.requestText,
-    readiness: normalized.readiness,
-  }, DEFAULT_NEXT_ACTIONS.persist);
-  const requestArtifactPath = requestRecord.requestPath;
-  const requestArtifactDir = path.dirname(requestArtifactPath);
-  const layout = ensureRequestLayout(repoRoot, requestId);
-  const leafArtifacts = buildLeafArtifacts(layout, requestArtifactDir, normalized.handoffs);
-  const requestReadiness = normalized.readiness || requestRecord.artifact.data?.readiness;
-  const rawRequestPath = requestRecord.artifact.data?.paths?.raw_request;
-  const createdAt = requestRecord.artifact.data?.timestamps?.created_at || nowIso();
-  const updatedAt = nowIso();
-
-  assertRequestArtifactsAbsent(requestId, leafArtifacts.flatMap((leaf) => [
-    ["relay-ready handoff", leaf.handoffPath],
-    ["done criteria snapshot", leaf.doneCriteriaPath],
-  ]));
-
-  for (const leaf of leafArtifacts) {
-    fs.writeFileSync(leaf.doneCriteriaPath, `${leaf.doneCriteriaMarkdown}\n`, "utf-8");
-    writeRequestManifest(leaf.handoffPath, {
+  const requestId = assertSafeId(options.requestId || createRequestId(), "request_id");
+  const requestsDir = getRequestsDir(repoRoot);
+  const requestDir = path.join(requestsDir, requestId);
+  const requestPath = path.join(requestsDir, `${requestId}.md`);
+  const rawRequestPath = path.join(requestDir, "raw-request.md");
+  const relayReadyDir = path.join(requestDir, "relay-ready");
+  const doneCriteriaDir = path.join(requestDir, "done-criteria");
+  const markerPath = path.join(requestDir, COMPLETION);
+  const leaves = normalized.handoffs.map((leaf) => ({
+    ...leaf,
+    handoffPath: path.join(relayReadyDir, `${leaf.leafId}.md`),
+    doneCriteriaPath: path.join(doneCriteriaDir, `${leaf.leafId}.md`),
+    handoffRelative: path.join(requestId, "relay-ready", `${leaf.leafId}.md`),
+    criteriaRelative: path.join(requestId, "done-criteria", `${leaf.leafId}.md`),
+  }));
+  const files = new Map();
+  files.set("raw-request.md", Buffer.from(`${normalized.requestText}\n`));
+  for (const leaf of leaves) {
+    files.set(path.join("done-criteria", `${leaf.leafId}.md`), Buffer.from(`${leaf.doneCriteriaMarkdown}\n`));
+    files.set(path.join("relay-ready", `${leaf.leafId}.md`), artifactBytes({
       request_id: requestId,
       leaf_id: leaf.leafId,
       title: leaf.title,
@@ -967,72 +515,107 @@ function persistRequestContract(repoRoot, contract, options = {}) {
       order: leaf.order,
       depends_on: leaf.dependsOn,
       done_criteria_path: leaf.doneCriteriaPath,
-    }, buildHandoffBody(leaf));
+    }, handoffBody(leaf)));
   }
-
-  writeRequestManifest(requestArtifactPath, buildRequestArtifactData({
-    requestId,
+  const requestData = {
+    request_id: requestId,
     state: "relay_ready",
-    leafId: leafArtifacts.length === 1 ? leafArtifacts[0].leafId : undefined,
-    leafArtifacts,
-    nextAction: DEFAULT_NEXT_ACTIONS.persist,
-    sourceKind: normalized.source.kind,
-    readiness: requestReadiness,
-    rawRequestPath,
-    createdAt,
-    updatedAt,
-  }), buildRequestBody({
-    sourceKind: normalized.source.kind,
-    requestText: normalized.requestText,
-    relayReadyLeaves: leafArtifacts.map(
-      (leaf) => `${leaf.leafId} [order ${leaf.order}] ${leaf.title}: ${leaf.handoffRelativePath}${
-        leaf.dependsOn.length ? ` (depends_on: ${leaf.dependsOn.join(", ")})` : ""
-      }`
-    ),
-    doneCriteriaSnapshots: leafArtifacts.map(
-      (leaf) => `${leaf.leafId}: ${leaf.doneCriteriaRelativePath}`
-    ),
-  }));
+    leaf_count: leaves.length,
+    next_action: "relay_plan",
+    source: { kind: normalized.sourceKind },
+    ...(normalized.readiness ? { readiness: normalized.readiness } : {}),
+    paths: {
+      raw_request: rawRequestPath,
+      ...(leaves.length === 1
+        ? { handoff: leaves[0].handoffPath, done_criteria: leaves[0].doneCriteriaPath }
+        : { handoffs: leaves.map((leaf) => leaf.handoffPath), done_criteria: leaves.map((leaf) => leaf.doneCriteriaPath) }),
+    },
+    ...(leaves.length > 1 ? {
+      decomposition: {
+        leaf_order: leaves.map((leaf) => leaf.leafId),
+        dependencies: Object.fromEntries(
+          leaves.filter((leaf) => leaf.dependsOn.length).map((leaf) => [leaf.leafId, leaf.dependsOn]),
+        ),
+      },
+    } : {}),
+  };
+  if (leaves.length === 1) requestData.leaf_id = leaves[0].leafId;
+  files.set("../request.md", artifactBytes(requestData, requestBody(normalized, leaves)));
+  const expected = bundleDigest(files);
+  const completion = {
+    schema_version: 1,
+    request_id: requestId,
+    bundle_sha256: expected.digest,
+    files: Object.fromEntries(expected.inventory),
+  };
 
-  for (const leaf of leafArtifacts) {
-    appendRequestEvent(repoRoot, requestId, {
-      event: "relay_ready_handoff_persisted",
-      source_kind: normalized.source.kind,
-      leaf_id: leaf.leafId,
-      handoff_path: leaf.handoffPath,
-      done_criteria_path: leaf.doneCriteriaPath,
-    });
+  let owner = false;
+  try { fs.mkdirSync(requestDir, { mode: 0o700 }); owner = true; fsyncDirectory(requestsDir); }
+  catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const stat = fs.lstatSync(requestDir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) fail("request bundle path is untrusted", "REQUEST_PATH_UNTRUSTED");
+  }
+  if (fs.realpathSync(requestDir) !== requestDir || path.dirname(requestDir) !== requestsDir) {
+    fail("request bundle path escapes its repository request directory", "REQUEST_PATH_UNTRUSTED");
   }
 
-  return buildPersistResult({
+  if (!owner) {
+    const existing = waitForCompletion(markerPath);
+    if (JSON.stringify(existing) !== JSON.stringify(completion)) {
+      fail("request_id already belongs to a different immutable bundle", "REQUEST_ARTIFACT_CONFLICT");
+    }
+    for (const [name, bytes] of files) {
+      const target = name === "../request.md" ? requestPath : path.join(requestDir, name);
+      if (!readRegular(target, name).equals(bytes)) fail(`completed request artifact changed: ${name}`, "REQUEST_ARTIFACT_CONFLICT");
+    }
+  } else {
+    ensurePrivateDirectory(relayReadyDir);
+    ensurePrivateDirectory(doneCriteriaDir);
+    fsyncDirectory(requestDir);
+    try {
+      for (const [name, bytes] of files) {
+        const target = name === "../request.md" ? requestPath : path.join(requestDir, name);
+        writeExclusive(target, bytes, name);
+        options.fault?.(`after:${name}`);
+      }
+      publishAtomicExclusive(
+        markerPath,
+        Buffer.from(`${JSON.stringify(completion)}\n`),
+        "request completion marker",
+        () => options.fault?.("after:bundle-complete.temp"),
+      );
+      fsyncDirectory(requestDir);
+    } catch (error) {
+      error.message = `incomplete request bundle ${requestId}: ${error.message}`;
+      throw error;
+    }
+  }
+
+  return {
     requestId,
-    requestPath: requestArtifactPath,
-    requestDir: getRequestDir(repoRoot, requestId),
+    requestPath,
+    requestDir,
     rawRequestPath,
-    leafArtifacts,
-    nextAction: DEFAULT_NEXT_ACTIONS.persist,
-    readiness: requestReadiness,
-    sourceKind: normalized.source.kind,
-  });
+    leafIds: leaves.map((leaf) => leaf.leafId),
+    handoffPaths: leaves.map((leaf) => leaf.handoffPath),
+    doneCriteriaPaths: leaves.map((leaf) => leaf.doneCriteriaPath),
+    leafCount: leaves.length,
+    nextAction: "relay_plan",
+    readiness: normalized.readiness || null,
+    sourceKind: normalized.sourceKind,
+    ...(leaves.length === 1 ? {
+      leafId: leaves[0].leafId,
+      handoffPath: leaves[0].handoffPath,
+      doneCriteriaPath: leaves[0].doneCriteriaPath,
+      title: leaves[0].title,
+    } : {}),
+  };
 }
 
 module.exports = {
-  acceptProposal,
-  answerQuestion,
-  appendRequestEvent,
-  clarify,
   createRequestId,
-  editProposal,
-  ensureRequestLayout,
-  getRequestDir,
-  getRequestEventsPath,
-  getRequestPath,
-  getRequestsBase,
-  getRequestsDir,
   normalizeSingleLeafContract,
   persistRequestContract,
-  propose,
   readRequestArtifact,
-  readRequestEvents,
-  structure,
 };

@@ -35,7 +35,7 @@ const {
   parseComponents,
   probeSprintStateBinary,
   validateSprintStatePayload,
-} = require("../../relay-dispatch/scripts/sprint-state");
+} = require("./sprint-state");
 
 const OWNER_SOURCES = Object.freeze({
   EXPLICIT_SPRINT: "explicit_sprint",

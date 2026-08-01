@@ -1,175 +1,151 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { runCanaries } = require("../../../skills/relay-dispatch/scripts/adapter-live-canary");
-const {
-  assertInvocationShape,
-  makeParseOutcome,
-} = require("../../../skills/relay-dispatch/scripts/adapter-contract");
+const { makeParseOutcome } = require("../../../skills/relay-dispatch/scripts/adapter-contract");
+const { listAdapters } = require("../../../skills/relay-dispatch/scripts/adapters");
+const { canaryExitCode, parseCredentialArgs, requiredMatrix, runCanaries, validateCanaryVerdict, validateReport } = require("./adapter-live-canary-runner");
 
-const CANARY_SCRIPT = path.join(
-  __dirname,
-  "../../../skills/relay-dispatch/scripts/adapter-live-canary.js"
-);
-const CHECKED_REPORT = path.join(
-  __dirname,
-  "../../../docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-07-31.json"
-);
+const RUNNER = path.join(__dirname, "adapter-live-canary-runner.js");
+function hash(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex"); }
+function selection(...cells) { return Object.fromEntries(cells.map((cell) => [cell, { envNames: ["TEST_CANARY_TOKEN"], fileSpecs: [] }])); }
 
-function fakeAdapter(name, mode) {
-  return {
-    name,
-    probe() {
-      if (mode === "unavailable") return { status: "skipped", error: `${name} CLI not found`, raw: null };
-      if (mode === "probe-timeout") return { status: "failed", error: `${name} --version failed: spawnSync ${name} ETIMEDOUT`, raw: null };
-      return { status: "available", error: null, raw: `${name} 1.0.0` };
-    },
-    capabilities({ phase }) {
-      return {
-        supported: phase === "primary_review",
-        write: false,
-        readOnly: true,
-        networkControl: "informational",
-        cancellation: "process",
-        structuredOutput: "json",
-      };
-    },
-    buildInvocation({ cwd }) {
-      const source = mode === "credentials"
-        ? "process.stderr.write('authentication credentials required'); process.exit(1)"
-        : mode === "environment"
-          ? "process.stderr.write('SQLITE_READONLY: attempt to write a readonly database'); process.exit(1)"
-          : mode === "timeout"
-            ? "setTimeout(() => process.stdout.write('{}'), 1000)"
-        : "process.stdout.write('{\"verdict\":\"pass\"}')"
-      return assertInvocationShape({
-        command: process.execPath,
-        args: ["-e", source],
-        cwd,
-      });
-    },
-    parseOutcome: makeParseOutcome("json_result"),
-  };
-}
-
-test("live adapter canary distinguishes unavailable CLI, credentials skip, and parsed invocation", () => {
-  const report = runCanaries({
-    timeoutMs: 3000,
-    adapters: [
-      fakeAdapter("available", "pass"),
-      fakeAdapter("missing", "unavailable"),
-      fakeAdapter("no-auth", "credentials"),
-      fakeAdapter("sandboxed", "environment"),
-    ],
-  });
-  assert.deepEqual(report.results.map(({ adapter, status, reason }) => ({ adapter, status, reason })), [
-    { adapter: "available", status: "passed", reason: "minimal_invocation_parsed" },
-    { adapter: "missing", status: "skipped", reason: "cli_unavailable" },
-    { adapter: "no-auth", status: "skipped", reason: "credentials_unavailable" },
-    { adapter: "sandboxed", status: "skipped", reason: "execution_environment_unavailable" },
-  ]);
-  assert.deepEqual(report.summary, { passed: 1, skipped: 3, failed: 0 });
+test("release canary is test-only and requires the exact 7-dispatch plus 6-review matrix", () => {
+  assert.equal(fs.existsSync(path.join(__dirname, "../../../skills/relay-dispatch/scripts/adapter-live-canary.js")), false);
+  assert.deepEqual(listAdapters(), ["claude", "codex", "opencode", "pi", "antigravity", "cursor", "cline"]);
+  const adapters = listAdapters().map((name) => ({ name, capabilities: ({ phase }) => ({ supported: phase === "primary_review" && name !== "cline" }) }));
+  const matrix = requiredMatrix(adapters);
+  assert.equal(matrix.length, 13);
+  assert.deepEqual(matrix.filter((cell) => cell.endsWith(":dispatch")).length, 7);
+  assert.deepEqual(matrix.filter((cell) => cell.endsWith(":primary_review")).length, 6);
+  const source = fs.readFileSync(RUNNER, "utf8");
+  assert.doesNotMatch(source, /FALLBACK|pass_with_fallback|status:\s*["']skipped/);
+  assert.match(source, /invokeIndependentReviewer/);
+  assert.match(source, /launchLocalSupervisor/);
 });
 
-test("live adapter canary never treats an unavailable read-only phase as a healthy pass", () => {
-  const adapter = fakeAdapter("no-review", "pass");
-  adapter.capabilities = () => ({
-    supported: false,
-    reason: "read-only review unsupported",
-  });
-  const report = runCanaries({ timeoutMs: 3000, adapters: [adapter] });
-  assert.equal(report.results[0].status, "skipped");
-  assert.equal(report.results[0].reason, "read_only_phase_unavailable");
-});
-
-test("live adapter canary classifies probe and invocation timeouts as failures", () => {
-  const report = runCanaries({
-    timeoutMs: 100,
-    adapters: [
-      fakeAdapter("slow-probe", "probe-timeout"),
-      fakeAdapter("slow-invocation", "timeout"),
-    ],
-  });
-  assert.deepEqual(report.results.map(({ adapter, status, reason }) => ({ adapter, status, reason })), [
-    { adapter: "slow-probe", status: "failed", reason: "probe_timeout" },
-    { adapter: "slow-invocation", status: "failed", reason: "invocation_timeout" },
-  ]);
-  assert.deepEqual(report.summary, { passed: 0, skipped: 0, failed: 2 });
-});
-
-test("live adapter canary CLI emits JSON and exits non-zero when a probe fails", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-canary-output-"));
-  const outputPath = path.join(root, "report.json");
-  const result = spawnSync(process.execPath, [
-    CANARY_SCRIPT,
-    "--timeout-ms", "1000",
-    "--output", outputPath,
-  ], {
-    cwd: path.join(__dirname, "../../.."),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: "/usr/bin:/bin",
-      RELAY_CLINE_BIN: "/usr/bin/false",
-    },
-    timeout: 15000,
-  });
-  assert.equal(result.status, 1, result.stderr);
-  const report = JSON.parse(result.stdout);
-  assert.equal(fs.readFileSync(outputPath, "utf8"), result.stdout);
-  fs.rmSync(root, { recursive: true, force: true });
-  assert.equal(report.summary.failed, 1);
-  assert.equal(report.generated_by, "skills/relay-dispatch/scripts/adapter-live-canary.js");
-  assert.match(report.command, /--output/);
-  const cline = report.results.find((entry) => entry.adapter === "cline");
-  assert.equal(cline.status, "failed");
-  assert.equal(cline.reason, "probe_failed");
-});
-
-test("checked live report preserves the CLI report schema and summary", () => {
-  const report = JSON.parse(fs.readFileSync(CHECKED_REPORT, "utf8"));
-  assert.equal(report.generated_by, "skills/relay-dispatch/scripts/adapter-live-canary.js");
-  assert.match(report.command, /^node skills\/relay-dispatch\/scripts\/adapter-live-canary\.js /);
-  assert.equal(report.results.length, 7);
-  assert.deepEqual(
-    report.summary,
-    {
-      passed: report.results.filter((entry) => entry.status === "passed").length,
-      skipped: report.results.filter((entry) => entry.status === "skipped").length,
-      failed: report.results.filter((entry) => entry.status === "failed").length,
-    }
-  );
-  for (const entry of report.results) {
-    assert.equal(typeof entry.adapter, "string");
-    assert.ok(["passed", "skipped", "failed"].includes(entry.status));
-    assert.equal(typeof entry.reason, "string");
-    assert.equal(typeof entry.probe?.status, "string");
+test("nonce verdict schema rejects replay and every permissive shape", () => {
+  assert.deepEqual(validateCanaryVerdict({ nonce: "abc" }, "abc"), { nonce: "abc" });
+  for (const value of [null, [], "abc", {}, { nonce: "old" }, { nonce: "abc", extra: true }]) {
+    assert.throws(() => validateCanaryVerdict(value, "abc"), /canary verdict/);
   }
 });
 
-test("live adapter canary CLI fails closed on a forced probe timeout", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-canary-timeout-"));
-  const slowCline = path.join(root, "slow-cline");
-  fs.writeFileSync(slowCline, `#!${process.execPath}\nsetTimeout(() => {}, 5000);\n`, "utf8");
-  fs.chmodSync(slowCline, 0o755);
-  const result = spawnSync(process.execPath, [CANARY_SCRIPT, "--timeout-ms", "100"], {
-    cwd: path.join(__dirname, "../../.."),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: "/usr/bin:/bin",
-      RELAY_CLINE_BIN: slowCline,
+function fakeAdapter(name, mode = "pass", state = {}) {
+  return {
+    name,
+    defaults: { timeoutMs: 10_000 },
+    metadata: { cliBinary: process.execPath, outputProtocol: "phase-specific", providerDefault: "test", processContainment: "inherited_scope_no_daemon",
+      credentials: { files: [], envHints: ["TEST_CANARY_TOKEN"] } },
+    probe() { return mode === "unavailable" ? { status: "skipped", error: "CLI not found", raw: null } : { status: "available", error: null, raw: "test 1.0" }; },
+    capabilities({ phase }) { return { supported: phase === "dispatch" || (phase === "primary_review" && name !== "cline"), write: phase === "dispatch", readOnly: phase !== "dispatch" }; },
+    buildInvocation({ phase, cwd, promptPath, promptBytes }) {
+      assert.ok(Buffer.isBuffer(promptBytes));
+      const prompt = promptBytes.toString("utf8"), nonce = prompt.match(/[a-f0-9]{32}/)?.[0];
+      if (mode === "builder-mutation") fs.writeFileSync(state.target, "mutated by builder\n");
+      let source;
+      if (mode === "auth") source = "process.stderr.write('authentication credentials required');process.exit(1)";
+      else if (mode === "wrong-nonce") source = "process.stdout.write(JSON.stringify({nonce:'stale'}))";
+      else if (mode === "fallback-marker") source = "process.stdout.write(JSON.stringify({nonce:'fallback'}))";
+      else if (mode === "delayed-grandchild") source = `const{spawn}=require('child_process');const c=spawn(process.execPath,['-e','setTimeout(()=>{},5000)'],{detached:true,stdio:'ignore'});c.unref();process.stdout.write(JSON.stringify({nonce:${JSON.stringify(nonce)}}))`;
+      else if (phase === "dispatch") {
+        const file = `RELAY_CANARY_${nonce}.txt`;
+        source = `require('fs').writeFileSync(${JSON.stringify(path.join(cwd, file))},${JSON.stringify(`${nonce}\n`)});process.stdout.write('done')`;
+      } else source = `process.stdout.write(JSON.stringify({nonce:${JSON.stringify(nonce)}}))`;
+      return { command: process.execPath, args: ["-e", source], cwd, stdinPath: promptPath, stdinSha256: hash(promptBytes) };
     },
-    timeout: 15000,
+    parseOutcome(input) { return makeParseOutcome(input.phase === "dispatch" ? "text_stdout" : "json_result")(input); },
+  };
+}
+
+test("two production phase cells pass only with explicit credentials and exact nonce evidence", { skip: process.platform !== "darwin" }, async () => {
+  process.env.TEST_CANARY_TOKEN = "unit-secret";
+  const report = await runCanaries({ timeoutMs: 3_000, adapters: [fakeAdapter("healthy")],
+    credentialSelections: selection("healthy:dispatch", "healthy:primary_review") });
+  assert.equal(report.summary.required, 2);
+  assert.equal(report.summary.passed, 2, JSON.stringify(report.results));
+  assert.equal(canaryExitCode(report), 0);
+  for (const result of report.results) {
+    assert.equal(result.status, "passed"); assert.equal(result.checks.nonce, "passed");
+    assert.match(result.invocation_sha256, /^[a-f0-9]{64}$/); assert.match(result.output_sha256, /^[a-f0-9]{64}$/);
+    assert.deepEqual(result.credential_request, { env_names: ["TEST_CANARY_TOKEN"], file_ids: [] });
+    assert.doesNotMatch(JSON.stringify(result), /unit-secret/);
+  }
+});
+
+test("missing CLI and missing explicit credentials are non-release not_run cells", async () => {
+  const report = await runCanaries({ timeoutMs: 1_000, adapters: [fakeAdapter("missing", "unavailable"), fakeAdapter("unprovisioned")] });
+  assert.ok(report.results.every((entry) => entry.status === "not_run"));
+  assert.ok(report.results.some((entry) => entry.reason === "not_run_cli_unavailable"));
+  assert.ok(report.results.some((entry) => entry.reason === "not_run_credentials_unavailable"));
+  assert.equal(canaryExitCode(report), 1);
+});
+
+test("provisioned authentication failure is failed, never skipped or not_run", { skip: process.platform !== "darwin" }, async () => {
+  process.env.TEST_CANARY_TOKEN = "wrong-secret";
+  const report = await runCanaries({ timeoutMs: 3_000, adapters: [fakeAdapter("auth", "auth")],
+    credentialSelections: selection("auth:dispatch", "auth:primary_review") });
+  assert.ok(report.results.every((entry) => entry.status === "failed"), JSON.stringify(report.results));
+  assert.ok(report.results.every((entry) => entry.reason === "credential_auth_failed"));
+  assert.equal(canaryExitCode(report), 1);
+});
+
+test("boundary mutation and stale or fallback nonce cannot produce a pass", { skip: process.platform !== "darwin" }, async () => {
+  process.env.TEST_CANARY_TOKEN = "unit-secret";
+  for (const mode of ["wrong-nonce", "fallback-marker"]) {
+    const report = await runCanaries({ timeoutMs: 3_000, adapters: [fakeAdapter("negative", mode)],
+      credentialSelections: selection("negative:dispatch", "negative:primary_review") });
+    assert.equal(canaryExitCode(report), 1);
+    assert.ok(report.results.some((entry) => entry.status === "failed"));
+  }
+  const state = {}, report = await runCanaries({ timeoutMs: 3_000, adapters: [fakeAdapter("mutator", "builder-mutation", state)],
+    credentialSelections: selection("mutator:dispatch", "mutator:primary_review"), onFixture(fixture) { state.target = path.join(fixture.outside, "sentinel"); } });
+  assert.equal(canaryExitCode(report), 1);
+  assert.ok(report.results.some((entry) => entry.reason === "boundary_mutated"));
+});
+
+test("report integrity rejects duplicate, missing, unknown status, and partial phase coverage", () => {
+  const digest = "a".repeat(64), cell = (phase) => ({ adapter: "a", phase, status: "passed", nonce_sha256: digest, prompt_sha256: digest,
+    invocation_sha256: digest, output_sha256: digest, probe: { status: "available" }, checks: { boundary: "passed", nonce: "passed", cleanup: "passed", process_scope_absent: "passed" } });
+  const base = { schema_version: 2, evidence_status: "release_complete", provenance: { git_head: "a".repeat(40), git_tree: "b".repeat(40),
+    dirty_digest: digest, runner_sha256: digest, runtime_sha256: { "host.js": digest }, platform: "darwin", arch: "arm64", node: "v22" },
+    policy: { required_cells: ["a:dispatch", "a:primary_review"] }, results: [cell("dispatch"), cell("primary_review")],
+    summary: { required: 2, passed: 2, not_run: 0, failed: 0, missing: [] } };
+  assert.equal(canaryExitCode(validateReport(base)), 0);
+  for (const bad of [
+    { ...base, results: [base.results[0]] },
+    { ...base, results: [base.results[0], base.results[0]] },
+    { ...base, results: [{ ...base.results[0], status: "skipped" }, base.results[1]] },
+    { ...base, summary: { ...base.summary, passed: 1, missing: ["a:primary_review"] } },
+    { ...base, results: [{ ...base.results[0], output_sha256: null }, base.results[1]] },
+    { ...base, results: [{ ...base.results[0], fallback: { diagnostic: true } }, base.results[1]] },
+  ]) assert.equal(canaryExitCode(bad), 1);
+});
+
+test("checked-in current evidence is schema-valid and honestly non-release", () => {
+  const evidence = JSON.parse(fs.readFileSync(path.join(__dirname, "../../../docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-02.json"), "utf8"));
+  assert.equal(validateReport(evidence), evidence);
+  assert.equal(evidence.policy.required_cells.length, 13);
+  assert.equal(evidence.evidence_status, "incomplete_non_release");
+  assert.equal(canaryExitCode(evidence), 1);
+  assert.equal(JSON.stringify(evidence).includes("source_path"), false);
+});
+
+test("credential CLI grammar is phase-explicit and retains no values in the public selector", () => {
+  const parsed = parseCredentialArgs(["--credential-env", "codex:dispatch:OPENAI_API_KEY", "--credential-file", "codex:primary_review:auth=/private/auth.json", "--timeout-ms", "5"]);
+  assert.deepEqual(parsed.selections, {
+    "codex:dispatch": { envNames: ["OPENAI_API_KEY"], fileSpecs: [] },
+    "codex:primary_review": { envNames: [], fileSpecs: ["auth=/private/auth.json"] },
   });
-  fs.rmSync(root, { recursive: true, force: true });
-  assert.equal(result.status, 1, result.stderr);
-  const report = JSON.parse(result.stdout);
-  assert.equal(report.summary.failed, 1);
-  const cline = report.results.find((entry) => entry.adapter === "cline");
-  assert.equal(cline.status, "failed");
-  assert.equal(cline.reason, "probe_timeout");
+  assert.deepEqual(parsed.argv, ["--timeout-ms", "5"]);
+  assert.throws(() => parseCredentialArgs(["--credential-env", "codex:OPENAI_API_KEY"]), /adapter:phase:value/);
+});
+
+test("runner help documents explicit phase credentials", () => {
+  const result = spawnSync(process.execPath, [RUNNER, "--help"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /adapter:phase:NAME/);
+  assert.match(result.stdout, /adapter:phase:ID=\/absolute\/source/);
 });

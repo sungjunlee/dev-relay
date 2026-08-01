@@ -43,7 +43,7 @@ One sentence naming the best starting anchor for Done Criteria recovery.
 
 ## Consumption boundary
 
-The scout is a weak planning signal. It may help the planner decide where to look, which commands to consider, and which risks deserve questions. It does not supply acceptance criteria, freeze Done Criteria, select rubric factors automatically, gate dispatch, or alter relay manifest state.
+The scout is a weak planning signal. It may help the planner decide where to look, which commands to consider, and which risks deserve questions. It does not supply acceptance criteria, freeze Done Criteria, select rubric factors automatically, gate dispatch, or alter immutable run facts.
 
 When the scout reveals a requirement not present in the task source, treat it as an ambiguity or inferred Done Criteria candidate. Resolve the conflict before freezing the review anchor, then persist planner-authored Done Criteria if the final anchor differs from the issue body or relay-ready handoff.
 

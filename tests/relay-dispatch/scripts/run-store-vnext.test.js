@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { execFileSync } = require("node:child_process");
 
 const {
   createRunRecord,
@@ -12,7 +13,10 @@ const {
   readRunRecord,
   validateRunRecord,
 } = require("../../../skills/relay-dispatch/scripts/run-store");
-const runtime = require("../../../skills/relay-dispatch/scripts/runtime-vnext");
+const store = require("../../../skills/relay-dispatch/scripts/run-store");
+const facts = require("../../../skills/relay-dispatch/scripts/facts");
+const host = require("../../../skills/relay-dispatch/scripts/host");
+const runtime = { ...facts, withRunLock: host.withRunLock };
 
 function tempDir(label) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-${label}-`)));
@@ -109,6 +113,24 @@ test("run and Done Criteria readers refuse symlinks", () => {
   );
 });
 
+test("run reader rejects a FIFO without blocking", () => {
+  const runDir = tempDir("run-fifo");
+  fs.writeFileSync(path.join(runDir, "done-criteria.md"), "criterion\n");
+  const value = record(runDir, {
+    contract: {
+      done_criteria_path: path.join(runDir, "done-criteria.md"),
+      done_criteria_sha256: crypto.createHash("sha256").update("criterion\n").digest("hex"),
+    },
+  });
+  createRunRecord({ runDir, record: value });
+  const runPath = path.join(runDir, "run.json");
+  fs.unlinkSync(runPath);
+  execFileSync("mkfifo", [runPath]);
+  const started = Date.now();
+  assert.throws(() => readRunRecord({ runDir }), /regular non-symlink/);
+  assert.ok(Date.now() - started < 1000, "FIFO rejection must not wait for a writer");
+});
+
 test("run directory basename is the immutable run identity", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-run-id-path-")));
   const runDir = path.join(root, "wrong-name");
@@ -125,6 +147,90 @@ test("run directory basename is the immutable run identity", () => {
     () => createRunRecord({ runDir, record: value }),
     (error) => error.code === "RUN_ID_PATH_MISMATCH",
   );
+});
+
+test("reviewer process-group reap still runs when the scope audit throws and both audit errors aggregate", () => {
+  const runDir = tempDir("review-audit-failure"), criteriaPath = path.join(runDir, "done-criteria.md"), criteria = "criterion\n";
+  fs.writeFileSync(criteriaPath, criteria, { mode: 0o600 });
+  createRunRecord({ runDir, record: record(runDir, { contract: { done_criteria_path: criteriaPath, done_criteria_sha256: crypto.createHash("sha256").update(criteria).digest("hex") } }) });
+  const diffPath = path.join(runDir, "diff.patch"), promptPath = path.join(runDir, "prompt.md");
+  fs.writeFileSync(diffPath, "diff\n", { mode: 0o600 }); fs.writeFileSync(promptPath, "prompt\n", { mode: 0o600 });
+  const request = { diff_path: diffPath, prompt_path: promptPath, done_criteria_path: criteriaPath, reviewed_sha: "a".repeat(40), current_sha: "a".repeat(40),
+    diff_sha256: crypto.createHash("sha256").update("diff\n").digest("hex"), prompt_sha256: crypto.createHash("sha256").update("prompt\n").digest("hex") };
+  const originalMkdtemp = fs.mkdtempSync; let stage;
+  fs.mkdtempSync = function captureStage(prefix, ...args) { const value = originalMkdtemp.call(this, prefix, ...args); if (String(prefix).includes("relay-review-stage-")) stage = value; return value; };
+  const realAudit = host.sandboxInvocation.auditProcessScope, realReap = host.sandboxInvocation.reapProcessGroup;
+  const reaped = []; let escapedPid;
+  host.sandboxInvocation.auditProcessScope = () => { const error = new Error("scope audit timed out"); error.code = "HOST_IDENTITY_UNAVAILABLE"; throw error; };
+  host.sandboxInvocation.reapProcessGroup = (pgid, seal) => {
+    reaped.push({ pgid, seal });
+    const resultPath = path.join(stage, "inputs", "output", "reviewer-result.json");
+    if (fs.existsSync(resultPath)) escapedPid = JSON.parse(fs.readFileSync(resultPath, "utf8")).pid;
+    realReap(pgid, seal);
+    const error = new Error("process-group audit timed out"); error.code = "HOST_GROUP_AUDIT_FAILED"; throw error;
+  };
+  try {
+    assert.throws(() => store.invokeIndependentReviewer({ runDir, request, timeoutMs: 10_000, env: {},
+      buildInvocation: ({ cwd, resultPath }) => ({ command: process.execPath, args: ["-e", [
+        "const {spawn}=require('child_process'),fs=require('fs');",
+        "const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore'});",
+        "child.unref();fs.writeFileSync(process.argv[1],JSON.stringify({pid:child.pid}));",
+      ].join(""), resultPath], cwd }),
+      parseOutcome: () => ({ status: "succeeded", output: {} }),
+    }), (error) => {
+      assert.match(error.message, /runtime audit failed: scope audit timed out; process-group audit timed out/);
+      assert.deepEqual(error.runtime_audit.audit_errors, ["HOST_IDENTITY_UNAVAILABLE", "HOST_GROUP_AUDIT_FAILED"]);
+      assert.equal(error.runtime_audit.process_scope_matched, null);
+      return true;
+    });
+    assert.equal(reaped.length, 1, "the process-group reap must be attempted in finally even when the scope audit throws");
+    assert.match(reaped[0].seal, /^[0-9a-f]{64}$/, "the reap must be bound to the issued inherited scope seal");
+    assert.ok(Number.isInteger(escapedPid));
+    const end = Date.now() + 2_000, waiter = new Int32Array(new SharedArrayBuffer(4)); let live = true;
+    while (live && Date.now() < end) { try { process.kill(escapedPid, 0); Atomics.wait(waiter, 0, 0, 20); } catch (error) { live = error.code !== "ESRCH"; } }
+    assert.equal(live, false, "a credential-inheriting reviewer descendant must not outlive an audit failure");
+  } finally {
+    host.sandboxInvocation.auditProcessScope = realAudit; host.sandboxInvocation.reapProcessGroup = realReap; fs.mkdtempSync = originalMkdtemp;
+  }
+  assert.ok(stage);
+  assert.equal(fs.existsSync(stage), false, "no credential-holding staging root may outlive a failed runtime audit");
+});
+
+test("independent review stages explicit owner-only credentials into private HOME/XDG and removes them after execution", () => {
+  const runDir = tempDir("review-credentials"), criteriaPath = path.join(runDir, "done-criteria.md"), source = path.join(path.dirname(runDir), "auth.json");
+  const criteria = "criterion\n", secret = "review-credential-secret", envSecret = "review-environment-secret";
+  fs.writeFileSync(criteriaPath, criteria, { mode: 0o600 }); fs.writeFileSync(source, secret, { mode: 0o600 }); fs.chmodSync(source, 0o600);
+  createRunRecord({ runDir, record: record(runDir, { contract: { done_criteria_path: criteriaPath, done_criteria_sha256: crypto.createHash("sha256").update(criteria).digest("hex") } }) });
+  const diffPath = path.join(runDir, "diff.patch"), promptPath = path.join(runDir, "prompt.md");
+  fs.writeFileSync(diffPath, "diff\n", { mode: 0o600 }); fs.writeFileSync(promptPath, "prompt\n", { mode: 0o600 });
+  const request = { diff_path: diffPath, prompt_path: promptPath, done_criteria_path: criteriaPath, reviewed_sha: "a".repeat(40), current_sha: "a".repeat(40),
+    diff_sha256: crypto.createHash("sha256").update("diff\n").digest("hex"), prompt_sha256: crypto.createHash("sha256").update("prompt\n").digest("hex") };
+  const originalMkdtemp = fs.mkdtempSync; let stage;
+  fs.mkdtempSync = function captureStage(prefix, ...args) { const value = originalMkdtemp.call(this, prefix, ...args); if (String(prefix).includes("relay-review-stage-")) stage = value; return value; };
+  const script = "const fs=require('fs'),path=require('path');const value={home:process.env.HOME,config:process.env.XDG_CONFIG_HOME,data:process.env.XDG_DATA_HOME,auth:fs.readFileSync(path.join(process.env.HOME,'.tool/auth.json'),'utf8'),env:process.env.TOOL_TOKEN,modes:[fs.statSync(process.env.HOME).mode&511,fs.statSync(path.join(process.env.HOME,'.tool/auth.json')).mode&511]};fs.writeFileSync(process.argv[1],JSON.stringify(value));";
+  const invoke = (credentialRequest) => store.invokeIndependentReviewer({ runDir, request, timeoutMs: 10_000, env: {}, credentialRequest,
+    buildInvocation: ({ cwd, promptPath, promptBytes, resultPath }) => ({ command: process.execPath, args: ["-e", script, resultPath], cwd, stdinPath: promptPath, stdinSha256: crypto.createHash("sha256").update(promptBytes).digest("hex") }),
+    parseOutcome: ({ exitCode, resultPath }) => ({ status: exitCode === 0 ? "succeeded" : "failed", output: JSON.parse(fs.readFileSync(resultPath, "utf8")) }),
+  });
+  const explicit = { metadata: { files: [{ id: "auth", targetRoot: "home", targetRel: ".tool/auth.json", access: "read", recommendedSource: "~/.tool/auth.json" }], envHints: [] }, envNames: ["TOOL_TOKEN"], fileSpecs: [`auth=${source}`], env: { TOOL_TOKEN: envSecret } };
+  try {
+    const outcome = invoke(explicit);
+    assert.equal(outcome.output.auth, secret); assert.equal(outcome.output.env, envSecret); assert.deepEqual(outcome.output.modes, [0o700, 0o600]);
+    assert.match(outcome.output.home, /reviewer-credentials\/home$/); assert.match(outcome.output.config, /reviewer-credentials\/xdg-config$/); assert.match(outcome.output.data, /reviewer-credentials\/xdg-data$/);
+    assert.doesNotMatch(JSON.stringify(outcome.review_binding), new RegExp(`${secret}|${envSecret}|${source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    fs.chmodSync(source, 0o644);
+    assert.throws(() => invoke(explicit), /owner-only regular file/);
+    fs.chmodSync(source, 0o600);
+    const link = path.join(path.dirname(source), "auth-link.json"); fs.symlinkSync(source, link);
+    assert.throws(() => invoke({ ...explicit, fileSpecs: [`auth=${link}`] }), (error) => {
+      assert.match(error.message, /owner-only regular file|source is unavailable/); assert.doesNotMatch(error.message, new RegExp(link)); return true;
+    });
+    const missing = path.join(path.dirname(source), "missing-private-source.json");
+    assert.throws(() => invoke({ ...explicit, fileSpecs: [`auth=${missing}`] }), (error) => {
+      assert.match(error.message, /source is unavailable/); assert.doesNotMatch(error.message, new RegExp(missing)); return true;
+    });
+    assert.throws(() => invoke({ ...explicit, env: {} }), /environment value is missing/);
+  } finally { fs.mkdtempSync = originalMkdtemp; assert.ok(stage); assert.equal(fs.existsSync(stage), false); }
 });
 
 test("stored Done Criteria path must itself be canonical, not merely resolve canonically", () => {
@@ -197,54 +303,22 @@ test("run record reader stays on the opened inode during a path swap", () => {
   assert.equal(swapped, true);
 });
 
-test("recovery converges without duplicate apply after an effect-before-receipt crash", async () => {
-  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-crash-"));
-  let published = false;
-  let applies = 0;
-  const operation = {
-    runDir,
-    recoveryKey: "publish-crash",
-    observe: async () => ({ converged: published, pr: published ? 42 : null }),
-    apply: async () => {
-      applies += 1;
-      published = true;
-      throw new Error("simulated process crash after external effect");
-    },
-  };
-  await assert.rejects(runtime.recoverRun(operation), /simulated process crash/);
-  const receipt = await runtime.recoverRun(operation);
-  assert.equal(applies, 1);
-  assert.equal(receipt.applied, false);
-  assert.equal(receipt.final_observation.converged, true);
-});
-
-test("recovery receipt open/write/fsync/rename faults converge on retry", async () => {
-  for (const stage of ["open", "write", "fsync", "rename", "dir_fsync"]) {
-    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), `relay-recover-${stage}-`));
-    let applied = 0;
-    let converged = false;
-    let injected = false;
-    const operation = {
-      runDir,
-      recoveryKey: `fault-${stage}`,
-      observe: async () => ({ converged }),
-      apply: async () => {
-        applied += 1;
-        converged = true;
-        return { applied };
-      },
-      fault(current, pathname) {
-        if (!injected && current === stage && !pathname.endsWith(".intent.json")) {
-          injected = true;
-          throw new Error(`injected ${stage}`);
-        }
-      },
-    };
-    await assert.rejects(runtime.recoverRun(operation), new RegExp(`injected ${stage}`));
-    delete operation.fault;
-    const receipt = await runtime.recoverRun(operation);
-    assert.equal(receipt.final_observation.converged, true, stage);
-    assert.equal(applied, 1, stage);
+test("runtime path seams canonicalize repository identity and reject path injection", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-path-seams-")));
+  execFileSync("git", ["init", "-b", "main", root], { stdio: "pipe" });
+  const priorHome = process.env.RELAY_HOME;
+  const priorBase = process.env.RELAY_WORKTREE_BASE;
+  process.env.RELAY_HOME = path.join(root, "relay-home");
+  process.env.RELAY_WORKTREE_BASE = path.join(root, "worktrees");
+  try {
+    assert.equal(store.canonicalRepository(root), fs.realpathSync(root));
+    assert.equal(store.relayWorktreeBase(), path.join(root, "worktrees"));
+    assert.match(store.resolveRunDirectory(root, "issue-1"), /\/runs\/[^/]+\/issue-1$/);
+    assert.throws(() => store.resolveRunDirectory(root, "../escape"), /safe path segment/);
+  } finally {
+    if (priorHome === undefined) delete process.env.RELAY_HOME; else process.env.RELAY_HOME = priorHome;
+    if (priorBase === undefined) delete process.env.RELAY_WORKTREE_BASE; else process.env.RELAY_WORKTREE_BASE = priorBase;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -299,7 +373,7 @@ test("merge recording converges after fact append but before receipt", async () 
       runDir,
       lockContext,
       freshObservation: fresh.observationCapability,
-      operatorAction: { actor: "owner", method: "squash" },
+      operatorAction: { actor: "owner", method: "squash", githubLogin: "relay-bot" },
       currentHead: "a".repeat(40),
       currentDoneCriteriaSha256: value.contract.done_criteria_sha256,
       prNumber: 42,

@@ -3,11 +3,10 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { getExecutor } = require("../../../skills/relay-dispatch/scripts/executors");
+const { getAdapter, listAdapters } = require("../../../skills/relay-dispatch/scripts/adapters");
 const {
   ADAPTER_PHASES,
-  listAgentAdapters,
-} = require("../../../skills/relay-dispatch/scripts/agent-adapters");
+} = require("../../../skills/relay-dispatch/scripts/adapters");
 const ROOT = path.join(__dirname, "..", "..", "..");
 const DISPATCH_SCRIPT = path.join(ROOT, "skills", "relay-dispatch", "scripts", "dispatch.js");
 const ADAPTER_PLATFORM_DOC = "skills/relay-dispatch/references/agent-adapter-platform.md";
@@ -41,9 +40,9 @@ function adapterMatrixRows() {
 
 
 test("dispatch docs mirror executor timeout defaults", () => {
-  const codexTimeout = getExecutor("codex").defaultTimeout;
-  const claudeTimeout = getExecutor("claude").defaultTimeout;
-  const opencodeTimeout = getExecutor("opencode").defaultTimeout;
+  const codexTimeout = getAdapter("codex").defaults.timeoutMs / 1000;
+  const claudeTimeout = getAdapter("claude").defaults.timeoutMs / 1000;
+  const opencodeTimeout = getAdapter("opencode").defaults.timeoutMs / 1000;
   const docs = [
     readRepoFile("README.md"),
     readRepoFile("skills/relay-dispatch/SKILL.md"),
@@ -54,31 +53,41 @@ test("dispatch docs mirror executor timeout defaults", () => {
   assert.match(docs, new RegExp(`opencode[^\\n]*${opencodeTimeout}`, "i"));
 });
 
-test("dispatch help mirrors executor timeout and auto-recover defaults", () => {
+test("dispatch help publishes the flat executor registry and vNext ownership boundary", () => {
   const result = spawnSync("node", [DISPATCH_SCRIPT, "--help"], {
     encoding: "utf-8",
     stdio: "pipe",
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /default: 2400 for codex, 1800 for others/);
-  assert.match(result.stdout, /auto-recover-commit.*default: on/);
+  for (const name of listAdapters()) assert.match(result.stdout, new RegExp(`\\b${name}\\b`));
+  assert.match(result.stdout, /Dispatch never commits, pushes, opens a PR, or runs recovery/);
 });
 
-test("recovery playbook documents landed auto-recover behavior, not stale deferral", () => {
+test("recovery playbook documents only the canonical inspect/recover surface", () => {
   const playbook = readRepoFile("skills/relay-dispatch/references/recovery-playbook.md");
 
-  assert.match(playbook, /#393 added Path 2/);
-  assert.match(playbook, /all executor `completed-uncommitted` results unless `--no-auto-recover-commit` is passed/);
-  assert.doesNotMatch(playbook, /#393[^.\n]*(?:deferred|Until #393 lands)/i);
-  assert.doesNotMatch(playbook, /defer to a follow-up issue/i);
+  assert.match(playbook, /relay-recover\.js inspect/);
+  assert.match(playbook, /relay-recover\.js recover/);
+  assert.match(playbook, /Retired target-state and force-policy flags fail closed/);
+  assert.doesNotMatch(playbook, /recover-state\.js[^\n]*--to/);
+  assert.doesNotMatch(playbook, /recover-state\.js[^\n]*--force/);
+});
+
+test("executor prompt leaves Git metadata and publication exclusively to canonical recovery", () => {
+  const prompt = readRepoFile("skills/relay/references/prompt-template.md");
+
+  assert.match(prompt, /reviewable dirty-worktree changes/);
+  assert.match(prompt, /canonical `relay-recover recover` alone commits, pushes/);
+  assert.match(prompt, /Do not run `git add`, `git commit`, `git push`/);
+  assert.doesNotMatch(prompt, /Do NOT skip the commit/);
+  assert.doesNotMatch(prompt, /final work is committed/);
 });
 
 test("operator-facing OpenCode docs use the installed adapter contract", () => {
   const docs = [
     readRepoFile("skills/relay-dispatch/SKILL.md"),
-    readRepoFile("skills/relay-dispatch/scripts/executors/README.md"),
-    readRepoFile("skills/relay-dispatch/scripts/executors/opencode.js"),
+    readRepoFile("skills/relay-dispatch/scripts/adapters/opencode.js"),
     readRepoFile("skills/relay-dispatch/scripts/dispatch.js"),
   ].join("\n");
 
@@ -114,29 +123,28 @@ test("model selection docs describe explicit bindings without legacy route confi
   }
   assert.match(docs, /explicit.*model|model.*explicit/i);
   assert.match(docs, /adapter.*capability|capability.*adapter/i);
-  assert.match(docs, /check review antigravity google\/antigravity-cli --json/);
+  assert.match(
+    docs,
+    /check --phase review --reviewer antigravity --model google\/antigravity-cli --json/,
+  );
   assert.doesNotMatch(docs, /agy --model/);
 });
 
-test("adapter platform docs publish the single 7-field executor contract", () => {
+test("adapter platform docs publish the flat four-method adapter contract", () => {
   const docs = [
     readRepoFile("AGENTS.md"),
     readRepoFile("CLAUDE.md"),
     readRepoFile("docs/relay-operator-guide.md"),
     readRepoFile("references/architecture.md"),
-    readRepoFile("skills/relay-dispatch/scripts/executors/README.md"),
     readRepoFile(ADAPTER_PLATFORM_DOC),
   ].join("\n");
 
-  assert.doesNotMatch(docs, /\b6-field\b/);
-  assert.match(docs, /\b7-field\b/);
+  assert.doesNotMatch(docs, /\b7-field\b/);
+  assert.match(docs, /four-method/i);
   for (const field of [
-    "cliBinary",
-    "defaultTimeout",
-    "validateExecutionMode",
-    "buildExecCommand",
-    "finalizeResult",
-    "register",
+    "capabilities",
+    "buildInvocation",
+    "parseOutcome",
     "probe",
   ]) {
     assert.match(readRepoFile(ADAPTER_PLATFORM_DOC), new RegExp(`\\b${field}\\b`));
@@ -148,26 +156,21 @@ test("adapter capability matrix mirrors supported adapter phase registry", () =>
   for (const heading of [
     "Dispatch",
     "Primary review",
-    "App registration",
   ]) {
     assert.match(doc, new RegExp(`\\| ${heading} `));
   }
 
   const rows = adapterMatrixRows();
-  const adapters = listAgentAdapters();
+  const adapters = listAdapters().map(getAdapter);
   assert.deepEqual([...rows.keys()].sort(), adapters.map((adapter) => adapter.name).sort());
 
   for (const adapter of adapters) {
     const row = rows.get(adapter.name);
-    const dispatch = adapter.phases[ADAPTER_PHASES.DISPATCH]?.supported === true;
-    const primaryReview = adapter.phases[ADAPTER_PHASES.PRIMARY_REVIEW]?.supported === true;
+    const dispatch = adapter.capabilities({ phase: ADAPTER_PHASES.DISPATCH }).supported === true;
+    const primaryReview = adapter.capabilities({ phase: ADAPTER_PHASES.PRIMARY_REVIEW }).supported === true;
     assert.match(row[1], dispatch ? /^Yes\b/ : /^No\b/, `${adapter.name} dispatch docs`);
     assert.match(row[2], primaryReview ? /^Yes\b/ : /^No\b/, `${adapter.name} primary review docs`);
-    if (adapter.capabilities.appRegistration.supported) {
-      assert.doesNotMatch(row[3], /^No\b/);
-    } else {
-      assert.match(row[3], /^No\b/);
-    }
+    assert.equal(row.length, 3, `${adapter.name} capability row`);
   }
 });
 
@@ -180,12 +183,12 @@ test("operator docs mention every supported dispatch and review adapter", () => 
     readRepoFile(ADAPTER_PLATFORM_DOC),
   ].join("\n");
 
-  for (const adapter of listAgentAdapters()) {
+  for (const adapter of listAdapters().map(getAdapter)) {
     assert.match(overviewDocs, new RegExp(`\\b${adapter.name}\\b`, "i"), `${adapter.name} overview docs`);
-    if (adapter.phases[ADAPTER_PHASES.DISPATCH]?.supported) {
+    if (adapter.capabilities({ phase: ADAPTER_PHASES.DISPATCH }).supported) {
       assert.match(dispatchDocs, new RegExp(`\\b${adapter.name}\\b`), `${adapter.name} dispatch docs`);
     }
-    if (adapter.phases[ADAPTER_PHASES.PRIMARY_REVIEW]?.supported) {
+    if (adapter.capabilities({ phase: ADAPTER_PHASES.PRIMARY_REVIEW }).supported) {
       assert.match(reviewDocs, new RegExp(`--reviewer ${adapter.name}\\b`), `${adapter.name} primary review docs`);
     }
   }
@@ -200,7 +203,7 @@ test("operator guide readiness mirrors the current adapter contract", () => {
   const section = doc.slice(start, end === -1 ? undefined : end);
   assert.notEqual(start, -1, "operator guide must publish adapter readiness");
   assert.match(section, /agent-adapter-platform\.md/);
-  for (const adapter of listAgentAdapters()) {
+  for (const adapter of listAdapters().map(getAdapter)) {
     assert.match(section, new RegExp(`\\b${adapter.name}\\b`, "i"), `${adapter.name} readiness`);
   }
   assert.match(section, /Cline is dispatch-only/);
@@ -225,25 +228,13 @@ test("operator guide teaches default and manual workflows before adapter readine
   assert.ok(manualPhaseIndex < matrixIndex, "manual phase control must appear before adapter readiness");
 });
 
-test("operator docs publish the live dogfood harness and outcome meanings", () => {
+test("operator docs keep live adapter evidence test-only", () => {
   const docs = [
     readRepoFile("docs/relay-operator-guide.md"),
     readRepoFile("skills/relay-dispatch/references/operator-utilities.md"),
   ].join("\n");
 
-  assert.match(docs, /live-dogfood\.js --repo \.[\s\S]*--pi-model '<pi-provider>\/<pi-model>'[\s\S]*--opencode-model '<opencode-provider>\/<opencode-model>'[\s\S]*--json --markdown/);
-  assert.match(docs, /live-dogfood\.js --repo \.[\s\S]*--pi-model '<pi-provider>\/<pi-model>'[\s\S]*--opencode-model '<opencode-provider>\/<opencode-model>'[\s\S]*--dispatch-canary --json/);
-  assert.match(docs, /RELAY_LIVE_DOGFOOD_PI_MODEL/);
-  assert.match(docs, /RELAY_LIVE_DOGFOOD_OPENCODE_MODEL/);
-  assert.match(docs, /--scenario <name>/);
-  assert.match(docs, /temporary `RELAY_HOME`/);
-  assert.match(docs, /without writing project configuration/);
-  assert.match(docs, /healthy dispatch canar(?:y|ies)[^.\n]*Pi[^.\n]*OpenCode[^.\n]*Antigravity/i);
-  assert.match(docs, /clean worktree/i);
-  assert.match(docs, /no-op[^.\n]*PR[^.\n]*(?:fail|failure|false success)/i);
-  assert.match(docs, /fail-safe timeout canary[^.\n]*(?:not|never)[^.\n]*healthy/i);
-  for (const outcome of ["pass", "fail-safe-pass", "timeout", "fail", "not-run"]) {
-    assert.match(docs, new RegExp(`\`${outcome}\``));
-  }
-  assert.match(docs, /fake-bin regressions and live canary evidence are not conflated/);
+  assert.doesNotMatch(docs, /adapter-live-canary\.js|live-dogfood\.js/);
+  assert.match(docs, /release-only/i);
+  assert.match(docs, /read-only adapter canary/i);
 });
