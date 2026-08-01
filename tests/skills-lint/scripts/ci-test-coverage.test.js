@@ -81,16 +81,15 @@ function extractSuiteMatrix(content) {
 }
 
 function assertMatrixRunsGuardedSuiteGlob(content) {
-  const guardMatch = content.match(/files=\(([\s\S]*?)\)/);
-  assert.ok(guardMatch, "workflow must declare an empty-glob guard: files=( ... )");
+  assert.match(content, /files=\(\)/, "workflow must initialize a guarded files array");
   const runMatch = content.match(/Run test suites[\s\S]*$/);
   assert.ok(runMatch, "workflow must declare a 'Run test suites' step");
   assert.match(
-    guardMatch[1],
-    /tests\/\$\{\{\s*matrix\.suite\s*\}\}\/scripts\/\*\*\/\*\.test\.js/,
-    "empty-glob guard must recursively resolve the current matrix.suite",
+    runMatch[0],
+    /find "tests\/\$\{\{\s*matrix\.suite\s*\}\}\/scripts" -type f -name '\*\.test\.js'/,
+    "portable file discovery must recursively resolve the current matrix.suite",
   );
-  assert.match(runMatch[0], /shopt -s (?:nullglob globstar|globstar nullglob)/);
+  assert.match(runMatch[0], /while IFS= read -r file; do[\s\S]*files\+=\("\$file"\)/);
   assert.match(
     runMatch[0],
     /node --test --test-concurrency=1 "\$\{files\[@\]\}"/,
@@ -131,10 +130,10 @@ function buildFixture({ wired }) {
     "    steps:",
     "      - name: Run test suites (${{ matrix.suite }})",
     "        run: |",
-    "          shopt -s nullglob globstar",
-    "          files=(",
-    "            tests/${{ matrix.suite }}/scripts/**/*.test.js",
-    "          )",
+    "          files=()",
+    "          while IFS= read -r file; do",
+    "            files+=(\"$file\")",
+    "          done < <(find \"tests/${{ matrix.suite }}/scripts\" -type f -name '*.test.js' -print | LC_ALL=C sort)",
     "          node --test --test-concurrency=1 \"${files[@]}\"",
     "",
   ].join("\n");

@@ -41,10 +41,10 @@ jobs:
           node-version: '22'
       - name: Run test suites (${{ matrix.suite }})
         run: |
-          shopt -s nullglob globstar
-          files=(
-            tests/${{ matrix.suite }}/scripts/**/*.test.js
-          )
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(find "tests/${{ matrix.suite }}/scripts" -type f -name '*.test.js' -print | LC_ALL=C sort)
           count=${#files[@]}
           echo "Matched $count test file(s)"
           if [ "$count" -eq 0 ]; then

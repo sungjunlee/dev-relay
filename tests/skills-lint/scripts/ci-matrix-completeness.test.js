@@ -87,8 +87,7 @@ function discoverTestSuites(testsDir = TESTS_DIR) {
 test("CI suite matrix exactly covers every filesystem test suite", () => {
   assert.ok(fs.existsSync(WORKFLOW_PATH), `workflow file is missing: ${WORKFLOW_PATH}`);
   const workflow = fs.readFileSync(WORKFLOW_PATH, "utf-8");
-  assert.match(workflow, /shopt -s (?:nullglob globstar|globstar nullglob)/);
-  assert.match(workflow, /tests\/\$\{\{\s*matrix\.suite\s*\}\}\/scripts\/\*\*\/\*\.test\.js/);
+  assert.match(workflow, /find "tests\/\$\{\{\s*matrix\.suite\s*\}\}\/scripts" -type f -name '\*\.test\.js'/);
   const matrices = extractSuiteMatrices(workflow);
   assert.equal(matrices.length, 1, "workflow must define exactly one matrix.suite list");
 
