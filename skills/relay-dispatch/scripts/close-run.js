@@ -13,24 +13,28 @@ const {
   validateManifestPaths,
 } = require("./manifest/paths");
 const { getActorName, writeManifest } = require("./manifest/store");
-const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const { findUnknownFlags, modeLabel: formatCliModeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendEventLineToPath, appendRunEvent, EVENTS } = require("./relay-events");
 const { assertNoLiveRunLease, corruptRunLeaseReportFields } = require("./run-runtime-state");
 
 const args = process.argv.slice(2);
-const CLI_ARG_OPTIONS = { commandName: "close-run", reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: ["--repo", "--run-id", "--reason", "--force", "--dry-run", "--json", "--help", "-h"],
+  booleanFlags: ["--force", "--dry-run", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--reason"],
+};
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: close-run.js --repo <path> --run-id <id> --reason <text> [--force] [--dry-run] [--json]");
   console.log("\nOptions:");
-  console.log(`  --repo <path>    ${modeLabel("--repo")} Repository root`);
-  console.log(`  --run-id <id>    ${modeLabel("--run-id")} Relay run identifier`);
-  console.log(`  --reason <text>  ${modeLabel("--reason")} Audit reason`);
-  console.log(`  --force          ${modeLabel("--force")} Override a live or unverifiable run lease`);
-  console.log(`  --dry-run        ${modeLabel("--dry-run")} Print result without writing`);
-  console.log(`  --json           ${modeLabel("--json")} Output JSON`);
+  console.log(`  --repo <path>    ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root`);
+  console.log(`  --run-id <id>    ${formatCliModeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier`);
+  console.log(`  --reason <text>  ${formatCliModeLabel("--reason", CLI_ARG_OPTIONS)} Audit reason`);
+  console.log(`  --force          ${formatCliModeLabel("--force", CLI_ARG_OPTIONS)} Override a live or unverifiable run lease`);
+  console.log(`  --dry-run        ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Print result without writing`);
+  console.log(`  --json           ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
 }
 
@@ -124,7 +128,7 @@ function appendCloseEvent(repoRoot, runId, eventData) {
 }
 
 function main() {
-  const unknownFlags = findUnknownFlags(args, "close-run");
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   }

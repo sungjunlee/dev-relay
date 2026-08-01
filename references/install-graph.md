@@ -10,7 +10,6 @@ relay ----------> relay-dispatch
 
 relay-ready ----> relay-dispatch
 relay-plan -----> relay-dispatch
-relay-dispatch -> relay-plan
 
 relay-review ---> relay-dispatch
 relay-merge ----> relay-dispatch
@@ -19,14 +18,11 @@ relay-merge ----> relay-review
 relay-config ---> relay-dispatch
 ```
 
-The `relay-dispatch` -> `relay-plan` edge is a small JS-level cycle: `skills/relay-dispatch/scripts/reliability-report.js` imports `../../relay-plan/scripts/tdd-flavor`, while relay-plan scripts and SKILL.md commands call back into relay-dispatch.
-
 | Skill | Required siblings (SKILL.md + JS) | If installed alone | Supported install path |
 | --- | --- | --- | --- |
 | `relay` | `relay-ready`, `relay-dispatch` | SKILL.md commands reference `${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/probe-readiness.js` and `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`; those sibling paths are missing in a relay-only install. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
 | `relay-ready` | `relay-dispatch` | JS imports fail before request persistence/probing can run: `scripts/persist-request.js` requires `../../relay-dispatch/scripts/cli-args`; `scripts/relay-request.js` requires `../../relay-dispatch/scripts/relay-manifest` and `../../relay-dispatch/scripts/manifest/paths`; `scripts/probe-readiness.js` requires `../../relay-dispatch/scripts/relay-events` and `../../relay-dispatch/scripts/cli-args`. SKILL.md also calls `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
-| `relay-plan` | `relay-dispatch` | JS imports fail for planning helpers: `scripts/match-template.js` requires `../../relay-dispatch/scripts/manifest/rubric`; `scripts/persist-done-criteria.js` requires `../../relay-dispatch/scripts/manifest/paths` and `../../relay-dispatch/scripts/cli-args`; `scripts/probe-executor-env.js` requires `../../relay-dispatch/scripts/cli-args` and `../../relay-dispatch/scripts/executors`. SKILL.md also calls `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js`. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
-| `relay-dispatch` | `relay-plan` | `scripts/reliability-report.js` requires `../../relay-plan/scripts/tdd-flavor`; running reliability reporting from a dispatch-only install fails when relay-plan is absent. This is the closest skill to a root, but it is not fully standalone today. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
+| `relay-plan` | `relay-dispatch` | JS imports fail for planning helpers: `scripts/match-template.js` requires `../../relay-dispatch/scripts/manifest/rubric`; `scripts/persist-done-criteria.js` requires `../../relay-dispatch/scripts/manifest/paths` and `../../relay-dispatch/scripts/cli-args`; `scripts/probe-executor-env.js` requires `../../relay-dispatch/scripts/cli-args` and `../../relay-dispatch/scripts/executors`. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
 | `relay-review` | `relay-dispatch` | Review entrypoints and helpers import dispatch manifest/event modules: `scripts/review-runner.js` requires `../../relay-dispatch/scripts/manifest/lifecycle`, `manifest/paths`, `manifest/rubric`, `manifest/store`, `relay-events`, and `cli-args`; nested `scripts/review-runner/*` modules require `../../../relay-dispatch/scripts/...`; reviewer adapters require `../../relay-dispatch/scripts/cli-args`; `scripts/reviewer-helpers.js` also requires dispatch modules. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
 | `relay-merge` | `relay-dispatch`, `relay-review` | Merge scripts import dispatch modules throughout: `scripts/finalize-run.js`, `scripts/gate-check.js`, `scripts/relay-reconcile-artifact.js`, and `scripts/review-gate.js` require `../../relay-dispatch/scripts/...`; `scripts/review-gate.js` also imports relay-review schemas and execution evidence. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
 | `relay-config` | `relay-dispatch` | The setup skill wrapper delegates all policy mutations and route decisions to `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/relay-config.js`; installing it alone leaves the policy engine missing. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |

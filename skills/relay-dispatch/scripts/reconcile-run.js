@@ -5,7 +5,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const { findUnknownFlags, modeLabel: formatCliModeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { execGit, resolveBranchRemote } = require("./exec");
 const {
   buildExecutionEvidence,
@@ -38,7 +38,11 @@ const {
 } = require("./run-runtime-state");
 
 const args = process.argv.slice(2);
-const CLI_ARG_OPTIONS = { commandName: "reconcile-run", reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: ["--repo", "--run-id", "--test-result-file", "--dry-run", "--json", "--help", "-h"],
+  booleanFlags: ["--dry-run", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--test-result-file"],
+};
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 function printHelp(exitCode) {
@@ -46,12 +50,12 @@ function printHelp(exitCode) {
   console.log("\nSettle a dispatched relay run after supervisor death, reboot, timeout, or interrupted dispatch.");
   console.log("Also salvages a terminal escalated run that timed out with committed-but-unpushed work.");
   console.log("\nOptions:");
-  console.log(`  --repo <path>    ${modeLabel("--repo")} Repository root (default: .)`);
-  console.log(`  --run-id <id>    ${modeLabel("--run-id")} Relay run identifier`);
-  console.log(`  --test-result-file <path> ${modeLabel("--test-result-file")} Operator test output hashed as salvage execution evidence; a replaceable placeholder is written when omitted`);
-  console.log(`  --dry-run        ${modeLabel("--dry-run")} Report the decision row and planned actions without mutating`);
-  console.log(`  --json           ${modeLabel("--json")} Output JSON`);
-  console.log(`  --help           ${modeLabel("--help")} Show help`);
+  console.log(`  --repo <path>    ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root (default: .)`);
+  console.log(`  --run-id <id>    ${formatCliModeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier`);
+  console.log(`  --test-result-file <path> ${formatCliModeLabel("--test-result-file", CLI_ARG_OPTIONS)} Operator test output hashed as salvage execution evidence; a replaceable placeholder is written when omitted`);
+  console.log(`  --dry-run        ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Report the decision row and planned actions without mutating`);
+  console.log(`  --json           ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
+  console.log(`  --help           ${formatCliModeLabel("--help", CLI_ARG_OPTIONS)} Show help`);
   process.exit(exitCode);
 }
 
@@ -569,7 +573,7 @@ async function trySalvageEscalatedTimeout(
   const shouldPublish = salvageTarget.state === STATES.REVIEW_PENDING;
 
   // Validate the target transition's invariants before any side effect (push,
-  // lease removal, evidence stamp). Mirrors reviewer-swap.js validate-first
+  // lease removal, evidence stamp). Uses a validate-first
   // ordering so a max-1-swap rejection cannot leave a pushed-but-stuck run.
   try {
     validateTransitionInvariants(data, data.state, salvageTarget.state);
@@ -691,7 +695,7 @@ async function trySalvageEscalatedTimeout(
 }
 
 async function main() {
-  const unknownFlags = findUnknownFlags(args, "reconcile-run");
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   }

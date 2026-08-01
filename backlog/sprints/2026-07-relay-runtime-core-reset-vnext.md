@@ -20,10 +20,10 @@ Complete GitHub epic #1129 end to end without using Relay orchestration: preserv
 
 ### Batch 2 — Parallel core replacements
 
-- [ ] #1131 — durable host/exclusion contract and crash drills (3–5 days; depends on #1130)
-- [ ] #1132 — immutable fact store and shadow lifecycle fold (4–6 days; depends on #1130)
-- [ ] #1133 — universal executor adapter protocol and migration of all current executors (4–6 days; depends on #1130)
-- [ ] #1134 — delete routing, assurance, analytics, and CLI runtime accretion (3–5 days; depends on #1130)
+- [x] #1131 — durable host/exclusion contract and crash drills (3–5 days; depends on #1130)
+- [x] #1132 — immutable fact store and shadow lifecycle fold (4–6 days; depends on #1130)
+- [x] #1133 — universal executor adapter protocol and migration of all current executors (4–6 days; depends on #1130)
+- [x] #1134 — delete routing, assurance, analytics, and CLI runtime accretion (3–5 days; depends on #1130)
 
 ### Batch 3 — Recovery convergence
 
@@ -90,3 +90,6 @@ For each issue, append:
 - 2026-07-31 — Completed #1130. Terra high and Sol medium split the inventory, ledger, and executable-contract implementation. Six fresh-context native review rounds found and closed gaps in dynamic invocation discovery, per-registration ledger accounting, measured E2E baselines, semantic reader roles, behavioral no-op rejection, and closed event schemas. Claude Opus 5 high produced no verdict before its 30-minute hard timeout; Pi/Qwen 3.8 Max Preview returned LGTM with one non-blocking recommendation, which was implemented as an automated no-op rejection meta-test. Final native verdict: LGTM.
 - 2026-07-31 — #1130 evidence: 149 shipped artifacts, 156 cross-skill static imports, 22 dynamic invocation edges, 128 relay test files, and 2,179 registration sites are fail-closed and machine-accounted. Ten dispatch and ten recovery E2E samples observed zero failures; medians were 28,281 ms and 7,736 ms. The focused final gate passed 79 tests with 12 intentional vNext TODO gates and zero failures, including all eight nested manifest suites that CI previously omitted.
 - 2026-07-31 — Full-suite baseline remains independently red before production changes: an interrupted 37-minute serialized run and an isolated rerun reproduced four existing advisory-lane cleanup failures (`reap_failed` versus `reaped`) in `advisory-lane-pid-reuse-996.test.js` and `cleanup-worktrees.test.js`. #1130 changes no production lifecycle behavior; the failures are recorded rather than conflated with this foundation change. Direct-orchestration friction so far: long silent external-model calls, one 30-minute reviewer timeout, and a very slow legacy serialized suite made bounded supervision and explicit evidence bookkeeping necessary.
+- 2026-08-01 — #1131 reached native LGTM after replacing fixed-path locks and recursive guards with immutable owner generations and one authenticated terminal decision per generation. Root verification on the final snapshot passed facts/ownership/concurrency 31/31, crash/supervisor 15/15, launcher-exit 20/20, and detached startup 100/100 with zero launchd service growth. The experiment also exposed a major simplification warning: `host.js` is 2,568 lines and must be reduced during cutover rather than treated as the final lightweight shape.
+- 2026-08-01 — #1132 reached LGTM after four adversarial review rounds closed run/journal identity gaps, stale criteria and merge authorization, reviewer filesystem leakage, crash convergence, live shadow wiring, and fd-based TOCTOU reads. #1133 reached LGTM with all seven dispatch executors retained, descriptor-driven capability checks, fail-closed live canary exits, and reproducible raw canary evidence.
+- 2026-08-01 — #1134 reached LGTM after deleting 43 production scripts and their installed policy surfaces: routing/catalog precedence, assurance/advisory lanes, mutable fleet state, runtime analytics, and central CLI-schema indirection. Final production residue search was empty, all seven executors remained registered, and inventory/ledger/reachability passed 23/23. Cross-model review found and closed run.json/facts fail-open paths, fleet redispatch and publication gaps, an admission-generation ABA race, parent-symlink escape, and partial issue-lock publication poisoning; the final independent rereview passed 79 focused checks.

@@ -3,21 +3,15 @@ const {
   buildReviewRunnerRubricGateFailure,
 } = require("../../../relay-dispatch/scripts/manifest/rubric");
 const {
-  buildLaneCapEscalationDecision,
-  getReviewAssuranceMetadata,
-} = require("./assurance");
-const {
   computeFactorStatusFlips,
   computeRepeatedIssueCount,
   decideFlipFlopEscalation,
   summarizeLineage,
   toEscalatedVerdict,
 } = require("./redispatch");
-const { shouldEscalateRepairCycle } = require("./round-cap");
 
 function analyzeVerdict({
   data,
-  gateResult,
   internalReview,
   primaryReviewerVerdict,
   round,
@@ -26,19 +20,8 @@ function analyzeVerdict({
   verdict,
 }) {
   const reviewerVerdict = primaryReviewerVerdict || verdict;
-  const confidenceDowngrade = gateResult.confidenceDowngrade;
-  const assuranceMetadata = getReviewAssuranceMetadata(verdict);
-  const confidenceDowngradeApplied = (
-    confidenceDowngrade.applied
-    && gateResult.passEquivalentVerdict.verdict === "pass"
-  );
-  let analysisVerdict = confidenceDowngradeApplied
-    ? gateResult.passEquivalentVerdict
-    : verdict;
-  const blockingChangesRequested = (
-    verdict.verdict === "changes_requested"
-    && !confidenceDowngradeApplied
-  );
+  let analysisVerdict = verdict;
+  const blockingChangesRequested = verdict.verdict === "changes_requested";
   const repeatedIssueCount = blockingChangesRequested
     ? computeRepeatedIssueCount(runDir, round, analysisVerdict.issues)
     : 0;
@@ -53,13 +36,6 @@ function analyzeVerdict({
     reason: "no_trigger",
   };
 
-  if (assuranceMetadata?.laneCapEscalated) {
-    escalationDecision = buildLaneCapEscalationDecision(
-      round,
-      lineageSummary,
-      assuranceMetadata
-    );
-  }
   if (blockingChangesRequested && repeatedIssueCount >= 3) {
     verdict = toEscalatedVerdict(
       verdict,
@@ -103,7 +79,6 @@ function analyzeVerdict({
     escalationDecision.decision !== "escalate"
     && (
       verdict.verdict === "pass"
-      || confidenceDowngradeApplied
     )
   )
     ? buildReviewRunnerRubricGateFailure(
@@ -116,36 +91,9 @@ function analyzeVerdict({
     blockingChangesRequested
     || Boolean(rubricGateFailure)
   );
-  if (
-    escalationDecision.decision !== "escalate"
-    && shouldEscalateRepairCycle({
-      data,
-      blocking: substantiveFailure,
-      phase: internalReview ? "internal" : "post_publication",
-    })
-  ) {
-    verdict = toEscalatedVerdict(
-      verdict,
-      `The corrected result still has substantive review failures after ${round} independent reviews. Owner decision required.`
-    );
-    escalationDecision = {
-      round,
-      trigger: "repair_cycle_exhausted",
-      factors: [],
-      traces: [],
-      lineage_summary: lineageSummary,
-      decision: "escalate",
-      reason: "repair_cycle_exhausted",
-    };
-    analysisVerdict = verdict;
-  }
-
   return {
     analysisVerdict,
-    assuranceMetadata,
     blockingChangesRequested,
-    confidenceDowngrade,
-    confidenceDowngradeApplied,
     escalationDecision,
     factorFlips,
     lineageSummary,

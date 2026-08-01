@@ -18,7 +18,11 @@ const {
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--run-id", "--manifest", "--json", "--help", "-h"];
-const CLI_ARG_OPTIONS = { commandName: "run-observer", reservedFlags: KNOWN_FLAGS };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--manifest"],
+};
 const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 
 function hasCliFlag(flag) {
@@ -32,11 +36,11 @@ function usage() {
     "Build a read-only status row for one relay run from existing local artifacts.",
     "",
     "Options:",
-    `  --repo <path>      ${modeLabel("--repo")} Repository root (default: .)`,
-    `  --run-id <id>      ${modeLabel("--run-id")} Relay run identifier`,
-    `  --manifest <path>  ${modeLabel("--manifest")} Relay manifest path`,
-    `  --json             ${modeLabel("--json")} Output JSON`,
-    `  --help, -h         ${modeLabel("--help")} Show help`,
+    `  --repo <path>      ${modeLabel("--repo", CLI_ARG_OPTIONS)} Repository root (default: .)`,
+    `  --run-id <id>      ${modeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier`,
+    `  --manifest <path>  ${modeLabel("--manifest", CLI_ARG_OPTIONS)} Relay manifest path`,
+    `  --json             ${modeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`,
+    `  --help, -h         ${modeLabel("--help", CLI_ARG_OPTIONS)} Show help`,
   ].join("\n");
 }
 
@@ -151,7 +155,7 @@ function inspectPr(repoRoot, data) {
     try {
       const raw = execGh(repoRoot, [
         "pr", "view", String(storedNumber),
-        "--json", "number,state,url,headRefName,mergedAt",
+        "--json", "number,state,url,headRefName,headRefOid,baseRefName,mergedAt,mergeCommit",
       ], { timeout: 5000 });
       const parsed = JSON.parse(raw);
       return {
@@ -159,6 +163,9 @@ function inspectPr(repoRoot, data) {
         state: parsed.state || "unknown",
         url: parsed.url || null,
         head_ref: parsed.headRefName || branch,
+        head_sha: parsed.headRefOid || null,
+        base_ref: parsed.baseRefName || data.git?.base_branch || null,
+        merge_sha: parsed.mergeCommit?.oid || null,
         source: "manifest",
         lookup_status: "ok",
       };
@@ -182,7 +189,7 @@ function inspectPr(repoRoot, data) {
       "pr", "list",
       "--head", branch,
       "--state", "all",
-      "--json", "number,state,url,headRefName,mergedAt",
+      "--json", "number,state,url,headRefName,headRefOid,baseRefName,mergedAt,mergeCommit",
     ], { timeout: 5000 });
     const candidates = JSON.parse(raw);
     const pr = Array.isArray(candidates) && candidates.length ? candidates[0] : null;
@@ -194,6 +201,9 @@ function inspectPr(repoRoot, data) {
       state: pr.state || "unknown",
       url: pr.url || null,
       head_ref: pr.headRefName || branch,
+      head_sha: pr.headRefOid || null,
+      base_ref: pr.baseRefName || data.git?.base_branch || null,
+      merge_sha: pr.mergeCommit?.oid || null,
       source: "branch",
       lookup_status: "ok",
     };
@@ -207,6 +217,82 @@ function inspectPr(repoRoot, data) {
       lookup_status: "github_unavailable",
       error: String(error.message || error),
     };
+  }
+}
+
+function inspectRepoIdentity(repoRoot) {
+  try {
+    const raw = execGh(repoRoot, ["repo", "view", "--json", "nameWithOwner"], {
+      timeout: 5000,
+    });
+    const parsed = JSON.parse(raw);
+    return typeof parsed.nameWithOwner === "string" && parsed.nameWithOwner
+      ? parsed.nameWithOwner
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function maybeEvaluateShadow({
+  record,
+  data,
+  normalizedRepoRoot,
+  paths,
+  lease,
+  worktree,
+  pr,
+  classification,
+}) {
+  const telemetryDirectory = process.env.RELAY_VNEXT_SHADOW_TELEMETRY_DIR;
+  if (!telemetryDirectory) return null;
+  if (!path.isAbsolute(telemetryDirectory)) {
+    return { error: "RELAY_VNEXT_SHADOW_TELEMETRY_DIR must be absolute" };
+  }
+  try {
+    const repoIdentity = inspectRepoIdentity(normalizedRepoRoot);
+    const runtime = require("./runtime-vnext");
+    const available = Boolean(
+      repoIdentity
+      && new Set(["ok", "not_found"]).has(pr.lookup_status),
+    );
+    return runtime.evaluateLegacyShadow({
+      manifestPath: record.manifestPath,
+      eventsPath: path.join(paths.runDir || path.dirname(paths.stdoutLog), "events.jsonl"),
+      observations: {
+        remote: repoIdentity,
+        doneCriteriaSha256: data.anchor?.done_criteria_sha256,
+        gitFacts: {
+          head_sha: worktree.current_head,
+          branch: data.git?.working_branch,
+          base_branch: data.git?.base_branch,
+          reviewable_work: worktree.reviewable_dirt || worktree.new_commits > 0,
+          branch_commit_exists: worktree.new_commits > 0,
+          tree_differs_from_start: worktree.reviewable_dirt,
+        },
+        githubFacts: {
+          available,
+          pr_lookup_complete: available,
+          pr_number: pr.number,
+          repo: repoIdentity,
+          pr_head_sha: pr.head_sha,
+          head_ref: pr.head_ref,
+          base_ref: pr.base_ref,
+          pr_state: pr.state,
+          merge_sha: pr.merge_sha,
+        },
+        hostFacts: { live: lease.live },
+      },
+      legacyDecision: {
+        state: data.state,
+        host_live: lease.live,
+        reviewable_work: worktree.reviewable_dirt || worktree.new_commits > 0,
+        classification,
+      },
+      telemetryPath: path.join(telemetryDirectory, `${data.run_id}.jsonl`),
+    });
+  } catch (error) {
+    return { error: error.message };
   }
 }
 
@@ -298,6 +384,16 @@ function observeRun({ repo = ".", runId, manifestPath } = {}) {
   const pr = inspectPr(normalizedRepoRoot, data);
   const resultFile = firstNonEmptyResult(normalizedRepoRoot, normalizedRunId, data);
   const classification = classify({ data, lease, logs, worktree, pr, resultFile });
+  const shadowComparison = maybeEvaluateShadow({
+    record,
+    data,
+    normalizedRepoRoot,
+    paths: { ...paths, runDir: getRunDir(normalizedRepoRoot, normalizedRunId) },
+    lease,
+    worktree,
+    pr,
+    classification,
+  });
   return {
     run_id: normalizedRunId,
     state: data.state,
@@ -318,6 +414,7 @@ function observeRun({ repo = ".", runId, manifestPath } = {}) {
     result_file: resultFile,
     classification,
     next_action: nextActionFor(classification, normalizedRepoRoot, normalizedRunId, record.manifestPath),
+    ...(shadowComparison ? { shadow_comparison: shadowComparison } : {}),
   };
 }
 
@@ -340,7 +437,7 @@ function main() {
     console.log(usage());
     process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
   }
-  const unknownFlags = findUnknownFlags(args, KNOWN_FLAGS);
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   }
@@ -366,4 +463,5 @@ module.exports = {
   classify,
   formatText,
   observeRun,
+  maybeEvaluateShadow,
 };

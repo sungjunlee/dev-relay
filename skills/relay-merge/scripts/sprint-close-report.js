@@ -11,7 +11,7 @@ const {
   parseScoreLog,
 } = require("../../relay-review/scripts/review-runner/divergence");
 const { extractAllFactors } = require("../../relay-plan/scripts/tdd-flavor");
-const { bindCliArgs } = require("../../relay-dispatch/scripts/cli-args");
+const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
 const {
   listManifestRecords,
 } = require("../../relay-dispatch/scripts/manifest/store");
@@ -27,6 +27,11 @@ const RESERVED_FLAGS = [
   "--help",
   "-h",
 ];
+const CLI_ARG_OPTIONS = {
+  reservedFlags: RESERVED_FLAGS,
+  booleanFlags: ["--help", "-h"],
+  verbatimValueFlags: ["--repo", "--sprint"],
+};
 
 function usage() {
   return [
@@ -95,7 +100,9 @@ function loadSprintCloseConfig(repoRoot) {
 }
 
 function resolveOptions(args) {
-  const cli = bindCliArgs(args, { reservedFlags: RESERVED_FLAGS });
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
+  if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+  const cli = bindCliArgs(args, CLI_ARG_OPTIONS);
   if (cli.hasFlag("--help") || cli.hasFlag("-h")) {
     return { help: true };
   }

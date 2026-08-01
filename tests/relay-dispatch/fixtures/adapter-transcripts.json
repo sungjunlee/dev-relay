@@ -1,0 +1,6 @@
+{
+  "text_success": "completed work\n",
+  "json_success": "{\"verdict\":\"pass\"}\n",
+  "cline_success": "{\"type\":\"agent_event\",\"event\":{\"type\":\"content_end\"}}\n{\"type\":\"run_result\",\"finishReason\":\"completed\",\"text\":\"completed cline work\"}\n",
+  "cline_malformed": "{not json}\n"
+}

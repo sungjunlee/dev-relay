@@ -3,7 +3,7 @@
  * Create a worktree and dispatch a task to an executor.
  *
  * Executor-agnostic orchestrator: worktree -> execute -> collect -> retain.
- * To add a new executor, add a branch in the "Execute task" section.
+ * Executors are selected through the universal adapter registry.
  *
  * Usage:
  *   ./dispatch.js <repo-path> --branch <name> --prompt <task>  [options]
@@ -18,27 +18,23 @@
  *   --prompt, -p <text>    Task prompt
  *   --prompt-file <path>   Read prompt from file (for large prompts)
  *   --executor, -e <name>  Executor to use (default: codex)
- *   --model, -m <name>     Model override (default: from executor config)
- *   --model-hints <spec>   Persist per-phase model hints (phase=model,...)
- *   --route-preset <name>  Expand named routes.json preset into unset route fields
+ *   --model, -m <name>     Explicit model selection (omitted: adapter provider default)
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --network-access <mode> disabled | enabled (default: disabled; codex workspace-write only)
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 2400 for codex, 1800 for others)
- *   --reasoning <level>    Codex reasoning effort override (default by rubric size: S=medium, M=high, L/XL=xhigh)
+ *   --reasoning <level>    Explicit Codex reasoning effort override (omitted: provider default)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
  *   --publish-policy <mode> immediate | after-internal-review (default: immediate)
- *   --review-assurance <level> compact | standard | hardened (default: standard)
- *   --tags <csv>          Explicit routing tags; override inferred routing tags
  *   --rubric-grandfathered Retired alias; dispatch rejects it
  *   --request-id <id>      Link the run back to a relay-ready request
  *   --leaf-id <id>         Link the run back to a relay-ready leaf handoff
  *   --ownership-json <json>  Validated fleet owner: sprint, track, component
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
  *   --register             Register session in executor's app (keeps worktree)
- *   --auto-recover-commit  Run recover-commit after completed-uncommitted (default: on for codex and claude, off for other executors)
- *   --no-auto-recover-commit  Opt out of codex and claude default auto recover-commit
+ *   --auto-recover-commit  Orchestrator-commit completed-uncommitted work (default: on)
+ *   --no-auto-recover-commit  Opt out of the default orchestrator commit
  *   --detach               Launch detached supervisor and print a receipt
  *   --dry-run              Show plan without executing
  *   --json                 Output as JSON
@@ -80,7 +76,9 @@ const {
   formatDispatchDryRun,
   removeWorktree,
 } = require("./worktree-runtime");
-const { getExecutor, listExecutors } = require("./executors");
+const { getExecutor: getLegacyExecutor } = require("./executors");
+const { ADAPTER_PHASES, getAdapter, listAdapters } = require("./adapters");
+const { assertInvocationIdentity, resolveAdapterProvider, validateCapabilities } = require("./adapter-contract");
 const {
   collectEnvironmentSnapshot,
   compareEnvironmentSnapshot,
@@ -90,19 +88,13 @@ const {
   readManifest,
   writeManifest,
 } = require("./manifest/store");
-const { parseModelHints } = require("./model-hints");
-const { resolveExecutorDefaultModel } = require("./executor-model-config");
-const {
-  extractReviewAssuranceFromRubric,
-  normalizeReviewAssurance,
-  resolveReviewAssurance,
-} = require("./manifest/review-assurance");
 const {
   createRunId,
   ensureRunLayout,
   getCanonicalRepoRoot,
+  getRelayHome,
+  getFleetIssueLockPath,
   getManifestPath,
-  getRoutePlanPath,
   getRunDir,
   inferIssueNumber,
   looksLikeGitRepo,
@@ -110,10 +102,6 @@ const {
   sameFilesystemLocation,
   validateManifestPaths,
 } = require("./manifest/paths");
-const {
-  acquireIssueLock,
-  releaseIssueLock,
-} = require("./manifest/fleet");
 const {
   findInflightRunsForIssue,
   formatInflightCollisionError,
@@ -126,6 +114,7 @@ const {
   validateRubricPathContainment,
 } = require("./manifest/rubric");
 const { findUnknownFlags, getPositionals, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const { captureLocalProcessIdentity, probeLocalProcess } = require("./host");
 const {
   formatOwnership,
   normalizeOwnership,
@@ -134,41 +123,10 @@ const {
   validateOwnershipAgainstSprintState,
 } = require("./ownership");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
-const {
-  buildGuidanceMetadata,
-  extractGuidanceFromPrompt,
-  extractTaskProfileSummaryFromPrompt,
-  GUIDANCE_METADATA_FILENAME,
-  persistGuidanceMetadata,
-} = require("./manifest/guidance");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS } = require("./relay-events");
-const {
-  ADAPTER_PHASES,
-  getAgentAdapterDescriptor,
-} = require("./agent-adapters");
-const {
-  assertPolicyRepresentable,
-  buildAdapterCapabilityFailureEnvelope,
-  buildAgentPolicyAudit,
-} = require("./agent-adapters/policy");
+const { appendRunEvent, EVENTS } = require("./relay-events");
 const { execGit } = require("./exec");
-const { resolveReasoningEffort } = require("./rubric-size");
-const {
-  validateReadyLightRubric,
-} = require("../../relay-plan/scripts/rubric-validation");
-const {
-  assertRelayPolicyGate,
-  buildPolicyGateFailureEnvelope,
-} = require("./relay-policy-gate");
-const {
-  hintForCliBinary,
-  hintForPolicyDecision,
-  withHint,
-} = require("./route-failure-hints");
-const { loadRelayPolicy } = require("./relay-policy");
-const { loadProjectRoutes, resolveRouteIntent, resolveRoutingDecision } = require("./relay-routing");
 const {
   classifyRepositoryDirt,
   formatEmptyReviewableIndexError,
@@ -186,6 +144,429 @@ const {
   writeRunLease,
 } = require("./run-runtime-state");
 
+// Fleet admission is deliberately private to dispatch.  A fleet is now only an
+// immutable cohort plus child-run lineage. This append-only admission ledger
+// serializes mutation of the transient per-issue lock without recreating a
+// fleet lifecycle/state subsystem. Only an unambiguously dead local generation
+// may be closed; remote, malformed, or unreadable owners fail closed.
+function fleetIssueLockPath(repoRoot, issueNumber) {
+  return getFleetIssueLockPath(repoRoot, issueNumber);
+}
+
+// O_NOFOLLOW protects the final lock file, not a symlinked `fleets/` or
+// `locks/` parent. Keep the configured relay home as the trust anchor (it may
+// itself be an OS-level alias such as /var on macOS), then make the logical
+// descendant and its canonical path agree component by component.
+function trustedAdmissionLockPath(lockPath, { create = false } = {}) {
+  const logicalHome = path.resolve(getRelayHome());
+  const logicalDirectory = path.resolve(path.dirname(lockPath));
+  if (create) fs.mkdirSync(logicalHome, { recursive: true });
+  let canonicalHome;
+  try {
+    canonicalHome = fs.realpathSync(logicalHome);
+  } catch (error) {
+    if (error.code === "ENOENT") throw new Error(`fleet admission relay home does not exist: ${logicalHome}`);
+    throw error;
+  }
+  const relativeTo = (root) => path.relative(root, logicalDirectory);
+  const isContainedRelative = (relative) => relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  // Internal callers retain canonical paths in their lock capability. Accept
+  // either that canonical spelling or the configured logical spelling, but
+  // never a sibling outside the configured relay home.
+  const relative = isContainedRelative(relativeTo(logicalHome))
+    ? relativeTo(logicalHome)
+    : relativeTo(canonicalHome);
+  if (!isContainedRelative(relative)) throw new Error(`fleet admission lock escapes relay home: ${lockPath}`);
+  const expectedDirectory = path.join(canonicalHome, relative);
+  let cursor = canonicalHome;
+  for (const component of relative.split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, component);
+    let stat;
+    try {
+      stat = fs.lstatSync(cursor);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      if (!create) return path.join(expectedDirectory, path.basename(lockPath));
+      fs.mkdirSync(cursor);
+      stat = fs.lstatSync(cursor);
+    }
+    if (stat.isSymbolicLink()) throw new Error(`fleet admission lock contains a symlink component: ${cursor}`);
+    if (!stat.isDirectory()) throw new Error(`fleet admission lock parent is not a directory: ${cursor}`);
+  }
+  const canonicalDirectory = fs.realpathSync(logicalDirectory);
+  if (canonicalDirectory !== expectedDirectory) {
+    throw new Error(`fleet admission lock parent is not its canonical logical path: ${logicalDirectory}`);
+  }
+  return path.join(expectedDirectory, path.basename(lockPath));
+}
+
+function readAdmissionLockSnapshot(lockPath) {
+  lockPath = trustedAdmissionLockPath(lockPath);
+  let fd;
+  try {
+    fd = fs.openSync(lockPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const before = fs.fstatSync(fd);
+    if (!before.isFile()) throw new Error("admission lock is not a regular file");
+    const record = JSON.parse(fs.readFileSync(fd, "utf8"));
+    const after = fs.fstatSync(fd);
+    if (before.dev !== after.dev || before.ino !== after.ino) throw new Error("admission lock changed while being read");
+    return { record, dev: before.dev, ino: before.ino };
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+function admissionMutationPath(lockPath) { return `${lockPath}.mutation`; }
+
+function admissionGenerationBase(generation) {
+  return String(generation).padStart(12, "0");
+}
+
+function fsyncAdmissionDirectory(directory, fsModule = fs) {
+  let fd;
+  try {
+    fd = fsModule.openSync(directory, fsModule.constants.O_RDONLY);
+    fsModule.fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) fsModule.closeSync(fd);
+  }
+}
+
+function readImmutableAdmissionArtifact(artifactPath, label) {
+  let fd;
+  try {
+    fd = fs.openSync(artifactPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const opened = fs.fstatSync(fd);
+    const pathname = fs.lstatSync(artifactPath);
+    if (
+      !opened.isFile()
+      || pathname.isSymbolicLink()
+      || opened.dev !== pathname.dev
+      || opened.ino !== pathname.ino
+    ) throw new Error(`${label} is not an immutable regular file`);
+    const record = JSON.parse(fs.readFileSync(fd, "utf8"));
+    const after = fs.fstatSync(fd);
+    if (opened.dev !== after.dev || opened.ino !== after.ino) throw new Error(`${label} changed while being read`);
+    return { record, dev: opened.dev, ino: opened.ino };
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function publishImmutableAdmissionArtifact(target, record) {
+  const directory = path.dirname(target);
+  const temporary = path.join(
+    directory,
+    `.${path.basename(target)}.tmp.${process.pid}.${crypto.randomBytes(8).toString("hex")}`,
+  );
+  let fd;
+  try {
+    fd = fs.openSync(temporary, "wx", 0o600);
+    fs.writeFileSync(fd, `${JSON.stringify(record)}\n`, "utf8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd); fd = undefined;
+    fs.linkSync(temporary, target);
+    fsyncAdmissionDirectory(directory);
+    return true;
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    throw error;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+    try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+}
+
+// The issue lock is transient, but publishing it still has to be crash-safe:
+// an interrupted direct O_EXCL write would leave malformed bytes that block
+// every later admission. Publish a durable private inode, then atomically add
+// its final name with link(2). A failed publication removes only the inode it
+// just linked, so a later normal admission is never poisoned by partial bytes.
+function publishIssueLockExclusive(lockPath, record, fsModule = fs) {
+  const directory = path.dirname(lockPath);
+  const temporary = path.join(
+    directory,
+    `.${path.basename(lockPath)}.tmp.${process.pid}.${crypto.randomBytes(8).toString("hex")}`,
+  );
+  let fd;
+  let linked = false;
+  let published = null;
+  try {
+    fd = fsModule.openSync(temporary, "wx", 0o600);
+    fsModule.writeFileSync(fd, `${JSON.stringify(record)}\n`, "utf8");
+    fsModule.fsyncSync(fd);
+    const stat = fsModule.fstatSync(fd);
+    fsModule.closeSync(fd); fd = undefined;
+
+    try {
+      fsModule.linkSync(temporary, lockPath);
+      linked = true;
+    } catch (error) {
+      if (error.code === "EEXIST") return null;
+      throw error;
+    }
+    published = { dev: stat.dev, ino: stat.ino };
+    fsyncAdmissionDirectory(directory, fsModule);
+    return published;
+  } catch (error) {
+    // If the final name was installed but its durability acknowledgement
+    // failed, remove exactly that inode before returning the failure. Never
+    // unlink a replacement published by another contender.
+    if (linked && published) {
+      try {
+        const current = fsModule.lstatSync(lockPath);
+        if (
+          current.isFile()
+          && !current.isSymbolicLink()
+          && current.dev === published.dev
+          && current.ino === published.ino
+        ) {
+          fsModule.unlinkSync(lockPath);
+          fsyncAdmissionDirectory(directory, fsModule);
+        }
+      } catch {
+        // Preserve the original publication failure. A cleanup failure leaves
+        // the regular lock record for the existing dead-holder reclaim path.
+      }
+    }
+    throw error;
+  } finally {
+    if (fd !== undefined) try { fsModule.closeSync(fd); } catch {}
+    try { fsModule.unlinkSync(temporary); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+}
+
+function validateAdmissionOwner(record, { generation, lockPath } = {}) {
+  if (
+    !record
+    || record.generation !== generation
+    || record.lock_path !== lockPath
+    || typeof record.token !== "string"
+    || !/^[0-9a-f]{32}$/.test(record.token)
+  ) throw new Error("fleet admission mutation owner is invalid");
+  return record;
+}
+
+function validateAdmissionTerminal(record, owner) {
+  if (
+    !record
+    || record.generation !== owner.generation
+    || record.token !== owner.token
+    || !["released", "broken"].includes(record.outcome)
+  ) throw new Error("fleet admission mutation terminal marker is invalid");
+  return record;
+}
+
+function admissionMutationSnapshot(lockPath) {
+  lockPath = trustedAdmissionLockPath(lockPath);
+  const directory = path.dirname(lockPath);
+  const prefix = path.basename(admissionMutationPath(lockPath));
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const ownerPattern = new RegExp(`^${escaped}\\.(\\d{12})\\.owner\\.json$`);
+  const entries = fs.readdirSync(directory)
+    .map((name) => ({ name, match: name.match(ownerPattern) }))
+    .filter((entry) => entry.match)
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(({ name, match }) => {
+      const generation = Number(match[1]);
+      const ownerPath = path.join(directory, name);
+      const ownerArtifact = readImmutableAdmissionArtifact(ownerPath, "fleet admission mutation owner");
+      const owner = validateAdmissionOwner(ownerArtifact.record, { generation, lockPath });
+      const terminalPath = path.join(directory, `${prefix}.${admissionGenerationBase(generation)}.terminal.json`);
+      let terminal = null;
+      if (fs.existsSync(terminalPath)) {
+        terminal = validateAdmissionTerminal(
+          readImmutableAdmissionArtifact(terminalPath, "fleet admission mutation terminal").record,
+          owner,
+        );
+      }
+      return { generation, ownerPath, terminalPath, owner, ownerArtifact, terminal };
+    });
+  const active = entries.filter((entry) => !entry.terminal);
+  if (active.length > 1) throw new Error("ambiguous fleet admission mutation generations");
+
+  // A pre-generation guard can remain after upgrading from the former mutable
+  // protocol. It blocks only while its exact local owner is still live; dead or
+  // released legacy bytes are left untouched and the immutable ledger proceeds.
+  const legacyPath = admissionMutationPath(lockPath);
+  if (fs.existsSync(legacyPath)) {
+    const legacy = readImmutableAdmissionArtifact(legacyPath, "legacy fleet admission mutation").record;
+    const owner = { ...legacy, host: legacy?.host || legacy?.hostname };
+    if (legacy?.state !== "released" && probeLocalProcess(owner).status !== "dead") {
+      return { entries, active: null, legacyBlocked: true, nextGeneration: (entries.at(-1)?.generation || 0) + 1 };
+    }
+  }
+  return {
+    entries,
+    active: active[0] || null,
+    legacyBlocked: false,
+    nextGeneration: (entries.at(-1)?.generation || 0) + 1,
+  };
+}
+
+function prepareAdmissionMutationCandidate(lockPath, snapshot = admissionMutationSnapshot(lockPath)) {
+  lockPath = trustedAdmissionLockPath(lockPath);
+  if (snapshot.legacyBlocked || snapshot.active) return null;
+  const generation = snapshot.nextGeneration;
+  const token = crypto.randomBytes(16).toString("hex");
+  const identity = captureLocalProcessIdentity();
+  const owner = {
+    generation,
+    token,
+    lock_path: lockPath,
+    acquired_at: new Date().toISOString(),
+    ...identity,
+    hostname: identity.host,
+  };
+  const prefix = admissionMutationPath(lockPath);
+  return {
+    lockPath,
+    generation,
+    token,
+    owner,
+    ownerPath: `${prefix}.${admissionGenerationBase(generation)}.owner.json`,
+    terminalPath: `${prefix}.${admissionGenerationBase(generation)}.terminal.json`,
+  };
+}
+
+function commitAdmissionMutationCandidate(candidate) {
+  if (!candidate || !publishImmutableAdmissionArtifact(candidate.ownerPath, candidate.owner)) return null;
+  const snapshot = admissionMutationSnapshot(candidate.lockPath);
+  if (
+    !snapshot.active
+    || snapshot.active.generation !== candidate.generation
+    || snapshot.active.owner.token !== candidate.token
+  ) return null;
+  return {
+    ...candidate,
+    dev: snapshot.active.ownerArtifact.dev,
+    ino: snapshot.active.ownerArtifact.ino,
+  };
+}
+
+function publishAdmissionMutationTerminal(entry, outcome) {
+  const terminal = {
+    generation: entry.owner.generation,
+    token: entry.owner.token,
+    outcome,
+    completed_at: new Date().toISOString(),
+  };
+  if (publishImmutableAdmissionArtifact(entry.terminalPath, terminal)) return true;
+  const existing = validateAdmissionTerminal(
+    readImmutableAdmissionArtifact(entry.terminalPath, "fleet admission mutation terminal").record,
+    entry.owner,
+  );
+  return existing.outcome === outcome;
+}
+
+function acquireAdmissionMutation(lockPath) {
+  lockPath = trustedAdmissionLockPath(lockPath);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const snapshot = admissionMutationSnapshot(lockPath);
+    if (snapshot.legacyBlocked) return null;
+    if (snapshot.active) {
+      if (probeLocalProcess(snapshot.active.owner).status !== "dead") return null;
+      // The true owner may publish `released` between our dead probe and the
+      // terminal election. Either terminal closes this generation, so follow
+      // the immutable ledger again instead of surfacing a false contention.
+      if (!publishAdmissionMutationTerminal(snapshot.active, "broken")) continue;
+      continue;
+    }
+    const acquired = commitAdmissionMutationCandidate(
+      prepareAdmissionMutationCandidate(lockPath, snapshot),
+    );
+    if (acquired) return acquired;
+  }
+  return null;
+}
+
+function releaseAdmissionMutation(mutation) {
+  if (!mutation) return false;
+  try {
+    const snapshot = admissionMutationSnapshot(mutation.lockPath);
+    if (
+      !snapshot.active
+      || snapshot.active.generation !== mutation.generation
+      || snapshot.active.owner.token !== mutation.token
+      || snapshot.active.ownerArtifact.dev !== mutation.dev
+      || snapshot.active.ownerArtifact.ino !== mutation.ino
+    ) return false;
+    return publishAdmissionMutationTerminal(snapshot.active, "released");
+  } catch {
+    return false;
+  }
+}
+
+function localHolderIsDead(record) {
+  if (!record) return false;
+  return probeLocalProcess({ ...record, host: record.host || record.hostname }).status === "dead";
+}
+
+function acquireIssueLock({ repoRoot, issueNumber, fleetId, runId }) {
+  const lockPath = trustedAdmissionLockPath(fleetIssueLockPath(repoRoot, issueNumber), { create: true });
+  const token = crypto.randomBytes(16).toString("hex");
+  const identity = captureLocalProcessIdentity();
+  const record = { issue_number: Number(issueNumber), fleet_id: fleetId, run_id: runId,
+    token, acquired_at: new Date().toISOString(), ...identity, hostname: identity.host };
+  const mutation = acquireAdmissionMutation(lockPath);
+  if (!mutation) throw new Error(`Refusing to dispatch: fleet admission mutation is active at ${lockPath}`);
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const published = publishIssueLockExclusive(lockPath, record);
+        if (published) return { lockPath, token, ...published };
+      } catch (error) {
+        throw error;
+      }
+      try {
+        let observed;
+        try { observed = readAdmissionLockSnapshot(lockPath); } catch {
+          throw new Error(`Refusing to dispatch: ambiguous fleet admission lock at ${lockPath}`);
+        }
+        if (!localHolderIsDead(observed.record)) {
+          throw new Error(`Refusing to dispatch: fleet admission lock is held at ${lockPath}`);
+        }
+        const current = readAdmissionLockSnapshot(lockPath);
+        if (
+          current.dev !== observed.dev || current.ino !== observed.ino ||
+          current.record?.token !== observed.record?.token || !localHolderIsDead(current.record)
+        ) {
+          throw new Error(`Refusing to dispatch: fleet admission lock changed during dead-holder reclaim at ${lockPath}`);
+        }
+        fs.unlinkSync(lockPath);
+        fsyncAdmissionDirectory(path.dirname(lockPath));
+      } catch (error) {
+        throw error;
+      }
+    }
+  } finally {
+    releaseAdmissionMutation(mutation);
+  }
+  throw new Error(`Refusing to dispatch: fleet admission lock remains contested at ${lockPath}`);
+}
+
+function releaseIssueLock(lock) {
+  if (!lock?.lockPath || !lock.token || lock.dev === undefined || lock.ino === undefined) return false;
+  let mutation;
+  try {
+    mutation = acquireAdmissionMutation(lock.lockPath);
+    if (!mutation) return false;
+    const current = readAdmissionLockSnapshot(lock.lockPath);
+    if (current.dev !== lock.dev || current.ino !== lock.ino || current.record?.token !== lock.token) return false;
+    fs.unlinkSync(lock.lockPath);
+    return true;
+  } catch { return false; }
+  finally { releaseAdmissionMutation(mutation); }
+}
+
+function acquireIssueAdmission({ repoRoot, issueNumber, fleetId, runId, scanInflight }) {
+  const lock = acquireIssueLock({ repoRoot, issueNumber, fleetId, runId });
+  try {
+    return { lock, inflightRuns: scanInflight() };
+  } catch (error) {
+    releaseIssueLock(lock);
+    throw error;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Args
 // ---------------------------------------------------------------------------
@@ -194,11 +575,21 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
-  "--request-id", "--leaf-id", "--fleet-id", "--ownership-json", "--done-criteria-file", "--publish-policy", "--review-assurance", "--tags",
+  "--model", "-m", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
+  "--request-id", "--leaf-id", "--fleet-id", "--issue-number", "--ownership-json", "--done-criteria-file", "--publish-policy",
   "--register", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help", "-h",
 ];
-const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: [
+    "--rubric-grandfathered", "--register", "--auto-recover-commit", "--no-auto-recover-commit",
+    "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help", "-h",
+  ],
+  verbatimValueFlags: [
+    "--branch", "-b", "--manifest", "--prompt", "-p", "--prompt-file", "--copy",
+    "--rubric-file", "--test-command", "--done-criteria-file", "--ownership-json",
+  ],
+};
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const JSON_OUT_REQUESTED = hasCliFlag("--json");
 
@@ -227,50 +618,46 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("       dispatch.js <repo-path> --run-id <id> --prompt <task> [options]");
   console.log("       dispatch.js --manifest <path> --prompt-file <path> [options]");
   console.log("\nOptions:");
-  console.log(`  --branch, -b       ${modeLabel("--branch")} Branch name (required)`);
-  console.log(`  --run-id           ${modeLabel("--run-id")} Resume an existing run, or reserve id for new dispatch with --branch`);
-  console.log(`  --manifest         ${modeLabel("--manifest")} Resume an existing relay run from its manifest`);
-  console.log(`  --prompt, -p       ${modeLabel("--prompt")} Task prompt`);
-  console.log(`  --prompt-file      ${modeLabel("--prompt-file")} Read prompt from file`);
-  console.log(`  --executor, -e     ${modeLabel("--executor")} Executor: ${listExecutors().join(", ")} (default: codex)`);
-  console.log(`  --model, -m        ${modeLabel("--model")} Model override`);
-  console.log(`  --model-hints      ${modeLabel("--model-hints")} Persist per-phase model hints (phase=model,...)`);
-  console.log(`  --route-intent-file ${modeLabel("--route-intent-file")} Read one-off run route intent JSON`);
-  console.log(`  --route-preset     ${modeLabel("--route-preset")} Expand named routes.json preset into unset route fields`);
-  console.log(`  --sandbox          ${modeLabel("--sandbox")} workspace-write | read-only (default: workspace-write)`);
-  console.log(`  --network-access   ${modeLabel("--network-access")} disabled | enabled (default: disabled; codex workspace-write only)`);
-  console.log(`  --copy <files>     ${modeLabel("--copy")} Additional files to copy (comma-separated)`);
-  console.log(`  --timeout          ${modeLabel("--timeout")} Exec timeout in seconds (default: 2400 for codex, 1800 for others)`);
-  console.log(`  --reasoning        ${modeLabel("--reasoning")} Codex reasoning effort (default by rubric size: S=medium, M=high, L/XL=xhigh)`);
-  console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
-  console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
-  console.log(`  --publish-policy   ${modeLabel("--publish-policy")} PR publication policy: immediate | after-internal-review (default: immediate)`);
-  console.log(`  --review-assurance ${modeLabel("--review-assurance")} Review assurance: compact | standard | hardened (default: standard)`);
-  console.log(`  --tags             ${modeLabel("--tags")} Explicit routing tags; override inferred routing tags`);
-  console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
-  console.log(`  --request-id       ${modeLabel("--request-id")} Link the run back to a relay-ready request`);
-  console.log(`  --leaf-id          ${modeLabel("--leaf-id")} Link the run back to a relay-ready leaf handoff`);
-  console.log(`  --fleet-id         ${modeLabel("--fleet-id")} Link the run back to a relay fleet`);
-  console.log(`  --ownership-json   ${modeLabel("--ownership-json")} Fleet owner JSON with sprint, track, and component`);
-  console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file")} Persist a frozen Done Criteria anchor path`);
-  console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
-  console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Run recover-commit after completed-uncommitted (default: on for codex and claude, off for other executors)`);
-  console.log(`  --no-auto-recover-commit  ${modeLabel("--no-auto-recover-commit")} Opt out of codex and claude default auto recover-commit`);
-  console.log(`  --allow-conflicting-run  ${modeLabel("--allow-conflicting-run")} Bypass the in-flight run check (logs conflicting_run_override event)`);
-  console.log(`  --detach           ${modeLabel("--detach")} Launch detached supervisor and print a receipt`);
-  console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
-  console.log(`  --json             ${modeLabel("--json")} Output as JSON`);
+  console.log(`  --branch, -b       ${modeLabel("--branch", CLI_ARG_OPTIONS)} Branch name (required)`);
+  console.log(`  --run-id           ${modeLabel("--run-id", CLI_ARG_OPTIONS)} Resume an existing run, or reserve id for new dispatch with --branch`);
+  console.log(`  --manifest         ${modeLabel("--manifest", CLI_ARG_OPTIONS)} Resume an existing relay run from its manifest`);
+  console.log(`  --prompt, -p       ${modeLabel("--prompt", CLI_ARG_OPTIONS)} Task prompt`);
+  console.log(`  --prompt-file      ${modeLabel("--prompt-file", CLI_ARG_OPTIONS)} Read prompt from file`);
+  console.log(`  --executor, -e     ${modeLabel("--executor", CLI_ARG_OPTIONS)} Executor: ${listAdapters().join(", ")} (default: codex)`);
+  console.log(`  --model, -m        ${modeLabel("--model", CLI_ARG_OPTIONS)} Explicit model selection (omitted: adapter provider default)`);
+  console.log(`  --sandbox          ${modeLabel("--sandbox", CLI_ARG_OPTIONS)} workspace-write | read-only (default: workspace-write)`);
+  console.log(`  --network-access   ${modeLabel("--network-access", CLI_ARG_OPTIONS)} disabled | enabled (default: disabled; codex workspace-write only)`);
+  console.log(`  --copy <files>     ${modeLabel("--copy", CLI_ARG_OPTIONS)} Additional files to copy (comma-separated)`);
+  console.log(`  --timeout          ${modeLabel("--timeout", CLI_ARG_OPTIONS)} Exec timeout in seconds (default: 2400 for codex, 1800 for others)`);
+  console.log(`  --reasoning        ${modeLabel("--reasoning", CLI_ARG_OPTIONS)} Explicit Codex reasoning effort (omitted: provider default)`);
+  console.log(`  --rubric-file      ${modeLabel("--rubric-file", CLI_ARG_OPTIONS)} REQUIRED: copy rubric YAML to run dir (persists for review)`);
+  console.log(`  --test-command     ${modeLabel("--test-command", CLI_ARG_OPTIONS)} Record the executor-side test command in execution evidence`);
+  console.log(`  --publish-policy   ${modeLabel("--publish-policy", CLI_ARG_OPTIONS)} PR publication policy: immediate | after-internal-review (default: immediate)`);
+  console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered", CLI_ARG_OPTIONS)} Retired alias; remove anchor.rubric_grandfathered manually`);
+  console.log(`  --request-id       ${modeLabel("--request-id", CLI_ARG_OPTIONS)} Link the run back to a relay-ready request`);
+  console.log(`  --leaf-id          ${modeLabel("--leaf-id", CLI_ARG_OPTIONS)} Link the run back to a relay-ready leaf handoff`);
+  console.log(`  --fleet-id         ${modeLabel("--fleet-id", CLI_ARG_OPTIONS)} Link the run back to a relay fleet`);
+  console.log(`  --issue-number     ${modeLabel("--issue-number", CLI_ARG_OPTIONS)} Explicit immutable issue identity for fleet admission`);
+  console.log(`  --ownership-json   ${modeLabel("--ownership-json", CLI_ARG_OPTIONS)} Fleet owner JSON with sprint, track, and component`);
+  console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file", CLI_ARG_OPTIONS)} Persist a frozen Done Criteria anchor path`);
+  console.log(`  --register         ${modeLabel("--register", CLI_ARG_OPTIONS)} Register session in executor's app (keeps worktree)`);
+  console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit", CLI_ARG_OPTIONS)} Orchestrator-commit completed-uncommitted work (default: on)`);
+  console.log(`  --no-auto-recover-commit  ${modeLabel("--no-auto-recover-commit", CLI_ARG_OPTIONS)} Opt out of the default orchestrator commit`);
+  console.log(`  --allow-conflicting-run  ${modeLabel("--allow-conflicting-run", CLI_ARG_OPTIONS)} Bypass the in-flight run check (logs conflicting_run_override event)`);
+  console.log(`  --detach           ${modeLabel("--detach", CLI_ARG_OPTIONS)} Launch detached supervisor and print a receipt`);
+  console.log(`  --dry-run          ${modeLabel("--dry-run", CLI_ARG_OPTIONS)} Show plan without executing`);
+  console.log(`  --json             ${modeLabel("--json", CLI_ARG_OPTIONS)} Output as JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
 }
 
-const UNKNOWN_FLAGS = findUnknownFlags(args, "dispatch");
+const UNKNOWN_FLAGS = findUnknownFlags(args, CLI_ARG_OPTIONS);
 if (UNKNOWN_FLAGS.length) {
   console.error(`Error: unknown flags: ${UNKNOWN_FLAGS.join(", ")}`);
   process.exit(1);
 }
 
 // Positional arg: first arg that isn't a flag and isn't consumed as a flag's value.
-const repoPathRaw = getPositionals(args, "dispatch")[0];
+const repoPathRaw = getPositionals(args, CLI_ARG_OPTIONS)[0];
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const BRANCH = readArg(args, ["--branch", "-b"], undefined, CLI_ARG_OPTIONS);
 const RUN_ID = readArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
@@ -279,93 +666,11 @@ const PROMPT = readArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = readArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR_ARG = readArg(args, ["--executor", "-e"], undefined, CLI_ARG_OPTIONS);
 const MODEL = readArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
-const ROUTE_INTENT_FILE = readArg(args, "--route-intent-file", undefined, CLI_ARG_OPTIONS);
-const ROUTE_PRESET = readArg(args, "--route-preset", undefined, CLI_ARG_OPTIONS);
-const RELAY_HOME_FOR_ROUTES = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
-
-function readRouteIntentFile(filePath) {
-  if (!filePath) return {};
-  const resolved = path.resolve(filePath);
-  try {
-    const parsed = JSON.parse(fs.readFileSync(resolved, "utf-8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("expected JSON object");
-    }
-    return parsed;
-  } catch (error) {
-    failEarly(`failed to read route intent file at ${resolved}: ${error.message}`);
-  }
-}
 
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function mergeDispatchCliIntoRunIntent(baseIntent, { executor, model }) {
-  const dispatch = {
-    ...(baseIntent.dispatch && typeof baseIntent.dispatch === "object" && !Array.isArray(baseIntent.dispatch)
-      ? baseIntent.dispatch
-      : {}),
-  };
-  if (executor) dispatch.executor = executor;
-  if (model) dispatch.model = model;
-  return {
-    ...baseIntent,
-    ...(Object.keys(dispatch).length ? { dispatch } : {}),
-  };
-}
-
-function loadInitialRoutePlan(repoRoot) {
-  const policyResult = loadRelayPolicy({ repoRoot, relayHome: RELAY_HOME_FOR_ROUTES });
-  const projectRoutes = loadProjectRoutes({ repoRoot, relayHome: RELAY_HOME_FOR_ROUTES });
-  if (!policyResult.ok) {
-    failEarly(policyResult.errors?.[0]?.message || "failed to load relay policy", {
-      policy: policyResult,
-    });
-  }
-  if (!projectRoutes.ok) {
-    failEarly(projectRoutes.error || "failed to load project routes", {
-      project_routes: projectRoutes,
-    });
-  }
-  const routeIntent = mergeDispatchCliIntoRunIntent(readRouteIntentFile(ROUTE_INTENT_FILE), {
-    executor: EXECUTOR_ARG,
-    model: MODEL,
-  });
-  // Seed an explicit CLI --review-assurance before preset expansion so the
-  // preset cannot claim it filled the value. The persisted rubric is resolved
-  // later and remains authoritative over this dispatch default.
-  if (REVIEW_ASSURANCE_RAW && !nonEmptyString(routeIntent.review_assurance)) {
-    routeIntent.review_assurance = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW);
-  }
-  let routePlan;
-  try {
-    routePlan = resolveRouteIntent({
-      runIntent: routeIntent,
-      routePresetName: ROUTE_PRESET,
-      projectRoutes: projectRoutes.routes,
-      policy: policyResult.policy,
-      relayHome: RELAY_HOME_FOR_ROUTES,
-      repoRoot,
-    });
-  } catch (error) {
-    const extra = {
-      error_code: error.code || "route_preset_error",
-    };
-    if (Array.isArray(error.availablePresets)) {
-      extra.available_presets = error.availablePresets;
-    }
-    failEarly(error.message, extra);
-  }
-  return {
-    routeIntent,
-    projectRoutes,
-    policyResult,
-    routePlan,
-  };
-}
-
-const MODEL_HINTS_RAW = readArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
 const REASONING_OVERRIDE = readArg(args, "--reasoning", undefined, CLI_ARG_OPTIONS);
 const SANDBOX = readArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
 const NETWORK_ACCESS = readArg(args, "--network-access", "disabled", CLI_ARG_OPTIONS);
@@ -378,41 +683,35 @@ const RUBRIC_GRANDFATHERED = hasCliFlag("--rubric-grandfathered");
 const REQUEST_ID = readArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
 const LEAF_ID = readArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
 const FLEET_ID = readArg(args, "--fleet-id", undefined, CLI_ARG_OPTIONS);
+const ISSUE_NUMBER_ARG_RAW = readArg(args, "--issue-number", undefined, CLI_ARG_OPTIONS);
+const ISSUE_NUMBER_ARG = ISSUE_NUMBER_ARG_RAW === undefined ? null : Number(ISSUE_NUMBER_ARG_RAW);
+if (ISSUE_NUMBER_ARG_RAW !== undefined && (!Number.isInteger(ISSUE_NUMBER_ARG) || ISSUE_NUMBER_ARG <= 0)) {
+  failEarly("--issue-number must be a positive integer");
+}
 const OWNERSHIP_JSON_RAW = readArg(args, "--ownership-json", undefined, CLI_ARG_OPTIONS);
 const DONE_CRITERIA_FILE = readArg(args, "--done-criteria-file", undefined, CLI_ARG_OPTIONS);
-const REVIEW_ASSURANCE_RAW = readArg(args, "--review-assurance", undefined, CLI_ARG_OPTIONS);
-const ROUTING_TAGS = readArg(args, "--tags", "", CLI_ARG_OPTIONS);
-let REVIEW_ASSURANCE;
-let REVIEW_ASSURANCE_RESOLUTION = null;
-try {
-  REVIEW_ASSURANCE = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW || "standard");
-} catch (error) {
-  console.error(`Error: ${error.message}`);
-  process.exit(1);
-}
 let EXECUTOR = null;
 let adapter = null;
-let adapterDescriptor = null;
 let TIMEOUT = null;
 let executorPolicy = null;
 let executorNetworkPolicy = null;
-let INITIAL_ROUTE_RESOLUTION = null;
 let AUTO_RECOVER_COMMIT = null;
 
-function resolveDispatchRuntime(repoRoot) {
-  const routeResolution = loadInitialRoutePlan(repoRoot);
-  const executor = EXECUTOR_ARG || routeResolution.routePlan.phases.dispatch?.executor || "codex";
+function resolveDispatchRuntime(manifest) {
+  const boundExecutor = nonEmptyString(manifest?.roles?.executor);
+  if (boundExecutor && EXECUTOR_ARG && EXECUTOR_ARG !== boundExecutor) {
+    failEarly(`--executor cannot replace immutable run binding '${boundExecutor}'`);
+  }
+  const executor = boundExecutor || EXECUTOR_ARG || "codex";
   let resolvedAdapter;
-  let resolvedAdapterDescriptor;
   try {
-    resolvedAdapter = getExecutor(executor);
-    resolvedAdapterDescriptor = getAgentAdapterDescriptor(executor);
+    resolvedAdapter = getAdapter(executor);
   } catch (error) {
     console.error(`Error: ${error.message}`);
     process.exit(1);
   }
 
-  const defaultTimeout = String(resolvedAdapter.defaultTimeout ?? 1800);
+  const defaultTimeout = String(Math.max(1, Math.floor((resolvedAdapter.defaults?.timeoutMs ?? 1800000) / 1000)));
   const timeout = parseInt(readArg(args, "--timeout", defaultTimeout, CLI_ARG_OPTIONS), 10);
   if (isNaN(timeout) || timeout <= 0) {
     console.error("Error: --timeout must be a positive integer");
@@ -422,73 +721,38 @@ function resolveDispatchRuntime(repoRoot) {
     console.error("Error: --network-access must be disabled or enabled");
     process.exit(1);
   }
-  const modeValidation = resolvedAdapter.validateExecutionMode({ sandbox: SANDBOX, networkAccess: NETWORK_ACCESS });
-  if (!modeValidation.ok) {
-    if (JSON_OUT_REQUESTED) {
-      console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope({
-        adapter: executor,
-        phase: ADAPTER_PHASES.DISPATCH,
-        requested: {
-          sandbox: SANDBOX,
-          network: NETWORK_ACCESS,
-          read_only: SANDBOX === "read-only",
-        },
-        safe: false,
-        warnings: modeValidation.warnings || [],
-        fail_closed_reasons: [modeValidation.error],
-      }, {
-        executor,
-        phase: "dispatch",
-      }), null, 2));
-    }
-    console.error(`Error: ${modeValidation.error}`);
-    process.exit(1);
-  }
-  for (const warn of (modeValidation.warnings || [])) {
-    console.error(`Warning: ${warn}`);
-  }
-
-  let resolvedExecutorPolicy;
+  let negotiatedCapability;
   try {
-    resolvedExecutorPolicy = assertPolicyRepresentable(buildAgentPolicyAudit({
-      descriptor: resolvedAdapterDescriptor,
-      phase: ADAPTER_PHASES.DISPATCH,
-      requested: {
-        sandbox: SANDBOX,
-        networkAccess: NETWORK_ACCESS,
-        readOnly: SANDBOX === "read-only",
-      },
-    }));
+    negotiatedCapability = validateCapabilities(resolvedAdapter, ADAPTER_PHASES.DISPATCH, {
+      readOnly: SANDBOX === "read-only",
+      sandbox: SANDBOX,
+      networkAccess: NETWORK_ACCESS,
+    });
   } catch (error) {
     if (JSON_OUT_REQUESTED) {
-      console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope(error, {
-        executor,
-        phase: "dispatch",
-      }), null, 2));
+      console.log(JSON.stringify({ status: "failed", executor, phase: "dispatch", error: error.message }, null, 2));
     }
     console.error(`Error: ${error.message}`);
     process.exit(1);
   }
-  for (const warn of resolvedExecutorPolicy.warnings || []) {
+  for (const warn of (negotiatedCapability.warnings || [])) {
     console.error(`Warning: ${warn}`);
   }
 
   return {
     adapter: resolvedAdapter,
-    adapterDescriptor: resolvedAdapterDescriptor,
     autoRecoverCommit: AUTO_RECOVER_COMMIT_REQUESTED
       ? true
       : NO_AUTO_RECOVER_COMMIT
         ? false
-        : executor === "codex" || executor === "claude",
+        : true,
     executor,
     executorNetworkPolicy: {
       access: NETWORK_ACCESS,
       mechanism: NETWORK_ACCESS === "enabled" ? "sandbox_workspace_write.network_access" : "default",
       domains: null,
     },
-    executorPolicy: resolvedExecutorPolicy,
-    routeResolution,
+    executorPolicy: negotiatedCapability,
     timeout,
   };
 }
@@ -514,14 +778,6 @@ function classifyNetworkFailure(text) {
     /failed to resolve .*domain/i,
   ];
   return patterns.some((pattern) => pattern.test(text)) ? "network_blocked_or_unavailable" : null;
-}
-
-let MODEL_HINTS;
-try {
-  MODEL_HINTS = parseModelHints(MODEL_HINTS_RAW);
-} catch (error) {
-  console.error(`Error: ${error.message}`);
-  process.exit(1);
 }
 
 const REGISTER = hasCliFlag("--register");
@@ -803,7 +1059,6 @@ function writeDetachReceiptIfRequested({
   runDir,
   stdoutLog,
   stderrLog,
-  reviewAssuranceResolution = null,
 }) {
   if (detachReceiptWritten) return;
   const receiptPath = process.env[DETACH_RECEIPT_ENV];
@@ -818,13 +1073,6 @@ function writeDetachReceiptIfRequested({
     stdoutLog,
     stderrLog,
     reconcileCommand: reconcileCommandForReceipt(repoRoot, runId),
-    ...(reviewAssuranceResolution
-      ? {
-          reviewAssurance: reviewAssuranceResolution.level,
-          reviewAssuranceSource: reviewAssuranceResolution.source,
-          reviewAssuranceOverridden: reviewAssuranceResolution.overridden,
-        }
-      : {}),
   });
   detachReceiptWritten = true;
   delete process.env[DETACH_RECEIPT_ENV];
@@ -859,7 +1107,7 @@ function planDetachedLaunch() {
   const childArgs = removeDetachFlag(args);
 
   if (!RESUME_MODE) {
-    const runId = RUN_ID || createRunId({ issueNumber: inferIssueNumber(BRANCH), branch: BRANCH });
+    const runId = RUN_ID || createRunId({ issueNumber: ISSUE_NUMBER_ARG || inferIssueNumber(BRANCH), branch: BRANCH });
     const plannedChildArgs = RUN_ID ? childArgs : appendRunIdArg(childArgs, runId);
     return {
       childArgs: plannedChildArgs,
@@ -974,15 +1222,6 @@ async function launchDetachedAndExit() {
     console.log(`  Stdout log: ${output.stdoutLog}`);
     console.log(`  Stderr log: ${output.stderrLog}`);
     console.log(`  Reconcile:  ${output.reconcileCommand}`);
-    if (output.reviewAssurance) {
-      const assuranceOverride = output.reviewAssuranceOverridden
-        ? `; overridden flag=${output.reviewAssuranceOverridden}`
-        : "";
-      console.log(
-        `  Assurance: ${output.reviewAssurance} ` +
-        `(source=${output.reviewAssuranceSource})${assuranceOverride}`
-      );
-    }
     if (output.note) console.log(`  Note:       ${output.note}`);
   }
 }
@@ -1201,16 +1440,6 @@ function validateResumeRequestLinkage(manifest, { requestId, leafId, fleetId, do
         `same-run resume cannot change immutable ${check.field} (existing: ${check.existing}, incoming: ${check.incoming})`
       );
     }
-  }
-}
-
-function validateResumeReviewAssurance(manifest, incoming) {
-  const existing = normalizeReviewAssurance(manifest?.policy?.review_assurance);
-  const requested = normalizeReviewAssurance(incoming);
-  if (existing !== requested) {
-    throw new Error(
-      `same-run resume cannot change immutable policy.review_assurance (existing: ${existing}, incoming: ${requested})`
-    );
   }
 }
 
@@ -1519,84 +1748,21 @@ function enforceRubricPersistence(manifest, runDir) {
   }
 }
 
-function readyLightTaskProfileForDispatch({ promptText, manifest }) {
-  // Trust only structured task_profile metadata, not arbitrary examples embedded in the prompt body.
-  let promptProfile = null;
-  let extractedGuidance = null;
-  try {
-    promptProfile = extractTaskProfileSummaryFromPrompt(promptText);
-    extractedGuidance = promptProfile ? null : extractGuidanceFromPrompt(promptText);
-  } catch (error) {
-    failEarly(`Invalid task_profile metadata in prompt: ${error.message}`, {
-      error_code: "task_profile_parse_failed",
-    });
-  }
-  const manifestProfile = manifest?.advisory?.guidance?.task_profile_summary || null;
-  const taskProfile = promptProfile
-    || extractedGuidance?.task_profile_summary
-    || manifestProfile
-    || null;
-  if (!taskProfile) return null;
-
-  const manifestMarker = manifestProfile?.planning_profile || manifestProfile?.route_decision || manifestProfile?.routeDecision || null;
-  if (manifestMarker && !taskProfile.planning_profile && !taskProfile.route_decision && !taskProfile.routeDecision) {
-    return { ...taskProfile, route_decision: manifestMarker };
-  }
-  return taskProfile;
-}
-
-function readRubricForReadyLightValidation({ rubricFile, manifest, runDir }) {
-  if (rubricFile) {
-    try {
-      return fs.readFileSync(path.resolve(rubricFile), "utf-8");
-    } catch (error) {
-      failEarly(`Failed to read rubric file: ${error.message}`, {
-        error_code: "rubric_file_read_failed",
-        rubric_file: rubricFile,
-      });
-    }
-  }
-
-  if (!hasRubricPath(manifest)) return null;
-  const rubricAnchor = getRubricAnchorStatus(manifest, { runDir, includeContent: true });
-  if (!rubricAnchor.satisfied) {
-    failRubricPersistence(rubricAnchor.error);
-  }
-  return rubricAnchor.content;
-}
-
-function enforceReadyLightRubricValidation({ rubricFile, promptText, manifest, runDir }) {
-  const taskProfile = readyLightTaskProfileForDispatch({ promptText, manifest });
-  if (!taskProfile) return;
-  const rubricYaml = readRubricForReadyLightValidation({ rubricFile, manifest, runDir });
-  if (!rubricYaml) return;
-  const result = validateReadyLightRubric({
-    rubricYaml,
-    taskProfile,
-  });
-  if (result.action !== "block") return;
-  const firstError = result.errors[0] || { code: "ready_light_rubric_invalid", message: "Ready-light rubric validation failed." };
-  failEarly(firstError.message, {
-    error_code: firstError.code,
-    ready_light_rubric_validation: result,
-  });
-}
-
 function validateExecutorCli() {
   let adapter;
   try {
-    adapter = getExecutor(EXECUTOR);
+    adapter = getAdapter(EXECUTOR);
   } catch (error) {
     console.error(`Error: ${error.message}`);
     process.exit(1);
   }
-  const cli = adapter.cliBinary || EXECUTOR;
+  const cli = adapter.metadata.cliBinary || EXECUTOR;
   let version;
   try {
     version = execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" }).trim();
   } catch {
     const message = `${cli} CLI not found.`;
-    const hint = hintForCliBinary(cli);
+    const hint = `Install '${cli}' and ensure it is available on PATH.`;
     if (JSON_OUT_REQUESTED) {
       console.log(JSON.stringify({
         status: "failed",
@@ -1727,20 +1893,27 @@ function resolveRoleBinding(envName, fallback) {
   return typeof explicit === "string" && explicit.trim() ? explicit.trim() : fallback;
 }
 
-function resolveEffectiveDispatchModel({ cliModel, routePlanModel, manifestModelHints, cliModelHints, executorDefaultModel }) {
-  if (cliModel) return cliModel;
-  if (routePlanModel) return routePlanModel;
-  if (manifestModelHints && typeof manifestModelHints.dispatch === "string" && manifestModelHints.dispatch.trim()) {
-    return manifestModelHints.dispatch;
+function resolveEffectiveDispatchModel({ cliModel, manifest, resumeMode = false }) {
+  const dispatch = manifest?.dispatch;
+  const hasModelBinding = !!dispatch && (
+    Object.prototype.hasOwnProperty.call(dispatch, "model")
+    || Object.prototype.hasOwnProperty.call(dispatch, "last_model")
+  );
+  const boundModel = nonEmptyString(
+    Object.prototype.hasOwnProperty.call(dispatch || {}, "model")
+      ? dispatch.model
+      : dispatch?.last_model
+  );
+  if (hasModelBinding && cliModel && cliModel !== boundModel) {
+    failEarly(`--model cannot replace immutable run binding '${boundModel || "adapter default"}'`);
   }
-  if (cliModelHints && typeof cliModelHints.dispatch === "string" && cliModelHints.dispatch.trim()) {
-    return cliModelHints.dispatch;
+  if (resumeMode && !hasModelBinding && cliModel) {
+    failEarly(
+      "--model cannot be added to a legacy run without an immutable dispatch model binding; " +
+      "resume with the recorded adapter default or migrate the run through an explicit audited migration"
+    );
   }
-  const defaultModel = typeof executorDefaultModel === "function"
-    ? executorDefaultModel()
-    : executorDefaultModel;
-  if (defaultModel) return defaultModel;
-  return null;
+  return hasModelBinding ? boundModel : nonEmptyString(cliModel);
 }
 
 function summarizeCommitMode({ status, gitLog, uncommitted }) {
@@ -1762,137 +1935,11 @@ function readFileIfExists(filePath) {
   }
 }
 
-function resolveRoutingRubricText({ rubricFile, manifest, runDir }) {
+function resolveRubricText({ rubricFile, manifest, runDir }) {
   if (rubricFile) return readFileIfExists(path.resolve(rubricFile));
   const rubricPath = manifest?.anchor?.rubric_path;
   if (!rubricPath || !runDir) return null;
   return readFileIfExists(path.join(runDir, rubricPath));
-}
-
-function summarizeRoutePlan(routePlan) {
-  const summary = {};
-  for (const [phase, value] of Object.entries(routePlan?.phases || {})) {
-    if (!value) continue;
-    if (Array.isArray(value)) {
-      summary[phase] = value.map((lane) => ({
-        actor: lane.executor || lane.reviewer || null,
-        actor_field: lane.executor ? "executor" : "reviewer",
-        model: lane.model || null,
-        policy_reason: lane.policy_decision?.reason || null,
-        model_resolution_source: lane.model_resolution?.source || null,
-        ...(lane.profile ? { profile: lane.profile } : {}),
-        ...(lane.trigger ? { trigger: lane.trigger } : {}),
-        ...(lane.gating !== undefined ? { gating: lane.gating === true } : {}),
-      }));
-      continue;
-    }
-    summary[phase] = {
-      actor: value.executor || value.reviewer || null,
-      actor_field: value.executor ? "executor" : "reviewer",
-      model: value.model || null,
-      policy_reason: value.policy_decision?.reason || null,
-      model_resolution_source: value.model_resolution?.source || null,
-    };
-  }
-  return summary;
-}
-
-function collectModelResolution(routePlan) {
-  const metadata = {};
-  for (const [phase, value] of Object.entries(routePlan?.phases || {})) {
-    if (Array.isArray(value)) {
-      const entries = value.map((lane) => lane?.model_resolution || null);
-      if (entries.some(Boolean)) metadata[phase] = entries;
-      continue;
-    }
-    if (value?.model_resolution) metadata[phase] = value.model_resolution;
-  }
-  return Object.keys(metadata).length ? metadata : null;
-}
-
-function presetAdvisorySelection(routePlan) {
-  const presetSource = routePlan?.route_preset?.source;
-  const advisory = routePlan?.phases?.advisory_review;
-  if (!presetSource || !advisory) return null;
-  const lanes = Array.isArray(advisory) ? advisory : [advisory];
-  const selected = lanes
-    .filter((lane) => {
-      const sources = lane.sources || {};
-      return ["reviewer", "model", "profile", "trigger", "gating"].some((field) => sources[field] === presetSource);
-    })
-    .map((lane) => ({
-      reviewer: lane.reviewer,
-      ...(lane.model ? { model: lane.model } : {}),
-      ...(lane.profile ? { profile: lane.profile } : {}),
-      trigger: lane.trigger || "every_round",
-      gating: lane.gating === true,
-    }));
-  return selected.length ? selected : null;
-}
-
-function applyPresetAdvisoryToRoutingDecision(routingDecision, routePlan) {
-  const advisory = presetAdvisorySelection(routePlan);
-  if (!advisory) return routingDecision;
-  // An explicit lane array on the matched routing rule — including [] meaning
-  // "no advisory lanes" — is a selection; preset lanes only fill absence.
-  if (Array.isArray(routingDecision?.selected?.advisory_review)) return routingDecision;
-  return {
-    ...routingDecision,
-    selected: {
-      ...(routingDecision.selected || {}),
-      advisory_review: advisory,
-    },
-  };
-}
-
-function writeRoutePlanSnapshot({ repoRoot, runId, routePlan, policyResult, projectRoutes, resolvedAt = new Date().toISOString() }) {
-  const routePlanPath = getRoutePlanPath(repoRoot, runId);
-  const snapshot = {
-    version: 1,
-    resolved_at: resolvedAt,
-    ...(routePlan.route_preset ? { route_preset: routePlan.route_preset } : {}),
-    policy: {
-      status: policyResult?.status || null,
-      sources: policyResult?.sources || null,
-    },
-    project_routes: {
-      status: projectRoutes?.status || null,
-      path: projectRoutes?.path || null,
-    },
-    phases: routePlan.phases,
-  };
-  fs.mkdirSync(path.dirname(routePlanPath), { recursive: true });
-  fs.writeFileSync(routePlanPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf-8");
-  return {
-    path: routePlanPath,
-    snapshot,
-  };
-}
-
-function collectChangedFilesForRouting(repoDir, baseBranch) {
-  const candidates = [];
-  if (baseBranch) {
-    candidates.push([`${baseBranch}...HEAD`]);
-    candidates.push([`origin/${baseBranch}...HEAD`]);
-  }
-  candidates.push(["--cached"]);
-
-  for (const argsForDiff of candidates) {
-    try {
-      const output = execGit(repoDir, ["diff", "--name-only", ...argsForDiff]);
-      if (output) return output.split("\n").filter(Boolean);
-    } catch {}
-  }
-
-  try {
-    return execGit(repoDir, ["status", "--porcelain"])
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => line.slice(3).trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1917,7 +1964,7 @@ async function main() {
   let cleanupPolicy = "on_close";
   let baseBranch = "main";
   let worktreeStartPoint = null;
-  let issueNumber = inferIssueNumber(branch);
+  let issueNumber = ISSUE_NUMBER_ARG || inferIssueNumber(branch);
   let manifest;
   let copiedFiles = [];
   let executorPid = null;
@@ -2069,7 +2116,7 @@ async function main() {
     branch = manifest.git?.working_branch || branch;
     runId = manifest.run_id || runId;
     wtPath = validatedPaths.worktree;
-    runtime = resolveDispatchRuntime(repoRoot);
+    runtime = resolveDispatchRuntime(manifest);
     if (manifest.ownership || OWNERSHIP) {
       try {
         validateOwnershipAgainstSprintState(repoRoot, manifest.ownership || OWNERSHIP, {
@@ -2102,7 +2149,12 @@ async function main() {
     }
     cleanupPolicy = manifest.policy?.cleanup || cleanupPolicy;
     baseBranch = manifest.git?.base_branch || baseBranch;
-    issueNumber = manifest.issue?.number || inferIssueNumber(branch);
+    const manifestIssueNumber = manifest.issue?.number || inferIssueNumber(branch);
+    if (ISSUE_NUMBER_ARG !== null && ISSUE_NUMBER_ARG !== manifestIssueNumber) {
+      console.error(`Error: --issue-number cannot replace immutable run issue binding '${manifestIssueNumber || "none"}'`);
+      process.exit(1);
+    }
+    issueNumber = manifestIssueNumber;
 
     if (!fs.existsSync(path.join(repoRoot, ".git"))) {
       console.error(`Error: manifest repo root is not a git repository: ${repoRoot}`);
@@ -2181,7 +2233,7 @@ async function main() {
       });
     }
   } else {
-    runtime = resolveDispatchRuntime(repoRoot);
+    runtime = resolveDispatchRuntime(null);
     if (OWNERSHIP) {
       try {
         validateOwnershipAgainstSprintState(repoRoot, OWNERSHIP, {
@@ -2194,26 +2246,33 @@ async function main() {
     }
     const issueForCollisionCheck = issueNumber
       || inferIssueFromPromptOrBranch(branch, PROMPT);
-    const inflightRuns = issueForCollisionCheck
-      ? findInflightRunsForIssue(repoRoot, issueForCollisionCheck)
-      : [];
-    if (inflightRuns.length > 0 && !ALLOW_CONFLICTING_RUN) {
-      console.error("Error: " + formatInflightCollisionError(inflightRuns, { issueNumber: issueForCollisionCheck }));
-      process.exit(1);
-    }
     runId = runId || createRunId({ issueNumber, branch });
+    let inflightRuns = null;
     if (FLEET_ID && issueForCollisionCheck && !DRY_RUN) {
       try {
-        fleetIssueLock = acquireIssueLock({
+        const admission = acquireIssueAdmission({
           repoRoot,
           issueNumber: issueForCollisionCheck,
           fleetId: FLEET_ID,
           runId,
+          scanInflight: () => findInflightRunsForIssue(repoRoot, issueForCollisionCheck),
         });
+        fleetIssueLock = admission.lock;
+        inflightRuns = admission.inflightRuns;
       } catch (error) {
         console.error(`Error: ${error.message}`);
         process.exit(1);
       }
+    }
+    // Fleet admission is authoritative only after the per-issue exclusion is
+    // held. This closes the stale-scan ABA window between discovery and lock.
+    inflightRuns = inflightRuns || (issueForCollisionCheck
+      ? findInflightRunsForIssue(repoRoot, issueForCollisionCheck)
+      : []);
+    if (inflightRuns.length > 0 && !ALLOW_CONFLICTING_RUN) {
+      releaseFleetIssueLock();
+      console.error("Error: " + formatInflightCollisionError(inflightRuns, { issueNumber: issueForCollisionCheck }));
+      process.exit(1);
     }
     manifestPath = getManifestPath(repoRoot, runId);
     const runDir = getRunDir(repoRoot, runId);
@@ -2248,11 +2307,9 @@ async function main() {
 
   EXECUTOR = runtime.executor;
   adapter = runtime.adapter;
-  adapterDescriptor = runtime.adapterDescriptor;
   TIMEOUT = runtime.timeout;
   executorPolicy = runtime.executorPolicy;
   executorNetworkPolicy = runtime.executorNetworkPolicy;
-  INITIAL_ROUTE_RESOLUTION = runtime.routeResolution;
   AUTO_RECOVER_COMMIT = runtime.autoRecoverCommit;
   const runArtifactPaths = getRunArtifactPaths(repoRoot, runId);
   resultFile = runArtifactPaths.resultFile;
@@ -2281,74 +2338,6 @@ async function main() {
 
   const manifestRunDir = getRunDir(repoRoot, runId);
   enforceRubricPersistence(manifest, manifestRunDir);
-  const rubricText = resolveRoutingRubricText({
-    rubricFile: RUBRIC_FILE,
-    manifest,
-    runDir: manifestRunDir,
-  });
-  let rubricReviewAssurance = null;
-  try {
-    rubricReviewAssurance = extractReviewAssuranceFromRubric(rubricText);
-  } catch (error) {
-    failEarly(`Invalid task_profile.review_assurance in rubric: ${error.message}`, {
-      error_code: "rubric_review_assurance_invalid",
-      rubric_file: RUBRIC_FILE || manifest?.anchor?.rubric_path || null,
-    });
-  }
-
-  if (RESUME_MODE) {
-    try {
-      const existingReviewAssurance = normalizeReviewAssurance(manifest?.policy?.review_assurance);
-      if (rubricReviewAssurance) {
-        if (existingReviewAssurance !== rubricReviewAssurance) {
-          throw new Error(
-            "same-run resume found policy.review_assurance inconsistent with the fixed rubric " +
-            `(existing: ${existingReviewAssurance}, rubric: ${rubricReviewAssurance})`
-          );
-        }
-        REVIEW_ASSURANCE_RESOLUTION = resolveReviewAssurance({
-          rubricReviewAssurance,
-          flagReviewAssurance: REVIEW_ASSURANCE,
-          flagWasExplicit: REVIEW_ASSURANCE_RAW !== undefined,
-        });
-        REVIEW_ASSURANCE_RESOLUTION.overridden = REVIEW_ASSURANCE_RESOLUTION.overridden
-          || manifest?.policy?.review_assurance_overridden
-          || null;
-      } else {
-        if (REVIEW_ASSURANCE_RAW !== undefined) {
-          validateResumeReviewAssurance(manifest, REVIEW_ASSURANCE);
-        }
-        REVIEW_ASSURANCE_RESOLUTION = {
-          level: existingReviewAssurance,
-          source: manifest?.policy?.review_assurance_source || "flag",
-          overridden: manifest?.policy?.review_assurance_overridden || null,
-        };
-      }
-      REVIEW_ASSURANCE = REVIEW_ASSURANCE_RESOLUTION.level;
-      manifest = {
-        ...manifest,
-        policy: {
-          ...(manifest.policy || {}),
-          review_assurance: REVIEW_ASSURANCE_RESOLUTION.level,
-          review_assurance_source: REVIEW_ASSURANCE_RESOLUTION.source,
-          ...(REVIEW_ASSURANCE_RESOLUTION.overridden
-            ? { review_assurance_overridden: REVIEW_ASSURANCE_RESOLUTION.overridden }
-            : {}),
-        },
-      };
-    } catch (error) {
-      console.error(`Error: ${error.message}`);
-      process.exit(1);
-    }
-  } else {
-    REVIEW_ASSURANCE_RESOLUTION = resolveReviewAssurance({
-      rubricReviewAssurance,
-      flagReviewAssurance: REVIEW_ASSURANCE,
-      flagWasExplicit: REVIEW_ASSURANCE_RAW !== undefined,
-    });
-    REVIEW_ASSURANCE = REVIEW_ASSURANCE_RESOLUTION.level;
-  }
-  let routePlanSnapshot = null;
 
   // A resumed run may carry a Done Criteria amendment: the operator edits the
   // original anchor file (or passes --done-criteria-file). The durable run-dir
@@ -2374,26 +2363,6 @@ async function main() {
     effectiveDoneCriteriaPath,
   });
   let taskPrompt = taskPromptResult.prompt;
-  if (!RESUME_MODE) {
-    try {
-      const promptTaskProfile = extractTaskProfileSummaryFromPrompt(taskPrompt);
-      if (promptTaskProfile?.publish_policy === "after-internal-review") {
-        if (
-          PUBLISH_POLICY_ARG !== undefined
-          && PUBLISH_POLICY_ARG !== "after-internal-review"
-        ) {
-          throw new Error(
-            "high-risk task_profile requires --publish-policy after-internal-review"
-          );
-        }
-        PUBLISH_POLICY = "after-internal-review";
-      }
-    } catch (error) {
-      failEarly(`Invalid task_profile metadata in prompt: ${error.message}`, {
-        error_code: "task_profile_parse_failed",
-      });
-    }
-  }
   if (taskPromptResult.source === "auto-discovered-redispatch" && !JSON_OUT) {
     console.log(`Auto-discovered redispatch prompt (round ${taskPromptResult.round}): ${taskPromptResult.path}`);
   }
@@ -2407,105 +2376,13 @@ async function main() {
     }
   }
 
-  if (RESUME_MODE && MODEL_HINTS !== undefined) {
-    const beforeModelHints = manifest.model_hints ?? null;
-    manifest = {
-      ...manifest,
-      model_hints: MODEL_HINTS,
-    };
-    if (!DRY_RUN) {
-      writeManifest(manifestPath, manifest);
-      appendRunEvent(repoRoot, runId, {
-        event: EVENTS.MODEL_HINTS_UPDATED,
-        state_from: manifest.state,
-        state_to: manifest.state,
-        head_sha: manifest.git?.head_sha || null,
-        reason: "dispatch_cli_replace",
-        before: beforeModelHints,
-        after: MODEL_HINTS,
-      });
-    }
-  }
-
-  enforceReadyLightRubricValidation({
-    rubricFile: RUBRIC_FILE,
-    promptText: taskPrompt,
-    manifest,
-    runDir: manifestRunDir,
-  });
-
   const effectiveDispatchModel = resolveEffectiveDispatchModel({
     cliModel: MODEL,
-    routePlanModel: INITIAL_ROUTE_RESOLUTION.routePlan.phases.dispatch?.model || null,
-    manifestModelHints: manifest?.model_hints,
-    cliModelHints: MODEL_HINTS,
-    executorDefaultModel: () => resolveExecutorDefaultModel(EXECUTOR, { relayHome: RELAY_HOME, repoRoot }),
+    manifest,
+    resumeMode: RESUME_MODE,
   });
-  const provider = typeof adapter.parseProvider === "function"
-    ? (adapter.parseProvider(effectiveDispatchModel) ?? adapter.providerDefault ?? null)
-    : (adapter.providerDefault || null);
-  let policyDecision;
-  try {
-    policyDecision = assertRelayPolicyGate({
-      repoRoot,
-      relayHome: RELAY_HOME,
-      phase: "dispatch",
-      executor: EXECUTOR,
-      model: effectiveDispatchModel,
-    });
-  } catch (error) {
-    const envelope = buildPolicyGateFailureEnvelope(error, {
-      runId,
-      manifestPath,
-      executor: EXECUTOR,
-      model: effectiveDispatchModel,
-      phase: "dispatch",
-      adapter_capability: executorPolicy,
-      executor_policy: executorPolicy,
-      route_plan: {
-        version: 1,
-        phases: INITIAL_ROUTE_RESOLUTION.routePlan.phases,
-        project_routes: {
-          status: INITIAL_ROUTE_RESOLUTION.projectRoutes.status,
-          path: INITIAL_ROUTE_RESOLUTION.projectRoutes.path,
-        },
-      },
-    });
-    const hint = hintForPolicyDecision(envelope.policy_decision);
-    if (JSON_OUT) {
-      console.log(JSON.stringify(withHint(envelope, hint), null, 2));
-    } else {
-      console.error(`Error: ${envelope.error}`);
-    }
-    if (hint) console.error(`hint: ${hint}`);
-    process.exit(1);
-  }
-
-  const effectivePolicy = loadRelayPolicy({ repoRoot, relayHome: RELAY_HOME });
-  const routePlan = {
-    ...INITIAL_ROUTE_RESOLUTION.routePlan,
-    phases: {
-      ...(INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}),
-      dispatch: {
-        ...((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch || {}),
-        phase: "dispatch",
-        executor: EXECUTOR,
-        model: effectiveDispatchModel,
-        source: EXECUTOR_ARG ? "run_intent" : ((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch?.source || "policy_defaults"),
-        sources: {
-          ...(((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch || {}).sources || {}),
-          executor: EXECUTOR_ARG ? "run_intent" : (((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch || {}).sources?.executor || "policy_defaults"),
-          model: MODEL
-            ? "run_intent"
-            : effectiveDispatchModel
-              ? ((((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch || {}).sources?.model) || "executor_defaults")
-              : "unresolved",
-        },
-        policy_decision: policyDecision,
-      },
-    },
-  };
-  const routingRubricText = resolveRoutingRubricText({
+  const provider = resolveAdapterProvider(adapter, effectiveDispatchModel);
+  const rubricText = resolveRubricText({
     rubricFile: RUBRIC_FILE,
     manifest,
     runDir: manifestRunDir,
@@ -2513,10 +2390,10 @@ async function main() {
   let evidenceTestCommand;
   let verificationGates;
   try {
-    verificationGates = extractVerificationGates(routingRubricText);
+    verificationGates = extractVerificationGates(rubricText);
     evidenceTestCommand = resolveExecutionEvidenceTestCommand({
       explicitTestCommand: TEST_COMMAND,
-      rubricYaml: routingRubricText,
+      rubricYaml: rubricText,
     });
   } catch (error) {
     failEarly(`Failed to seed execution evidence from verification gates: ${error.message}`, {
@@ -2524,17 +2401,6 @@ async function main() {
       rubric_file: RUBRIC_FILE || manifest?.anchor?.rubric_path || null,
     });
   }
-  let routingDecision = resolveRoutingDecision({
-    policy: effectivePolicy.policy || {},
-    cliTags: ROUTING_TAGS,
-    taskProfile: manifest?.advisory?.guidance?.task_profile_summary || null,
-    promptText: taskPrompt,
-    rubricText: routingRubricText,
-    changedFiles: collectChangedFilesForRouting(RESUME_MODE ? wtPath : repoRoot, baseBranch),
-    testCommands: evidenceTestCommand ? [evidenceTestCommand] : [],
-  });
-  routingDecision = applyPresetAdvisoryToRoutingDecision(routingDecision, routePlan);
-
   // --- Dry run ---
   if (DRY_RUN) {
     const planFleetId = FLEET_ID || manifest?.fleet_id || null;
@@ -2560,36 +2426,17 @@ async function main() {
       requestId: REQUEST_ID || manifest?.source?.request_id || null,
       leafId: LEAF_ID || manifest?.source?.leaf_id || null,
       doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
-      reviewAssurance: REVIEW_ASSURANCE,
-      reviewAssuranceSource: REVIEW_ASSURANCE_RESOLUTION.source,
-      reviewAssuranceOverridden: REVIEW_ASSURANCE_RESOLUTION.overridden,
       publishPolicy: PUBLISH_POLICY,
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
       runState: manifest?.state || null,
       dispatchSkipped: false,
-      policy_decision: policyDecision,
-      route_plan: {
-        version: 1,
-        phases: routePlan.phases,
-        policy: {
-          status: effectivePolicy.status,
-          sources: effectivePolicy.sources,
-        },
-        project_routes: {
-          status: INITIAL_ROUTE_RESOLUTION.projectRoutes.status,
-          path: INITIAL_ROUTE_RESOLUTION.projectRoutes.path,
-        },
-      },
-      routing_decision: routingDecision,
+      provider,
     };
     if (planFleetId) {
       plan.fleetId = planFleetId;
     }
     if (OWNERSHIP || manifest?.ownership) {
       plan.ownership = OWNERSHIP || manifest.ownership;
-    }
-    if (MODEL_HINTS !== undefined || manifest?.model_hints !== undefined) {
-      plan.model_hints = MODEL_HINTS ?? manifest?.model_hints ?? null;
     }
     if (effectiveDispatchModel !== null) {
       plan.effective_dispatch_model = effectiveDispatchModel;
@@ -2616,11 +2463,6 @@ async function main() {
         leafId: LEAF_ID || manifest?.source?.leaf_id || null,
         fleetId: planFleetId,
         doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
-        reviewAssurance: REVIEW_ASSURANCE,
-        reviewAssuranceSource: REVIEW_ASSURANCE_RESOLUTION.source,
-        reviewAssuranceOverridden: REVIEW_ASSURANCE_RESOLUTION.overridden,
-        policyDecision,
-        routingDecision,
         worktreePlan,
       }));
     }
@@ -2656,10 +2498,6 @@ async function main() {
       leafId: LEAF_ID || null,
       doneCriteriaPath: resolvedDoneCriteriaPath,
       doneCriteriaSource,
-      reviewAssurance: REVIEW_ASSURANCE,
-      reviewAssuranceSource: REVIEW_ASSURANCE_RESOLUTION.source,
-      reviewAssuranceOverridden: REVIEW_ASSURANCE_RESOLUTION.overridden,
-      modelHints: MODEL_HINTS,
       fleetId: FLEET_ID,
       ownership: OWNERSHIP || undefined,
     });
@@ -2678,12 +2516,9 @@ async function main() {
       },
       dispatch: {
         ...(manifest.dispatch || {}),
+        model: effectiveDispatchModel,
+        provider,
         publish_policy: PUBLISH_POLICY,
-      },
-      routing: routingDecision,
-      routes: {
-        plan_path: "route-plan.json",
-        summary: summarizeRoutePlan(routePlan),
       },
     };
     try {
@@ -2754,20 +2589,8 @@ async function main() {
         executor_network: executorNetworkPolicy,
         executor_policy: executorPolicy,
       },
-      routing: routingDecision,
-      routes: {
-        plan_path: "route-plan.json",
-        summary: summarizeRoutePlan(routePlan),
-      },
     };
     ensureRunLayout(repoRoot, runId);
-    routePlanSnapshot = writeRoutePlanSnapshot({
-      repoRoot,
-      runId,
-      routePlan,
-      policyResult: effectivePolicy,
-      projectRoutes: INITIAL_ROUTE_RESOLUTION.projectRoutes,
-    });
     writeManifest(manifestPath, manifest);
     releaseRunDirClaim();
   } else if (manifest) {
@@ -2782,20 +2605,7 @@ async function main() {
         executor_network: executorNetworkPolicy,
         executor_policy: executorPolicy,
       },
-      routing: routingDecision,
-      routes: {
-        ...(manifest.routes || {}),
-        plan_path: "route-plan.json",
-        summary: summarizeRoutePlan(routePlan),
-      },
     };
-    routePlanSnapshot = writeRoutePlanSnapshot({
-      repoRoot,
-      runId,
-      routePlan,
-      policyResult: effectivePolicy,
-      projectRoutes: INITIAL_ROUTE_RESOLUTION.projectRoutes,
-    });
     writeManifest(manifestPath, manifest);
   }
 
@@ -2820,56 +2630,6 @@ async function main() {
     writeManifest(manifestPath, manifest);
   }
 
-  if (routePlanSnapshot) {
-    appendRunEvent(repoRoot, runId, {
-      event: EVENTS.ROUTE_RESOLUTION,
-      state_from: manifest.state,
-      state_to: manifest.state,
-      head_sha: manifest.git?.head_sha || null,
-      reason: ROUTE_INTENT_FILE ? "route_intent_file" : "resolved_defaults",
-      executor: EXECUTOR,
-      model: effectiveDispatchModel,
-      policy_decision: policyDecision,
-      route_plan_path: routePlanSnapshot.path,
-      route_plan_summary: summarizeRoutePlan(routePlan),
-      model_resolution: collectModelResolution(routePlan),
-    });
-    appendUnregisteredRouteUsedEvent(repoRoot, runId, {
-      state: manifest.state,
-      headSha: manifest.git?.head_sha || null,
-      policyDecision,
-      modelResolution: routePlan.phases.dispatch?.model_resolution || null,
-    });
-  }
-
-  const guidanceMetadata = buildGuidanceMetadata({
-    promptText: taskPrompt,
-    manifest,
-    promptSource: taskPromptResult.source,
-    rubricPath: manifest?.anchor?.rubric_path || null,
-  });
-  if (guidanceMetadata) {
-    const runDir = getRunDir(repoRoot, runId);
-    try {
-      manifest = persistGuidanceMetadata({ runDir, manifest, metadata: guidanceMetadata });
-      writeManifest(manifestPath, manifest);
-      appendRunEvent(repoRoot, runId, {
-        event: EVENTS.GUIDANCE_SELECTED,
-        state_from: manifest.state,
-        state_to: manifest.state,
-        head_sha: manifest.git?.head_sha || null,
-        reason: RESUME_MODE ? "same_run_resume" : "new_dispatch",
-        guidance_packs: guidanceMetadata.guidance_packs,
-        task_profile_summary: guidanceMetadata.task_profile_summary,
-        guidance_source: guidanceMetadata.source,
-        guidance_artifact_path: GUIDANCE_METADATA_FILENAME,
-      });
-    } catch (guidanceError) {
-      console.error(`Error: failed to persist guidance metadata: ${guidanceError.message}`);
-      process.exit(1);
-    }
-  }
-
   // --- Step 3: Execute task ---
   // Executor adapter builds command + args + spawn cwd.
 
@@ -2877,13 +2637,6 @@ async function main() {
   let execCwd;
   let codexGitCommonDir = null;
   const reasoningRunDir = getRunDir(repoRoot, runId);
-  const rubricPathForReasoning = manifest?.anchor?.rubric_path
-    ? path.join(reasoningRunDir, manifest.anchor.rubric_path)
-    : null;
-  const resolvedReasoningEffort = resolveReasoningEffort({
-    override: REASONING_OVERRIDE,
-    rubricPath: rubricPathForReasoning,
-  });
 
   // Prepend non-interactive directive so the model doesn't wait for approval
   // (e.g. brainstorming HARD-GATE or design-confirmation patterns).
@@ -2895,28 +2648,33 @@ async function main() {
     taskPrompt +
     (executorVerificationInstructions ? `\n\n${executorVerificationInstructions}` : "");
 
-  const buildResult = adapter.buildExecCommand({
-    wtPath,
-    resultFile,
-    prompt: execPrompt,
+  const invocationPromptPath = path.join(reasoningRunDir, "dispatch-invocation-prompt.md");
+  fs.writeFileSync(invocationPromptPath, execPrompt, "utf8");
+  const buildResult = adapter.buildInvocation({
+    phase: ADAPTER_PHASES.DISPATCH,
+    cwd: wtPath,
+    promptPath: invocationPromptPath,
+    resultPath: resultFile,
     model: effectiveDispatchModel,
     sandbox: SANDBOX,
     networkAccess: NETWORK_ACCESS,
-    reasoning: resolvedReasoningEffort,
-    timeoutSeconds: TIMEOUT,
+    reasoning: REASONING_OVERRIDE,
+    timeoutMs: TIMEOUT * 1000,
   });
-  cmd = buildResult.cmd;
+  executorPolicy = { ...executorPolicy, cli: executorPolicy?.cli || null };
+  manifest = {
+    ...manifest,
+    policy: {
+      ...(manifest.policy || {}),
+      executor_network: executorNetworkPolicy,
+      executor_policy: executorPolicy,
+    },
+  };
+  cmd = buildResult.command;
   execArgs = buildResult.args;
   execCwd = buildResult.cwd;
-  codexGitCommonDir = buildResult.codexGitCommonDir || null;
-
-  if (EXECUTOR === "opencode") {
-    console.error("Warning: opencode executor is experimental; see relay-dispatch/references/reviewer-policy-opencode.md for trust boundary and reviewer policy.");
-  }
-  if (EXECUTOR === "cursor") {
-    console.error("Warning: cursor executor uses the optional Cursor Agent CLI (agent); add cursor to route policy managed_cli when using slug-only models. See relay-dispatch/references/agent-adapter-platform.md.");
-  }
-
+  const addDirIndex = execArgs.indexOf("--add-dir");
+  codexGitCommonDir = addDirIndex >= 0 ? execArgs[addDirIndex + 1] || null : null;
   if (!JSON_OUT) {
     console.log(`Dispatching to ${EXECUTOR}...`);
     console.log(`  Run:      ${runId}`);
@@ -2974,7 +2732,6 @@ async function main() {
     provider,
     executor_network: executorNetworkPolicy,
     executor_policy: executorPolicy,
-    policy_decision: policyDecision,
   });
   writeDetachReceiptIfRequested({
     repoRoot,
@@ -2983,9 +2740,9 @@ async function main() {
     runDir: runArtifactPaths.runDir,
     stdoutLog,
     stderrLog,
-    reviewAssuranceResolution: REVIEW_ASSURANCE_RESOLUTION,
   });
   await maybePauseBeforeExecutorSpawnForTest();
+  assertInvocationIdentity(buildResult);
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
   // a killable process group (terminateProcessGroup sends SIGTERM to -pid).
@@ -3022,7 +2779,6 @@ async function main() {
       runDir: runArtifactPaths.runDir,
       stdoutLog,
       stderrLog,
-      reviewAssuranceResolution: REVIEW_ASSURANCE_RESOLUTION,
     });
   }
 
@@ -3117,7 +2873,24 @@ async function main() {
   const elapsed = Math.round((Date.now() - startTime) / 1000);
 
   try {
-    adapter.finalizeResult({ stdoutLog, resultFile });
+    const adapterOutcome = adapter.parseOutcome({
+      phase: ADAPTER_PHASES.DISPATCH,
+      exitCode,
+      signal: execResult.signal,
+      timedOut: execResult.timedOut,
+      stdoutPath: stdoutLog,
+      stderrPath: stderrLog,
+      resultPath: resultFile,
+    });
+    if (exitCode === 0 && adapterOutcome.status === "failed") {
+      exitCode = 1;
+      error = `executor_result_finalize_failed: ${adapterOutcome.summary || "executor_result_parse_failed"}`;
+    } else if (adapterOutcome.status === "succeeded" && adapterOutcome.output !== null) {
+      const normalizedOutput = typeof adapterOutcome.output === "string"
+        ? adapterOutcome.output
+        : JSON.stringify(adapterOutcome.output);
+      fs.writeFileSync(resultFile, normalizedOutput.endsWith("\n") ? normalizedOutput : `${normalizedOutput}\n`, "utf8");
+    }
   } catch (finalizeError) {
     exitCode = exitCode || 1;
     error = error || `executor_result_finalize_failed: ${String(finalizeError.message || finalizeError).split("\n")[0]}`;
@@ -3196,7 +2969,7 @@ async function main() {
     );
   } else if (execResult.timedOut && hasWork) {
     status = "completed-with-warning";
-  } else if (exitCode === 0 && !gitLog && dirt.hasOnlyRuntimeMetadataDirt && EXECUTOR !== "codex") {
+  } else if (exitCode === 0 && !gitLog && dirt.hasOnlyRuntimeMetadataDirt) {
     status = "failed";
     error = error || (
       "executor produced no reviewable repository changes; only runtime metadata dirt was detected: " +
@@ -3217,8 +2990,7 @@ async function main() {
   // reviewable work uncommitted, commit it now — before execution evidence is
   // written — so evidence binds once to the committed SHA and no post-hoc
   // recover-commit or evidence rebrand is needed. Gated identically to
-  // auto-recover-commit (default-on for codex/claude) so other executors keep
-  // their existing path. On failure, fall through with the original
+  // the executor-independent auto-recover-commit decision. On failure, fall through with the original
   // completed-uncommitted status so the downstream recover-commit path still runs.
   //
   // Skip when another orchestrator has already superseded this run (manifest
@@ -3496,7 +3268,6 @@ async function main() {
     publish_policy: PUBLISH_POLICY,
     executor_network: executorNetworkPolicy,
     executor_policy: executorPolicy,
-    policy_decision: policyDecision,
     failure_class: networkFailure,
     dispatch_failure_class: dispatchFailureClass,
     execution_evidence_path: executionEvidencePath,
@@ -3507,7 +3278,7 @@ async function main() {
   let threadId = null;
   if (REGISTER && status !== "failed") {
     try {
-      const reg = adapter.register({
+      const reg = getLegacyExecutor(EXECUTOR).register({
         wtPath,
         repoPath: repoRoot,
         branch,
@@ -3537,13 +3308,6 @@ async function main() {
     executorNetwork: executorNetworkPolicy,
     executorPolicy,
     publishPolicy: PUBLISH_POLICY,
-    reviewAssurance: manifest.policy.review_assurance,
-    reviewAssuranceSource: manifest.policy.review_assurance_source,
-    reviewAssuranceOverridden: manifest.policy.review_assurance_overridden || null,
-    policyDecision,
-    routePlanPath: routePlanSnapshot?.path || null,
-    routePlan: routePlanSnapshot?.snapshot || null,
-    routingDecision,
     codexGitCommonDir,
     worktree: wtPath,
     branch,
@@ -3581,13 +3345,6 @@ async function main() {
     if (error) console.log(`  Error: ${error}`);
     console.log(`  Run state: ${result.runState}`);
     console.log(`  Commit mode: ${result.commitMode}`);
-    const assuranceOverride = result.reviewAssuranceOverridden
-      ? `; overridden flag=${result.reviewAssuranceOverridden}`
-      : "";
-    console.log(
-      `  Assurance: ${result.reviewAssurance} ` +
-      `(source=${result.reviewAssuranceSource})${assuranceOverride}`
-    );
     if (prNumber !== null) {
       console.log(`  PR:        #${prNumber}${prCreatedByUs === true ? " (created by orchestrator)" : prCreatedByUs === false ? " (existing)" : ""}`);
     }

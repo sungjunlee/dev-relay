@@ -14,7 +14,7 @@ const { spawn, spawnSync } = require("child_process");
 const {
   bindCliArgs,
   findUnknownFlags,
-  modeLabel,
+  modeLabel: formatCliModeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 
 const DEFAULT_SUITES = [
@@ -31,6 +31,11 @@ const DEFAULT_SUITES = [
 const KNOWN_FLAGS = [
   "--repo", "--suites", "--output", "--lock-timeout", "--json", "--help", "-h",
 ];
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--suites", "--output"],
+};
 const LOCK_POLL_MS = 100;
 const SENTINEL_POLL_MS = 100;
 const DEFAULT_LOCK_TIMEOUT_SECONDS = 600;
@@ -325,9 +330,9 @@ function parseNonNegativeSeconds(value) {
 }
 
 function parsePublicArgs(args) {
-  const unknownFlags = findUnknownFlags(args, "run-full-gate");
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
   if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
-  const cli = bindCliArgs(args, { commandName: "run-full-gate", reservedFlags: KNOWN_FLAGS });
+  const cli = bindCliArgs(args, CLI_ARG_OPTIONS);
   const repoArg = cli.getArg("--repo");
   if (!repoArg) throw new Error("--repo <worktree> is required");
   const repo = path.resolve(repoArg);
@@ -358,11 +363,11 @@ function printHelp() {
   console.log("Usage: run-full-gate.js --repo <worktree> [options]");
   console.log("\nRun pre-merge test files serially in a detached, machine-locked process.");
   console.log("\nOptions:");
-  console.log(`  --repo <worktree>       ${modeLabel("--repo")} Required repository/worktree root`);
-  console.log(`  --suites <glob-set>     ${modeLabel("--suites")} Comma-separated globs (default: nine CI suite globs)`);
-  console.log(`  --output <path>         ${modeLabel("--output")} Evidence log (default: <repo>/.relay/full-gate-<timestamp>-<pid>.log)`);
-  console.log(`  --lock-timeout <secs>   ${modeLabel("--lock-timeout")} Maximum lock wait (default: 600)`);
-  console.log(`  --json                  ${modeLabel("--json")} Emit one JSON result object`);
+  console.log(`  --repo <worktree>       ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Required repository/worktree root`);
+  console.log(`  --suites <glob-set>     ${formatCliModeLabel("--suites", CLI_ARG_OPTIONS)} Comma-separated globs (default: nine CI suite globs)`);
+  console.log(`  --output <path>         ${formatCliModeLabel("--output", CLI_ARG_OPTIONS)} Evidence log (default: <repo>/.relay/full-gate-<timestamp>-<pid>.log)`);
+  console.log(`  --lock-timeout <secs>   ${formatCliModeLabel("--lock-timeout", CLI_ARG_OPTIONS)} Maximum lock wait (default: 600)`);
+  console.log(`  --json                  ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Emit one JSON result object`);
   console.log("  --help, -h              Show this help");
 }
 

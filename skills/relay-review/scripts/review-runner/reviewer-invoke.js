@@ -5,19 +5,11 @@ const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle")
 const { writeManifest } = require("../../../relay-dispatch/scripts/manifest/store");
 const {
   ADAPTER_PHASES,
-  listAgentAdapterNames,
-  getAgentAdapterDescriptor,
-  supportsAgentAdapterPhase,
-} = require("../../../relay-dispatch/scripts/agent-adapters");
-const {
-  AdapterCapabilityError,
-  assertPolicyRepresentable,
-  buildAgentPolicyAudit,
-} = require("../../../relay-dispatch/scripts/agent-adapters/policy");
-const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
-const { getRoutePlanPath } = require("../../../relay-dispatch/scripts/manifest/paths");
-const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
-const { assertRelayPolicyGate } = require("../../../relay-dispatch/scripts/relay-policy-gate");
+  getAdapter,
+  listAdapters,
+} = require("../../../relay-dispatch/scripts/adapters");
+const { AdapterCapabilityError, assertInvocationIdentity, validateCapabilities } = require("../../../relay-dispatch/scripts/adapter-contract");
+const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
 const { git, readText, writeText } = require("./common");
 const {
@@ -25,82 +17,45 @@ const {
   promptTransportPolicy,
 } = require("../reviewer-prompt-transport");
 
-function loadRunRoutePlan(repoRoot, runId) {
-  if (!repoRoot || !runId) return { path: null, plan: null, status: "missing" };
-  const routePlanPath = getRoutePlanPath(repoRoot, runId);
-  if (!fs.existsSync(routePlanPath)) {
-    return { path: routePlanPath, plan: null, status: "absent" };
-  }
-  try {
-    return {
-      path: routePlanPath,
-      plan: JSON.parse(fs.readFileSync(routePlanPath, "utf-8")),
-      status: "ok",
-    };
-  } catch (error) {
-    throw new Error(`failed to read route plan at ${routePlanPath}: ${error.message}`);
-  }
-}
-
-function routePlanReviewPhase(routePlan) {
-  return routePlan?.phases?.review && typeof routePlan.phases.review === "object"
-    ? routePlan.phases.review
-    : null;
-}
-
-function resolveReviewerName(data, reviewerArg, { routePlan = null } = {}) {
+function resolveReviewerName(data, reviewerArg) {
   const manifestReviewer = data.roles?.reviewer;
-  const envReviewer = typeof process.env.RELAY_REVIEWER === "string"
-    ? process.env.RELAY_REVIEWER.trim()
-    : "";
+  if (reviewerArg && manifestReviewer && manifestReviewer !== "unknown" && reviewerArg !== manifestReviewer) {
+    throw new Error(`--reviewer cannot replace immutable run binding '${manifestReviewer}'`);
+  }
   if (reviewerArg) return reviewerArg;
-  if (envReviewer) return envReviewer;
-  const routeReviewer = routePlanReviewPhase(routePlan)?.reviewer;
-  if (routeReviewer) return routeReviewer;
   if (manifestReviewer && manifestReviewer !== "unknown") return manifestReviewer;
   return "codex";
 }
 
 function supportedAdapterPhases(reviewerName) {
   return Object.values(ADAPTER_PHASES)
-    .filter((phase) => supportsAgentAdapterPhase(reviewerName, phase));
+    .filter((phase) => {
+      try {
+        return getAdapter(reviewerName).capabilities({ phase }).supported === true;
+      } catch {
+        return false;
+      }
+    });
 }
 
 function adaptersSupportingPhase(phase) {
-  return listAgentAdapterNames()
-    .filter((name) => supportsAgentAdapterPhase(name, phase));
+  return listAdapters()
+    .filter((name) => getAdapter(name).capabilities({ phase }).supported === true);
 }
 
 function formatUnsupportedReviewerPhaseError(reviewerName, phase) {
   const supported = supportedAdapterPhases(reviewerName);
-  if (
-    phase === ADAPTER_PHASES.PRIMARY_REVIEW &&
-    supported.includes(ADAPTER_PHASES.ADVISORY_REVIEW)
-  ) {
-    return (
-      `Reviewer adapter '${reviewerName}' supports advisory_review but not primary_review; ` +
-      `use --advisory-reviewer ${reviewerName} instead of --reviewer ${reviewerName} until primary review support is implemented. ` +
-      `Use --reviewer-script for an operator override. Primary-review-capable adapters: ${adaptersSupportingPhase(phase).join(", ")}.`
-    );
-  }
-  if (
-    phase === ADAPTER_PHASES.ADVISORY_REVIEW &&
-    supported.includes(ADAPTER_PHASES.PRIMARY_REVIEW)
-  ) {
-    return (
-      `Reviewer adapter '${reviewerName}' supports primary_review but not advisory_review; ` +
-      `use --reviewer ${reviewerName} instead of --advisory-reviewer ${reviewerName}.`
-    );
-  }
   return (
     `Reviewer adapter '${reviewerName}' does not support ${phase}. ` +
-    `Supported phases: ${supported.join(", ") || "(none)"}. Use --reviewer-script for an operator override.`
+    `Supported phases: ${supported.join(", ") || "(none)"}. ` +
+    `Primary-review-capable adapters: ${adaptersSupportingPhase(ADAPTER_PHASES.PRIMARY_REVIEW).join(", ")}. ` +
+    "Use --reviewer-script for an operator override."
   );
 }
 
 function preflightPrimaryReviewerCapability(reviewerName) {
-  if (!listAgentAdapterNames().includes(reviewerName)) return;
-  if (supportsAgentAdapterPhase(reviewerName, ADAPTER_PHASES.PRIMARY_REVIEW)) return;
+  if (!listAdapters().includes(reviewerName)) return;
+  if (getAdapter(reviewerName).capabilities({ phase: ADAPTER_PHASES.PRIMARY_REVIEW }).supported) return;
   const message = formatUnsupportedReviewerPhaseError(reviewerName, ADAPTER_PHASES.PRIMARY_REVIEW);
   throw new AdapterCapabilityError({
     adapter: reviewerName,
@@ -123,14 +78,14 @@ function resolveReviewerScript(reviewerName, reviewerScriptArg, { phase = ADAPTE
   }
   let descriptor;
   try {
-    descriptor = getAgentAdapterDescriptor(reviewerName);
+    descriptor = getAdapter(reviewerName);
   } catch {
     throw new Error(
-      `Unknown reviewer adapter '${reviewerName}'. Supported adapters: ${listAgentAdapterNames().join(", ")}. ` +
+      `Unknown reviewer adapter '${reviewerName}'. Supported adapters: ${listAdapters().join(", ")}. ` +
       "Use --reviewer-script for custom paths."
     );
   }
-  if (!supportsAgentAdapterPhase(reviewerName, phase)) {
+  if (!descriptor.capabilities({ phase }).supported) {
     const message = formatUnsupportedReviewerPhaseError(reviewerName, phase);
     throw new AdapterCapabilityError({
       adapter: reviewerName,
@@ -143,13 +98,10 @@ function resolveReviewerScript(reviewerName, reviewerScriptArg, { phase = ADAPTE
     }, message);
   }
 
-  const scriptName = phase === ADAPTER_PHASES.ADVISORY_REVIEW
-    ? descriptor.reviewer?.advisoryReviewScript
-    : descriptor.reviewer?.primaryReviewScript;
-  if (!scriptName) {
+  const candidate = descriptor.metadata.reviewScript;
+  if (!candidate) {
     throw new Error(`Reviewer adapter '${reviewerName}' supports ${phase} but has no registered reviewer script.`);
   }
-  const candidate = path.join(__dirname, "..", scriptName);
   if (!fs.existsSync(candidate)) {
     throw new Error(`No reviewer adapter script found for '${reviewerName}' phase ${phase}. Provide --reviewer-script or --review-file.`);
   }
@@ -165,22 +117,38 @@ function invokeReviewer({
   reviewerName,
   reviewerScript,
   reviewerModel,
+  invocation = null,
 }) {
-  const execArgs = [
-    reviewerScript,
-    "--repo", repoPath,
-    "--prompt-file", promptPath,
-    "--json",
-  ];
+  let command = process.execPath;
+  let execArgs;
+  let cwd = repoPath;
   if (passPhase) {
-    execArgs.push("--phase", phase);
-  }
-  if (reviewerModel) {
-    execArgs.push("--model", reviewerModel);
+    const builtInvocation = invocation || getAdapter(reviewerName).buildInvocation({
+      phase,
+      cwd: repoPath,
+      promptPath,
+      resultPath: path.join(path.dirname(promptPath), `${path.basename(promptPath)}.review-result.json`),
+      model: reviewerModel,
+      timeoutMs: 1800000,
+      sandbox: "read-only",
+      networkAccess: "disabled",
+    });
+    command = builtInvocation.command;
+    execArgs = builtInvocation.args;
+    cwd = builtInvocation.cwd;
+    assertInvocationIdentity(builtInvocation);
+  } else {
+    execArgs = [
+      reviewerScript,
+      "--repo", repoPath,
+      "--prompt-file", promptPath,
+      "--json",
+    ];
+    if (reviewerModel) execArgs.push("--model", reviewerModel);
   }
 
-  const rawText = execFileSync("node", execArgs, {
-    cwd: repoPath,
+  const rawText = execFileSync(command, execArgs, {
+    cwd,
     encoding: "utf-8",
     ...(promptTransportEvidencePath
       ? {
@@ -201,64 +169,52 @@ function invokeReviewer({
   };
 }
 
-function resolveReviewerModel(data, reviewerModel, reviewerName = null, { routePlan = null, repoRoot = null } = {}) {
+function resolveReviewerModel(data, reviewerModel) {
+  const bound = data?.review?.model ?? data?.review?.last_model ?? null;
+  if (bound && reviewerModel && reviewerModel !== bound) {
+    throw new Error(`--reviewer-model cannot replace immutable run binding '${bound}'`);
+  }
+  if (bound) return { model: bound, source: "manifest_binding" };
   if (reviewerModel) return { model: reviewerModel, source: "cli" };
-  const routeReview = routePlanReviewPhase(routePlan);
-  if (routeReview?.model && (!routeReview.reviewer || routeReview.reviewer === reviewerName)) {
-    return { model: routeReview.model, source: "route_plan" };
-  }
-  const hintedModel = data?.model_hints?.review;
-  if (typeof hintedModel === "string" && hintedModel.trim()) return { model: hintedModel.trim(), source: "model_hints" };
-  if (["opencode", "pi", "antigravity", "cline"].includes(reviewerName)) {
-    return {
-      model: resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME, repoRoot }),
-      source: "executor_defaults",
-    };
-  }
-  return { model: null, source: "unresolved" };
+  return { model: null, source: "adapter_default" };
 }
 
-function buildPrimaryReviewerPolicy(reviewerName) {
-  let descriptor;
+function buildPrimaryReviewerPolicy(reviewerName, invocation = null) {
+  let adapter;
   try {
-    descriptor = getAgentAdapterDescriptor(reviewerName);
+    adapter = getAdapter(reviewerName);
   } catch {
     return null;
   }
-  const networkAccess = reviewerName === "claude" ? "ambient" : "disabled";
-  const audit = assertPolicyRepresentable(buildAgentPolicyAudit({
-    descriptor,
+  const networkAccess = "disabled";
+  const requestedPolicy = {
+    sandbox: "read-only",
+    networkAccess,
+    readOnly: true,
+  };
+  const capability = validateCapabilities(adapter, ADAPTER_PHASES.PRIMARY_REVIEW, {
+    readOnly: true,
+    sandbox: "read-only",
+    networkAccess,
+  });
+  const auditInvocation = invocation || adapter.buildInvocation({
     phase: ADAPTER_PHASES.PRIMARY_REVIEW,
-    requested: {
-      sandbox: "read-only",
-      networkAccess,
-      readOnly: true,
-    },
-  }));
-  if (reviewerName !== "antigravity") {
-    return {
-      ...audit,
-      prompt_transport: promptTransportPolicy(reviewerName),
-    };
-  }
-
-  const cliBinary = process.env.RELAY_ANTIGRAVITY_BIN || descriptor.executor?.cliBinary || "agy";
-  let version = null;
-  let error = null;
-  try {
-    version = execFileSync(cliBinary, ["--version"], { encoding: "utf-8", stdio: "pipe" }).trim();
-  } catch (caught) {
-    error = String(caught?.message || caught).split("\n")[0];
-  }
+    cwd: process.cwd(),
+    promptPath: path.join(process.cwd(), ".relay-capability-probe-prompt"),
+    resultPath: path.join(process.cwd(), ".relay-capability-probe-result"),
+    model: null,
+    timeoutMs: 1800000,
+    sandbox: "read-only",
+    networkAccess,
+  });
   return {
-    ...audit,
+    adapter: reviewerName,
+    phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+    requested: requestedPolicy,
+    capability,
+    invocation: { command: auditInvocation.command, args: auditInvocation.args },
+    safe: true,
     prompt_transport: promptTransportPolicy(reviewerName),
-    cli: {
-      binary: cliBinary,
-      version,
-      version_probe: "agy --version",
-      error,
-    },
   };
 }
 
@@ -311,76 +267,81 @@ function buildPrimaryReviewerPreflight({
   reviewerModel,
   reviewerName,
   reviewerScript,
-  runRepoPath,
-  routePlan = null,
 }) {
-  const resolvedReviewerModel = resolveReviewerModel(data, reviewerModel, reviewerName, { routePlan, repoRoot: runRepoPath });
+  const resolvedReviewerModel = resolveReviewerModel(data, reviewerModel);
   const effectiveReviewerModel = resolvedReviewerModel.model;
-  const reviewPhase = routePlanReviewPhase(routePlan);
-  const modelResolution = resolvedReviewerModel.source === "route_plan"
-    ? reviewPhase?.model_resolution || null
-    : null;
   const reviewerPolicy = buildReviewerPolicy({ reviewerName, reviewerScript });
-  try {
-    const policyDecision = assertRelayPolicyGate({
-      repoRoot: runRepoPath,
-      phase: "review",
-      reviewer: reviewerName,
-      model: effectiveReviewerModel,
-    });
-    return {
-      effectiveReviewerModel,
-      policyDecision,
-      routeSource: resolvedReviewerModel.source,
-      modelResolution,
-      reviewerPolicy,
-    };
-  } catch (error) {
-    error.adapterCapability = reviewerPolicy;
-    throw error;
-  }
+  return {
+    effectiveReviewerModel,
+    modelSource: resolvedReviewerModel.source,
+    reviewerPolicy,
+  };
 }
 
 function captureGitStatus(repoPath) {
   return git(repoPath, "status", "--short", "--untracked-files=all").trim();
 }
 
-function loadReviewText({ body, data, manifestPath, prNumber, promptPath, reviewFile, reviewRepoPath, reviewedHeadSha, reviewerModel, reviewerName, reviewerScript, round, runDir, runRepoPath, reviewerPreflight = null, routePlan = null }) {
+function loadReviewText({ body, data, manifestPath, prNumber, promptPath, reviewFile, reviewRepoPath, reviewedHeadSha, reviewerModel, reviewerName, reviewerScript, round, runDir, runRepoPath, reviewerPreflight = null }) {
   if (reviewFile) {
     return { rawResponsePath: null, reviewText: readText(reviewFile) };
   }
 
   const {
     effectiveReviewerModel,
-    policyDecision,
-    routeSource,
-    modelResolution,
+    modelSource,
     reviewerPolicy,
   } = reviewerPreflight || buildPrimaryReviewerPreflight({
     data,
     reviewerModel,
     reviewerName,
     reviewerScript,
-    runRepoPath,
-    routePlan,
   });
   const adapterManaged = isAdapterManagedReviewerScript(
     reviewerName,
     reviewerScript,
     { phase: ADAPTER_PHASES.PRIMARY_REVIEW }
   );
+  const reviewerInvocation = adapterManaged
+    ? getAdapter(reviewerName).buildInvocation({
+      phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+      cwd: reviewRepoPath,
+      promptPath,
+      resultPath: path.join(path.dirname(promptPath), `${path.basename(promptPath)}.review-result.json`),
+      model: effectiveReviewerModel,
+      timeoutMs: 1800000,
+      sandbox: "read-only",
+      networkAccess: "disabled",
+    })
+    : null;
+  const auditedReviewerPolicy = adapterManaged
+    ? {
+      ...buildPrimaryReviewerPolicy(reviewerName, reviewerInvocation),
+      prompt_transport: reviewerPolicy?.prompt_transport,
+    }
+    : reviewerPolicy;
+  if (effectiveReviewerModel && !data?.review?.model && !data?.review?.last_model) {
+    data = {
+      ...data,
+      review: {
+        ...(data.review || {}),
+        model: effectiveReviewerModel,
+      },
+    };
+    writeManifest(manifestPath, data, body);
+  }
   const promptTransportEvidencePath = adapterManaged
     ? path.join(runDir, `review-round-${round}-prompt-transport.json`)
     : null;
   const invocationReviewerPolicy = promptTransportEvidencePath
     ? {
-      ...reviewerPolicy,
+      ...auditedReviewerPolicy,
       prompt_transport: {
-        ...(reviewerPolicy?.prompt_transport || promptTransportPolicy(reviewerName)),
+        ...(auditedReviewerPolicy?.prompt_transport || promptTransportPolicy(reviewerName)),
         evidence_path: promptTransportEvidencePath,
       },
     }
-    : reviewerPolicy;
+    : auditedReviewerPolicy;
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_INVOKE,
     state_from: data.state,
@@ -389,16 +350,8 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     round,
     reason: reviewerName,
     model: effectiveReviewerModel,
-    policy_decision: policyDecision,
-    route_source: routeSource,
+    model_source: modelSource,
     reviewer_policy: invocationReviewerPolicy,
-  });
-  appendUnregisteredRouteUsedEvent(runRepoPath, data.run_id, {
-    state: data.state,
-    headSha: reviewedHeadSha || null,
-    round,
-    policyDecision,
-    modelResolution,
   });
 
   const statusBeforeReviewer = captureGitStatus(reviewRepoPath);
@@ -411,6 +364,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     reviewerModel: effectiveReviewerModel,
     reviewerName,
     reviewerScript,
+    invocation: reviewerInvocation,
   });
   const statusAfterReviewer = captureGitStatus(reviewRepoPath);
   if (statusBeforeReviewer !== statusAfterReviewer) {
@@ -464,7 +418,6 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
 module.exports = {
   captureGitStatus,
   invokeReviewer,
-  loadRunRoutePlan,
   loadReviewText,
   buildPrimaryReviewerPolicy,
   buildPrimaryReviewerPreflight,

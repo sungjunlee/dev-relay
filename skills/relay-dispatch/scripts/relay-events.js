@@ -5,7 +5,6 @@ const {
   withManifestTransaction,
 } = require("./manifest/store");
 const { ensureRunLayout, getEventsPath, getManifestPath, getRunsDir } = require("./manifest/paths");
-const { timingFieldsFromEventData } = require("./advisory-timing");
 const {
   appendTextFileWithoutFollowingSymlinks,
   readTextFileWithoutFollowingSymlinks,
@@ -20,7 +19,6 @@ const {
 // absent: current producer code no longer emits them, and readRunEvents remains tolerant
 // because validation is write-only.
 const EVENTS = Object.freeze({
-  ADVISORY_REVIEW: "advisory_review",
   // Consumer: /relay records the user's explicit proceed-anyway choice after a failed readiness probe.
   BYPASS_OVERRIDE_BY_USER: "bypass_override_by_user",
   CLEANUP_RESULT: "cleanup_result",
@@ -37,13 +35,10 @@ const EVENTS = Object.freeze({
   // Consumer: dispatch supervisor audits notifier/helper survivors after a clean leader exit.
   EXECUTOR_GROUP_LINGERING: "executor_group_lingering",
   FORCE_FINALIZE: "force_finalize",
-  GUIDANCE_SELECTED: "guidance_selected",
   ITERATION_SCORE: "iteration_score",
   MERGE_BLOCKED: "merge_blocked",
   MERGE_FINALIZE: "merge_finalize",
-  MODEL_HINTS_UPDATED: "model_hints_updated",
   OPERATOR_EXECUTION_EVIDENCE: "operator_execution_evidence",
-  POLICY_UPDATED: "policy_updated",
   PUBLISH_RESULT: "publish_result",
   PR_BODY_SNAPSHOT_FAILED: "pr_body_snapshot_failed",
   PR_NUMBER_STAMPED: "pr_number_stamped",
@@ -56,15 +51,12 @@ const EVENTS = Object.freeze({
   RECOVER_COMMIT: "recover_commit",
   RECOVER_COMMIT_FAILED: "recover_commit_failed",
   REVIEW_PREFLIGHT_FAILED: "review_preflight_failed",
-  ROUTE_RESOLUTION: "route_resolution",
   REVIEW_APPLY: "review_apply",
   REVIEW_INVOKE: "review_invoke",
-  REVIEWER_SWAP: "reviewer_swap",
   RUBRIC_QUALITY: "rubric_quality",
   SAFETY_BOUNDARY_VIOLATION: "safety_boundary_violation",
   SKIP_REVIEW: "skip_review",
   STATE_RECOVERY: "state_recovery",
-  UNREGISTERED_ROUTE_USED: "unregistered_route_used",
 });
 
 const EVENT_VALUES = Object.freeze(Object.values(EVENTS));
@@ -161,12 +153,6 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
       : {}),
     ...(eventData.state !== undefined
       ? { state: normalizeEventValue(eventData.state) }
-      : {}),
-    ...(eventData.old_max_rounds !== undefined
-      ? { old_max_rounds: normalizeEventValue(eventData.old_max_rounds) }
-      : {}),
-    ...(eventData.new_max_rounds !== undefined
-      ? { new_max_rounds: normalizeEventValue(eventData.new_max_rounds) }
       : {}),
     ...(eventData.override_class !== undefined
       ? { override_class: normalizeEventValue(eventData.override_class) }
@@ -286,9 +272,6 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
     ...(eventData.reviewer_policy !== undefined
       ? { reviewer_policy: normalizeEventValue(eventData.reviewer_policy) }
       : {}),
-    ...(eventData.policy_decision !== undefined
-      ? { policy_decision: normalizeEventValue(eventData.policy_decision) }
-      : {}),
     ...(eventData.program_id !== undefined
       ? { program_id: normalizeEventValue(eventData.program_id) }
       : {}),
@@ -304,20 +287,8 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
     ...(eventData.result !== undefined
       ? { result: normalizeEventValue(eventData.result) }
       : {}),
-    ...(eventData.route_plan_path !== undefined
-      ? { route_plan_path: normalizeEventValue(eventData.route_plan_path) }
-      : {}),
-    ...(eventData.route_plan_summary !== undefined
-      ? { route_plan_summary: normalizeEventValue(eventData.route_plan_summary) }
-      : {}),
-    ...(eventData.route_source !== undefined
-      ? { route_source: normalizeEventValue(eventData.route_source) }
-      : {}),
-    ...(eventData.model_resolution !== undefined
-      ? { model_resolution: normalizeEventValue(eventData.model_resolution) }
-      : {}),
-    ...(eventData.model_resolution_source !== undefined
-      ? { model_resolution_source: normalizeEventValue(eventData.model_resolution_source) }
+    ...(eventData.model_source !== undefined
+      ? { model_source: normalizeEventValue(eventData.model_source) }
       : {}),
     ...(eventData.failure_class !== undefined
       ? { failure_class: normalizeEventValue(eventData.failure_class) }
@@ -364,30 +335,6 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
     ...(eventData.to_reviewer !== undefined
       ? { to_reviewer: normalizeEventValue(eventData.to_reviewer) }
       : {}),
-    ...(eventData.reviewer_swap_count !== undefined
-      ? { reviewer_swap_count: normalizeEventValue(eventData.reviewer_swap_count) }
-      : {}),
-    ...(eventData.trigger !== undefined
-      ? { trigger: normalizeEventValue(eventData.trigger) }
-      : {}),
-    ...(eventData.gating !== undefined
-      ? { gating: eventData.gating === true }
-      : {}),
-    ...(eventData.advisory_lanes !== undefined
-      ? { advisory_lanes: normalizeEventValue(eventData.advisory_lanes) }
-      : {}),
-    ...(eventData.advisory_config_hash !== undefined
-      ? { advisory_config_hash: normalizeEventValue(eventData.advisory_config_hash) }
-      : {}),
-    ...(eventData.lane_index !== undefined
-      ? { lane_index: normalizeEventValue(eventData.lane_index) }
-      : {}),
-    ...(eventData.lane_demotion_cap !== undefined
-      ? { lane_demotion_cap: normalizeEventValue(eventData.lane_demotion_cap) }
-      : {}),
-    ...(eventData.lane_demotion_count !== undefined
-      ? { lane_demotion_count: normalizeEventValue(eventData.lane_demotion_count) }
-      : {}),
     ...(eventData.factors !== undefined
       ? { factors: normalizeEventValue(eventData.factors) }
       : {}),
@@ -400,18 +347,6 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
     ...(eventData.decision !== undefined
       ? { decision: normalizeEventValue(eventData.decision) }
       : {}),
-    ...(eventData.guidance_packs !== undefined
-      ? { guidance_packs: normalizeEventValue(eventData.guidance_packs) }
-      : {}),
-    ...(eventData.task_profile_summary !== undefined
-      ? { task_profile_summary: normalizeEventValue(eventData.task_profile_summary) }
-      : {}),
-    ...(eventData.guidance_source !== undefined
-      ? { guidance_source: normalizeEventValue(eventData.guidance_source) }
-      : {}),
-    ...(eventData.guidance_artifact_path !== undefined
-      ? { guidance_artifact_path: normalizeEventValue(eventData.guidance_artifact_path) }
-      : {}),
     ...(eventData.profile !== undefined
       ? { profile: normalizeEventValue(eventData.profile) }
       : {}),
@@ -420,9 +355,6 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
       : {}),
     ...(eventData.artifact_path !== undefined
       ? { artifact_path: normalizeEventValue(eventData.artifact_path) }
-      : {}),
-    ...(eventData.advisory_artifact_hash !== undefined
-      ? { advisory_artifact_hash: normalizeEventValue(eventData.advisory_artifact_hash) }
       : {}),
     ...(eventData.output_path !== undefined
       ? { output_path: normalizeEventValue(eventData.output_path) }
@@ -436,28 +368,9 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
     ...(eventData.attempt_count !== undefined
       ? { attempt_count: normalizeEventValue(eventData.attempt_count) }
       : {}),
-    ...(eventData.required_count !== undefined
-      ? { required_count: normalizeEventValue(eventData.required_count) }
-      : {}),
-    ...(eventData.advisory_count !== undefined
-      ? { advisory_count: normalizeEventValue(eventData.advisory_count) }
-      : {}),
-    ...(eventData.duplicate_low_confidence_count !== undefined
-      ? { duplicate_low_confidence_count: normalizeEventValue(eventData.duplicate_low_confidence_count) }
-      : {}),
-    ...(eventData.advisory_outcome !== undefined
-      ? { advisory_outcome: normalizeEventValue(eventData.advisory_outcome) }
-      : {}),
-    ...(eventData.confidence_downgrade !== undefined
-      ? { confidence_downgrade: eventData.confidence_downgrade === true }
-      : {}),
-    ...(eventData.low_confidence_count !== undefined
-      ? { low_confidence_count: normalizeEventValue(eventData.low_confidence_count) }
-      : {}),
     ...(eventData.elapsed_ms !== undefined
       ? { elapsed_ms: normalizeEventValue(eventData.elapsed_ms) }
       : {}),
-    ...timingFieldsFromEventData(eventData),
     ...(eventData.failure_reason !== undefined
       ? { failure_reason: normalizeEventValue(eventData.failure_reason) }
       : {}),
@@ -472,45 +385,12 @@ function appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath = null 
 }
 
 // Manifest and journal writers share the same per-run transaction lock. Callers
-// already inside a transaction (notably extend-review-policy's manifest+audit pair) set
+// already inside a transaction set
 // lockHeld and may target an explicitly resolved events path.
 function appendRunEvent(repoRoot, runId, eventData, { eventsPath = null, lockHeld = false } = {}) {
   if (lockHeld) return appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath });
   const manifestPath = getManifestPath(repoRoot, runId);
   return withManifestTransaction(manifestPath, () => appendRunEventUnlocked(repoRoot, runId, eventData, { eventsPath }));
-}
-
-function appendUnregisteredRouteUsedEvent(repoRoot, runId, {
-  state = null,
-  headSha = null,
-  round = undefined,
-  policyDecision,
-  modelResolution = null,
-} = {}) {
-  if (policyDecision?.reason !== "unknown_allowed") return null;
-  const phase = normalizeEventValue(policyDecision.phase);
-  const actorField = normalizeEventValue(policyDecision.actor_field)
-    || (phase === "review" || phase === "advisory_review" ? "reviewer" : "executor");
-  const record = {
-    event: EVENTS.UNREGISTERED_ROUTE_USED,
-    state_from: state,
-    state_to: state,
-    head_sha: headSha,
-    round,
-    reason: "unknown_allowed",
-    phase,
-    actor_field: actorField,
-    model: policyDecision.model || null,
-    policy_decision: policyDecision,
-    ...(modelResolution ? { model_resolution: modelResolution } : {}),
-    ...(modelResolution?.source ? { model_resolution_source: modelResolution.source } : {}),
-  };
-  if (actorField === "reviewer") {
-    record.reviewer = policyDecision.reviewer || policyDecision.actor || null;
-  } else {
-    record.executor = policyDecision.executor || policyDecision.actor || null;
-  }
-  return appendRunEvent(repoRoot, runId, record);
 }
 
 function appendIterationScore(repoRoot, runId, { round, scores } = {}) {
@@ -679,7 +559,6 @@ module.exports = {
   appendRubricQuality,
   appendRunEvent,
   appendSafetyBoundaryViolation,
-  appendUnregisteredRouteUsedEvent,
   EVENTS,
   readAllRunEvents,
   readRunEvents,

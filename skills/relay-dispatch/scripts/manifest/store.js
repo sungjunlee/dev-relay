@@ -11,12 +11,6 @@ const {
   requireValidFleetId,
   requireValidRunId,
 } = require("./paths");
-const {
-  normalizeReviewAssurance,
-  normalizeReviewAssuranceSource,
-  reviewRoundLimitForAssurance,
-} = require("./review-assurance");
-const { createReviewRoundBudget } = require("./review-budget");
 const { normalizeOwnership } = require("../ownership");
 
 const RELAY_VERSION = 2;
@@ -342,15 +336,11 @@ function createManifestSkeleton({
   mergePolicy = "manual_after_lgtm",
   cleanupPolicy = "on_close",
   reviewerWritePolicy = "forbid",
-  reviewAssurance = "standard",
-  reviewAssuranceSource = "flag",
-  reviewAssuranceOverridden = null,
   environment = null,
   requestId = null,
   leafId = null,
   doneCriteriaPath = null,
   doneCriteriaSource = null,
-  modelHints = undefined,
   fleetId = undefined,
   ownership = undefined,
 }) {
@@ -359,12 +349,6 @@ function createManifestSkeleton({
 
   const createdAt = nowIso();
   const normalizedRunId = requireValidRunId(runId);
-  const normalizedReviewAssurance = normalizeReviewAssurance(reviewAssurance);
-  const normalizedReviewAssuranceSource = normalizeReviewAssuranceSource(reviewAssuranceSource);
-  const normalizedReviewAssuranceOverridden = reviewAssuranceOverridden
-    ? normalizeReviewAssurance(reviewAssuranceOverridden)
-    : null;
-
   const manifest = {
     relay_version: RELAY_VERSION,
     run_id: normalizedRunId,
@@ -396,11 +380,6 @@ function createManifestSkeleton({
       merge: mergePolicy,
       cleanup: cleanupPolicy,
       reviewer_write: reviewerWritePolicy,
-      review_assurance: normalizedReviewAssurance,
-      review_assurance_source: normalizedReviewAssuranceSource,
-      ...(normalizedReviewAssuranceOverridden
-        ? { review_assurance_overridden: normalizedReviewAssuranceOverridden }
-        : {}),
     },
     anchor: {
       done_criteria_source: doneCriteriaSource || (issueNumber ? "issue" : "unknown"),
@@ -409,12 +388,9 @@ function createManifestSkeleton({
     },
     review: {
       rounds: 0,
-      max_rounds: reviewRoundLimitForAssurance(normalizedReviewAssurance),
-      round_budget: createReviewRoundBudget(),
       latest_verdict: "pending",
       repeated_issue_count: 0,
       last_reviewed_sha: null,
-      reviewer_swap_count: 0,
     },
     cleanup: createCleanupSkeleton(),
     environment: environment || {
@@ -434,10 +410,6 @@ function createManifestSkeleton({
       ...(requestId ? { request_id: requestId } : {}),
       ...(leafId ? { leaf_id: leafId } : {}),
     };
-  }
-
-  if (modelHints !== undefined) {
-    manifest.model_hints = modelHints;
   }
 
   if (fleetId !== undefined) {

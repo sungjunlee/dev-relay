@@ -24,7 +24,7 @@ const {
 } = require("./execution-evidence");
 const {
   findUnknownFlags,
-  modeLabel,
+  modeLabel: formatCliModeLabel,
   readArg,
   schemaHasFlag,
 } = require("./cli-args");
@@ -41,7 +41,15 @@ const {
 } = require("./run-runtime-state");
 
 const args = process.argv.slice(2);
-const CLI_ARG_OPTIONS = { commandName: "recover-commit", reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: [
+    "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
+    "--test-command", "--test-result-file", "--test-exit-code", "--replace-placeholder-evidence",
+    "--dry-run", "--json", "--help", "-h",
+  ],
+  booleanFlags: ["--replace-placeholder-evidence", "--dry-run", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--manifest", "--reason", "--pr-title", "--pr-body-file", "--test-command", "--test-result-file"],
+};
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const getCliArg = (flag, fallback) => readArg(args, flag, fallback, CLI_ARG_OPTIONS);
 
@@ -49,18 +57,18 @@ function printHelp(exitCode) {
   console.log("Usage: recover-commit.js (--repo <path> --run-id <id> | --manifest <path>) --reason <text> [options]");
   console.log("\nCommit recoverable work left by an executor. review_pending runs push/open PR; internal_review_pending runs only commit locally.");
   console.log("\nOptions:");
-  console.log(`  --repo <path>       ${modeLabel("--repo")} Repository root used with --run-id (default: .)`);
-  console.log(`  --run-id <id>       ${modeLabel("--run-id")} Relay run identifier`);
-  console.log(`  --manifest <path>   ${modeLabel("--manifest")} Explicit manifest path`);
-  console.log(`  --reason <text>     ${modeLabel("--reason")} Required audit reason; preserved verbatim`);
-  console.log(`  --pr-title <text>   ${modeLabel("--pr-title")} PR title override`);
-  console.log(`  --pr-body-file <path> ${modeLabel("--pr-body-file")} PR body override file`);
-  console.log(`  --test-command <cmd> ${modeLabel("--test-command")} Operator-run test command for missing execution evidence`);
-  console.log(`  --test-result-file <path> ${modeLabel("--test-result-file")} Operator-run test output file to hash for missing execution evidence`);
-  console.log(`  --test-exit-code <n> ${modeLabel("--test-exit-code")} Operator-run test exit code for missing execution evidence`);
-  console.log(`  --replace-placeholder-evidence ${modeLabel("--replace-placeholder-evidence")} Replace timeout placeholder evidence with operator-run evidence`);
-  console.log(`  --dry-run           ${modeLabel("--dry-run")} Print planned git/gh commands and manifest mutation only`);
-  console.log(`  --json              ${modeLabel("--json")} Output JSON`);
+  console.log(`  --repo <path>       ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root used with --run-id (default: .)`);
+  console.log(`  --run-id <id>       ${formatCliModeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier`);
+  console.log(`  --manifest <path>   ${formatCliModeLabel("--manifest", CLI_ARG_OPTIONS)} Explicit manifest path`);
+  console.log(`  --reason <text>     ${formatCliModeLabel("--reason", CLI_ARG_OPTIONS)} Required audit reason; preserved verbatim`);
+  console.log(`  --pr-title <text>   ${formatCliModeLabel("--pr-title", CLI_ARG_OPTIONS)} PR title override`);
+  console.log(`  --pr-body-file <path> ${formatCliModeLabel("--pr-body-file", CLI_ARG_OPTIONS)} PR body override file`);
+  console.log(`  --test-command <cmd> ${formatCliModeLabel("--test-command", CLI_ARG_OPTIONS)} Operator-run test command for missing execution evidence`);
+  console.log(`  --test-result-file <path> ${formatCliModeLabel("--test-result-file", CLI_ARG_OPTIONS)} Operator-run test output file to hash for missing execution evidence`);
+  console.log(`  --test-exit-code <n> ${formatCliModeLabel("--test-exit-code", CLI_ARG_OPTIONS)} Operator-run test exit code for missing execution evidence`);
+  console.log(`  --replace-placeholder-evidence ${formatCliModeLabel("--replace-placeholder-evidence", CLI_ARG_OPTIONS)} Replace timeout placeholder evidence with operator-run evidence`);
+  console.log(`  --dry-run           ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Print planned git/gh commands and manifest mutation only`);
+  console.log(`  --json              ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
   console.log("\nDecision tree:");
   console.log("  - Use recover-commit when the executor completed and the retained worktree has uncommitted changes or unpushed commits.");
   console.log("  - Use dispatch.js --run-id <id> when review requested changes and you need a same-run executor resume.");
@@ -339,7 +347,7 @@ function appendFailureEvent(repoRoot, data, status, detail, commitSha, branch) {
 }
 
 function main() {
-  const unknownFlags = findUnknownFlags(args, "recover-commit");
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
   if (unknownFlags.length > 0) {
     throw new Error(`Unknown flag(s): ${unknownFlags.join(", ")}`);
   }

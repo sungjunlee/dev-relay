@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 /**
- * Invoke Google Antigravity CLI as an isolated structured primary or advisory reviewer.
+ * Invoke Google Antigravity CLI as an isolated structured primary reviewer.
  */
 
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
+const { antigravityReviewArgs } = require("./reviewer-control-invocations");
 const {
   bindCliArgs,
-  modeLabel,
+  findUnknownFlags,
+  modeLabel: formatCliModeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
   parseReviewerVerdictObject,
@@ -17,52 +19,29 @@ const {
   summarizeFailure,
 } = require("./reviewer-helpers");
 const {
-  parseAdvisoryReview,
-  validateAdvisoryProfile,
-  writeAdvisorySchemaFailure,
-} = require("./advisory-review-schema");
-const {
   assertControlSafeArgv,
   createPromptFileReference,
 } = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help", "-h"];
-const cliArgs = bindCliArgs(args, {
-  commandName: "invoke-reviewer-antigravity",
+const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
+const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-});
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--prompt-file"],
+};
+const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
+if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
-  console.log("Usage: invoke-reviewer-antigravity.js --repo <path> --prompt-file <path> [--phase <name>] [--model <route>] [--profile <name>] [--json]");
+  console.log("Usage: invoke-reviewer-antigravity.js --repo <path> --prompt-file <path> [--model <route>] [--json]");
   console.log("\nOptions:");
-  console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
-  console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
-  console.log(`  --model <route>      ${modeLabel("--model")} Policy route label; not passed to agy`);
-  console.log(`  --phase <name>       ${modeLabel("--phase")} primary_review or advisory_review`);
-  console.log(`  --profile <name>     ${modeLabel("--profile")} Advisory profile, defaults to blindspot`);
-  console.log(`  --json               ${modeLabel("--json")} Output JSON`);
+  console.log(`  --repo <path>        ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root`);
+  console.log(`  --prompt-file <path> ${formatCliModeLabel("--prompt-file", CLI_ARG_OPTIONS)} Prompt bundle path`);
+  console.log(`  --model <route>      ${formatCliModeLabel("--model", CLI_ARG_OPTIONS)} Policy route label; not passed to agy`);
+  console.log(`  --json               ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
-}
-
-function resolvePhase(value) {
-  const phase = String(value || "primary_review").trim();
-  if (phase !== "primary_review" && phase !== "advisory_review") {
-    throw new Error(`--phase must be primary_review or advisory_review, got ${JSON.stringify(value)}`);
-  }
-  return phase;
-}
-
-function readAdvisoryProfileArg(argv) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = String(argv[index]);
-    if (token === "--profile") {
-      const value = argv[index + 1];
-      return value && !String(value).startsWith("--") ? value : undefined;
-    }
-    if (token.startsWith("--profile=")) return token.slice("--profile=".length);
-  }
-  return undefined;
 }
 
 function parsePrintTimeoutMs(value) {
@@ -104,28 +83,17 @@ function summarizeStatus(status) {
   return text ? text.split(/\r?\n/).slice(0, 8).join("; ") : "(clean)";
 }
 
-function worktreeMutationMessage(repoPath, beforeStatus, phase) {
+function worktreeMutationMessage(repoPath, beforeStatus) {
   const afterStatus = readWorktreeStatus(repoPath);
   if (afterStatus === beforeStatus) return "";
   return (
-    `Antigravity reviewer ${phase} mutated the worktree while running in read-only review mode. ` +
+    "Antigravity primary reviewer mutated the worktree while running in read-only review mode. " +
     `Before git status: ${summarizeStatus(beforeStatus)}. ` +
     `After git status: ${summarizeStatus(afterStatus)}.`
   );
 }
 
-function buildPrompt(promptText, phase) {
-  if (phase === "advisory_review") {
-    return [
-      "[NON-INTERACTIVE ADVISORY REVIEW]",
-      "Return only JSON matching the advisory review shape in the prompt.",
-      "Do not wrap the response in markdown fences.",
-      "Do not modify files, create commits, or write comments. Treat the checkout as read-only.",
-      "Relay will check git status after this process and record any worktree mutation as a policy violation.",
-      "",
-      promptText,
-    ].join("\n");
-  }
+function buildPrompt(promptText) {
   return [
     "[NON-INTERACTIVE REVIEW]",
     "Review the provided bundle and return only JSON matching this schema:",
@@ -139,17 +107,10 @@ function buildPrompt(promptText, phase) {
   ].join("\n");
 }
 
-function parseResult(result, phase, profile) {
-  if (phase === "advisory_review") {
-    return parseAdvisoryReview(result, {
-      adapter: "antigravity",
-      phase,
-      profile,
-    });
-  }
+function parseResult(result) {
   return parseReviewerVerdictObject(result, {
     adapter: "antigravity",
-    phase,
+    phase: "primary_review",
     description: "review verdict",
   });
 }
@@ -157,10 +118,6 @@ function parseResult(result, phase, profile) {
 function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
-  const phase = resolvePhase(cliArgs.getArg("--phase", "primary_review"));
-  const advisoryProfile = phase === "advisory_review"
-    ? validateAdvisoryProfile(readAdvisoryProfileArg(args) || "blindspot")
-    : "blindspot";
   const agyBin = process.env.RELAY_ANTIGRAVITY_BIN || "agy";
   const printTimeout = String(process.env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT || "1800s").trim();
   const parentTimeoutMs = parsePrintTimeoutMs(printTimeout);
@@ -170,7 +127,7 @@ function main() {
   }
 
   const promptText = fs.readFileSync(promptFile, "utf-8").trim();
-  const fullPrompt = buildPrompt(promptText, phase);
+  const fullPrompt = buildPrompt(promptText);
   const beforeStatus = readWorktreeStatus(repoPath);
   const promptTransport = createPromptFileReference({
     adapter: "antigravity",
@@ -178,12 +135,11 @@ function main() {
     promptFile,
   });
 
-  const execArgs = [
-    "--add-dir", promptTransport.directory,
-    "--prompt", promptTransport.argvReference,
-    "--print-timeout", printTimeout,
-    "--sandbox",
-  ];
+  const execArgs = antigravityReviewArgs({
+    promptDirectory: promptTransport.directory,
+    promptReference: promptTransport.argvReference,
+    printTimeout,
+  });
   assertControlSafeArgv(execArgs, { adapter: "antigravity", promptFile });
 
   let result;
@@ -197,10 +153,10 @@ function main() {
       maxBuffer: 10 * 1024 * 1024,
     }).trim();
   } catch (error) {
-    const mutationMessage = worktreeMutationMessage(repoPath, beforeStatus, phase);
+    const mutationMessage = worktreeMutationMessage(repoPath, beforeStatus);
     if (isExecTimeout(error)) {
       throw new Error(
-        `Antigravity reviewer ${phase} timed out after ${printTimeout} (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT). ` +
+        `Antigravity primary reviewer timed out after ${printTimeout} (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT). ` +
         "The agy --prompt invocation did not return before the parent-process timeout; retry with a larger timeout or split the review scope." +
         (mutationMessage ? ` ${mutationMessage}` : "")
       );
@@ -218,13 +174,13 @@ function main() {
   }
 
   if (!result) {
-    throw new Error(`Antigravity reviewer ${phase} did not produce a structured result`);
+    throw new Error("Antigravity primary reviewer did not produce a structured result");
   }
-  const mutationMessage = worktreeMutationMessage(repoPath, beforeStatus, phase);
+  const mutationMessage = worktreeMutationMessage(repoPath, beforeStatus);
   if (mutationMessage) {
     throw new Error(mutationMessage);
   }
-  const parsed = parseResult(result, phase, advisoryProfile);
+  const parsed = parseResult(result);
   const output = JSON.stringify(parsed);
 
   if (cliArgs.hasFlag("--json")) {
@@ -238,6 +194,5 @@ try {
   main();
 } catch (error) {
   console.error(`Error: ${error.message}`);
-  writeAdvisorySchemaFailure(error);
   process.exit(1);
 }

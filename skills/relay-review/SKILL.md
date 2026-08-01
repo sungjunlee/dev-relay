@@ -60,14 +60,6 @@ Run the runner in the foreground. Do NOT background it, detach it, or return wit
 Supported primary reviewers: `--reviewer codex`, `--reviewer claude`, `--reviewer opencode`, `--reviewer pi`, `--reviewer antigravity`, and `--reviewer cursor`. Adapter precedence, environment knobs, capability gates, and model examples live in `../relay-dispatch/references/agent-adapter-platform.md`.
 If a reviewer route is denied or its model is unresolved, run `relay-config` to register the route or set the reviewer default before re-running review.
 
-Optional advisory lanes run alongside the primary reviewer from list config in routing or CLI shorthand. Profiles: `blindspot` defaults to `trigger=every_round,gating=false`; `adversarial` defaults to `trigger=on_pass,gating=true`. Explicit trigger/gating values win. Triggers are `every_round` or `on_pass`; gating lanes can demote an applied pass when they report required findings.
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer <name> --advisory-profile blindspot --json
-```
-Supported advisory reviewers: `--advisory-reviewer opencode`, `--advisory-reviewer pi`, `--advisory-reviewer antigravity`, and `--advisory-reviewer cline`.
-
-Full advisory timing, failure, demotion cap, and route semantics are in `references/runner-notes.md` and the adapter platform reference.
-
 4. Fallback path for unsupported environments or debugging:
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
@@ -86,7 +78,7 @@ This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `re
 | Converged (post-publication) | ready verdict emitted | `converged` | `ready_to_merge` |
 | Configured cap | fail | `repair_cycle_exhausted` | Escalated |
 
-Two phases run in order. Under standard assurance, the default repair cycle is one independent review, one targeted re-dispatch, and one review of the corrected result. `review.rounds` is the global applied-verdict sequence. Compact escalates its first substantive failure; standard permits one targeted repair; hardened permits two. Corrected-result PASS and required post-publication PASS are phase-recorded protocol verifications and do not consume substantive repair capacity. Each round re-measures against the **original anchor**, not the previous round's state.
+Two phases run in order. The review loop uses one independent primary reviewer, then targeted re-dispatch when that reviewer requests changes. Each round re-measures against the **original anchor**, not the previous round's state.
 
 ### Phase 1: Spec Compliance
 
@@ -107,7 +99,7 @@ Two phases run in order. Under standard assurance, the default repair cycle is o
 
 ### Phase 2: Code Quality (only after Phase 1 PASS)
 
-8. Inspect changed files inline for code quality, patterns, conventions, and structural issues. Adapter-managed primary reviewers (Codex, Claude, OpenCode, Pi, and Antigravity) return findings in the structured verdict; advisory reviewers return advisory JSON. Fallback/manual reviewers follow the primary verdict contract. Manual or supported environments MAY use helpers such as Claude Code `/review`, but helper availability is optional.
+8. Inspect changed files inline for code quality, patterns, conventions, and structural issues. Adapter-managed primary reviewers return findings in the structured verdict. Fallback/manual reviewers follow the same primary verdict contract. Manual or supported environments MAY use helpers such as Claude Code `/review`, but helper availability is optional.
 9. Inspect changed files inline for simplification opportunities: unnecessary complexity, dead code, verbose patterns, and hard-to-review structure. Manual or supported environments MAY use helpers such as `/simplify`; simplification findings are merge-blocking only when they affect maintainability, correctness risk, or reviewability, not style nits.
 10. The structured verdict is the single Phase 2 gating output. No reviewer blocks or fails merely because an external skill command is unavailable. Issues found → return `verdict=changes_requested`, then follow the `phase2_fail` back-edge: re-dispatch and restart at Phase 1 because quality fixes can regress spec compliance.
 
@@ -123,8 +115,6 @@ Before any re-dispatch, check:
 
 11. Both phases pass → produce a structured verdict with `verdict=pass` and `issues=[]`. Use `next_action=publish_pending` when the manifest state is `internal_review_pending`; use `next_action=ready_to_merge` when the manifest state is `review_pending`.
 
-**Assurance caps:** compact `1`, standard `2`, hardened `3`. Higher experimental values must be explicitly persisted.
-
 ## Verdict + Audit Trail
 
 12. If you used the fallback path, apply the structured verdict with the review runner:
@@ -135,8 +125,6 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo 
 ```
 
 The runner validates the verdict, writes the PR audit comment only for post-publication rounds, updates manifest state, and records round artifacts. Internal rounds use the retained worktree diff and never comment on a PR. For hardened runs, a passing manual verdict requires an explicit `--manual-review-reason` audit reason. See `references/runner-notes.md` for the full audit-trail and backward-compatibility behavior.
-
-When an escalated run needs another review attempt, pass a different `--reviewer` when available. If the same adapter is intentionally reused, include `--independent-review-reason <text>` to document why the attempt is independent enough to spend the single reviewer-swap quota.
 
 ## Re-dispatch (when issues found)
 

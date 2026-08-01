@@ -7,9 +7,11 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
+const { codexReviewArgs } = require("./reviewer-control-invocations");
 const {
   bindCliArgs,
-  modeLabel,
+  findUnknownFlags,
+  modeLabel: formatCliModeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const { parseReviewerJsonObject, summarizeFailure } = require("./reviewer-helpers");
 const {
@@ -20,18 +22,22 @@ const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
 const REVIEW_TIMEOUT_ENV = "RELAY_CODEX_REVIEW_TIMEOUT";
 const DEFAULT_REVIEW_TIMEOUT = "900s";
-const cliArgs = bindCliArgs(args, {
-  commandName: "invoke-reviewer-codex",
+const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-});
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--prompt-file"],
+};
+const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
+if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-reviewer-codex.js --repo <path> --prompt-file <path> [--model <name>] [--json]");
   console.log("\nOptions:");
-  console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
-  console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
-  console.log(`  --model <name>       ${modeLabel("--model")} Model override`);
-  console.log(`  --json               ${modeLabel("--json")} Output JSON`);
+  console.log(`  --repo <path>        ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root`);
+  console.log(`  --prompt-file <path> ${formatCliModeLabel("--prompt-file", CLI_ARG_OPTIONS)} Prompt bundle path`);
+  console.log(`  --model <name>       ${formatCliModeLabel("--model", CLI_ARG_OPTIONS)} Model override`);
+  console.log(`  --json               ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
@@ -114,17 +120,7 @@ function main() {
       promptText,
     ].join("\n");
 
-    const execArgs = [
-      "exec",
-      "-C", repoPath,
-      "--ephemeral",
-      "--sandbox", "read-only",
-      "--color", "never",
-      "--output-schema", schemaPath,
-      "-o", resultPath,
-    ];
-    if (model) execArgs.push("-m", model);
-    execArgs.push("-");
+    const execArgs = codexReviewArgs({ repoPath, schemaPath, resultPath, model });
 
     try {
       execFileSyncWithStdinPrompt(codexBin, execArgs, {

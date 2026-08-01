@@ -51,12 +51,13 @@ function persistDoneCriteria({ repo, runId, text }) {
 function main() {
   const args = process.argv.slice(2);
   const cliArgs = bindCliArgs(args, {
-    commandName: "persist-done-criteria",
     reservedFlags: KNOWN_FLAGS,
+    booleanFlags: ["--json", "--help", "-h"],
+    verbatimValueFlags: ["--repo", "--text", "--file"],
   });
 
   try {
-    const unknownFlags = findUnknownFlags(args, "persist-done-criteria");
+    const unknownFlags = findUnknownFlags(args, cliArgs.options);
     if (unknownFlags.length) {
       throw new Error(`unknown flag(s): ${unknownFlags.join(", ")}`);
     }

@@ -17,24 +17,6 @@ function formatPlan({ worktreePath, branch, title, register, pin, includeFiles }
   return lines.join("\n");
 }
 
-function formatAdvisorySelection(value) {
-  if (!value) return "(none)";
-  const lanes = Array.isArray(value) ? value : [value];
-  const formatted = lanes
-    .filter((lane) => lane && typeof lane === "object")
-    .map((lane) => {
-      const reviewer = lane.reviewer || "(unknown)";
-      const profile = lane.profile || "blindspot";
-      const model = lane.model || lane.reviewer_model;
-      const suffixes = [];
-      if (model) suffixes.push(`model=${model}`);
-      if (lane.trigger && lane.trigger !== "every_round") suffixes.push(`trigger=${lane.trigger}`);
-      if (lane.gating === true) suffixes.push("gating=true");
-      return `${reviewer}/${profile}${suffixes.length ? ` ${suffixes.join(" ")}` : ""}`;
-    });
-  return formatted.length ? formatted.join(", ") : "(none)";
-}
-
 function formatDispatchDryRun({
   runId,
   mode,
@@ -54,11 +36,6 @@ function formatDispatchDryRun({
   leafId = null,
   fleetId = null,
   doneCriteriaFile = null,
-  reviewAssurance = null,
-  reviewAssuranceSource = null,
-  reviewAssuranceOverridden = null,
-  policyDecision = null,
-  routingDecision = null,
   worktreePlan,
 }) {
   const lines = [
@@ -93,39 +70,6 @@ function formatDispatchDryRun({
   }
   if (doneCriteriaFile) {
     lines.push(`  Done AC:  ${doneCriteriaFile}`);
-  }
-  if (reviewAssurance) {
-    const source = reviewAssuranceSource ? ` (source=${reviewAssuranceSource})` : "";
-    const overridden = reviewAssuranceOverridden
-      ? `; overridden flag=${reviewAssuranceOverridden}`
-      : "";
-    lines.push(`  Assurance: ${reviewAssurance}${source}${overridden}`);
-  }
-  if (policyDecision) {
-    const actorField = policyDecision.actor_field || "actor";
-    const actorValue = policyDecision[actorField] || policyDecision.actor || "(unset)";
-    const route = policyDecision.matched_route ? ` matched=${policyDecision.matched_route}` : "";
-    lines.push(
-      `  Policy:   ${policyDecision.allowed ? "allowed" : "denied"} ` +
-      `phase=${policyDecision.phase} ${actorField}=${actorValue} ` +
-      `model=${policyDecision.model || "(none)"} reason=${policyDecision.reason}${route}`
-    );
-  }
-  if (routingDecision) {
-    const matched = routingDecision.matched_rule
-      ? `matched ${routingDecision.matched_rule.name} (#${routingDecision.matched_rule.index})`
-      : `no match${routingDecision.no_match_reason ? ` (${routingDecision.no_match_reason})` : ""}`;
-    const sourceTags = routingDecision.source_tags || {};
-    const sourceParts = Object.entries(sourceTags)
-      .filter(([, tags]) => Array.isArray(tags) && tags.length)
-      .map(([source, tags]) => `${source.replace(/_/g, "-")}=${tags.join(",")}`);
-    const effective = (routingDecision.effective_tags || []).join(",") || "(none)";
-    lines.push(`  Routing: ${matched}`);
-    lines.push(`  Tags:    ${[...sourceParts, `effective=${effective}`].join(" ")}`);
-    lines.push(`  Selected: advisory_review=${formatAdvisorySelection(routingDecision.selected?.advisory_review)}`);
-    if (routingDecision.warnings?.length) {
-      lines.push(`  Routing warnings: ${routingDecision.warnings.map((warning) => warning.code).join(", ")}`);
-    }
   }
   if (worktreePlan.worktreeinclude.length) {
     lines.push(`  .worktreeinclude: ${worktreePlan.worktreeinclude.join(", ")}`);

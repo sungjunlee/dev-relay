@@ -7,7 +7,7 @@ const path = require("path");
 const {
   bindCliArgs,
   findUnknownFlags,
-  modeLabel,
+  modeLabel: formatCliModeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const { getCanonicalRepoRoot } = require("../../relay-dispatch/scripts/manifest/paths");
 const { observeRun } = require("../../relay-dispatch/scripts/run-observer");
@@ -15,7 +15,11 @@ const { selectIssueRuns } = require("./relay-status");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--run-id", "--issue", "--apply", "--dry-run", "--json", "--help", "-h"];
-const CLI_ARG_OPTIONS = { commandName: "relay-recover", reservedFlags: KNOWN_FLAGS };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--apply", "--dry-run", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo"],
+};
 const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 
 function hasCliFlag(flag) {
@@ -29,13 +33,13 @@ function usage() {
     "Choose the safe existing recovery command for a relay run. Defaults to dry-run.",
     "",
     "Options:",
-    `  --repo <path>  ${modeLabel("--repo")} Repository root (default: .)`,
-    `  --run-id <id>  ${modeLabel("--run-id")} Relay run identifier`,
-    `  --issue <n>    ${modeLabel("--issue")} GitHub issue number`,
-    `  --dry-run      ${modeLabel("--dry-run")} Print planned command without mutating (default)`,
-    `  --apply        ${modeLabel("--apply")} Execute safe delegated recovery`,
-    `  --json         ${modeLabel("--json")} Output JSON`,
-    `  --help, -h     ${modeLabel("--help")} Show help`,
+    `  --repo <path>  ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root (default: .)`,
+    `  --run-id <id>  ${formatCliModeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier`,
+    `  --issue <n>    ${formatCliModeLabel("--issue", CLI_ARG_OPTIONS)} GitHub issue number`,
+    `  --dry-run      ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Print planned command without mutating (default)`,
+    `  --apply        ${formatCliModeLabel("--apply", CLI_ARG_OPTIONS)} Execute safe delegated recovery`,
+    `  --json         ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`,
+    `  --help, -h     ${formatCliModeLabel("--help", CLI_ARG_OPTIONS)} Show help`,
   ].join("\n");
 }
 
@@ -131,7 +135,7 @@ function main() {
     console.log(usage());
     process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
   }
-  const unknownFlags = findUnknownFlags(args, KNOWN_FLAGS);
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
   if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   const repo = cliArgs.getArg("--repo", ".");
   const runIdArg = cliArgs.getArg("--run-id");

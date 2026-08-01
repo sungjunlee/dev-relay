@@ -65,17 +65,6 @@ test("transport/parseJsonObject includes adapter and phase in invalid JSON error
   );
 });
 
-test("transport/parseJsonObject rejects non-object JSON with adapter and phase", () => {
-  assert.throws(
-    () => parseJsonObject("[]", {
-      adapter: "opencode",
-      phase: "advisory_review",
-      description: "advisory review",
-    }),
-    /adapter=opencode phase=advisory_review advisory review must be a JSON object/
-  );
-});
-
 test("transport/summarizeSpawnResult reports probe timeouts with context", () => {
   const timeoutError = new Error("spawn ETIMEDOUT");
   timeoutError.code = "ETIMEDOUT";

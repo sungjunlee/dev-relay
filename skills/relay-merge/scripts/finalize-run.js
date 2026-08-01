@@ -58,7 +58,7 @@ const { execGit, execGh } = require("../../relay-dispatch/scripts/exec");
 const {
   bindCliArgs,
   findUnknownFlags,
-  modeLabel,
+  modeLabel: formatCliModeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
   buildSkipReviewGateFailure,
@@ -72,7 +72,6 @@ const {
   readManifestOwnership,
   parseIssueComponent,
 } = require("./sprint-owner");
-const { reapAdvisoryLaneLeases } = require("../../relay-dispatch/scripts/run-runtime-state");
 const os = require("os");
 
 const ALLOWED_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
@@ -85,32 +84,34 @@ const KNOWN_FLAGS = [
   "--allow-stacked-base-hazard",
   "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
 ];
-const cliArgs = bindCliArgs(args, {
-  commandName: "finalize-run",
+const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-});
+  booleanFlags: ["--force-finalize-nonready", "--allow-behind-main", "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--manifest", "--branch", "--skip-review", "--reason", "--allow-stacked-base-hazard"],
+};
+const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 const helpRequested = cliArgs.hasFlag(["--help", "-h"]);
 
 function printHelpAndExit() {
   console.log("Usage: finalize-run.js (--repo <path> --run-id <id> | --repo <path> --pr <number> | --manifest <path>) [options]");
   console.log("\nMerge a ready relay run, then finalize cleanup and manifest metadata.");
   console.log("\nOptions:");
-  console.log(`  --repo <path>          ${modeLabel("--repo")} Repository root (default: .)`);
-  console.log(`  --run-id <id>          ${modeLabel("--run-id")} Relay run identifier`);
-  console.log(`  --manifest <path>      ${modeLabel("--manifest")} Explicit manifest path`);
-  console.log(`  --branch <name>        ${modeLabel("--branch")} Override branch name`);
-  console.log(`  --pr <number>          ${modeLabel("--pr")} Pull request number (optional when stored in manifest)`);
-  console.log(`  --merge-method <name>  ${modeLabel("--merge-method")} squash | merge | rebase (default: squash)`);
-  console.log(`  --skip-review <reason> ${modeLabel("--skip-review")} Bypass the fresh-review gate with an audit reason`);
-  console.log(`  --force-finalize-nonready ${modeLabel("--force-finalize-nonready")}`);
+  console.log(`  --repo <path>          ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root (default: .)`);
+  console.log(`  --run-id <id>          ${formatCliModeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier`);
+  console.log(`  --manifest <path>      ${formatCliModeLabel("--manifest", CLI_ARG_OPTIONS)} Explicit manifest path`);
+  console.log(`  --branch <name>        ${formatCliModeLabel("--branch", CLI_ARG_OPTIONS)} Override branch name`);
+  console.log(`  --pr <number>          ${formatCliModeLabel("--pr", CLI_ARG_OPTIONS)} Pull request number (optional when stored in manifest)`);
+  console.log(`  --merge-method <name>  ${formatCliModeLabel("--merge-method", CLI_ARG_OPTIONS)} squash | merge | rebase (default: squash)`);
+  console.log(`  --skip-review <reason> ${formatCliModeLabel("--skip-review", CLI_ARG_OPTIONS)} Bypass the fresh-review gate with an audit reason`);
+  console.log(`  --force-finalize-nonready ${formatCliModeLabel("--force-finalize-nonready", CLI_ARG_OPTIONS)}`);
   console.log("                         Operator-only: bypass non-ready state gate");
   console.log("  --allow-behind-main   [parsed] Override overlapping behind-main freshness refusal");
-  console.log(`  --reason <text>        ${modeLabel("--reason")} Required with either operator override above`);
-  console.log(`  --allow-stacked-base-hazard <reason> ${modeLabel("--allow-stacked-base-hazard")} Override non-default stacked PR base hazard block`);
-  console.log(`  --skip-merge           ${modeLabel("--skip-merge")} Skip the PR merge step and run cleanup only`);
-  console.log(`  --no-issue-close       ${modeLabel("--no-issue-close")} Skip linked issue close`);
-  console.log(`  --dry-run              ${modeLabel("--dry-run")} Print what would happen without writing`);
-  console.log(`  --json                 ${modeLabel("--json")} Output JSON`);
+  console.log(`  --reason <text>        ${formatCliModeLabel("--reason", CLI_ARG_OPTIONS)} Required with either operator override above`);
+  console.log(`  --allow-stacked-base-hazard <reason> ${formatCliModeLabel("--allow-stacked-base-hazard", CLI_ARG_OPTIONS)} Override non-default stacked PR base hazard block`);
+  console.log(`  --skip-merge           ${formatCliModeLabel("--skip-merge", CLI_ARG_OPTIONS)} Skip the PR merge step and run cleanup only`);
+  console.log(`  --no-issue-close       ${formatCliModeLabel("--no-issue-close", CLI_ARG_OPTIONS)} Skip linked issue close`);
+  console.log(`  --dry-run              ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Print what would happen without writing`);
+  console.log(`  --json                 ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
   console.log("\nReview-bypass decision tree:");
   console.log("  State is 'review_pending' + you want to skip review:     --skip-review <reason>");
   console.log("  State is 'changes_requested' + reviewer-bundle limit:    --force-finalize-nonready --reason <text>");
@@ -1286,11 +1287,7 @@ function main() {
   }
 
   // --allow-behind-main is intentionally local to relay-merge so this bounded
-  // change does not expand the shared dispatch CLI schema. Keep schema parsing
-  // for every established flag and exempt only the exact new boolean token;
-  // close typos remain unknown (#407).
-  const schemaArgs = args.filter((arg) => arg !== "--allow-behind-main");
-  const unknownFlags = findUnknownFlags(schemaArgs, "finalize-run");
+  const unknownFlags = findUnknownFlags(args, cliArgs.options);
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   }
@@ -1308,17 +1305,7 @@ function main() {
   const stackedBaseOverrideReason = allowStackedBaseHazard
     ? cliArgs.getArg("--allow-stacked-base-hazard")
     : null;
-  let forceFinalizeReason;
-  try {
-    forceFinalizeReason = cliArgs.getArg("--reason");
-  } catch (error) {
-    if ((forceFinalizeNonready || allowBehindMain)
-      && error.name === "CliSchemaError" && error.details?.flag === "--reason") {
-      forceFinalizeReason = "";
-    } else {
-      throw error;
-    }
-  }
+  const forceFinalizeReason = cliArgs.getArg("--reason");
   const dryRun = cliArgs.hasFlag("--dry-run");
   const skipMerge = cliArgs.hasFlag("--skip-merge");
   const skipIssueClose = cliArgs.hasFlag("--no-issue-close");
@@ -1834,11 +1821,6 @@ function main() {
     }
   }
 
-  // Reap own-pgid advisory lanes before retained-worktree removal so finalize
-  // does not orphan TERM-ignoring lane process groups (ppid 1).
-  const runDir = getRunDir(repoPath, updated.run_id);
-  const advisoryLaneReaps = reapAdvisoryLaneLeases({ runDir, dryRun });
-
   const cleanupResult = runFinalizeCleanup({
     repoRoot: repoPath,
     data: updated,
@@ -1889,8 +1871,6 @@ function main() {
     forceFinalized: forceFinalizeNonready,
     forceFinalizeReason: forceFinalizeNonready ? forceFinalizeReason : null,
     ...(freshness ? { freshness } : {}),
-    // Omit when idle so no-lease finalize stays byte-identical to prior output.
-    ...(advisoryLaneReaps.length > 0 ? { advisoryLaneReaps } : {}),
   };
 
   if (jsonOut) {
@@ -1905,11 +1885,6 @@ function main() {
       if (remoteBranchDeleteWarning) console.log(`  Remote note:  ${remoteBranchDeleteWarning}`);
     }
     console.log(`  Issue close:  ${issueNumber ? (issueClosed ? "closed" : (issueCloseWarning ? `warning: ${issueCloseWarning}` : "skipped")) : "none"}`);
-    if (advisoryLaneReaps.length > 0) {
-      for (const reap of advisoryLaneReaps) {
-        console.log(`  Advisory lane: pgid=${reap.pgid ?? "unknown"} reviewer=${reap.reviewer ?? "unknown"} outcome=${reap.outcome}`);
-      }
-    }
     console.log(`  Cleanup:      ${cleanupResult.summary.cleanupStatus}`);
     if (cleanupResult.summary.error) console.log(`  Cleanup note: ${cleanupResult.summary.error}`);
     if (dryRun) console.log("  dry-run:      no changes written");

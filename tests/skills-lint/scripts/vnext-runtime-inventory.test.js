@@ -97,6 +97,22 @@ test("checked-in runtime inventory covers every shipped relay script and edge", 
   }));
 });
 
+test("#1134 deletion table and retired inventory map the same 43 absent production scripts", () => {
+  const inventory = readInventory(INVENTORY_PATH);
+  const retired = inventory.retiredArtifacts.map((entry) => entry.path).sort();
+  const plan = fs.readFileSync(path.join(
+    REPO_ROOT,
+    "docs/plans/relay-runtime-core-reset-vnext/06-delete-runtime-accretion.md",
+  ), "utf8");
+  const mapped = [...plan.matchAll(/\| `([^`]+\.js)` \|/g)]
+    .map((match) => `skills/${match[1]}`)
+    .sort();
+  assert.equal(retired.length, 43);
+  assert.equal(new Set(retired).size, 43);
+  assert.deepEqual(mapped, retired);
+  retired.forEach((script) => assert.equal(fs.existsSync(path.join(REPO_ROOT, script)), false, script));
+});
+
 test("runtime inventory report is byte-deterministic", () => {
   const inventory = readInventory(INVENTORY_PATH);
   const first = stableReport(validateInventory({ repoRoot: REPO_ROOT, inventory }));

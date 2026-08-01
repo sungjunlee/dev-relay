@@ -12,13 +12,14 @@ const { findInflightRunsForIssue } = require("../../relay-dispatch/scripts/manif
 const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { EVENTS } = require("../../relay-dispatch/scripts/relay-events");
-const { buildRunReconcileAdvisory } = require("../../relay-dispatch/scripts/reconcile-advisory");
+const { buildRunReconcileFinding } = require("../../relay-dispatch/scripts/reconcile-findings");
 
 const EVENT_FIELD = "event";
 const INFLIGHT_ROUTE_INSTRUCTIONS = {
   "existing-open-pr": "Review the existing open PR instead of planning or dispatching a new run.",
   "existing-merged-pr": "Mark the sprint item done if present and stop because the PR is already merged.",
   "inflight-run": "Resume or inspect the existing inflight run and continue from its manifest state.",
+  attention: "Stop before planning or dispatch and inspect the inflight-run scanner failure.",
   continue: "Continue to readiness handling before planning or dispatch.",
 };
 const BRANCH_INSTRUCTIONS = {
@@ -58,6 +59,11 @@ const KNOWN_FLAGS = [
   "--help",
   "-h",
 ];
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--reconcile", "--skip-readiness", "--bypass-readiness", "--non-interactive", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--branch", "--body", "--body-file", "--manifest", "--skip-readiness-reason"],
+};
 
 function usage() {
   return [
@@ -176,7 +182,7 @@ function checkPullRequest(repoRoot, branch) {
   }
 }
 
-function checkInflightRuns(repoRoot, issueNumber) {
+function checkInflightRuns(repoRoot, issueNumber, scanner = findInflightRunsForIssue) {
   if (!issueNumber) {
     return {
       status: "skipped",
@@ -186,7 +192,7 @@ function checkInflightRuns(repoRoot, issueNumber) {
   }
 
   try {
-    const runs = findInflightRunsForIssue(repoRoot, issueNumber);
+    const runs = scanner(repoRoot, issueNumber);
     return {
       status: runs.length ? "found" : "not_found",
       reason: null,
@@ -227,6 +233,16 @@ function routeFromInflight({ prCheck, runCheck }) {
       next_action: "resume_or_inspect_inflight_run",
       prNumber: prCheck.pr?.number || null,
       runId: runCheck.runs[0].runId,
+    };
+  }
+  if (runCheck.status === "unknown") {
+    return {
+      route: "attention",
+      instruction: INFLIGHT_ROUTE_INSTRUCTIONS.attention,
+      next_action: "inspect_inflight_scanner_failure",
+      prNumber: null,
+      runId: null,
+      reason: runCheck.reason || "inflight_scan_unknown",
     };
   }
   return {
@@ -463,7 +479,7 @@ function runRouteStage(cliArgs) {
   }
 
   return {
-    ok: true,
+    ok: inflight.route !== "attention",
     stage: "route",
     repo: repoRoot,
     inflight,
@@ -647,7 +663,7 @@ function compareReviewSnapshot(current, cliArgs) {
 function runReviewStage(cliArgs) {
   const repoRoot = path.resolve(cliArgs.getArg("--repo") || ".");
   let record = resolveReviewManifest(cliArgs, repoRoot);
-  const reconcile = buildRunReconcileAdvisory({
+  const reconcile = buildRunReconcileFinding({
     repoRoot,
     manifestPath: record.manifestPath,
     data: record.data,
@@ -672,25 +688,23 @@ function runReviewStage(cliArgs) {
 }
 
 function main(argv = process.argv.slice(2)) {
-  const cliArgs = bindCliArgs(argv, {
-    commandName: "run-preflight",
-    reservedFlags: KNOWN_FLAGS,
-  });
+  const cliArgs = bindCliArgs(argv, CLI_ARG_OPTIONS);
 
   if (cliArgs.hasFlag(["--help", "-h"])) {
     process.stdout.write(`${usage()}\n`);
     return 0;
   }
 
-  const unknownFlags = findUnknownFlags(argv, KNOWN_FLAGS);
+  const unknownFlags = findUnknownFlags(argv, CLI_ARG_OPTIONS);
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   }
 
   const stage = normalizeBlank(cliArgs.getArg("--stage"));
   if (stage === "route") {
-    process.stdout.write(`${JSON.stringify(runRouteStage(cliArgs))}\n`);
-    return 0;
+    const result = runRouteStage(cliArgs);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return result.ok ? 0 : 1;
   }
   if (stage === "review") {
     process.stdout.write(`${JSON.stringify(runReviewStage(cliArgs))}\n`);

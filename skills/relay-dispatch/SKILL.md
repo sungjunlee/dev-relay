@@ -44,31 +44,27 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e codex
 
 For background and parallel dispatch, see `../relay/SKILL.md` § Batch Mode (single source of truth for the parallel-fork flow).
 
-Supported executors: `codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`, and `cline`. For non-default routes, pass `--executor pi`, `--executor antigravity`, `--executor cursor`, `--executor cline`, or another supported executor with a route-policy-approved model.
+Supported executors: `codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`, and `cline`. Select one with `--executor`; select a model explicitly with `--model` or omit it to use the adapter provider default.
 
-Default timeouts are `codex: 2400` and `claude/opencode/pi/antigravity/cursor/cline: 1800`. Model examples, capability gates, and the 7-field executor contract are documented in `references/agent-adapter-platform.md` and `references/model-routing.md`.
+Default timeouts are `codex: 2400` and `claude/opencode/pi/antigravity/cursor/cline: 1800`. Capability negotiation and the adapter contract are documented in `references/agent-adapter-platform.md`.
 
 ## Options
 
-All CLI flags are registered with an explicit `parsed` or `verbatim` read mode. See `references/cli-schema.md` before adding or changing flags.
+Each CLI declares its own closed `KNOWN_FLAGS` contract next to its argument reads. Unsupported flags fail closed.
 
 Essential flags:
 
 - `--branch, -b` starts a new retained run; `--run-id` or `--manifest` resumes one.
 - `--prompt, -p` or `--prompt-file` supplies the executor prompt.
 - `--rubric-file` is required for new dispatches from relay-plan and carries either structured evaluation channels or a readable legacy rubric.
-- `--executor, -e`, `--model, -m`, and `--model-hints` select harness/model routes subject to policy.
-- `--review-assurance compact | standard | hardened` sets the default assurance level; the rubric's `task_profile.review_assurance` is authoritative when present, and a disagreement is resolved to the rubric and recorded (see `references/cli-schema.md` § Review Assurance Resolution). `--request-id`, `--leaf-id`, and `--done-criteria-file` persist review and readiness anchors. Fleet dispatch also requires typed `--ownership-json` with `sprint`, `track`, and `component`; it is immutable on resume.
+- `--executor, -e` and `--model, -m` are the only dispatch selection inputs. Resume rejects attempts to replace the manifest binding.
+- `--request-id`, `--leaf-id`, and `--done-criteria-file` persist review and readiness anchors. Fleet dispatch also requires typed `--ownership-json` with `sprint`, `track`, and `component`; it is immutable on resume.
 - `--detach` starts a detached dispatch supervisor, prints a receipt, and returns before executor completion.
 - `--dry-run` validates without executing; `--json` returns structured output for orchestration.
 
-Manifest layout is `~/.relay/runs/<repo-slug>/<run-id>.md` plus `events.jsonl`; readiness linkage is persisted as `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path`. Model precedence and route-policy behavior are documented in `references/model-routing.md`.
+Manifest layout is `~/.relay/runs/<repo-slug>/<run-id>.md` plus `events.jsonl`; readiness linkage is persisted as `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path`. Legacy routing and model-hint fields are historical data and do not select a runtime path.
 
 Detached JSON receipts include `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and a copy-pasteable `reconcileCommand`. The supervisor writes `lease.json` and runtime logs in the run directory; use `reconcile-run.js --dry-run --json` to poll or diagnose a detached run.
-
-### Executor model routing
-
-For precedence, managed CLI defaults, unmanaged route requirements, and optional `~/.relay/executors.json` overrides, see `references/model-routing.md`. Short version: explicit `--model` wins; `model_hints` are hints, not approval; unmanaged executors need allowed provider/model routes.
 
 ### Timeout guidance
 
@@ -90,8 +86,6 @@ Publication policy:
 - Full `/relay` orchestration uses `--publish-policy after-internal-review`: retain the branch locally in `internal_review_pending`, require relay-review LGTM, then run `publish-run.js` to push/open PR and move to `review_pending`.
 - `publish-run.js` is valid only from `publish_pending`; it writes a `publish_result` event and stamps `git.pr_number`.
 
-Risk-aware task profiles derive compact/standard/hardened from task properties, never model identity. Compact keeps the same permission, sandbox, network, repository, SHA, audit, publication, and merge boundaries with a one-round review cap; hardened uses the existing delayed-publication and advisory-gated path. See `../relay-plan/references/risk-assurance.md`.
-
 ### Handling Failures
 
 | Failure | Action |
@@ -109,8 +103,7 @@ Risk-aware task profiles derive compact/standard/hardened from task properties, 
 - Crash-only settlement after signal/reboot/OOM or from another shell → `references/recovery-playbook.md` (`reconcile-run.js`).
 - Executor finished but did not commit / push / open the PR → `references/recovery-playbook.md` (`recover-commit.js`).
 - Manifest state needs adjustment after an external event (direct push, hung dispatch, escalation) → `references/recovery-playbook.md` (`recover-state.js`, includes the whitelist transition table).
-- A run needs an exceptional monotonic `review.max_rounds` increase → `references/review-policy-extension.md` (`extend-review-policy.js`; cap extension is not convergence evidence).
-- Standalone worktree creation, cleanup, run-close, reliability report → `references/operator-utilities.md`.
+- Standalone worktree creation, cleanup, and run-close → `references/operator-utilities.md`.
 
 ## Caveats
 

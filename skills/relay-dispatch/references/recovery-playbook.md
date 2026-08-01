@@ -199,11 +199,11 @@ Investigation note for #389: `codex --version` reported `codex-cli 0.128.0`, and
 
 Decision-tree paths from #389, updated after #393 landed:
 
-If `--add-dir` IS supported and works: Path 1 keeps Codex's git writes inside the sandbox. Path 2 (`--auto-recover-commit`) is now bundled defense-in-depth: Codex and Claude enable it by default, and other executors can opt in explicitly.
+If `--add-dir` IS supported and works: Path 1 keeps Codex's git writes inside the sandbox. Path 2 (`--auto-recover-commit`) is now bundled, executor-independent defense-in-depth and can be disabled explicitly.
 
 If `--add-dir` is NOT supported or doesn't fix the failure: ship Path 2 and document Path 1's failure mode in recovery-playbook.md.
 
-#389 picked Path 1 (sandbox widening via `--add-dir`). #393 added Path 2: `dispatch.js` runs `recover-commit.js` automatically for Codex and Claude `completed-uncommitted` results unless `--no-auto-recover-commit` is passed. For opencode and other executors, `--auto-recover-commit` remains an explicit opt-in. The standalone `recover-commit.js` command remains the canonical manual recovery when automatic recovery is disabled, unavailable, or interrupted.
+#389 picked Path 1 (sandbox widening via `--add-dir`). #393 added Path 2: `dispatch.js` applies the same orchestrator commit rule to all executor `completed-uncommitted` results unless `--no-auto-recover-commit` is passed. The standalone `recover-commit.js` command remains the canonical manual recovery when automatic recovery is disabled, unavailable, or interrupted.
 
 Use normal `dispatch.js --run-id <id>` when reviewer feedback requires code changes. That path re-dispatches implementation work and must produce a fresh code handoff before review.
 

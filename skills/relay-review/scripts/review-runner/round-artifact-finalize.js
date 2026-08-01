@@ -9,25 +9,6 @@ const {
   formatConvergenceMarkdown,
 } = require("./convergence");
 
-function normalizeRubricGateFailure(rubricGateFailure, appliedVerdict) {
-  if (!rubricGateFailure || appliedVerdict !== "escalated") {
-    return rubricGateFailure;
-  }
-
-  const recovery = (
-    "Automatic rubric repair re-dispatch is unavailable because the run exhausted "
-    + "its substantive failure budget and escalated. Inspect the review failure; "
-    + "continuation requires an explicit owner decision through the documented "
-    + "review-policy extension and escalated-state recovery paths."
-  );
-  return {
-    ...rubricGateFailure,
-    recoveryCommand: null,
-    recovery,
-    summary: `review-runner fail-closed: the rubric gate exhausted the repair budget. ${recovery}`,
-  };
-}
-
 function buildRelayEscalationAudit({
   appliedVerdict,
   escalationDecision,
@@ -51,19 +32,15 @@ function buildRelayEscalationAudit({
 
 function persistVerdictArtifacts(context, analysis) {
   const {
-    advisoryResults,
     churnGrowth,
     doneCriteria,
     doneCriteriaSource,
-    hardenedAssurance,
     reviewedHeadSha,
     round,
     runDir,
   } = context;
   const {
     analysisVerdict,
-    assuranceMetadata,
-    confidenceDowngradeApplied,
     escalationDecision,
     factorFlips,
     repeatedIssueCount,
@@ -84,21 +61,12 @@ function persistVerdictArtifacts(context, analysis) {
     );
   }
 
-  const confidenceDowngradeAppliedAsFinalPass = (
-    confidenceDowngradeApplied
-    && !rubricGateFailure
-  );
   const appliedVerdict = analysis.verdict.verdict === "escalated"
     ? "escalated"
     : rubricGateFailure
       ? "changes_requested"
-      : confidenceDowngradeAppliedAsFinalPass
-        ? "pass"
-        : analysis.verdict.verdict;
-  const persistedRubricGateFailure = normalizeRubricGateFailure(
-    rubricGateFailure,
-    appliedVerdict
-  );
+      : analysis.verdict.verdict;
+  const persistedRubricGateFailure = rubricGateFailure;
   const relayEscalation = buildRelayEscalationAudit({
     appliedVerdict,
     escalationDecision,
@@ -139,7 +107,6 @@ function persistVerdictArtifacts(context, analysis) {
     && (
       (
         analysis.verdict.verdict === "changes_requested"
-        && !confidenceDowngradeAppliedAsFinalPass
       )
       || persistedRubricGateFailure
     )
@@ -161,14 +128,12 @@ function persistVerdictArtifacts(context, analysis) {
         doneCriteriaSource,
         reviewedHeadSha,
         convergenceSummary,
-        { advisoryResults, assuranceMetadata, hardenedAssurance }
       );
     writeText(redispatchPath, `${redispatchPrompt}\n`);
   }
 
   return {
     appliedVerdict,
-    confidenceDowngradeAppliedAsFinalPass,
     convergenceSummary,
     redispatchPath,
     relayEscalation,

@@ -32,11 +32,11 @@ The normal public operator surface is:
 
 | Skill | Use it for |
 | --- | --- |
-| `/relay-config` | Configure company/personal route policy, OpenCode/Pi opt-ins, and advisory review defaults |
+| `/relay-config` | Configure company/personal dispatch and primary-review routes |
 | `/relay` | Hand off an issue, sprint item, or natural-language task and run through review |
 | `/relay-merge` | Explicitly merge a reviewed PR and clean up relay state |
 
-The lower-level phase skills still exist for advanced operations and debugging, but most day-to-day use should start with `/relay`. See [references/operator-surface.md](references/operator-surface.md) for the public/internal/optional surface tiers and [docs/relay-operator-guide.md](docs/relay-operator-guide.md) for manual phase control, batch dispatch, advisory review, extension points, and recovery tools.
+The lower-level phase skills still exist for advanced operations and debugging, but most day-to-day use should start with `/relay`. See [references/operator-surface.md](references/operator-surface.md) for the public/internal/optional surface tiers and [docs/relay-operator-guide.md](docs/relay-operator-guide.md) for manual phase control, batch dispatch, extension points, and recovery tools.
 
 ## Install
 
@@ -74,13 +74,13 @@ Adapter minimum versions, binary overrides, timeouts, capability gates, and prov
 
 Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, `antigravity`, and `cline` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast`, `example/pi-model-fast`, `google/antigravity-cli`, or `cline-pass/glm-5.2`.
 
-Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, Antigravity, Cline, and advisory reviewers require explicit route approval.
+Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, Antigravity, Cline, and Cursor routes require explicit approval.
 
 After installing skills, ask for setup in plain language:
 
 ```text
 /relay-config Set up relay for my company environment. Only allow OpenCode through example/opencode-model-*.
-$relay-config For my personal setup, use example/opencode-model-fast for advisory review.
+$relay-config For my personal setup, use example/opencode-model-fast for review.
 ```
 
 Common starting points:
@@ -89,7 +89,7 @@ Common starting points:
 | --- | --- |
 | Company default | `/relay-config Set up relay for my company environment` |
 | Approved OpenCode route | `/relay-config Only allow OpenCode through the example/opencode-model-* route at work` |
-| Personal advisory review | `$relay-config Use example/opencode-model-fast for personal advisory review` |
+| Personal primary review | `$relay-config Use example/opencode-model-fast for personal review` |
 | Managed only | `/relay-config Keep the default Codex/Claude-only setup` |
 
 For the full policy model and precedence order, see [docs/model-route-policy.md](docs/model-route-policy.md).
@@ -136,7 +136,7 @@ For the full architecture, see [references/architecture.md](references/architect
 
 - GitHub is currently required for PR handoff, review comments, gate checks, and merge flow.
 - Nested Codex executor runs may need `--network-access enabled` for networked quality gates or PR/API calls.
-- Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli`; Antigravity primary and advisory review remain fail-safe experimental until healthy live reviewer canaries pass. Fake-bin tests alone do not prove live executor or reviewer success. See [docs/relay-operator-guide.md#antigravity-live-canary](docs/relay-operator-guide.md#antigravity-live-canary).
+- Antigravity support remains route-specific and experimental until healthy live canaries pass. Fake-bin tests alone do not prove live executor or reviewer success.
 - Sprint-file automation works, but some sprint status updates can still require manual intervention.
 
 ## Contributing
@@ -145,7 +145,7 @@ Issues and PRs welcome. Please open an issue first for non-trivial changes.
 
 Useful references:
 
-- [docs/relay-operator-guide.md](docs/relay-operator-guide.md) — operator workflow, manual phase control, advisory review, batch mode, and recovery tools
+- [docs/relay-operator-guide.md](docs/relay-operator-guide.md) — operator workflow, manual phase control, batch mode, and recovery tools
 - [docs/README.md](docs/README.md) — documentation index
 - [references/architecture.md](references/architecture.md) — manifest schema, state transitions, and extension points
 - [CLAUDE.md](CLAUDE.md) — project structure and working conventions

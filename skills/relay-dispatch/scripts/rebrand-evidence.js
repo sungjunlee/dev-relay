@@ -21,14 +21,18 @@ const {
 const { getCanonicalRepoRoot, getRunDir, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
 const {
   findUnknownFlags,
-  modeLabel,
+  modeLabel: formatCliModeLabel,
   readArg,
   schemaHasFlag,
 } = require("./cli-args");
 const { execGit, resolveBranchRemote } = require("./exec");
 
 const args = process.argv.slice(2);
-const CLI_ARG_OPTIONS = { commandName: "rebrand-evidence", reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: ["--repo", "--run-id", "--manifest", "--reason", "--rebase-onto-base", "--dry-run", "--json", "--help", "-h"],
+  booleanFlags: ["--rebase-onto-base", "--dry-run", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--manifest", "--reason"],
+};
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const getCliArg = (flag, fallback) => readArg(args, flag, fallback, CLI_ARG_OPTIONS);
 const RECORDED_BY = "orchestrator-correction-rebrand";
@@ -53,14 +57,14 @@ function printHelp(exitCode) {
   console.log("\nRebind an existing execution-evidence.json artifact to the current correction commit without publishing git changes.");
   console.log("With --rebase-onto-base, first rebase the retained worktree onto origin/<base_branch>, force-with-lease push, then rebrand.");
   console.log("\nOptions:");
-  console.log(`  --repo <path>         ${modeLabel("--repo")} Repository root used with --run-id (default: .)`);
-  console.log(`  --run-id <id>         ${modeLabel("--run-id")} Relay run identifier`);
-  console.log(`  --manifest <path>     ${modeLabel("--manifest")} Explicit manifest path`);
-  console.log(`  --reason <text>       ${modeLabel("--reason")} Required audit reason; preserved verbatim`);
-  console.log(`  --rebase-onto-base    ${modeLabel("--rebase-onto-base")} Rebase onto origin/<base>, force-with-lease push, then rebrand`);
-  console.log(`  --dry-run             ${modeLabel("--dry-run")} Print the planned evidence mutation only`);
-  console.log(`  --json                ${modeLabel("--json")} Output JSON`);
-  console.log(`  --help                ${modeLabel("--help")} Show this help`);
+  console.log(`  --repo <path>         ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root used with --run-id (default: .)`);
+  console.log(`  --run-id <id>         ${formatCliModeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier`);
+  console.log(`  --manifest <path>     ${formatCliModeLabel("--manifest", CLI_ARG_OPTIONS)} Explicit manifest path`);
+  console.log(`  --reason <text>       ${formatCliModeLabel("--reason", CLI_ARG_OPTIONS)} Required audit reason; preserved verbatim`);
+  console.log(`  --rebase-onto-base    ${formatCliModeLabel("--rebase-onto-base", CLI_ARG_OPTIONS)} Rebase onto origin/<base>, force-with-lease push, then rebrand`);
+  console.log(`  --dry-run             ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Print the planned evidence mutation only`);
+  console.log(`  --json                ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
+  console.log(`  --help                ${formatCliModeLabel("--help", CLI_ARG_OPTIONS)} Show this help`);
   console.log("\nDecision tree:");
   console.log("  Use rebrand-evidence after the orchestrator already made a correction commit and only execution-evidence.json is stale.");
   console.log("  Use --rebase-onto-base when a base-advancing merge left the review branch behind and a conflict-free rebase can clear both behind-base and stale-evidence preflights.");
@@ -284,7 +288,7 @@ function printConflictFailure(result, jsonOut) {
 }
 
 function main() {
-  const unknownFlags = findUnknownFlags(args, "rebrand-evidence");
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
   if (unknownFlags.length > 0) {
     usageError(`Unknown flag(s): ${unknownFlags.join(", ")}`);
   }

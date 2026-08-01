@@ -1,13 +1,15 @@
 const path = require("path");
 const { bindCliArgs, findUnknownFlags } = require("../../../relay-dispatch/scripts/cli-args");
 
-const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--allow-behind-base", "--wait-for-checks", "--detach", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--allow-behind-base", "--wait-for-checks", "--detach", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--allow-behind-base", "--detach", "--prepare-only", "--no-comment", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--branch", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer-script"],
+};
 
 function parseReviewRunnerCliArgs(args) {
-  const cliArgs = bindCliArgs(args, {
-    commandName: "review-runner",
-    reservedFlags: KNOWN_FLAGS,
-  });
+  const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
   const repoArg = cliArgs.getArg("--repo");
   return {
     args,
@@ -15,15 +17,9 @@ function parseReviewRunnerCliArgs(args) {
     options: {
       allowBehindBase: cliArgs.hasFlag("--allow-behind-base"),
       detach: cliArgs.hasFlag("--detach"),
-      advisoryGraceArg: cliArgs.getArg("--advisory-grace"),
-      advisoryProfileArg: cliArgs.getArg("--advisory-profile"),
-      advisoryReviewerArg: cliArgs.getArg("--advisory-reviewer"),
-      advisoryReviewerModel: cliArgs.getArg("--advisory-reviewer-model"),
-      advisoryTimeoutArg: cliArgs.getArg("--advisory-timeout"),
       branchArg: cliArgs.getArg("--branch"),
       diffFile: cliArgs.getArg("--diff-file"),
       doneCriteriaFile: cliArgs.getArg("--done-criteria-file"),
-      independentReviewReason: cliArgs.getArg("--independent-review-reason"),
       jsonOut: cliArgs.hasFlag("--json"),
       manifestPathArg: cliArgs.getArg("--manifest"),
       manualReviewReason: cliArgs.getArg("--manual-review-reason"),
@@ -43,13 +39,14 @@ function parseReviewRunnerCliArgs(args) {
 }
 
 function assertKnownReviewRunnerFlags(args) {
-  const unknownFlags = findUnknownFlags(args, "review-runner");
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   }
 }
 
 module.exports = {
+  CLI_ARG_OPTIONS,
   assertKnownReviewRunnerFlags,
   parseReviewRunnerCliArgs,
 };

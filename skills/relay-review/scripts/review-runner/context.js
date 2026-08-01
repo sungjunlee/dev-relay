@@ -761,7 +761,7 @@ function formatPriorRoundContext(runDir, round) {
     }
     if (Array.isArray(verdict.issues) && verdict.issues.length) {
       parts.push(
-        appliedVerdict === "changes_requested" ? "Issues flagged:" : "Advisory issues preserved from the raw verdict:",
+        "Issues flagged:",
         formatIssueList(verdict.issues)
       );
     }

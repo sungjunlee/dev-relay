@@ -1,10 +1,4 @@
 const { STATES, updateManifestState } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
-const {
-  normalizeReviewRoundBudget,
-  recordAppliedReviewBudget,
-  reviewPhaseForManifest,
-} = require("../../../relay-dispatch/scripts/manifest/review-budget");
-const { isLowConfidenceAdvisoryPass } = require("./verdict");
 
 function refreshManifestWithoutStateChange(data, nextAction) {
   return {
@@ -37,12 +31,14 @@ function buildReviewStatusFields(verdict) {
 function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount, options = {}) {
   const rubricGateFailure = options.rubricGateFailure || null;
   const escalationDecision = options.escalationDecision || null;
-  const reviewPhase = options.reviewPhase || reviewPhaseForManifest(data);
+  const reviewPhase = options.reviewPhase || (
+    data.state === STATES.INTERNAL_REVIEW_PENDING ? "internal" : "post_publication"
+  );
   let nextState;
   let nextAction;
   let latestVerdict;
 
-  const appliesAsPass = verdict.verdict === "pass" || isLowConfidenceAdvisoryPass(verdict);
+  const appliesAsPass = verdict.verdict === "pass";
 
   if (appliesAsPass) {
     if (rubricGateFailure) {
@@ -83,17 +79,9 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
     review: {
       ...(updated.review || {}),
       rounds: round,
-      round_budget: recordAppliedReviewBudget(data, {
-        phase: reviewPhase,
-        protocolVerification: appliesAsPass && !rubricGateFailure,
-        substantiveFailure: (
-          options.substantiveFailure
-          ?? (verdict.verdict === "changes_requested" && !isLowConfidenceAdvisoryPass(verdict))
-        ) || Boolean(rubricGateFailure),
-      }),
       last_review_phase: reviewPhase,
       latest_verdict: latestVerdict,
-      repeated_issue_count: verdict.verdict === "changes_requested" && !isLowConfidenceAdvisoryPass(verdict) ? repeatedIssueCount : 0,
+      repeated_issue_count: verdict.verdict === "changes_requested" ? repeatedIssueCount : 0,
       ...(options.lineageSummary ? { last_lineage_summary: options.lineageSummary } : {}),
       last_reviewed_sha: reviewedHeadSha || null,
       ...buildReviewStatusFields(verdict),
@@ -113,7 +101,6 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
 
 function applyPolicyViolationToManifest(data, round, prNumber, reviewedHeadSha, reason, options = {}) {
   const updated = updateManifestState(data, STATES.ESCALATED, "inspect_review_failure");
-  const { budget: normalizedRoundBudget } = normalizeReviewRoundBudget(data);
   return {
     ...updated,
     git: {
@@ -124,7 +111,6 @@ function applyPolicyViolationToManifest(data, round, prNumber, reviewedHeadSha, 
     review: {
       ...(updated.review || {}),
       rounds: round,
-      round_budget: normalizedRoundBudget,
       latest_verdict: reason || "policy_violation",
       repeated_issue_count: 0,
       last_reviewed_sha: reviewedHeadSha || null,

@@ -1,24 +1,18 @@
 const { printResult } = require("./output");
-const { getReviewRoundBudget } = require("../../../relay-dispatch/scripts/manifest/review-budget");
 const { analyzeVerdict } = require("./round-analysis");
 const { persistVerdictArtifacts } = require("./round-artifact-finalize");
 const { persistManifestAndEvents } = require("./round-persistence");
 
 function finalizeRound(context) {
   const analysis = analyzeVerdict(context);
-  if (analysis.assuranceMetadata) {
-    context.result.reviewAssuranceDecision = analysis.assuranceMetadata;
-  }
   const artifacts = persistVerdictArtifacts(context, analysis);
   const persisted = persistManifestAndEvents(context, analysis, artifacts);
   Object.assign(context.result, {
     appliedVerdict: artifacts.appliedVerdict,
-    confidenceDowngrade: persisted.reportedConfidenceDowngrade,
     convergenceSummary: artifacts.convergenceSummary,
     nextState: persisted.updatedManifest.state,
     redispatchPath: artifacts.redispatchPath,
     repeatedIssueCount: analysis.repeatedIssueCount,
-    reviewBudget: getReviewRoundBudget(persisted.updatedManifest, { phase: context.reviewPhase }),
     lineageSummary: (
       analysis.escalationDecision.lineage_summary
       || analysis.lineageSummary

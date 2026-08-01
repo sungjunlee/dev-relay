@@ -1,6 +1,6 @@
 # Operator Utilities
 
-Standalone helpers around `relay-dispatch` for worktree creation, cleanup, live dogfood, and reliability reporting. None of these are part of the normal dispatch → review → merge flow — reach for them when you need to work outside the lifecycle (set up a worktree without dispatching, prune stale runs, run live adapter canaries, audit aggregate metrics).
+Standalone helpers around `relay-dispatch` for worktree creation, cleanup, and live dogfood. None of these are part of the normal dispatch → review → merge flow — reach for them when you need to work outside the lifecycle.
 
 ## `create-worktree.js` — Standalone worktree creation
 
@@ -30,7 +30,6 @@ node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo .              # 
 node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --all         # ignore age threshold
 node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run     # show what would be removed
 node skills/relay-dispatch/scripts/close-run.js --repo . --run-id <run-id> --reason "stale_non_terminal_run"
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 ```
 
 ## `publish-run.js` — Delayed PR publication
@@ -43,17 +42,15 @@ node skills/relay-dispatch/scripts/publish-run.js --repo . --run-id <run-id> --j
 
 The command pushes the retained branch, opens or reuses the PR, stamps `git.pr_number`, writes a `publish_result` event, and advances the manifest to `review_pending`. The next step is post-publication relay-review so CI/actions and external review signals are evaluated before `ready_to_merge`.
 
-### Reliability Round-Cost Observations
-
-`reliability-report.js --json` includes `round_cost` as an observation-only section for comparing relay shaping changes. It summarizes review rounds, request/leaf linkage, relay-ready leaf counts when the request artifact is available, task-profile guidance size when recorded, execution-evidence preflight failures, review lineage totals, escalation/continue decisions, factor flip counts, and explicitly inferable reviewer rounds avoided by preflight.
-
-The `calibration` section compares full and lightweight behavior by task class, keeps routine Verification separate from Earned Rubric value, applies immediate safety rollback signals, and identifies legacy mechanisms that found unique material defects versus friction only. See `risk-calibration.md`.
-
-For epic #678, compare a baseline window before the task-shaping, evidence-preflight, and review-lineage changes with a later window that includes those runs. The useful operator checks are whether median/average review rounds fall, whether `evidence_preflight_failures.by_type` shifts failures before reviewer invocation, whether `reviewer_rounds_avoided_by_preflight.total` appears only from explicit preflight signals, and whether `lineage_totals.repeat`/`stale` shrink relative to `deepening`/`newly_scoreable`.
-
-These metrics do not change readiness calibration for #439 and are not merge, review, dispatch, or readiness gates. Treat them as trend evidence for planning and routing decisions; a single run with high round cost can still be valid work if its frozen Done Criteria required it.
-
 ## Live Adapter Dogfood
+
+Run the registry-wide, read-only smoke canary before adapter-specific dogfood:
+
+```bash
+node skills/relay-dispatch/scripts/adapter-live-canary.js --timeout-ms 5000
+```
+
+It probes every registered adapter, invokes a bounded minimal primary review when that phase is supported, verifies the worktree stayed unchanged, and feeds the result through that adapter's `parseOutcome()`. Dispatch-only adapters are explicit skips for the review invocation. Missing CLIs, unavailable credentials, execution-environment restrictions, and unavailable read-only phases are also explicit skips. Probe failures and invocation timeouts are failures, never skips or healthy passes.
 
 Use `live-dogfood.js` when you need repeatable evidence for Pi, OpenCode, and Antigravity live adapter paths:
 
@@ -67,14 +64,12 @@ node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --probe-only --json
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dry-run --markdown
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
-  --opencode-model '<opencode-provider>/<opencode-model>' --scenario opencode-advisory --json
-node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
   --pi-model '<pi-provider>/<pi-model>' --scenario pi-primary --json
 ```
 
-The harness creates a temporary `RELAY_HOME` by default and writes a scoped route policy there instead of mutating the operator's default `~/.relay/policy.json`. Healthy reviewer canaries use realistic default timeouts, while the Antigravity fail-safe timeout canary has its own intentionally short `--antigravity-fail-safe-timeout` setting.
+The harness creates a temporary `RELAY_HOME` by default without writing project configuration. Healthy reviewer canaries use realistic default timeouts, while the Antigravity fail-safe timeout canary has its own intentionally short `--antigravity-fail-safe-timeout` setting.
 
-Pi and OpenCode live dogfood require explicit provider/model routes through `--pi-model` and `--opencode-model`, or `RELAY_LIVE_DOGFOOD_PI_MODEL` and `RELAY_LIVE_DOGFOOD_OPENCODE_MODEL`. Antigravity defaults to `google/antigravity-cli` unless `--antigravity-model` or `RELAY_LIVE_DOGFOOD_ANTIGRAVITY_MODEL` overrides it. Use repeated `--scenario <name>` filters such as `opencode-primary`, `opencode-advisory`, `pi-primary`, `pi-advisory`, `antigravity-primary`, or `antigravity-advisory` when you need isolated evidence for one adapter path.
+Pi and OpenCode live dogfood require explicit provider/model values through `--pi-model` and `--opencode-model`, or `RELAY_LIVE_DOGFOOD_PI_MODEL` and `RELAY_LIVE_DOGFOOD_OPENCODE_MODEL`. Antigravity defaults to `google/antigravity-cli` unless `--antigravity-model` or `RELAY_LIVE_DOGFOOD_ANTIGRAVITY_MODEL` overrides it. Use repeated `--scenario <name>` primary-review or dispatch filters when you need isolated evidence for one adapter path.
 
 Use `--dispatch-canary` from a clean worktree for healthy dispatch canaries across Pi, OpenCode, and Antigravity. Those steps request unique minimal repository changes and pass only when dispatch returns `review_pending` with a PR number. `--dispatch-timeout` defaults to 180 seconds, and `--dispatch-branch-prefix` defaults to `dogfood-dispatch`.
 

@@ -12,7 +12,7 @@ an operator CLI, adapter entry point, or archived measurement tool.
 
 | Category | Meaning | Cleanup rule |
 |----------|---------|--------------|
-| Runtime entry point | Invoked by a skill workflow or documented operator command. | Keep unless the workflow is retired. Update `SKILL.md`, `README.md`, `CLAUDE.md`, and `cli-schema.js` together. |
+| Runtime entry point | Invoked by a skill workflow or documented operator command. | Keep unless the workflow is retired. Update `SKILL.md`, `README.md`, and `CLAUDE.md` together. |
 | Adapter entry point | Invoked by naming convention from another runtime script. | Keep if the adapter is supported. Deleting requires removing discovery references and tests. |
 | Shared helper | Imported by one or more runtime scripts. | Keep. Rename or move only with import-site migration and focused tests. |
 | Test support | Imported by tests only. | Keep outside packaged runtime when possible; otherwise document why runtime placement is required. |
@@ -32,7 +32,6 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/close-run.js` | Optional operator tool | Used by cleanup output and documented recovery flows. | Keep. |
 | `scripts/recover-commit.js` | Optional operator tool | Canonical recovery for executor completed without commit/PR. | Keep. |
 | `scripts/recover-state.js` | Optional operator tool | Canonical structured state recovery command. | Keep. |
-| `scripts/reliability-report.js` | Optional operator tool / planner signal producer | `/relay-plan` reads it before rubric design. | Keep. |
 | `scripts/smoke_dispatch_scenarios.py` | Archived measurement tool | Deleted from packaged `skills/` in #765. | Removed; dated evidence docs remain historical. |
 | `scripts/claude-app-register.js` | Shared helper | Imported by the Claude executor adapter. | Keep while Claude executor registration parity exists. |
 | `scripts/codex-app-register.js` | Shared helper | Imported by the Codex executor adapter. | Keep. |
@@ -40,11 +39,8 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/worktreeinclude.js` | Shared helper | Imported by `worktree-runtime.js`. | Keep or inline only if the worktree include contract stays trivial. |
 | `scripts/dispatch-publish.js` | Shared helper | Imported by `dispatch.js` and `recover-commit.js`. | Keep. |
 | `scripts/execution-evidence.js` | Shared helper | Imported by dispatch/recovery and mirrored in review. | Keep. |
-| `scripts/model-hints.js` | Shared helper | Imported by `dispatch.js`. | Keep while model hints exist. |
-| `scripts/rubric-size.js` | Shared helper | Imported by `dispatch.js`. | Keep. |
 | `scripts/exec.js` | Shared helper | Imported by dispatch, worktree, merge, and review helpers. | Keep. |
 | `scripts/cli-args.js` | Shared helper | Imported across all skills. | Keep. |
-| `scripts/cli-schema.js` | Shared helper / public registry | Imported by `cli-args.js`. | Keep and update when public CLIs are added or removed. |
 | `tests/relay-dispatch/scripts/test-support.js` | Test support | Used by tests only. | Moved out of packaged `skills/` in #765. |
 | `scripts/relay-events.js` | Shared helper | Event journal producer used across dispatch, review, and merge. | Keep. |
 | `scripts/relay-resolver.js` | Shared helper | Manifest/run/branch resolution for dispatch, review, and merge. | Keep. |
@@ -64,7 +60,7 @@ an operator CLI, adapter entry point, or archived measurement tool.
 |--------|----------|----------|------------------|
 | `scripts/probe-executor-env.js` | Runtime entry point / signal producer | `/relay-plan` step 3 invokes it. | Keep. |
 | `scripts/persist-done-criteria.js` | Runtime entry point | `/relay-plan` uses it to persist Phase 1 deviations. | Keep. |
-| `scripts/tdd-flavor.js` | Shared helper | Imported by `reliability-report.js` and `tdd-suggestion.js`. | Keep. Consider renaming to a rubric parser/renderer name because it is shared outside the planner flow. |
+| `scripts/tdd-flavor.js` | Shared helper | Imported by `tdd-suggestion.js`. | Keep. Consider renaming to a rubric parser/renderer name because it is shared outside the planner flow. |
 | `scripts/tdd-suggestion.js` | Optional planner helper | Mentioned by TDD reference; not wired into default `/relay-plan` flow. | Keep while Phase 1.2 TDD mode is planned; wire or fold into `rubric-pattern-tdd-flavor.md` when #142 lands. |
 
 ### Relay Review
@@ -101,12 +97,6 @@ run:
 ```bash
 rg -n '<script-basename>' skills tests README.md CLAUDE.md references docs backlog
 node --test tests/<affected-skill>/scripts/*.test.js
-```
-
-If `cli-schema.js` changes, also run:
-
-```bash
-node --test tests/relay-dispatch/scripts/cli-schema.test.js
 ```
 
 ## Decision Notes

@@ -2,7 +2,7 @@
 
 const { resolveContext } = require("./context");
 const {
-  loadRunRoutePlan, preflightPrimaryReviewerCapability, resolveReviewerName,
+  preflightPrimaryReviewerCapability, resolveReviewerName,
 } = require("./reviewer-invoke");
 
 function preflightResolvedPrimaryReviewer(options) {
@@ -12,8 +12,7 @@ function preflightResolvedPrimaryReviewer(options) {
   } = options;
   const context = resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFile);
   const { data } = context.manifest;
-  const routePlan = loadRunRoutePlan(context.runRepoPath, data.run_id).plan;
-  preflightPrimaryReviewerCapability(resolveReviewerName(data, reviewerArg, { routePlan }));
+  preflightPrimaryReviewerCapability(resolveReviewerName(data, reviewerArg));
 }
 
 module.exports = { preflightResolvedPrimaryReviewer };

@@ -9,10 +9,9 @@ Repo-local design notes, operator workflow docs, audit ledgers, and archived iss
 | [workflow-lanes.md](./workflow-lanes.md) | Fast / goal / relay / review-only lane selection |
 | [external-tool-workflow.md](./external-tool-workflow.md) | gstack, superpowers, CE around relay (optional) |
 | [direct-read-relay-operator-note.md](./direct-read-relay-operator-note.md) | Operate relay from a repo checkout without installed skills |
-| [relay-operator-guide.md](./relay-operator-guide.md) | Operator workflow for `/relay`, setup, manual phases, advisory review, batch dispatch, recovery, and extension points |
+| [relay-operator-guide.md](./relay-operator-guide.md) | Operator workflow for `/relay`, setup, manual phases, batch dispatch, recovery, and extension points |
 | [references/operator-surface.md](../references/operator-surface.md) | Public/internal/optional skill tiers and placement rules for stable command surfaces |
-| [model-route-policy.md](./model-route-policy.md) | Provider/model route policy via `relay-config` (`~/.relay/policy.json`) — company defaults, personal opt-in, routing rules, advisory reviewers |
-| [reviewer-policy-opencode.md](./reviewer-policy-opencode.md) | OpenCode trust boundary and review policy |
+| [model-route-policy.md](./model-route-policy.md) | Provider/model route policy via `relay-config` for dispatch and primary review |
 | [script-inventory-and-cleanup.md](./script-inventory-and-cleanup.md) | Runtime script classification and cleanup backlog |
 
 ## Architecture Decisions

@@ -37,7 +37,7 @@ const {
   formatPlan,
 } = require("./worktree-runtime");
 const { getExecutor } = require("./executors");
-const { getPositionals, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const { getPositionals, modeLabel: formatCliModeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { execGit } = require("./exec");
 
 // ---------------------------------------------------------------------------
@@ -49,7 +49,11 @@ const KNOWN_FLAGS = [
   "--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy",
   "--pin", "--register", "--dry-run", "--json", "--help", "-h",
 ];
-const CLI_ARG_OPTIONS = { commandName: "create-worktree", reservedFlags: KNOWN_FLAGS };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--pin", "--register", "--dry-run", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy"],
+};
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
@@ -61,19 +65,19 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   );
   console.log("       [--pin] [--register] [--dry-run] [--json]");
   console.log("\nOptions:");
-  console.log(`  --branch, -b       ${modeLabel("--branch")} Branch name (default: auto from topic)`);
-  console.log(`  --title, -t        ${modeLabel("--title")} Thread title in Codex App`);
-  console.log(`  --topic            ${modeLabel("--topic")} Topic slug -> branch becomes codex/<topic>`);
-  console.log(`  --worktree-path    ${modeLabel("--worktree-path")} Register an existing worktree`);
-  console.log(`  --copy             ${modeLabel("--copy")} Additional files to copy`);
-  console.log(`  --pin              ${modeLabel("--pin")} Pin thread to prevent auto-cleanup`);
-  console.log(`  --register         ${modeLabel("--register")} Pre-register in SQLite + global state`);
-  console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
-  console.log(`  --json             ${modeLabel("--json")} Output as JSON`);
+  console.log(`  --branch, -b       ${formatCliModeLabel("--branch", CLI_ARG_OPTIONS)} Branch name (default: auto from topic)`);
+  console.log(`  --title, -t        ${formatCliModeLabel("--title", CLI_ARG_OPTIONS)} Thread title in Codex App`);
+  console.log(`  --topic            ${formatCliModeLabel("--topic", CLI_ARG_OPTIONS)} Topic slug -> branch becomes codex/<topic>`);
+  console.log(`  --worktree-path    ${formatCliModeLabel("--worktree-path", CLI_ARG_OPTIONS)} Register an existing worktree`);
+  console.log(`  --copy             ${formatCliModeLabel("--copy", CLI_ARG_OPTIONS)} Additional files to copy`);
+  console.log(`  --pin              ${formatCliModeLabel("--pin", CLI_ARG_OPTIONS)} Pin thread to prevent auto-cleanup`);
+  console.log(`  --register         ${formatCliModeLabel("--register", CLI_ARG_OPTIONS)} Pre-register in SQLite + global state`);
+  console.log(`  --dry-run          ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Show plan without executing`);
+  console.log(`  --json             ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output as JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
 }
 
-const repoPathRaw = getPositionals(args, "create-worktree")[0];
+const repoPathRaw = getPositionals(args, CLI_ARG_OPTIONS)[0];
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
 const TOPIC = readArg(args, "--topic", undefined, CLI_ARG_OPTIONS);

@@ -26,6 +26,11 @@ const KNOWN_FLAGS = [
   "--help",
   "-h",
 ];
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo"],
+};
 
 const SUCCESS_BUCKETS = new Set([
   "pass",
@@ -87,15 +92,12 @@ function parsePositiveInteger(value, flag) {
 }
 
 function parseArgs(argv) {
-  const unknown = findUnknownFlags(argv, KNOWN_FLAGS);
+  const unknown = findUnknownFlags(argv, CLI_ARG_OPTIONS);
   if (unknown.length > 0) {
     throw usageError(`Unknown flag(s): ${unknown.join(", ")}`);
   }
 
-  const cli = bindCliArgs(argv, {
-    commandName: "wait-for-check",
-    reservedFlags: KNOWN_FLAGS,
-  });
+  const cli = bindCliArgs(argv, CLI_ARG_OPTIONS);
   const help = cli.hasFlag(["--help", "-h"]);
   const json = cli.hasFlag("--json");
   if (help) return { help, json };

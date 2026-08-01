@@ -212,53 +212,6 @@ test("redispatch/buildRedispatchPrompt adds score optimization beside issue fixe
   assert.match(prompt, /Improve this factor without regressing already passing contract or quality factors/);
 });
 
-test("redispatch/buildRedispatchPrompt includes demoting lane required findings and preserves no-demotion output", () => {
-  const runDir = tempRunDir();
-  const artifactPath = path.join(runDir, "review-round-1-advisory-opencode.json");
-  fs.writeFileSync(artifactPath, JSON.stringify({
-    profile: "adversarial",
-    summary: "Required adversarial finding.",
-    required_findings: [{
-      title: "Retry race corrupts state",
-      body: "Concurrent redispatch can write stale state after the new branch wins.",
-      file: "skills/relay-review/scripts/review-runner/redispatch.js",
-      line: 42,
-      severity: "P1",
-      category: "edge-case",
-      confidence: 0.92,
-    }],
-    advisory_findings: [],
-    duplicate_or_low_confidence: [],
-  }), "utf-8");
-  const verdict = {
-    issues: [makeReviewIssue()],
-    scope_drift: { creep: [], missing: [] },
-    rubric_scores: [],
-  };
-
-  const baseline = buildRedispatchPrompt(verdict, "# Done Criteria\n\n- Keep redispatch targeted.", runDir, 1, null, "planner_decision");
-  const noDemotion = buildRedispatchPrompt(verdict, "# Done Criteria\n\n- Keep redispatch targeted.", runDir, 1, null, "planner_decision", null, null, {
-    demotingAdvisoryResults: [],
-  });
-  const withDemotion = buildRedispatchPrompt(verdict, "# Done Criteria\n\n- Keep redispatch targeted.", runDir, 1, null, "planner_decision", null, null, {
-    demotingAdvisoryResults: [{
-      reviewer: "opencode",
-      profile: "adversarial",
-      status: "success",
-      artifactPath,
-      required_count: 1,
-    }],
-  });
-
-  assert.equal(noDemotion, baseline);
-  assert.match(withDemotion, /Demoting advisory lane findings:/);
-  assert.match(withDemotion, /opencode \(profile=adversarial\)/);
-  assert.match(withDemotion, /Retry race corrupts state/);
-  assert.match(withDemotion, /Concurrent redispatch can write stale state/);
-  assert.match(withDemotion, /skills\/relay-review\/scripts\/review-runner\/redispatch\.js:42/);
-  assert.match(withDemotion, /severity=P1/);
-});
-
 test("redispatch/buildRedispatchPrompt omits rejected approaches when prior issues have no metadata", () => {
   const runDir = tempRunDir();
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({

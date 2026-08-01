@@ -37,7 +37,7 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
-const { bindCliArgs } = require("../../relay-dispatch/scripts/cli-args");
+const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
@@ -45,10 +45,14 @@ const KNOWN_FLAGS = [
   "--artifact-path", "--writer-pr", "--reason", "--skip-review",
   "--json", "--help", "-h",
 ];
-const cliArgs = bindCliArgs(args, {
-  commandName: "relay-reconcile-artifact",
+const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-});
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--manifest", "--branch", "--artifact-path", "--reason", "--skip-review"],
+};
+const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
+if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("Usage: relay-reconcile-artifact (--repo <path> --run-id <id> | --manifest <path>) --artifact-path <path> --writer-pr <int> --reason <text> [options]");

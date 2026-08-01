@@ -276,8 +276,18 @@ test("checked-in ledger and generated artifacts exactly cover the current relay 
     result.generated.sites.filter((site) => site.directive).length,
     result.ledger.approvedDirectives.length,
   );
+  const dispatchClassifications = new Set(
+    result.generated.sites
+      .filter((site) => site.path === "tests/relay-dispatch/scripts/dispatch.test.js")
+      .map((site) => site.decision.classification),
+  );
+  assert.deepEqual(
+    [...dispatchClassifications].sort(),
+    ["compatibility-migration", "preserve-invariant"],
+    "dispatch test coverage must retain only the explicit executor/model path and core compatibility contracts",
+  );
+
   for (const file of [
-    "tests/relay-dispatch/scripts/dispatch.test.js",
     "tests/relay-review/scripts/review-runner.test.js",
     "tests/relay-merge/scripts/finalize-run.test.js",
     "tests/relay-dispatch/scripts/relay-manifest.test.js",

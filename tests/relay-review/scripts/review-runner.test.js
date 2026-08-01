@@ -1735,7 +1735,7 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
-test("all-low-confidence changes_requested verdict applies as advisory pass while preserving findings", () => {
+test("all-low-confidence changes_requested verdict remains blocking and preserves findings", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "low-confidence-changes.json", {
     verdict: "changes_requested",
@@ -1785,23 +1785,19 @@ test("all-low-confidence changes_requested verdict applies as advisory pass whil
   const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
   const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
-  assert.equal(result.appliedVerdict, "pass");
-  assert.equal(result.state, STATES.READY_TO_MERGE);
-  assert.equal(result.redispatchPath, null);
-  assert.deepEqual(result.confidenceDowngrade, {
-    originalVerdict: "changes_requested",
-    appliedVerdict: "pass",
-    lowConfidenceCount: 2,
-  });
-  assert.equal(manifest.state, STATES.READY_TO_MERGE);
-  assert.equal(manifest.review.latest_verdict, "lgtm");
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.ok(result.redispatchPath);
+  assert.equal("confidenceDowngrade" in result, false);
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
   assert.equal(verdictRecord.verdict, "changes_requested");
-  assert.equal(verdictRecord.applied_verdict, "pass");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
   assert.equal(verdictRecord.issues.length, 2);
   assert.ok(verdictRecord.issues.every((issue) => issue.confidence === "low"));
-  assert.equal(reviewApplyEvent?.reason, "pass");
-  assert.equal(reviewApplyEvent?.confidence_downgrade, true);
-  assert.equal(reviewApplyEvent?.low_confidence_count, 2);
+  assert.equal(reviewApplyEvent?.reason, "changes_requested");
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
 test("all-low-confidence changes_requested verdict with a failing rubric score stays changes_requested", () => {
@@ -1849,7 +1845,7 @@ test("all-low-confidence changes_requested verdict with a failing rubric score s
   const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
   assert.equal(result.appliedVerdict, "changes_requested");
-  assert.equal(result.confidenceDowngrade, null);
+  assert.equal("confidenceDowngrade" in result, false);
   assert.equal(result.state, STATES.CHANGES_REQUESTED);
   assert.ok(result.redispatchPath);
   assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
@@ -1909,7 +1905,7 @@ test("all-low-confidence changes_requested verdict with a below-target quality s
   const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
   assert.equal(result.appliedVerdict, "changes_requested");
-  assert.equal(result.confidenceDowngrade, null);
+  assert.equal("confidenceDowngrade" in result, false);
   assert.equal(result.state, STATES.CHANGES_REQUESTED);
   assert.ok(result.redispatchPath);
   assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
@@ -1922,7 +1918,7 @@ test("all-low-confidence changes_requested verdict with a below-target quality s
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
-test("all-low-confidence changes_requested verdict is rejected by pass scope-drift gates", () => {
+test("all-low-confidence changes_requested with scope drift remains blocking", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "low-confidence-scope-drift.json", {
     verdict: "changes_requested",
@@ -1947,7 +1943,7 @@ test("all-low-confidence changes_requested verdict is rejected by pass scope-dri
     },
   });
 
-  assert.throws(() => execFileSync("node", [
+  const result = JSON.parse(execFileSync("node", [
     SCRIPT,
     "--repo", repoRoot,
     "--branch", "issue-42",
@@ -1957,17 +1953,17 @@ test("all-low-confidence changes_requested verdict is rejected by pass scope-dri
     "--review-file", reviewFile,
     "--no-comment",
     "--json",
-  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
-    assert.match(String(error.stderr), /PASS verdict cannot have scope_drift\.missing entries with status not_done, changed, or partial/);
-    return true;
-  });
+  ], { encoding: "utf-8" }));
 
   const manifest = readManifest(manifestPath).data;
-  assert.equal(manifest.state, STATES.REVIEW_PENDING);
-  assert.equal(manifest.review.latest_verdict, "pending");
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.ok(result.redispatchPath);
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
 });
 
-test("all-low-confidence changes_requested verdict is blocked by failed execution evidence", () => {
+test("all-low-confidence changes_requested remains blocking without synthesized execution findings", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.unlinkSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
@@ -2007,18 +2003,18 @@ test("all-low-confidence changes_requested verdict is blocked by failed executio
   const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
   assert.equal(result.appliedVerdict, "changes_requested");
-  assert.equal(result.confidenceDowngrade, null);
+  assert.equal("confidenceDowngrade" in result, false);
   assert.equal(result.state, STATES.CHANGES_REQUESTED);
   assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
   assert.equal(manifest.review.latest_verdict, "changes_requested");
   assert.equal(verdictRecord.verdict, "changes_requested");
   assert.equal(verdictRecord.applied_verdict, "changes_requested");
-  assert.equal(verdictRecord.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
+  assert.equal(verdictRecord.issues[0].file, "src/index.js");
   assert.equal("confidence_downgrade" in reviewApplyEvent, false);
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
-test("all-low-confidence changes_requested verdict is blocked by rubric gate failure", () => {
+test("all-low-confidence changes_requested remains blocking without rubric-gate rewriting", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
   configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
   const reviewFile = writeVerdict(repoRoot, "low-confidence-missing-rubric.json", {
@@ -2057,22 +2053,21 @@ test("all-low-confidence changes_requested verdict is blocked by rubric gate fai
   const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
   assert.equal(result.appliedVerdict, "changes_requested");
-  assert.equal(result.confidenceDowngrade, null);
-  assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
-  assert.equal(result.reviewGate.rubricState, "missing");
+  assert.equal("confidenceDowngrade" in result, false);
+  assert.equal(result.reviewGate, null);
   assert.equal(result.state, STATES.CHANGES_REQUESTED);
   assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
-  assert.equal(manifest.next_action, "repair_rubric_and_redispatch");
-  assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
+  assert.equal(manifest.next_action, "re_dispatch_requested_changes");
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
   assert.equal(verdictRecord.verdict, "changes_requested");
   assert.equal(verdictRecord.applied_verdict, "changes_requested");
   assert.equal(verdictRecord.issues[0].confidence, "low");
-  assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
+  assert.equal("relay_gate" in verdictRecord, false);
   assert.equal("confidence_downgrade" in reviewApplyEvent, false);
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
-test("compact assurance escalates its first rubric gate failure immediately", () => {
+test("persisted compact assurance is ignored and a rubric gate failure remains blocking", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
   const commentCapturePath = path.join(repoRoot, "compact-rubric-gate-comment.txt");
   updateManifestRecord(manifestPath, (data) => ({
@@ -2113,41 +2108,30 @@ test("compact assurance escalates its first rubric gate failure immediately", ()
     "review-round-1-redispatch.md"
   );
 
-  assert.equal(result.appliedVerdict, "escalated");
-  assert.equal(result.state, STATES.ESCALATED);
-  assert.equal(result.redispatchPath, null);
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(result.redispatchPath, redispatchPath);
   assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
-  assert.equal(result.reviewGate.recoveryCommand, null);
-  assert.match(result.reviewGate.recovery, /Automatic rubric repair re-dispatch is unavailable/);
-  assert.doesNotMatch(result.reviewGate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
-  assert.equal(fs.existsSync(redispatchPath), false);
-  assert.equal(manifest.next_action, "inspect_review_failure");
-  assert.equal(manifest.review.latest_verdict, "escalated");
-  assert.equal(manifest.review.last_gate.recovery_command, null);
-  assert.match(manifest.review.last_gate.recovery, /explicit owner decision/);
-  assert.doesNotMatch(manifest.review.last_gate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
-  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 1);
-  assert.equal(
-    manifest.review.last_escalation_decision.trigger,
-    "repair_cycle_exhausted"
-  );
+  assert.ok(result.reviewGate.recoveryCommand);
+  assert.equal(fs.existsSync(redispatchPath), true);
+  assert.equal(manifest.next_action, "repair_rubric_and_redispatch");
+  assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
+  assert.equal("round_budget" in manifest.review, false);
   assert.equal(verdictRecord.verdict, "pass");
   assert.equal(verdictRecord.next_action, "ready_to_merge");
   assert.equal(verdictRecord.summary, "All done criteria are satisfied.");
-  assert.equal(verdictRecord.applied_verdict, "escalated");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
   assert.equal("original_reviewer_verdict" in verdictRecord, false);
   assert.equal("relay_escalation" in verdictRecord, false);
   assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
-  assert.equal(verdictRecord.relay_gate.recovery_command, null);
-  assert.doesNotMatch(verdictRecord.relay_gate.recovery, /dispatch\.js|review-round-1-redispatch\.md/);
-  assert.match(commentBody, /Verdict: ESCALATED/);
+  assert.ok(verdictRecord.relay_gate.recovery_command);
+  assert.match(commentBody, /Verdict: CHANGES_REQUESTED/);
   assert.match(commentBody, /Reviewer verdict: PASS \(next_action=ready_to_merge\)/);
   assert.doesNotMatch(commentBody, /Reviewer verdict: ESCALATED/);
-  assert.match(commentBody, /Recovery command: unavailable after escalation/);
-  assert.doesNotMatch(commentBody, /dispatch\.js|review-round-1-redispatch\.md/);
+  assert.match(commentBody, /Recovery command:/);
 });
 
-test("standard assurance escalates a rubric gate as the second substantive failure", () => {
+test("repeated rubric gate failure remains changes_requested without an assurance budget", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
   const blockingReviewFile = writeVerdict(repoRoot, "first-substantive-failure.json", {
     verdict: "changes_requested",
@@ -2191,15 +2175,11 @@ test("standard assurance escalates a rubric gate as the second substantive failu
   const manifest = readManifest(manifestPath).data;
 
   assert.equal(second.round, 2);
-  assert.equal(second.appliedVerdict, "escalated");
-  assert.equal(second.state, STATES.ESCALATED);
-  assert.equal(second.redispatchPath, null);
+  assert.equal(second.appliedVerdict, "changes_requested");
+  assert.equal(second.state, STATES.CHANGES_REQUESTED);
+  assert.ok(second.redispatchPath);
   assert.equal(second.reviewGate.status, "rubric_state_failed_closed");
-  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 2);
-  assert.equal(
-    manifest.review.last_escalation_decision.trigger,
-    "repair_cycle_exhausted"
-  );
+  assert.equal("round_budget" in manifest.review, false);
 });
 
 test("mixed-confidence changes_requested verdict records no downgrade event marker", () => {
@@ -2826,34 +2806,6 @@ test("review-runner execution evidence preflight blocks primary reviewer invocat
       qualityExecutionStatus: "fail",
       evidenceHeadSha: null,
     },
-    {
-      name: "strict-failing",
-      mutate({ manifestPath, runDir }) {
-        updateManifestRecord(manifestPath, (data) => ({
-          ...data,
-          policy: {
-            ...(data.policy || {}),
-            review_assurance: "hardened",
-          },
-        }));
-        fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
-          "evaluation:",
-          "  schema_version: 2",
-          "  outcome_contract:",
-          "    source: done_criteria",
-          "  verification:",
-          "    checks:",
-          "      - name: hardened suite",
-          "        type: command",
-          "        command: node --test hardened.test.js",
-          "  earned_rubric:",
-          "    factors: []",
-        ].join("\n"), "utf-8");
-      },
-      reason: /verification gate went unrecorded: 'hardened suite'/,
-      qualityExecutionStatus: "fail",
-      evidenceHeadSha: ({ reviewedHead }) => reviewedHead,
-    },
   ];
 
   for (const entry of cases) {
@@ -3268,7 +3220,7 @@ test("review runner enforces max_rounds before starting a new round", () => {
   assert.equal("reviewer" in reviewApplyEvent, false);
 });
 
-test("standard assurance admits internal repair verification and required post-publication verification", () => {
+test("internal repair still requires post-publication verification without repair budgets", () => {
   const {
     repoRoot,
     worktreePath,
@@ -3296,9 +3248,7 @@ test("standard assurance admits internal repair verification and required post-p
     "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
     "--prepare-only", "--json",
   ], { encoding: "utf-8" }));
-  assert.equal(prepared.reviewBudget.substantive_failures.consumed, 0);
-  assert.equal(prepared.reviewBudget.protocol_verifications.consumed, 0);
-  assert.equal(prepared.reviewBudget.applied_in_phase, 0);
+  assert.equal("reviewBudget" in prepared, false);
 
   const changesFile = writeVerdict(repoRoot, "topology-internal-changes.json", {
     verdict: "changes_requested",
@@ -3325,9 +3275,7 @@ test("standard assurance admits internal repair verification and required post-p
     "--review-file", changesFile, "--no-comment", "--json",
   ], { encoding: "utf-8" }));
   assert.equal(first.state, STATES.CHANGES_REQUESTED);
-  assert.equal(first.reviewBudget.substantive_failures.consumed, 1);
-  assert.equal(first.reviewBudget.protocol_verifications.consumed, 0);
-  assert.equal(first.reviewBudget.applied_in_phase, 1);
+  assert.equal("reviewBudget" in first, false);
 
   fs.writeFileSync(path.join(worktreePath, "repair.txt"), "repaired\n", "utf-8");
   execFileSync("git", ["add", "repair.txt"], { cwd: worktreePath, stdio: "pipe" });
@@ -3375,9 +3323,7 @@ test("standard assurance admits internal repair verification and required post-p
   ], { encoding: "utf-8" }));
   assert.equal(second.state, STATES.PUBLISH_PENDING, JSON.stringify(second));
   assert.equal(second.round, 2);
-  assert.equal(second.reviewBudget.substantive_failures.consumed, 1);
-  assert.equal(second.reviewBudget.protocol_verifications.consumed, 1);
-  assert.equal(second.reviewBudget.applied_in_phase, 2);
+  assert.equal("reviewBudget" in second, false);
 
   const publishPending = readManifest(manifestPath);
   let published = updateManifestState(
@@ -3402,20 +3348,11 @@ test("standard assurance admits internal repair verification and required post-p
   ], { encoding: "utf-8" }));
   assert.equal(third.state, STATES.READY_TO_MERGE);
   assert.equal(third.round, 3);
-  assert.equal(third.reviewBudget.substantive_failures.consumed, 1);
+  assert.equal("reviewBudget" in third, false);
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.review.rounds, 3);
-  assert.equal(manifest.review.max_rounds, 2);
-  assert.equal(manifest.review.round_budget.consumed.substantive_failures, 1);
-  assert.deepEqual(manifest.review.round_budget.consumed.applied_by_phase, {
-    internal: 2,
-    post_publication: 1,
-  });
-  assert.deepEqual(manifest.review.round_budget.consumed.protocol_verifications, {
-    internal: 1,
-    post_publication: 1,
-  });
+  assert.equal("round_budget" in manifest.review, false);
 });
 
 test("#1116 invoke failure and salvage on a new HEAD do not consume substantive repair budget", () => {

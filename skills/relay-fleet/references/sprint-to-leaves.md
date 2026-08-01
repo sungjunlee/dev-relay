@@ -100,12 +100,11 @@ not perform planning.
 
 Run one fleet per sprint batch and per owning track. relay-fleet compares the
 full normalized owner on every leaf and rejects missing, contradictory, or
-mixed-track input before it creates a fleet manifest or invokes dispatch. A
+mixed-track input before it creates its immutable cohort or invokes dispatch. A
 track is canonical only when it equals the sprint filename basename without
 `.md`; component remains an independent dev-backlog scope key and may differ
 from the track. A
-`next_batch` is one parallel-safe wave, so the new leaves file SHOULD NOT
-prefill same-wave `depends_on` entries. If an item depends on another sprint
+`next_batch` is one parallel-safe wave. If an item depends on another sprint
 item, dev-backlog's batch contract requires that dependent work to appear in a
 later batch.
 

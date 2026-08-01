@@ -1,5 +1,8 @@
 # #28 Codex-as-Orchestrator E2E Validation Report
 
+> Historical validation record. It predates retirement of the aggregate
+> reliability-report command.
+
 Date: 2026-04-03
 
 ## Scope

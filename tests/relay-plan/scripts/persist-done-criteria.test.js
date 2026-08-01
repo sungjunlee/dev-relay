@@ -52,3 +52,22 @@ test("persist-done-criteria writes canonical planner decision anchor and returns
     }
   }
 });
+
+test("persist-done-criteria preserves a flag-like --text value", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const runId = "issue-1134-20260801010101000-deadbeef";
+  const env = { ...process.env, RELAY_HOME: relayHome };
+  const previousRelayHome = process.env.RELAY_HOME;
+  process.env.RELAY_HOME = relayHome;
+  try {
+    const stdout = execFileSync(process.execPath, [
+      SCRIPT, "--repo", repoRoot, "--run-id", runId, "--text", "--json",
+    ], { encoding: "utf8", env });
+    const outputPath = path.join(getRunDir(repoRoot, runId), "done-criteria.md");
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "--json\n");
+    assert.match(stdout, /^Done Criteria:/);
+  } finally {
+    if (previousRelayHome === undefined) delete process.env.RELAY_HOME;
+    else process.env.RELAY_HOME = previousRelayHome;
+  }
+});

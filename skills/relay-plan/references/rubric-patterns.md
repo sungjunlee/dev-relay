@@ -28,7 +28,7 @@ The pattern was originally derived from #434's mechanical-rename dispatch (`rela
 | 2026-05-08 | #447 | #436 | new module + state machine wiring | clean |
 | 2026-05-08 | #446 | #437 | new probe CLI + chain offer | clean |
 | 2026-05-08 | #448 | #372 | artifact schema additions | clean |
-| 2026-05-08 | #449 | #381 | new advisory artifact skill | clean |
+| 2026-05-08 | #449 | #381 | new secondary artifact skill | clean |
 | 2026-05-08 | #450 / #451 | #373 / #376 | kind module / surgical extension | clean (one false start at #374 R2, caught by reviewer and reverted) |
 | 2026-05-08 | #452 / #453 | #374 / #375 | kind modules | #374 had one R2 forbidden-zone touch → reverted in R3 |
 | 2026-05-08 | #454 | #144 | new feature dir + matcher in existing skill | clean |
@@ -60,15 +60,14 @@ forbidden_zones:
   - "skills/relay-ready/**"
   - "skills/relay-plan/**"
   # ... and so on for every other skill
-  # Allowed-zones (positive list): skills/relay-dispatch/scripts/reliability-report.js,
-  # tests/relay-dispatch/scripts/reliability-report.test.js
+  # Allowed-zones (positive list): one explicitly named target script and its test.
 ```
 
 The comment-style allowed-zones note at the bottom is a planning aid; the dispatch prompt repeats it in prose under a "Forbidden zones (rubric-enforced)" section so codex sees it before opening any file.
 
-### Worked example — surgical extension of an existing module (#376)
+### Historical worked example — surgical extension of a retired metrics module (#376)
 
-When the task extended `reliability-report.js` to add an `advisory_insights` block but every other relay-dispatch file was frozen by prior PRs:
+When a past task extended a now-retired metrics module while every other relay-dispatch file was frozen by prior PRs:
 
 ```yaml
 forbidden_zones:
@@ -78,7 +77,7 @@ forbidden_zones:
   - "docs/*-2026-*.md"
   - "docs/*-2025-*.md"
   - ".github/workflows/**"
-  # Read-only relay-dispatch internals (the ONE allowed edit is reliability-report.js itself):
+  # Read-only relay-dispatch internals (the ONE allowed edit is the target module itself):
   - "skills/relay-dispatch/scripts/dispatch.js"
   - "skills/relay-dispatch/scripts/frozen-artifact-helper.js"
   - "skills/relay-dispatch/scripts/relay-events.js"
@@ -86,8 +85,7 @@ forbidden_zones:
   - "skills/relay-dispatch/scripts/manifest/**"
   - "skills/relay-dispatch/scripts/executors/**"
   # ... etc
-  # Allowed-zones: skills/relay-dispatch/scripts/reliability-report.js (extend),
-  # tests/relay-dispatch/scripts/reliability-report.test.js (extend additively).
+  # Allowed-zones: the target module (extend), its test (extend additively).
 ```
 
 PR #451 landed in 2 rounds (R1 changes_requested on prediction-heuristic precision, R2 PASS clean). Zero forbidden-zone breaches.

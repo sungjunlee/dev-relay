@@ -24,18 +24,7 @@ Execute the plan -> dispatch -> review cycle. Stop at `ready_to_merge` unless th
 
 Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and review through `review-runner --reviewer codex`. Assigned manifest roles stay immutable; acting reviewer data is recorded separately.
 
-## Route Preset Words
-
-When the user gives a routing style, map only these clear words:
-| User wording | Dispatch option |
-| --- | --- |
-| `가볍게`, `싸게`, `light` | `--route-preset light` |
-| `리뷰 다양하게`, `diverse` | `--route-preset diverse` |
-| `하드하게`, `hardened` | `--route-preset hardened` |
-
-If no wording matches, list configured presets from routes config and ask/continue with defaults; do not guess.
-
-## Step 1: Re-Anchor and Route
+## Step 1: Re-Anchor
 
 Run `git fetch origin`. Task evidence: collect the first available source—local task file, `gh issue view <N>`, or user description—and use its `track:` or `component:` value as the sprint ownership handle. If no issue number, use a descriptive branch name and skip issue-close in merge.
 
@@ -59,16 +48,16 @@ Fast path: bypass relay-ready only for one relay-ready task with a stable review
 
 ## Step 3: Dispatch (relay-dispatch)
 
-`relay` owns lifecycle orchestration; `relay-dispatch` owns dispatch CLI semantics. When an operator needs a fixed executor or model, pass the dispatch options explicitly in this command. Common pass-through knobs are `--executor`, `--model`, and `--model-hints`; see `../relay-dispatch/references/model-routing.md` and `../relay-dispatch/references/cli-schema.md` for full route and option semantics.
+`relay` owns lifecycle orchestration; `relay-dispatch` owns dispatch CLI semantics. Pass a fixed executor or model explicitly with `--executor` and `--model`; no catalog, preset, or model-hint fallback participates in selection.
 
-For actor+model wording such as "opencode glm-5.2", run `relay-config resolve-model` or preset setup first and pass only explicit provider/model route intent. For model-only wording such as "glm-5.2", do not guess an actor; ask for actor context or offer matching configured presets/routes.
+For actor+model wording such as "opencode glm-5.2", pass both values explicitly. For model-only wording such as "glm-5.2", do not guess an actor; ask for actor context.
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \
   --publish-policy after-internal-review --timeout 3600 --detach --json
 # If relay-ready ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
-# To pin a dispatch route, append: --executor <name> --model <provider/model> or --model-hints dispatch=<provider/model>
+# To pin dispatch selection, append: --executor <name> --model <provider/model>
 ```
 
 `--detach` prints a launch receipt with `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and `reconcileCommand`; the supervisor continues if the calling shell dies. Poll the run until it leaves `dispatched`:
@@ -120,7 +109,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
 ```
 If `REVIEW_BEFORE.ready_status.status == "merge_ready"`, skip the review invocation and continue to Step 5.
 
-Invoke **relay-review** in an isolated context. It runs Spec Compliance then Code Quality, re-dispatches on issues, updates manifest state, and keeps the relay-plan rubric fixed as the review anchor. The assurance-derived cap (compact 1, standard 2, hardened 3) applies to substantive failures; corrected-result and post-publication PASS verifications are phase-recorded protocol work and do not consume repair capacity. A higher run cap remains explicit. Do NOT review inline.
+Invoke **relay-review** in an isolated context. It runs Spec Compliance then Code Quality, re-dispatches on issues, updates manifest state, and keeps the relay-plan rubric fixed as the review anchor. A requested change remains blocking until the corrected HEAD receives a passing primary review. Do NOT review inline.
 
 After review returns, compare against the snapshot:
 ```bash

@@ -1,6 +1,28 @@
 {
   "schemaVersion": 1,
   "accountingContract": "lexical-registration-site-v1",
+  "retiredTestMappings": [
+    {
+      "path": "tests/relay-dispatch/scripts/cli-schema.test.js",
+      "productionSurface": "skills/relay-dispatch/scripts/cli-schema.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1134",
+      "replacementCoverage": [
+        "tests/relay-dispatch/scripts/cli-args.test.js",
+        "tests/relay-dispatch/scripts/cli-unknown-flag-wiring.test.js"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/reliability-report.test.js",
+      "productionSurface": "skills/relay-dispatch/scripts/reliability-report.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1134",
+      "replacementCoverage": [
+        "tests/relay-dispatch/scripts/facts-vnext.test.js",
+        "tests/relay-dispatch/scripts/run-fold-vnext.test.js"
+      ]
+    }
+  ],
   "approvedDirectives": [
     {
       "id": "tests/relay-dispatch/scripts/opencode-live.test.js::test::1",
@@ -21,7 +43,7 @@
       "expires": "2027-07-31"
     },
     {
-      "id": "tests/relay-dispatch/scripts/relay-manifest.test.js::test::60",
+      "id": "tests/relay-dispatch/scripts/relay-manifest.test.js::test::56",
       "owner": "runtime-core-reset",
       "reason": "FIFO behavior is POSIX-specific and is skipped only on Windows.",
       "expires": "2027-07-31"
@@ -37,20 +59,33 @@
       "removalIssue": "#1134"
     },
     {
+      "path": "tests/relay-dispatch/scripts/adapter-contract.test.js",
+      "owner": "executor-adapters",
+      "classification": "preserve-invariant",
+      "rationale": "Protects argv-only execution, capability fail-closed behavior, and independent reviewer isolation.",
+      "invariantIds": [
+        "RR-01",
+        "RR-07",
+        "RR-12"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/adapter-live-canary.test.js",
+      "owner": "executor-adapters",
+      "classification": "preserve-invariant",
+      "rationale": "Protects live adapter availability probes, minimal invocation evidence, and fail-closed canary result classification.",
+      "invariantIds": [
+        "RR-07",
+        "RR-12"
+      ]
+    },
+    {
       "path": "tests/relay-dispatch/scripts/advisory-lane-pid-reuse-996.test.js",
       "owner": "runtime-core-reset",
       "classification": "obsolete-surface-delete",
       "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
       "surface": "legacy runtime policy and configuration accretion",
       "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/agent-adapter-policy.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
     },
     {
       "path": "tests/relay-dispatch/scripts/agent-adapter-transport.test.js",
@@ -101,23 +136,16 @@
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
     },
     {
-      "path": "tests/relay-dispatch/scripts/cli-schema.test.js",
+      "path": "tests/relay-dispatch/scripts/cli-help-smoke.test.js",
       "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
+      "classification": "preserve-invariant",
+      "rationale": "Protects fail-closed caller-local CLI taxonomies across every production entrypoint.",
+      "invariantIds": [
+        "RR-12"
+      ]
     },
     {
       "path": "tests/relay-dispatch/scripts/cli-unknown-flag-wiring.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/cline-jsonl.test.js",
       "owner": "runtime-core-reset",
       "classification": "compatibility-migration",
       "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
@@ -147,22 +175,6 @@
       "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
       "migrationTarget": "vNext immutable run facts and derived lifecycle action",
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/dispatch-risk-assurance.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/dispatch-route-plan.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
     },
     {
       "path": "tests/relay-dispatch/scripts/dispatch-timeout-diagnostics.test.js",
@@ -716,3108 +728,6 @@
             "migrationTarget": "vNext immutable run facts and derived lifecycle action",
             "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
           }
-        },
-        {
-          "match": {
-            "ordinals": [
-              32
-            ],
-            "names": [
-              "dispatch stores model_hints for configured phases verbatim"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              33
-            ],
-            "names": [
-              "dispatch resume replaces model_hints and records model_hints_updated before redispatch"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-05.",
-            "invariantIds": [
-              "RR-05"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              34
-            ],
-            "names": [
-              "dispatch resume without --model-hints preserves stored hints and emits no model_hints_updated event"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              35
-            ],
-            "names": [
-              "parseModelHints rejects invalid model-hints tokens"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "implementation-detail-delete",
-            "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-            "replacementCoverage": "Black-box invariant coverage at the vNext public command boundary."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              36
-            ],
-            "names": [
-              "dispatch model-hints parse error skips manifest write"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "implementation-detail-delete",
-            "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-            "replacementCoverage": "Black-box invariant coverage at the vNext public command boundary."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              37
-            ],
-            "names": [
-              "dispatch precedence D1 regression: CLI override beats manifest hint in executor argv"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              38
-            ],
-            "names": [
-              "dispatch precedence D2 regression: CLI override works when manifest hint is absent"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              39
-            ],
-            "names": [
-              "dispatch precedence D3 regression: manifest hint supplies the effective model when CLI is unset"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              40
-            ],
-            "names": [
-              "dispatch precedence D4 regression: executor argv stays byte-identical when CLI and manifest hint are both absent"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              41
-            ],
-            "names": [
-              "dispatch network-access enabled adds codex workspace-write network override and audit stamps"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              42
-            ],
-            "names": [
-              "dispatch widens codex sandbox via --add-dir <common-git-dir> for worktree (#389 sandbox-widening)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              43
-            ],
-            "names": [
-              "dispatch rejects network-access enabled outside codex workspace-write"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              44
-            ],
-            "names": [
-              "dispatch classifies sandbox network failures for audit events"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              45
-            ],
-            "names": [
-              "dispatch opencode executor records provider metadata"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              46
-            ],
-            "names": [
-              "dispatch denies disallowed executor route before spawning the executor"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              47
-            ],
-            "names": [
-              "dispatch prints relay-config route hint for text route denial"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              48
-            ],
-            "names": [
-              "dispatch reports adapter-capability denial before model-route policy"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              49
-            ],
-            "names": [
-              "dispatch opencode executor fails closed when no model route is supplied"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              50
-            ],
-            "names": [
-              "dispatch prints relay-config default-model hint for text unresolved model"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              51
-            ],
-            "names": [
-              "dispatch reports install hint when executor CLI is missing in JSON and text modes"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              52
-            ],
-            "names": [
-              "dispatch opencode executor lets RELAY_HOME executors config override bundled model"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              53
-            ],
-            "names": [
-              "dispatch lets local executor config define defaults for executors absent from bundled config"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              54
-            ],
-            "names": [
-              "dispatch codex executor ignores malformed local executor model config"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              55
-            ],
-            "names": [
-              "dispatch opencode invalid local default fails closed without bundled fallback"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-11.",
-            "invariantIds": [
-              "RR-11"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              56
-            ],
-            "names": [
-              "dispatch opencode explicit --model skips malformed local executor model config"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              57
-            ],
-            "names": [
-              "dispatch opencode malformed local default fails closed without bundled fallback"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-11.",
-            "invariantIds": [
-              "RR-11"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              58
-            ],
-            "names": [
-              "dispatch scales codex reasoning effort by rubric size"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              59
-            ],
-            "names": [
-              "dispatch --reasoning overrides rubric-size codex reasoning effort"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              60
-            ],
-            "names": [
-              "dispatch falls back to xhigh codex reasoning when rubric size is missing or unrecognized"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              61
-            ],
-            "names": [
-              "dispatch leaves claude executor argv untouched by rubric-size reasoning"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              62
-            ],
-            "names": [
-              "dispatch dry-run resolves effective_dispatch_model from model hints and emits zero events"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              63
-            ],
-            "names": [
-              "dispatch dry-run includes managed default policy decision details"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              64
-            ],
-            "names": [
-              "dispatch routing dry-run JSON explains CLI tags and selected advisory defaults"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              65
-            ],
-            "names": [
-              "explicit empty routed advisory selection survives preset injection"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              66
-            ],
-            "names": [
-              "dispatch routing dry-run text explains no-match decisions"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              67
-            ],
-            "names": [
-              "dispatch resume --dry-run with new --model-hints reports the new hint in effective_dispatch_model and does NOT write the manifest or emit events"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              68
-            ],
-            "names": [
-              "dispatch resumes rubric fail-closed recovery runs from changes_requested"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-10.",
-            "invariantIds": [
-              "RR-10"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              69
-            ],
-            "names": [
-              "dispatch can resume from --manifest while invoked from an unrelated git repo"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              70
-            ],
-            "names": [
-              "dispatch remaps detached HEAD to origin default branch before manifest creation (#253)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              71
-            ],
-            "names": [
-              "dispatch remaps a local-only linked-worktree checkout branch to origin default before manifest creation (#809)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              72
-            ],
-            "names": [
-              "dispatch names new relay worktrees after recorded canonical repo root from linked checkout (#857)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              73
-            ],
-            "names": [
-              "dispatch keeps a checkout branch that exists on origin as base_branch (#809)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              74
-            ],
-            "names": [
-              "dispatch starts new branches at origin base when local base is ahead (#795)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              75
-            ],
-            "names": [
-              "dispatch starts new branches at origin base when local base is behind (#795)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              76
-            ],
-            "names": [
-              "dispatch falls back to local base with a loud warning when origin base fetch fails (#795)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              77
-            ],
-            "names": [
-              "dispatch fails closed on detached HEAD when origin HEAD is unresolved before worktree creation (#253)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              78
-            ],
-            "names": [
-              "dispatch resume missing-worktree error reprovisions an existing branch without recreating it"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              79
-            ],
-            "names": [
-              "dispatch resume missing-worktree hint stays runnable when the deleted directory is still registered"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              80
-            ],
-            "names": [
-              "dispatch resume missing-worktree error creates the branch only when it is absent"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              81
-            ],
-            "names": [
-              "dispatch resume fails when --run-id does not resolve"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-03.",
-            "invariantIds": [
-              "RR-03"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              82
-            ],
-            "names": [
-              "dispatch resume validateManifestPaths wire rejects crafted manifest repo roots"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              83
-            ],
-            "names": [
-              "dispatch refuses same-ms same-branch run-dir collisions for new runs"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              84
-            ],
-            "names": [
-              "dispatch refuses a concurrent new dispatch while its empty run dir is claimed"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              85
-            ],
-            "names": [
-              "dispatch reclaims a claim owned by a real exited process"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              86
-            ],
-            "names": [
-              "a live stale-claim reclaimer cannot be preempted by a later contender"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              87
-            ],
-            "names": [
-              "exit cleanup releases the fleet issue lock when claim release throws"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-04.",
-            "invariantIds": [
-              "RR-04"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              88
-            ],
-            "names": [
-              "dispatch cleans up tmp rubric files when atomic rubric persistence fails"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              89
-            ],
-            "names": [
-              "dispatch with --executor claude creates worktree and collects result"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              90
-            ],
-            "names": [
-              "dispatch with --executor pi invokes Pi and copies stdout into the result file"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              91
-            ],
-            "names": [
-              "dispatch with --executor antigravity invokes agy and copies stdout into the result file"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              92
-            ],
-            "names": [
-              "dispatch with --executor cline invokes Cline and extracts run_result.text into the result file"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              93
-            ],
-            "names": [
-              "dispatch with --executor cline escalates malformed JSONL through the manifest failure path"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              94
-            ],
-            "names": [
-              "dispatch artifacts are persisted in the run directory"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              95
-            ],
-            "names": [
-              "dispatch creates a run lease while executor runs and removes it on normal completion"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              96
-            ],
-            "names": [
-              "dispatch terminal write preserves external progress and audits the superseded outcome"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-11.",
-            "invariantIds": [
-              "RR-11"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              97
-            ],
-            "names": [
-              "dispatch keeps lease and leaves run dispatched when timeout kill leaves process group unsettled"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              98
-            ],
-            "names": [
-              "dispatch completes normally when clean leader exit leaves a lingering process-group member"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              99
-            ],
-            "names": [
-              "dispatch resume waits for the fresh run lease when stale lease.json exists"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              100
-            ],
-            "names": [
-              "dispatch persists selected guidance metadata in run artifacts and events"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              101
-            ],
-            "names": [
-              "dispatch keeps rubric-omission default and flag over prompt task_profile assurance"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              102
-            ],
-            "names": [
-              "dispatch uses rubric assurance over prompt metadata and persists its resolved cap and source"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              103
-            ],
-            "names": [
-              "dispatch uses the review assurance flag when the rubric omits the field"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              104
-            ],
-            "names": [
-              "dispatch records a disagreeing assurance flag while the rubric wins"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              105
-            ],
-            "names": [
-              "dispatch resume preserves guidance metadata without injecting stale Working Guidance blocks"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-04.",
-            "invariantIds": [
-              "RR-04"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              106
-            ],
-            "names": [
-              "dispatch with --executor claude supports resume"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              107
-            ],
-            "names": [
-              "dispatch with --register --executor claude does not emit the codex-only warning"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              108
-            ],
-            "names": [
-              "timeout with commits produces completed-with-warning"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              109
-            ],
-            "names": [
-              "timeout without commits produces failed"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              110
-            ],
-            "names": [
-              "pushAndOpenPR uses the injected execFile seam for happy-path publication"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              111
-            ],
-            "names": [
-              "pushAndOpenPR skips PR creation when the branch already has an open PR"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              112
-            ],
-            "names": [
-              "pushAndOpenPR surfaces injected git push failures"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              113
-            ],
-            "names": [
-              "pushAndOpenPR surfaces injected gh pr create failures"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              114
-            ],
-            "names": [
-              "pushAndOpenPR pushes to the branch-configured remote when it is not origin (#229)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              115
-            ],
-            "names": [
-              "pushAndOpenPR falls back to origin when the branch has no configured remote (#229)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              116
-            ],
-            "names": [
-              "pushAndOpenPR falls back to origin when git config lookup fails (#229)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              117
-            ],
-            "names": [
-              "resolveBranchRemote returns origin when branch is missing or empty (#229)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              118
-            ],
-            "names": [
-              "dispatch pushes the branch and opens a PR from the orchestrator on success"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              119
-            ],
-            "names": [
-              "dispatch can defer PR publication until internal review passes"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              120
-            ],
-            "names": [
-              "dispatch preserves delayed publication policy across same-run redispatch"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              121
-            ],
-            "names": [
-              "dispatch rejects same-run redispatch publish policy changes"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              122
-            ],
-            "names": [
-              "dispatch lets explicit role env vars override the unknown defaults"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              123
-            ],
-            "names": [
-              "dispatch dry-run never invokes orchestrator push or PR creation"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              124
-            ],
-            "names": [
-              "dispatch escalates when orchestrator git push fails"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              125
-            ],
-            "names": [
-              "dispatch escalates when orchestrator PR creation fails"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              126
-            ],
-            "names": [
-              "dispatch skips PR creation when the branch already has an open PR"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              127
-            ],
-            "names": [
-              "dispatch silent failure escalates when executor exits cleanly without stdout or result file"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              128
-            ],
-            "names": [
-              "dispatch escalates committed work when the executor omits the structured result file"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              129
-            ],
-            "names": [
-              "dispatch escalates partial timed-out work when the executor omits the structured result file"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              130
-            ],
-            "names": [
-              "dispatch marks verified no-op runs as completed-no-op and skips orchestrator publication"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              131
-            ],
-            "names": [
-              "dispatch orchestrator-commits uncommitted codex runs by default"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              132
-            ],
-            "names": [
-              "dispatch commit keeps tracked runtime-root changes but excludes adjacent metadata"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              133
-            ],
-            "names": [
-              "dispatch ${scenario.name} preserves a staged runtime-root addition beside unstaged metadata"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              134
-            ],
-            "names": [
-              "dispatch ${scenario.name} proves an intent-to-add runtime-root path from the gate-time worktree"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              135
-            ],
-            "names": [
-              "dispatch orchestrator commit proves staged runtime-root ${scenario.name} from the gate-time worktree"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              136
-            ],
-            "names": [
-              "dispatch fails closed when an executor-direct commit ignores staged runtime-root ${scenario.name}"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-11.",
-            "invariantIds": [
-              "RR-11"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              137
-            ],
-            "names": [
-              "dispatch fails closed when an orchestrator-owned commit hook changes the verified tree"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-11.",
-            "invariantIds": [
-              "RR-11"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              138
-            ],
-            "names": [
-              "dispatch fails closed when an executor-direct commit hook changes the verified tree"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-11.",
-            "invariantIds": [
-              "RR-11"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              139
-            ],
-            "names": [
-              "dispatch Claude resume orchestrator-commits completed-uncommitted work by default"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              140
-            ],
-            "names": [
-              "dispatch --no-auto-recover-commit disables Claude default recovery"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-10.",
-            "invariantIds": [
-              "RR-10"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              141
-            ],
-            "names": [
-              "dispatch blocks delayed publication internal review when work is uncommitted"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-04.",
-            "invariantIds": [
-              "RR-04"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              142
-            ],
-            "names": [
-              "dispatch blocks delayed publication internal review when timed-out work is uncommitted"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-04.",
-            "invariantIds": [
-              "RR-04"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              143
-            ],
-            "names": [
-              "dispatch escalates delayed internal review when orchestrator commit and recover-commit both fail"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-10.",
-            "invariantIds": [
-              "RR-10"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              144
-            ],
-            "names": [
-              "dispatch names reviewable paths when staging leaves an empty index"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              145
-            ],
-            "names": [
-              "dispatch skips orchestrator commit and publish when the run is superseded mid-dispatch"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              146
-            ],
-            "names": [
-              "dispatch falls back to recover-commit when only the orchestrator commit fails"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-10.",
-            "invariantIds": [
-              "RR-10"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              147
-            ],
-            "names": [
-              "dispatch orchestrator-commits before internal review under after-internal-review policy"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              148
-            ],
-            "names": [
-              "dispatch escalates Antigravity zero-exit runs with only runtime metadata dirt"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              149
-            ],
-            "names": [
-              "dispatch preserves Antigravity completed-uncommitted for non-runtime repository dirt"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              150
-            ],
-            "names": [
-              "dispatch --auto-recover-commit orchestrator-commits non-codex completed-uncommitted runs (#393)"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-10.",
-            "invariantIds": [
-              "RR-10"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              151
-            ],
-            "names": [
-              "dispatch --no-auto-recover-commit disables codex default recovery"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-10.",
-            "invariantIds": [
-              "RR-10"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              152
-            ],
-            "names": [
-              "dispatch uses result-file presence to distinguish silent failure from verified no-op"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              153
-            ],
-            "names": [
-              "dispatch writes execution evidence with the post-dispatch HEAD and the caller test command"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              154
-            ],
-            "names": [
-              "dispatch seeds execution evidence test_command from structured verification gates"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              155
-            ],
-            "names": [
-              "dispatch cannot execute a gate with orchestrator environment privileges"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              156
-            ],
-            "names": [
-              "dispatch writes execution evidence for no-op runs with the stable start head"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              157
-            ],
-            "names": [
-              "dispatch rejects blank test-command values before writing execution evidence"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              158
-            ],
-            "names": [
-              "dispatch writes execution evidence with a flag-like test command verbatim"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              159
-            ],
-            "names": [
-              "dispatch writes execution evidence with an exact reserved-token test command verbatim"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              160
-            ],
-            "names": [
-              "re-dispatch prompt includes previous iteration history"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              161
-            ],
-            "names": [
-              "new dispatch manifest includes environment snapshot"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              162
-            ],
-            "names": [
-              "re-dispatch detects environment drift and records event"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              163
-            ],
-            "names": [
-              "dispatch copies rubric file to run dir and records path in manifest"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              164
-            ],
-            "names": [
-              "dispatch dry-run includes rubric file info"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              165
-            ],
-            "names": [
-              "dispatch rejects invalid ready-light rubric before accepting rubric file"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              166
-            ],
-            "names": [
-              "dispatch reports invalid task_profile metadata through failEarly"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              167
-            ],
-            "names": [
-              "dispatch ignores ready-light examples outside structured task profile metadata"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              168
-            ],
-            "names": [
-              "dispatch ignores task_profile examples before active Task Profile metadata"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              169
-            ],
-            "names": [
-              "dispatch validates retained ready-light rubric on resume"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              170
-            ],
-            "names": [
-              "dispatch preserves manifest ready-light marker when prompt profile omits it"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              171
-            ],
-            "names": [
-              "dispatch dry-run resolves per-executor timeout defaults and preserves explicit override"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              172
-            ],
-            "names": [
-              "dispatch dry-run json matches the frozen fixture"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              173
-            ],
-            "names": [
-              "dispatch dry-run text matches the frozen fixture"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              174
-            ],
-            "names": [
-              "dispatched run whose persisted rubric is empty fails closed at the review gate"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-11.",
-            "invariantIds": [
-              "RR-11"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              175
-            ],
-            "names": [
-              "dispatch stores request linkage and frozen done criteria anchor in manifest"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              176
-            ],
-            "names": [
-              "dispatch infers planner_decision for canonical run-dir done criteria anchor"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              177
-            ],
-            "names": [
-              "dispatch preserves file source for ad-hoc done criteria paths"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              178
-            ],
-            "names": [
-              "file-source resume accepts the original external Done Criteria path"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              179
-            ],
-            "names": [
-              "file-source resume rejects a different external Done Criteria path"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              180
-            ],
-            "names": [
-              "Done Criteria copy failure leaves an empty run dir that can be retried"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              181
-            ],
-            "names": [
-              "dispatch dry-run includes request linkage and frozen done criteria file info"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              182
-            ],
-            "names": [
-              "dispatch resume rejects changes to immutable intake linkage"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              183
-            ],
-            "names": [
-              "dispatch resume keeps the original intake linkage when the same immutable values are supplied"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              184
-            ],
-            "names": [
-              "dispatch resume rejects adding intake linkage to a run that started without it"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              185
-            ],
-            "names": [
-              "dispatch fails when rubric file does not exist"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              186
-            ],
-            "names": [
-              "dispatch resume rejects anchor.rubric_path values with parent traversal"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              187
-            ],
-            "names": [
-              "dispatch resume rejects absolute anchor.rubric_path values"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              188
-            ],
-            "names": [
-              "dispatch fails when done criteria file does not exist"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-02.",
-            "invariantIds": [
-              "RR-02"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              189
-            ],
-            "names": [
-              "dispatch without --rubric-file fails loudly even in dry-run mode"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              190
-            ],
-            "names": [
-              "dispatch without --rubric-file fails loudly in non-dry-run mode"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              191
-            ],
-            "names": [
-              "dispatch rejects --rubric-grandfathered on new dispatches"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              192
-            ],
-            "names": [
-              "dispatch rejects --rubric-grandfathered on same-run resumes"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              193
-            ],
-            "names": [
-              "dispatch rejects --rubric-grandfathered for review_pending legacy runs"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              194
-            ],
-            "names": [
-              "dispatch rejects --rubric-grandfathered for ready_to_merge legacy runs"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              195
-            ],
-            "names": [
-              "dispatch pre-flight applies the legacy-grandfather retirement matrix"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              196
-            ],
-            "names": [
-              "<dynamic:entry.label>"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              197
-            ],
-            "names": [
-              "extractRubricSize accepts size and size_class at top-level and nested indentation"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              198
-            ],
-            "names": [
-              "<dynamic:entry.name>"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              199
-            ],
-            "names": [
-              "extractRubricSize returns exported sentinels for missing and unparseable size fields"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "implementation-detail-delete",
-            "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-            "replacementCoverage": "Black-box invariant coverage at the vNext public command boundary."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              200
-            ],
-            "names": [
-              "resolveReasoningEffort maps valid rubric size without stderr"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              201
-            ],
-            "names": [
-              "resolveReasoningEffort falls back for missing rubric size without requiring a warning"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              202
-            ],
-            "names": [
-              "resolveReasoningEffort warns and falls back for unparseable rubric size"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "implementation-detail-delete",
-            "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-            "replacementCoverage": "Black-box invariant coverage at the vNext public command boundary."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              203
-            ],
-            "names": [
-              "resolveReasoningEffort override returns directly and silences unparseable warnings"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "implementation-detail-delete",
-            "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-            "replacementCoverage": "Black-box invariant coverage at the vNext public command boundary."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              204
-            ],
-            "names": [
-              "dispatch canonicalizes typed fleet ownership and rejects only real resume-time drift"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-04.",
-            "invariantIds": [
-              "RR-04"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              205
-            ],
-            "names": [
-              "direct dispatch resume cannot backfill a legacy fleet child and names the audited migration path"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "compatibility-migration",
-            "rationale": "This registration protects a legacy behavior until its vNext fact/action equivalent reaches cutover.",
-            "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-            "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              206
-            ],
-            "names": [
-              "dispatch requires valid ownership before fleet manifest or lock side effects"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-04.",
-            "invariantIds": [
-              "RR-04"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              207
-            ],
-            "names": [
-              "dispatch rejects standalone ownership before manifest, lock, worktree, or executor side effects"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              208
-            ],
-            "names": [
-              "dispatch preserves valid fleet behavior when fleet id and ownership are paired"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-04.",
-            "invariantIds": [
-              "RR-04"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              209
-            ],
-            "names": [
-              "dispatch rejects stale sprint-state component ownership before manifest, lock, worktree, or executor side effects"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              210
-            ],
-            "names": [
-              "dispatch rejects a canonical missing sprint before manifest, lock, worktree, or executor side effects"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-01.",
-            "invariantIds": [
-              "RR-01"
-            ]
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              211
-            ],
-            "names": [
-              "dispatch rejects a contradictory sprint and track before fleet manifest or lock side effects"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "preserve-invariant",
-            "rationale": "This registration directly exercises canonical invariant RR-04.",
-            "invariantIds": [
-              "RR-04"
-            ]
-          }
         }
       ]
     },
@@ -3832,10 +742,12 @@
     {
       "path": "tests/relay-dispatch/scripts/evaluation-contract.test.js",
       "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
+      "classification": "preserve-invariant",
+      "rationale": "Proves the policy module remains deleted while direct review evaluation fails closed on malformed required channels.",
+      "invariantIds": [
+        "RR-02",
+        "RR-07"
+      ]
     },
     {
       "path": "tests/relay-dispatch/scripts/exec.test.js",
@@ -3854,14 +766,6 @@
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
     },
     {
-      "path": "tests/relay-dispatch/scripts/executor-model-config.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
       "path": "tests/relay-dispatch/scripts/executors.test.js",
       "owner": "runtime-core-reset",
       "classification": "compatibility-migration",
@@ -3872,18 +776,84 @@
     {
       "path": "tests/relay-dispatch/scripts/extend-review-policy.test.js",
       "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
+      "classification": "preserve-invariant",
+      "rationale": "Proves mutable review-round policy and its CLI surface remain deleted from new runs.",
+      "invariantIds": [
+        "RR-11"
+      ]
     },
     {
-      "path": "tests/relay-dispatch/scripts/guidance-risk-assurance.test.js",
+      "path": "tests/relay-dispatch/scripts/facts-vnext.test.js",
       "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
+      "classification": "preserve-invariant",
+      "rationale": "Exercises the append-only fact journal, exact bindings, provenance, recovery, and terminal contracts.",
+      "invariantIds": [
+        "RR-05",
+        "RR-06",
+        "RR-09",
+        "RR-10",
+        "RR-11",
+        "RR-12"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/fleet-admission.test.js",
+      "owner": "runtime-core-reset",
+      "classification": "preserve-invariant",
+      "rationale": "Proves same-host dead-lock reclaim is serialized and neither release nor reclaim can unlink a replacement admission lock inode.",
+      "invariantIds": [
+        "RR-01",
+        "RR-02"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/host-concurrency.test.js",
+      "owner": "runtime-core-reset",
+      "classification": "preserve-invariant",
+      "rationale": "Proves exactly one mutating actor acquires a run lock under process contention.",
+      "invariantIds": [
+        "RR-04"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/host-contract.test.js",
+      "owner": "runtime-core-reset",
+      "classification": "preserve-invariant",
+      "rationale": "Protects trusted containment, exclusive mutation, crash recovery, and external revalidation.",
+      "invariantIds": [
+        "RR-01",
+        "RR-04",
+        "RR-10",
+        "RR-12"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/host-crash-drills.test.js",
+      "owner": "runtime-core-reset",
+      "classification": "preserve-invariant",
+      "rationale": "Injects distinct crash boundaries and proves idempotent recovery and terminal monotonicity.",
+      "invariantIds": [
+        "RR-10",
+        "RR-11"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/host-supervisor.test.js",
+      "owner": "runtime-core-reset",
+      "classification": "preserve-invariant",
+      "rationale": "Proves durable terminal results and bounded cancellation across supervisor failures.",
+      "invariantIds": [
+        "RR-10"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/host-survival.test.js",
+      "owner": "runtime-core-reset",
+      "classification": "preserve-invariant",
+      "rationale": "Measures worker outcome survival after launcher exit.",
+      "invariantIds": [
+        "RR-10"
+      ]
     },
     {
       "path": "tests/relay-dispatch/scripts/inflight-runs.test.js",
@@ -3934,14 +904,6 @@
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
     },
     {
-      "path": "tests/relay-dispatch/scripts/manifest/fleet.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-    },
-    {
       "path": "tests/relay-dispatch/scripts/manifest/lifecycle.test.js",
       "owner": "runtime-core-reset",
       "classification": "compatibility-migration",
@@ -3974,14 +936,6 @@
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
     },
     {
-      "path": "tests/relay-dispatch/scripts/model-resolver.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
       "path": "tests/relay-dispatch/scripts/opencode-live.test.js",
       "owner": "runtime-core-reset",
       "classification": "compatibility-migration",
@@ -3999,14 +953,6 @@
     },
     {
       "path": "tests/relay-dispatch/scripts/pi-live.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/project-config.test.js",
       "owner": "runtime-core-reset",
       "classification": "compatibility-migration",
       "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
@@ -6069,14 +3015,6 @@
       ]
     },
     {
-      "path": "tests/relay-dispatch/scripts/relay-config.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
       "path": "tests/relay-dispatch/scripts/relay-events-enum.test.js",
       "owner": "runtime-core-reset",
       "classification": "compatibility-migration",
@@ -6123,40 +3061,6 @@
               2
             ],
             "names": [
-              "createManifestSkeleton defaults and validates review assurance policy"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              3
-            ],
-            "names": [
-              "rubric review assurance extraction and resolution preserve authoritative provenance"
-            ]
-          },
-          "decision": {
-            "owner": "runtime-core-reset",
-            "classification": "obsolete-surface-delete",
-            "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-            "surface": "legacy runtime policy and configuration accretion",
-            "removalIssue": "#1134"
-          }
-        },
-        {
-          "match": {
-            "ordinals": [
-              4
-            ],
-            "names": [
               "createRunId is branch-stable and filesystem-safe"
             ]
           },
@@ -6172,7 +3076,7 @@
         {
           "match": {
             "ordinals": [
-              5
+              3
             ],
             "names": [
               "validateRunId accepts sampled historical relay run_ids"
@@ -6190,7 +3094,7 @@
         {
           "match": {
             "ordinals": [
-              6
+              4
             ],
             "names": [
               "validateRunId rejects unsafe and non-conforming values"
@@ -6208,7 +3112,7 @@
         {
           "match": {
             "ordinals": [
-              7
+              5
             ],
             "names": [
               "getRunDir and getManifestPath reject invalid run_id before path derivation"
@@ -6226,7 +3130,7 @@
         {
           "match": {
             "ordinals": [
-              8
+              6
             ],
             "names": [
               "validateManifestPaths accepts repo-contained and relay-owned worktrees"
@@ -6244,7 +3148,7 @@
         {
           "match": {
             "ordinals": [
-              9
+              7
             ],
             "names": [
               "validateManifestPaths rejects mismatched repo roots, escaped worktrees, and manifest-path mismatches"
@@ -6262,7 +3166,7 @@
         {
           "match": {
             "ordinals": [
-              10
+              8
             ],
             "names": [
               "manifest round-trips through frontmatter helpers"
@@ -6278,7 +3182,7 @@
         {
           "match": {
             "ordinals": [
-              11
+              9
             ],
             "names": [
               "manifest round-trips multiline scalar values"
@@ -6295,7 +3199,7 @@
         {
           "match": {
             "ordinals": [
-              12
+              10
             ],
             "names": [
               "createManifestSkeleton falls back to unknown actor when git user.name is unavailable"
@@ -6312,7 +3216,7 @@
         {
           "match": {
             "ordinals": [
-              13
+              11
             ],
             "names": [
               "createManifestSkeleton stores optional intake linkage without changing state semantics"
@@ -6329,7 +3233,7 @@
         {
           "match": {
             "ordinals": [
-              14
+              12
             ],
             "names": [
               "readManifest migrates v1 roles.worker to roles.executor"
@@ -6346,7 +3250,7 @@
         {
           "match": {
             "ordinals": [
-              15
+              13
             ],
             "names": [
               "getRepoSlug canonicalizes repo roots across subdirs, symlinks, and worktrees"
@@ -6364,7 +3268,7 @@
         {
           "match": {
             "ordinals": [
-              16
+              14
             ],
             "names": [
               "getRepoSlug stays deterministic and differentiates same-name repos by canonical path"
@@ -6381,7 +3285,7 @@
         {
           "match": {
             "ordinals": [
-              17
+              15
             ],
             "names": [
               "getCanonicalRepoRoot and getRepoSlug fail clearly for non-git paths"
@@ -6398,7 +3302,7 @@
         {
           "match": {
             "ordinals": [
-              18
+              16
             ],
             "names": [
               "updateManifestState allows valid transitions and rejects invalid ones"
@@ -6415,7 +3319,7 @@
         {
           "match": {
             "ordinals": [
-              19
+              17
             ],
             "names": [
               "forceTransitionState bypasses ALLOWED_TRANSITIONS but keeps enum + invariant checks"
@@ -6432,7 +3336,7 @@
         {
           "match": {
             "ordinals": [
-              20
+              18
             ],
             "names": [
               "updateManifestState rejects dispatched -> review_pending when anchor.rubric_path is missing"
@@ -6450,7 +3354,7 @@
         {
           "match": {
             "ordinals": [
-              21
+              19
             ],
             "names": [
               "updateManifestState allows dispatched -> review_pending when anchor.rubric_path is present"
@@ -6468,7 +3372,7 @@
         {
           "match": {
             "ordinals": [
-              22
+              20
             ],
             "names": [
               "updateManifestState supports delayed publication lifecycle transitions with rubric gating"
@@ -6485,7 +3389,7 @@
         {
           "match": {
             "ordinals": [
-              23
+              21
             ],
             "names": [
               "updateManifestState rejects dispatched -> internal_review_pending when anchor.rubric_path is missing"
@@ -6503,7 +3407,7 @@
         {
           "match": {
             "ordinals": [
-              24
+              22
             ],
             "names": [
               "updateManifestState rejects dispatched -> review_pending when the legacy grandfather field is true"
@@ -6520,7 +3424,7 @@
         {
           "match": {
             "ordinals": [
-              25
+              23
             ],
             "names": [
               "getRubricAnchorStatus rejects invalid run_id even for grandfathered runs"
@@ -6537,7 +3441,7 @@
         {
           "match": {
             "ordinals": [
-              26
+              24
             ],
             "names": [
               "getRubricAnchorStatus rejects missing and empty run_id before rubric or grandfathered handling"
@@ -6554,7 +3458,7 @@
         {
           "match": {
             "ordinals": [
-              27
+              25
             ],
             "names": [
               "getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and legacy grandfather-field rejection"
@@ -6571,7 +3475,7 @@
         {
           "match": {
             "ordinals": [
-              28
+              26
             ],
             "names": [
               "getRubricAnchorStatus rejects explicit false after grandfather retirement"
@@ -6588,7 +3492,7 @@
         {
           "match": {
             "ordinals": [
-              29
+              27
             ],
             "names": [
               "getRubricAnchorStatus fails closed for malformed grandfather provenance objects"
@@ -6605,7 +3509,7 @@
         {
           "match": {
             "ordinals": [
-              30
+              28
             ],
             "names": [
               "getRubricAnchorStatus rejects object-form grandfather provenance regardless of provenance shape"
@@ -6622,7 +3526,7 @@
         {
           "match": {
             "ordinals": [
-              31
+              29
             ],
             "names": [
               "getRubricAnchorStatus fails closed for parseable non-ISO grandfather provenance timestamps"
@@ -6639,7 +3543,7 @@
         {
           "match": {
             "ordinals": [
-              32
+              30
             ],
             "names": [
               "getRubricAnchorStatus rejects symlinked rubric files even when they target readable files"
@@ -6657,7 +3561,7 @@
         {
           "match": {
             "ordinals": [
-              33
+              31
             ],
             "names": [
               "getRubricAnchorStatus fails closed for contained-but-malformed rubric paths"
@@ -6675,7 +3579,7 @@
         {
           "match": {
             "ordinals": [
-              34
+              32
             ],
             "names": [
               "getRubricAnchorStatus distinguishes parent symlink escapes from lexical outside_run_dir"
@@ -6693,7 +3597,7 @@
         {
           "match": {
             "ordinals": [
-              35
+              33
             ],
             "names": [
               "updateManifestCleanup records cleanup metadata without changing state"
@@ -6710,7 +3614,7 @@
         {
           "match": {
             "ordinals": [
-              36
+              34
             ],
             "names": [
               "readPreviousAttempts returns [] on corrupted JSON"
@@ -6728,7 +3632,7 @@
         {
           "match": {
             "ordinals": [
-              37
+              35
             ],
             "names": [
               "captureAttempt writes and readPreviousAttempts reads correctly"
@@ -6746,7 +3650,7 @@
         {
           "match": {
             "ordinals": [
-              38
+              36
             ],
             "names": [
               "captureAttempt validates inputs"
@@ -6764,7 +3668,7 @@
         {
           "match": {
             "ordinals": [
-              39
+              37
             ],
             "names": [
               "formatAttemptsForPrompt returns empty string for no attempts"
@@ -6780,7 +3684,7 @@
         {
           "match": {
             "ordinals": [
-              40
+              38
             ],
             "names": [
               "formatAttemptsForPrompt formats attempts correctly"
@@ -6796,7 +3700,7 @@
         {
           "match": {
             "ordinals": [
-              41
+              39
             ],
             "names": [
               "collectEnvironmentSnapshot returns expected shape"
@@ -6813,7 +3717,7 @@
         {
           "match": {
             "ordinals": [
-              42
+              40
             ],
             "names": [
               "collectEnvironmentSnapshot hashes lockfile when present"
@@ -6831,7 +3735,7 @@
         {
           "match": {
             "ordinals": [
-              43
+              41
             ],
             "names": [
               "compareEnvironmentSnapshot returns empty array for identical snapshots"
@@ -6848,7 +3752,7 @@
         {
           "match": {
             "ordinals": [
-              44
+              42
             ],
             "names": [
               "compareEnvironmentSnapshot detects field changes"
@@ -6865,7 +3769,7 @@
         {
           "match": {
             "ordinals": [
-              45
+              43
             ],
             "names": [
               "compareEnvironmentSnapshot returns empty array when baseline is null"
@@ -6882,7 +3786,7 @@
         {
           "match": {
             "ordinals": [
-              46
+              44
             ],
             "names": [
               "compareEnvironmentSnapshot skips fields that are null in both"
@@ -6899,7 +3803,7 @@
         {
           "match": {
             "ordinals": [
-              47
+              45
             ],
             "names": [
               "manifest round-trips with environment block"
@@ -6917,7 +3821,7 @@
         {
           "match": {
             "ordinals": [
-              48
+              46
             ],
             "names": [
               "readPreviousAttempts refuses when previous-attempts.json is a symlink"
@@ -6935,7 +3839,7 @@
         {
           "match": {
             "ordinals": [
-              49
+              47
             ],
             "names": [
               "captureAttempt refuses when previous-attempts.json is a symlink"
@@ -6953,7 +3857,7 @@
         {
           "match": {
             "ordinals": [
-              50
+              48
             ],
             "names": [
               "readPreviousAttempts refuses dangling symlinks instead of silently returning []"
@@ -6971,7 +3875,7 @@
         {
           "match": {
             "ordinals": [
-              51
+              49
             ],
             "names": [
               "captureAttempt refuses dangling symlinks (no create-through on write)"
@@ -6989,7 +3893,7 @@
         {
           "match": {
             "ordinals": [
-              52
+              50
             ],
             "names": [
               "appendTextFileWithoutFollowingSymlinks refuses an existing symlink at target"
@@ -7007,7 +3911,7 @@
         {
           "match": {
             "ordinals": [
-              53
+              51
             ],
             "names": [
               "writeTextFileWithoutFollowingSymlinks refuses an existing symlink at target"
@@ -7025,7 +3929,7 @@
         {
           "match": {
             "ordinals": [
-              54
+              52
             ],
             "names": [
               "writeTextFileWithoutFollowingSymlinks refuses a dangling symlink at target"
@@ -7043,7 +3947,7 @@
         {
           "match": {
             "ordinals": [
-              55
+              53
             ],
             "names": [
               "writeTextFileWithoutFollowingSymlinks creates a new file when the target is truly absent"
@@ -7061,7 +3965,7 @@
         {
           "match": {
             "ordinals": [
-              56
+              54
             ],
             "names": [
               "appendTextFileWithoutFollowingSymlinks refuses a dangling symlink at target"
@@ -7079,7 +3983,7 @@
         {
           "match": {
             "ordinals": [
-              57
+              55
             ],
             "names": [
               "appendTextFileWithoutFollowingSymlinks creates a new file when the target is truly absent"
@@ -7097,7 +4001,7 @@
         {
           "match": {
             "ordinals": [
-              58
+              56
             ],
             "names": [
               "write helpers refuse a FIFO at the target path (POSIX only)"
@@ -7113,7 +4017,7 @@
         {
           "match": {
             "ordinals": [
-              59
+              57
             ],
             "names": [
               "write helpers loop on short writes so records are never truncated"
@@ -7129,7 +4033,7 @@
         {
           "match": {
             "ordinals": [
-              60
+              58
             ],
             "names": [
               "read helper refuses a FIFO at the target path (POSIX only)"
@@ -7145,22 +4049,6 @@
       ]
     },
     {
-      "path": "tests/relay-dispatch/scripts/relay-policy-gate.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/relay-policy.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
       "path": "tests/relay-dispatch/scripts/relay-resolver.test.js",
       "owner": "runtime-core-reset",
       "classification": "compatibility-migration",
@@ -7169,52 +4057,18 @@
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
     },
     {
-      "path": "tests/relay-dispatch/scripts/relay-routing.test.js",
+      "path": "tests/relay-dispatch/scripts/run-fold-vnext.test.js",
       "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/reliability-calibration-reference.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/reliability-calibration.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/reliability-report.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/risk-adaptive-cleanup-contract.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/risk-assurance-policy.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
+      "classification": "preserve-invariant",
+      "rationale": "Protects deterministic lifecycle derivation, review binding, explicit merge, recovery, and terminal precedence.",
+      "invariantIds": [
+        "RR-06",
+        "RR-08",
+        "RR-09",
+        "RR-10",
+        "RR-11",
+        "RR-12"
+      ]
     },
     {
       "path": "tests/relay-dispatch/scripts/run-observer.test.js",
@@ -7223,6 +4077,16 @@
       "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
       "migrationTarget": "vNext immutable run facts and derived lifecycle action",
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/run-store-vnext.test.js",
+      "owner": "runtime-core-reset",
+      "classification": "preserve-invariant",
+      "rationale": "Protects frozen Done Criteria and immutable run identity.",
+      "invariantIds": [
+        "RR-02",
+        "RR-03"
+      ]
     },
     {
       "path": "tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js",
@@ -7421,11 +4285,11 @@
       "siteRules": [
         {
           "match": {
-            "ordinals": [
-              1
-            ],
             "names": [
               "RR-01 vNext worktree containment"
+            ],
+            "ordinals": [
+              1
             ]
           },
           "decision": {
@@ -7439,11 +4303,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              2
-            ],
             "names": [
               "RR-02 vNext frozen outcome contract"
+            ],
+            "ordinals": [
+              2
             ]
           },
           "decision": {
@@ -7457,11 +4321,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              3
-            ],
             "names": [
               "RR-03 vNext immutable identity"
+            ],
+            "ordinals": [
+              3
             ]
           },
           "decision": {
@@ -7475,11 +4339,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              4
-            ],
             "names": [
               "RR-04 vNext single actor"
+            ],
+            "ordinals": [
+              4
             ]
           },
           "decision": {
@@ -7493,11 +4357,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              5
-            ],
             "names": [
               "RR-05 vNext append-only attempts"
+            ],
+            "ordinals": [
+              5
             ]
           },
           "decision": {
@@ -7511,11 +4375,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              6
-            ],
             "names": [
               "RR-06 vNext exact review binding"
+            ],
+            "ordinals": [
+              6
             ]
           },
           "decision": {
@@ -7529,11 +4393,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              7
-            ],
             "names": [
               "RR-07 vNext independent review"
+            ],
+            "ordinals": [
+              7
             ]
           },
           "decision": {
@@ -7547,11 +4411,29 @@
         },
         {
           "match": {
+            "names": [
+              "RR-07 Node 18 capability simulation fails closed without isolation"
+            ],
             "ordinals": [
               8
-            ],
+            ]
+          },
+          "decision": {
+            "owner": "runtime-core-reset",
+            "classification": "preserve-invariant",
+            "rationale": "This vNext gate directly exercises canonical invariant RR-07.",
+            "invariantIds": [
+              "RR-07"
+            ]
+          }
+        },
+        {
+          "match": {
             "names": [
               "RR-08 vNext explicit merge"
+            ],
+            "ordinals": [
+              9
             ]
           },
           "decision": {
@@ -7565,11 +4447,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              9
-            ],
             "names": [
               "RR-09 vNext merge provenance"
+            ],
+            "ordinals": [
+              10
             ]
           },
           "decision": {
@@ -7583,11 +4465,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              10
-            ],
             "names": [
               "RR-10 vNext crash-safe idempotency"
+            ],
+            "ordinals": [
+              11
             ]
           },
           "decision": {
@@ -7601,11 +4483,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              11
-            ],
             "names": [
               "RR-11 vNext terminal irreversibility"
+            ],
+            "ordinals": [
+              12
             ]
           },
           "decision": {
@@ -7619,11 +4501,11 @@
         },
         {
           "match": {
-            "ordinals": [
-              12
-            ],
             "names": [
               "RR-12 vNext external revalidation"
+            ],
+            "ordinals": [
+              13
             ]
           },
           "decision": {
@@ -7670,28 +4552,18 @@
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
     },
     {
-      "path": "tests/relay-fleet/scripts/fleet.test.js",
+      "path": "tests/relay-fleet/scripts/fleet-safety.test.js",
       "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
+      "classification": "preserve-invariant",
+      "rationale": "Proves immutable cohort publication, facts-authoritative child derivation, explicit issue binding, zero-write dry-run, legacy drain, and serial merge retry fail closed.",
+      "invariantIds": ["RR-01", "RR-02", "RR-05", "RR-10", "RR-12"]
     },
     {
-      "path": "tests/relay-fleet/scripts/merge-queue.test.js",
+      "path": "tests/relay-fleet/scripts/vnext-derived.test.js",
       "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-    },
-    {
-      "path": "tests/relay-fleet/scripts/relay-fleet.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
+      "classification": "preserve-invariant",
+      "rationale": "An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed.",
+      "invariantIds": ["RR-01", "RR-02"]
     },
     {
       "path": "tests/relay-merge/scripts/append-learnings.test.js",
@@ -7699,14 +4571,6 @@
       "classification": "implementation-detail-delete",
       "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
       "replacementCoverage": "Black-box invariant coverage at the vNext public command boundary."
-    },
-    {
-      "path": "tests/relay-merge/scripts/finalize-run-advisory-lane-reap.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
     },
     {
       "path": "tests/relay-merge/scripts/finalize-run-learnings-guard.test.js",
@@ -8967,12 +5831,13 @@
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
     },
     {
-      "path": "tests/relay-merge/scripts/review-gate.test.js",
+      "path": "tests/relay-merge/scripts/review-gate-core.test.js",
       "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
+      "classification": "preserve-invariant",
+      "rationale": "Protects the single authorized primary-review merge gate after secondary review policy removal.",
+      "invariantIds": [
+        "RR-07"
+      ]
     },
     {
       "path": "tests/relay-merge/scripts/run-full-gate.test.js",
@@ -9006,27 +5871,11 @@
       "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
     },
     {
-      "path": "tests/relay-plan/scripts/earned-rubric.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration directly exercises canonical invariant RR-02.",
-      "invariantIds": [
-        "RR-02"
-      ]
-    },
-    {
       "path": "tests/relay-plan/scripts/match-template.test.js",
       "owner": "runtime-core-reset",
       "classification": "implementation-detail-delete",
       "rationale": "Exercises a replaceable helper boundary rather than an enduring product invariant.",
       "replacementCoverage": "Black-box invariant and adapter conformance coverage in the vNext runtime."
-    },
-    {
-      "path": "tests/relay-plan/scripts/observation-context.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "implementation-detail-delete",
-      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-      "replacementCoverage": "Black-box invariant coverage at the vNext public command boundary."
     },
     {
       "path": "tests/relay-plan/scripts/persist-done-criteria.test.js",
@@ -9043,23 +5892,6 @@
       "classification": "implementation-detail-delete",
       "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
       "replacementCoverage": "Black-box invariant coverage at the vNext public command boundary."
-    },
-    {
-      "path": "tests/relay-plan/scripts/ready-light-rubric-validation.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration directly exercises canonical invariant RR-02.",
-      "invariantIds": [
-        "RR-02"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/risk-assurance-reference.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
     },
     {
       "path": "tests/relay-plan/scripts/rubric-reference-contract.test.js",
@@ -9123,61 +5955,12 @@
       "replacementCoverage": "Black-box invariant coverage at the vNext public command boundary."
     },
     {
-      "path": "tests/relay-review/scripts/advisory-lane-lease.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-review/scripts/advisory-lane-lifecycle-988.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-review/scripts/advisory-orchestration.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-review/scripts/advisory-review-schema.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-review/scripts/build-lane-reap-field-996.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
       "path": "tests/relay-review/scripts/convergence.test.js",
       "owner": "runtime-core-reset",
       "classification": "obsolete-surface-delete",
       "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
       "surface": "legacy runtime policy and configuration accretion",
       "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-review/scripts/invoke-reviewer.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration directly exercises canonical invariant RR-07.",
-      "invariantIds": [
-        "RR-07"
-      ]
     },
     {
       "path": "tests/relay-review/scripts/review-policy-reference.test.js",
@@ -9190,18 +5973,11 @@
     {
       "path": "tests/relay-review/scripts/review-round-policy.test.js",
       "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "This registration covers policy or bypass accretion removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
-    },
-    {
-      "path": "tests/relay-review/scripts/review-runner-advisory.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "obsolete-surface-delete",
-      "rationale": "Covers a policy, routing, assurance, catalog, or runtime-analytics surface removed by the vNext subtraction plan.",
-      "surface": "legacy runtime policy and configuration accretion",
-      "removalIssue": "#1134"
+      "classification": "preserve-invariant",
+      "rationale": "Deletion evidence prevents the retired round-cap helper from being restored or relocated.",
+      "invariantIds": [
+        "RR-11"
+      ]
     },
     {
       "path": "tests/relay-review/scripts/review-runner-capability-preflight.test.js",
@@ -9249,7 +6025,8 @@
       "classification": "compatibility-migration",
       "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
       "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
+      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold.",
+      "siteRules": []
     },
     {
       "path": "tests/relay-review/scripts/review-runner-prompt.test.js",
@@ -9261,22 +6038,6 @@
     },
     {
       "path": "tests/relay-review/scripts/review-runner-redispatch.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-    },
-    {
-      "path": "tests/relay-review/scripts/review-runner-reviewer-invoke.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "compatibility-migration",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "migrationTarget": "vNext immutable run facts and derived lifecycle action",
-      "removalGate": "Remove or reclassify only after shadow parity, cutover, and the legacy-reader retirement threshold."
-    },
-    {
-      "path": "tests/relay-review/scripts/review-runner-reviewer-swap.test.js",
       "owner": "runtime-core-reset",
       "classification": "compatibility-migration",
       "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
@@ -9791,7 +6552,7 @@
               28
             ],
             "names": [
-              "all-low-confidence changes_requested verdict applies as advisory pass while preserving findings"
+              "all-low-confidence changes_requested verdict remains blocking and preserves findings"
             ]
           },
           "decision": {
@@ -9842,7 +6603,7 @@
               31
             ],
             "names": [
-              "all-low-confidence changes_requested verdict is rejected by pass scope-drift gates"
+              "all-low-confidence changes_requested with scope drift remains blocking"
             ]
           },
           "decision": {
@@ -9859,7 +6620,7 @@
               32
             ],
             "names": [
-              "all-low-confidence changes_requested verdict is blocked by failed execution evidence"
+              "all-low-confidence changes_requested remains blocking without synthesized execution findings"
             ]
           },
           "decision": {
@@ -9876,7 +6637,7 @@
               33
             ],
             "names": [
-              "all-low-confidence changes_requested verdict is blocked by rubric gate failure"
+              "all-low-confidence changes_requested remains blocking without rubric-gate rewriting"
             ]
           },
           "decision": {
@@ -9893,7 +6654,7 @@
               34
             ],
             "names": [
-              "compact assurance escalates its first rubric gate failure immediately"
+              "persisted compact assurance is ignored and a rubric gate failure remains blocking"
             ]
           },
           "decision": {
@@ -9910,7 +6671,7 @@
               35
             ],
             "names": [
-              "standard assurance escalates a rubric gate as the second substantive failure"
+              "repeated rubric gate failure remains changes_requested without an assurance budget"
             ]
           },
           "decision": {
@@ -10327,7 +7088,7 @@
               59
             ],
             "names": [
-              "standard assurance admits internal repair verification and required post-publication verification"
+              "internal repair still requires post-publication verification without repair budgets"
             ]
           },
           "decision": {
@@ -11204,15 +7965,6 @@
       "rationale": "This registration directly exercises canonical invariant RR-07.",
       "invariantIds": [
         "RR-07"
-      ]
-    },
-    {
-      "path": "tests/relay-review/scripts/reviewer-score-authority.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration directly exercises canonical invariant RR-06.",
-      "invariantIds": [
-        "RR-06"
       ]
     },
     {

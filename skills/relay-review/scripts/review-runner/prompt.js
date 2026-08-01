@@ -2,10 +2,6 @@ const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("../review-schema");
 const { readText } = require("./common");
 const { formatPriorRoundContext, loadProjectConventions } = require("./context");
-const {
-  buildEvaluationSections,
-  buildRubricScoreValidationRule,
-} = require("./evaluation-channels");
 const { getAppliedVerdict } = require("./verdict");
 
 const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "..", "references", "reviewer-prompt.md");
@@ -126,7 +122,15 @@ function buildPrompt({
   if (prBodySnapshotSection) sections.push("", prBodySnapshotSection);
   sections.push("", template);
 
-  sections.push(...buildEvaluationSections(rubricLoad));
+  if (rubricLoad?.content) {
+    sections.push(
+      "",
+      "## Planning Anchor",
+      "Use this persisted artifact as context for the frozen Done Criteria. Do not invent a separate scoring policy.",
+      "",
+      rubricLoad.content,
+    );
+  }
 
   const priorContext = formatPriorRoundContext(runDir, round);
   if (priorContext) {
@@ -151,8 +155,7 @@ function buildPrompt({
     "- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.",
     "- For `changes_requested` issues, optionally include `factor`, `attempted_approach`, and `fix_direction` when that context would help a later re-dispatch avoid repeating a rejected approach.",
     "- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.",
-    buildRubricScoreValidationRule(rubricLoad),
-    "- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `score`, `target_score`, `status`, `tier`, and `notes`.",
+    "- Set `rubric_scores` to `[]`; the primary review verdict and its evidence are authoritative.",
     "- `scope_drift` is always required. Set `scope_drift.creep` to `[]` if no out-of-scope changes. Set `scope_drift.missing` to list each Done Criteria item with status `verified`, `partial`, `not_done`, or `changed`.",
     "- If `scope_drift.missing` contains any `not_done`, `changed`, or `partial` entries, verdict cannot be `pass`.",
   ].filter(Boolean);

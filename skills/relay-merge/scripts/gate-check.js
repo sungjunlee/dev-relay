@@ -47,7 +47,7 @@ const { stampPrNumberUnderLock } = require("../../relay-dispatch/scripts/manifes
 const {
   findUnknownFlags,
   getPositionals,
-  modeLabel,
+  modeLabel: formatCliModeLabel,
   readArg,
   schemaHasFlag,
 } = require("../../relay-dispatch/scripts/cli-args");
@@ -62,26 +62,30 @@ function getGateCheckRepoRoot() {
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
-const CLI_ARG_OPTIONS = { commandName: "gate-check", reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: ["--skip", "--dry-run", "--json", "--help", "-h"],
+  booleanFlags: ["--dry-run", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--skip"],
+};
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (!args.length || hasCliFlag("--help") || hasCliFlag("-h")) {
   console.log("Usage: gate-check.js <PR-number> [--skip <reason>] [--dry-run] [--json]");
   console.log("\nVerify relay-review audit trail before merge.");
   console.log("\nOptions:");
-  console.log(`  --skip <reason>   ${modeLabel("--skip")} Skip review with documented reason (writes PR comment)`);
-  console.log(`  --dry-run         ${modeLabel("--dry-run")} Read comment JSON from stdin instead of gh CLI`);
-  console.log(`  --json            ${modeLabel("--json")} Output as JSON`);
+  console.log(`  --skip <reason>   ${formatCliModeLabel("--skip", CLI_ARG_OPTIONS)} Skip review with documented reason (writes PR comment)`);
+  console.log(`  --dry-run         ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Read comment JSON from stdin instead of gh CLI`);
+  console.log(`  --json            ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output as JSON`);
   process.exit(hasCliFlag("--help") || hasCliFlag("-h") ? 0 : 1);
 }
 
-const UNKNOWN_FLAGS = findUnknownFlags(args, "gate-check");
+const UNKNOWN_FLAGS = findUnknownFlags(args, CLI_ARG_OPTIONS);
 if (UNKNOWN_FLAGS.length) {
   console.error(`Error: unknown flags: ${UNKNOWN_FLAGS.join(", ")}`);
   process.exit(1);
 }
 
-const PR_NUM = getPositionals(args, "gate-check")[0];
+const PR_NUM = getPositionals(args, CLI_ARG_OPTIONS)[0];
 if (!PR_NUM || !/^\d+$/.test(PR_NUM)) {
   console.error("Error: PR number is required (positive integer)");
   process.exit(1);
@@ -249,18 +253,6 @@ const STATUS_RENDERERS = {
     console.log(`✗ PR #${prNumber}: reviewer_login was required for this run but could not be recorded — merge blocked`);
     console.log("  Origin resolved to a non-default GitHub host but gh api user --hostname <host> failed during relay-review.");
     console.log("  Fix the host auth (export GH_HOST=<host> or gh auth switch --hostname <host>), rerun relay-review, then retry.");
-  },
-  missing_hardened_advisory(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: hardened review assurance requires advisory evidence — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
-  },
-  invalid_hardened_advisory(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: hardened advisory artifact is invalid — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
-  },
-  hardened_advisory_required_findings(result, prNumber) {
-    console.log(`✗ PR #${prNumber}: hardened advisory review reported required findings — merge blocked`);
-    if (result.reason) console.log(`  ${result.reason}`);
   },
   hardened_execution_evidence_failed(result, prNumber) {
     console.log(`✗ PR #${prNumber}: hardened execution evidence failed — merge blocked`);

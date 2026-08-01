@@ -36,11 +36,18 @@ const {
 } = require("./manifest/paths");
 const { getActorName, writeManifest } = require("./manifest/store");
 const { readTextFileWithoutFollowingSymlinks } = require("./manifest/rubric");
-const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const { findUnknownFlags, modeLabel: formatCliModeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendEventLineToPath, appendRunEvent, EVENTS } = require("./relay-events");
 const { classifyChecks, fetchChecks } = require("./wait-for-check");
-const CLI_ARG_OPTIONS = { commandName: "recover-state", reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = {
+  reservedFlags: [
+    "--repo", "--run-id", "--manifest", "--to", "--reason", "--force", "--dry-run", "--json", "--help", "-h",
+    "--allow-same-head", "--require-pr-body-change", "--require-checks-green",
+  ],
+  booleanFlags: ["--force", "--dry-run", "--json", "--help", "-h", "--allow-same-head", "--require-pr-body-change", "--require-checks-green"],
+  verbatimValueFlags: ["--repo", "--manifest", "--reason"],
+};
 const PR_BODY_FETCH_TIMEOUT_MS = 15000;
 
 // Whitelist: recovery transitions that the normal dispatch/review/merge flow does NOT support.
@@ -144,17 +151,17 @@ function printUsage(stream = console.log) {
     "Usage: recover-state.js (--repo <path> --run-id <id> | --manifest <path>) --to <state> --reason <text> [--force] [--dry-run] [--json]\n" +
     "\n" +
     "Options:\n" +
-    `  --repo <path>     ${modeLabel("--repo")} Repository root\n` +
-    `  --run-id <id>     ${modeLabel("--run-id")} Relay run identifier\n` +
-    `  --manifest <path> ${modeLabel("--manifest")} Explicit manifest path\n` +
-    `  --to <state>      ${modeLabel("--to")} Recovery target state\n` +
-    `  --reason <text>   ${modeLabel("--reason")} Audit reason\n` +
-    `  --force           ${modeLabel("--force")} Confirm selected recovery transitions\n` +
-    `  --allow-same-head ${modeLabel("--allow-same-head")} Allow same-HEAD review recovery with exactly one same-HEAD evidence flag\n` +
-    `  --require-pr-body-change ${modeLabel("--require-pr-body-change")} Require current PR body to differ from the latest review snapshot\n` +
-    `  --require-checks-green ${modeLabel("--require-checks-green")} Require the pending-checks marker at HEAD and all-green live gh pr checks\n` +
-    `  --dry-run         ${modeLabel("--dry-run")} Print result without writing\n` +
-    `  --json            ${modeLabel("--json")} Output JSON\n` +
+    `  --repo <path>     ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root\n` +
+    `  --run-id <id>     ${formatCliModeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run identifier\n` +
+    `  --manifest <path> ${formatCliModeLabel("--manifest", CLI_ARG_OPTIONS)} Explicit manifest path\n` +
+    `  --to <state>      ${formatCliModeLabel("--to", CLI_ARG_OPTIONS)} Recovery target state\n` +
+    `  --reason <text>   ${formatCliModeLabel("--reason", CLI_ARG_OPTIONS)} Audit reason\n` +
+    `  --force           ${formatCliModeLabel("--force", CLI_ARG_OPTIONS)} Confirm selected recovery transitions\n` +
+    `  --allow-same-head ${formatCliModeLabel("--allow-same-head", CLI_ARG_OPTIONS)} Allow same-HEAD review recovery with exactly one same-HEAD evidence flag\n` +
+    `  --require-pr-body-change ${formatCliModeLabel("--require-pr-body-change", CLI_ARG_OPTIONS)} Require current PR body to differ from the latest review snapshot\n` +
+    `  --require-checks-green ${formatCliModeLabel("--require-checks-green", CLI_ARG_OPTIONS)} Require the pending-checks marker at HEAD and all-green live gh pr checks\n` +
+    `  --dry-run         ${formatCliModeLabel("--dry-run", CLI_ARG_OPTIONS)} Print result without writing\n` +
+    `  --json            ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON\n` +
     "\n" +
     "Whitelisted recovery transitions:\n" +
     RECOVERY_TRANSITIONS.map((t) => {
@@ -521,7 +528,7 @@ function main() {
     process.exit(hasCliFlag("--help") || hasCliFlag("-h") ? 0 : 1);
   }
 
-  const unknownFlags = findUnknownFlags(args, "recover-state");
+  const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   }

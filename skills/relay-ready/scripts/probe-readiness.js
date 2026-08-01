@@ -7,7 +7,7 @@ const path = require("path");
 const scoreReadiness = require("./score-readiness");
 const { READINESS_CONDITIONS } = require("./score-readiness");
 const { appendEventLineToPath, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
-const { bindCliArgs } = require("../../relay-dispatch/scripts/cli-args");
+const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
 
 const KNOWN_FLAGS = [
   "--body",
@@ -18,6 +18,11 @@ const KNOWN_FLAGS = [
   "--help",
   "-h",
 ];
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--body", "--body-file", "--manifest"],
+};
 
 const CONDITION_LABELS = Object.freeze({
   [READINESS_CONDITIONS.VAGUE_VERB]: "vague verb",
@@ -204,10 +209,9 @@ function usage() {
 
 function main(argv = process.argv.slice(2)) {
   const startedAt = process.hrtime.bigint();
-  const cliArgs = bindCliArgs(argv, {
-    commandName: "probe-readiness",
-    reservedFlags: KNOWN_FLAGS,
-  });
+  const unknownFlags = findUnknownFlags(argv, CLI_ARG_OPTIONS);
+  if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+  const cliArgs = bindCliArgs(argv, CLI_ARG_OPTIONS);
   const jsonOut = cliArgs.hasFlag("--json");
 
   if (cliArgs.hasFlag(["--help", "-h"])) {
@@ -245,6 +249,11 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
+    if (/^unknown flags:/.test(String(error?.message || ""))) {
+      process.stderr.write(`${error.message}\n`);
+      process.exitCode = 1;
+      return;
+    }
     const envelope = buildDegradedEnvelope(error, 0);
     process.stdout.write(`${JSON.stringify(envelope)}\n`);
     process.exitCode = 0;

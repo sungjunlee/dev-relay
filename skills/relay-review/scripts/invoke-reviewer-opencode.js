@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Invoke OpenCode as a structured primary or advisory reviewer.
+ * Invoke OpenCode as a structured primary reviewer.
  */
 
 const fs = require("fs");
 const path = require("path");
 const {
   bindCliArgs,
-  modeLabel,
+  findUnknownFlags,
+  modeLabel: formatCliModeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
   recoverExecStdout,
@@ -15,54 +16,32 @@ const {
   summarizeFailure,
 } = require("./reviewer-helpers");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
-const {
-  parseAdvisoryReview,
-  validateAdvisoryProfile,
-  writeAdvisorySchemaFailure,
-} = require("./advisory-review-schema");
+const { opencodeReviewArgs } = require("./reviewer-control-invocations");
 const {
   execFileSyncWithStdinPrompt,
 } = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help", "-h"];
-const cliArgs = bindCliArgs(args, {
-  commandName: "invoke-reviewer-opencode",
+const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
+const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-});
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--prompt-file"],
+};
+const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
+if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 const REVIEW_TIMEOUT_ENV = "RELAY_OPENCODE_REVIEW_TIMEOUT";
 const DEFAULT_REVIEW_TIMEOUT = "1800s";
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
-  console.log("Usage: invoke-reviewer-opencode.js --repo <path> --prompt-file <path> [--phase <name>] [--model <name>] [--profile <name>] [--json]");
+  console.log("Usage: invoke-reviewer-opencode.js --repo <path> --prompt-file <path> [--model <name>] [--json]");
   console.log("\nOptions:");
-  console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
-  console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
-  console.log(`  --model <name>       ${modeLabel("--model")} Model override`);
-  console.log(`  --phase <name>       ${modeLabel("--phase")} primary_review or advisory_review`);
-  console.log(`  --profile <name>     ${modeLabel("--profile")} Advisory profile, defaults to blindspot`);
-  console.log(`  --json               ${modeLabel("--json")} Output JSON`);
+  console.log(`  --repo <path>        ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root`);
+  console.log(`  --prompt-file <path> ${formatCliModeLabel("--prompt-file", CLI_ARG_OPTIONS)} Prompt bundle path`);
+  console.log(`  --model <name>       ${formatCliModeLabel("--model", CLI_ARG_OPTIONS)} Model override`);
+  console.log(`  --json               ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
-}
-
-function resolvePhase(value) {
-  const phase = String(value || "advisory_review").trim();
-  if (phase !== "primary_review" && phase !== "advisory_review") {
-    throw new Error(`--phase must be primary_review or advisory_review, got ${JSON.stringify(value)}`);
-  }
-  return phase;
-}
-
-function readAdvisoryProfileArg(argv) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = String(argv[index]);
-    if (token === "--profile") {
-      const value = argv[index + 1];
-      return value && !String(value).startsWith("--") ? value : undefined;
-    }
-    if (token.startsWith("--profile=")) return token.slice("--profile=".length);
-  }
-  return undefined;
 }
 
 function parseReviewTimeoutMs(value) {
@@ -90,51 +69,32 @@ function isExecTimeout(error) {
   return error?.code === "ETIMEDOUT" || (error?.signal === "SIGKILL" && error?.killed);
 }
 
-function buildPrompt(promptText, phase) {
-  if (phase === "primary_review") {
-    return [
-      "[NON-INTERACTIVE REVIEW]",
-      "Review the provided bundle and return only raw JSON matching this schema:",
-      JSON.stringify(REVIEWER_VERDICT_JSON_SCHEMA),
-      "The first byte of your response must be `{` and the last byte must be `}`.",
-      "Do not wrap the response in markdown fences.",
-      "Do not include prose, analysis, acknowledgements, or explanations outside the JSON object.",
-      "Start with the diff for overview. Then read callers/imports of changed functions to verify integration.",
-      "Do not modify files, create commits, or write comments. Treat the checkout as read-only.",
-      "Relay will check git status after this process and escalate any worktree mutation as a policy violation.",
-      "",
-      promptText,
-    ].join("\n");
-  }
+function buildPrompt(promptText) {
   return [
-    "[NON-INTERACTIVE ADVISORY REVIEW]",
-    "Return only JSON matching the advisory review shape in the prompt.",
+    "[NON-INTERACTIVE REVIEW]",
+    "Review the provided bundle and return only raw JSON matching this schema:",
+    JSON.stringify(REVIEWER_VERDICT_JSON_SCHEMA),
+    "The first byte of your response must be `{` and the last byte must be `}`.",
     "Do not wrap the response in markdown fences.",
+    "Do not include prose, analysis, acknowledgements, or explanations outside the JSON object.",
+    "Start with the diff for overview. Then read callers/imports of changed functions to verify integration.",
     "Do not modify files, create commits, or write comments. Treat the checkout as read-only.",
+    "Relay will check git status after this process and escalate any worktree mutation as a policy violation.",
     "",
     promptText,
   ].join("\n");
 }
 
-function parseResult(result, phase, profile) {
-  if (phase === "primary_review") {
-    return parseReviewerVerdictObject(result, {
-      adapter: "opencode",
-      phase,
-      description: "review verdict",
-    });
-  }
-  return parseAdvisoryReview(result, {
+function parseResult(result) {
+  return parseReviewerVerdictObject(result, {
     adapter: "opencode",
-    phase,
-    profile,
+    phase: "primary_review",
+    description: "review verdict",
   });
 }
 
-function buildEmptyOutputDiagnosticCommand({ opencodeBin, model, phase }) {
-  const prompt = phase === "primary_review"
-    ? "Return exactly {\"verdict\":\"pass\",\"summary\":\"ok\",\"contract_status\":\"pass\",\"quality_review_status\":\"pass\",\"next_action\":\"ready_to_merge\",\"issues\":[],\"rubric_scores\":[],\"scope_drift\":{\"creep\":[],\"missing\":[]}} and nothing else."
-    : "Return exactly {\"profile\":\"blindspot\",\"summary\":\"ok\",\"required_findings\":[],\"advisory_findings\":[],\"duplicate_or_low_confidence\":[]} and nothing else.";
+function buildEmptyOutputDiagnosticCommand({ opencodeBin, model }) {
+  const prompt = "Return exactly {\"verdict\":\"pass\",\"summary\":\"ok\",\"contract_status\":\"pass\",\"quality_review_status\":\"pass\",\"next_action\":\"ready_to_merge\",\"issues\":[],\"rubric_scores\":[],\"scope_drift\":{\"creep\":[],\"missing\":[]}} and nothing else.";
   const command = [opencodeBin || "opencode", "run"];
   if (model) command.push("-m", model);
   command.push(JSON.stringify(prompt));
@@ -145,10 +105,6 @@ function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
   const model = cliArgs.getArg("--model");
-  const phase = resolvePhase(cliArgs.getArg("--phase", "advisory_review"));
-  const advisoryProfile = phase === "advisory_review"
-    ? validateAdvisoryProfile(readAdvisoryProfileArg(args) || "blindspot")
-    : "blindspot";
   const opencodeBin = process.env.RELAY_OPENCODE_BIN || "opencode";
   const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
   const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
@@ -158,10 +114,9 @@ function main() {
   }
 
   const promptText = fs.readFileSync(promptFile, "utf-8").trim();
-  const fullPrompt = buildPrompt(promptText, phase);
+  const fullPrompt = buildPrompt(promptText);
 
-  const execArgs = ["run"];
-  if (model) execArgs.push("-m", model);
+  const execArgs = opencodeReviewArgs({ model });
 
   let result;
   try {
@@ -178,9 +133,9 @@ function main() {
     }).trim();
   } catch (error) {
     if (isExecTimeout(error)) {
-      const diagnosticCommand = buildEmptyOutputDiagnosticCommand({ opencodeBin, model, phase });
+      const diagnosticCommand = buildEmptyOutputDiagnosticCommand({ opencodeBin, model });
       throw new Error(
-        `opencode ${phase} reviewer timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
+        `opencode primary reviewer timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
         "The opencode run invocation did not return before the parent-process timeout, so relay cannot treat this as healthy review evidence. " +
         `First verify OpenCode non-interactive model/provider output with: ${diagnosticCommand}. ` +
         "If that minimal command also times out, record this as an OpenCode CLI/provider non-interactive blocker; otherwise retry with a larger review timeout or split the review scope."
@@ -188,20 +143,20 @@ function main() {
     }
     const recovered = recoverExecStdout(error);
     if (!recovered) {
-      throw new Error(`opencode ${phase} reviewer failed: ${summarizeFailure(error)}`);
+      throw new Error(`opencode primary reviewer failed: ${summarizeFailure(error)}`);
     }
     result = recovered;
   }
 
   if (!result) {
-    const diagnosticCommand = buildEmptyOutputDiagnosticCommand({ opencodeBin, model, phase });
+    const diagnosticCommand = buildEmptyOutputDiagnosticCommand({ opencodeBin, model });
     throw new Error(
-      `opencode ${phase} reviewer produced empty stdout, so relay cannot treat this as healthy review evidence. ` +
+      `opencode primary reviewer produced empty stdout, so relay cannot treat this as healthy review evidence. ` +
       `First verify OpenCode non-interactive model/provider output with: ${diagnosticCommand}. ` +
       "If that minimal command is also empty, record this as an OpenCode CLI/provider non-interactive blocker; otherwise tighten the review prompt or increase the live dogfood command timeout."
     );
   }
-  const parsed = parseResult(result, phase, advisoryProfile);
+  const parsed = parseResult(result);
   const output = JSON.stringify(parsed);
 
   if (cliArgs.hasFlag("--json")) {
@@ -215,6 +170,5 @@ try {
   main();
 } catch (error) {
   console.error(`Error: ${error.message}`);
-  writeAdvisorySchemaFailure(error);
   process.exit(1);
 }

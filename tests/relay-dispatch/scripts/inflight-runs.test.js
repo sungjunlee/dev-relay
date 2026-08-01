@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -18,6 +19,8 @@ const {
   formatInflightCollisionError,
   inferIssueFromPromptOrBranch,
 } = require("../../../skills/relay-dispatch/scripts/manifest/inflight-runs");
+const { createRunRecord } = require("../../../skills/relay-dispatch/scripts/run-store");
+const { getRunDir } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-inflight-"));
@@ -58,6 +61,30 @@ function writeRunWithState({
   return { runId, manifestPath: layout.manifestPath };
 }
 
+function writeVnextRun({ repoRoot, issueNumber, facts = [], corruptFacts = null }) {
+  const runId = createRunId({ issueNumber, branch: `issue-${issueNumber}` });
+  const runDir = getRunDir(repoRoot, runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  const canonical = fs.realpathSync(runDir);
+  const donePath = path.join(canonical, "done-criteria.md");
+  fs.writeFileSync(donePath, "done\n");
+  createRunRecord({ runDir: canonical, record: {
+    version: 3,
+    run_id: runId,
+    repo: { root: repoRoot, remote: "owner/repo" },
+    git: { branch: `issue-${issueNumber}`, base_branch: "main", worktree: repoRoot, start_sha: "a".repeat(40) },
+    contract: { done_criteria_path: donePath, done_criteria_sha256: crypto.createHash("sha256").update("done\n").digest("hex") },
+    roles: { orchestrator: "codex", executor: "codex", reviewer: "claude" },
+    parent: null,
+    ownership_digest: null,
+    created_at: new Date().toISOString(),
+  } });
+  const eventsPath = path.join(canonical, "events.jsonl");
+  if (corruptFacts !== null) fs.writeFileSync(eventsPath, corruptFacts);
+  else if (facts.length) fs.writeFileSync(eventsPath, `${facts.map((fact) => JSON.stringify({ ...fact, run_id: runId })).join("\n")}\n`);
+  return { runId, runDir: canonical };
+}
+
 test("inferIssueFromPromptOrBranch: matches issue-N in branch", () => {
   assert.equal(inferIssueFromPromptOrBranch("issue-408", null), 408);
   assert.equal(inferIssueFromPromptOrBranch("feature/issue-99", null), 99);
@@ -77,6 +104,48 @@ test("findInflightRunsForIssue: returns empty when no manifests exist", () => {
   process.env.RELAY_HOME = newRunRelayHome();
   const repoRoot = setupRepo();
   assert.deepEqual(findInflightRunsForIssue(repoRoot, 408), []);
+});
+
+test("findInflightRunsForIssue: discovers run.json-only crash residue with no legacy manifest", () => {
+  process.env.RELAY_HOME = newRunRelayHome();
+  const repoRoot = setupRepo();
+  const child = writeVnextRun({ repoRoot, issueNumber: 409 });
+  const result = findInflightRunsForIssue(repoRoot, 409);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].runId, child.runId);
+  assert.equal(result[0].source, "vnext");
+  assert.equal(result[0].state, "no_attempt");
+  assert.equal(result[0].manifestPath, null);
+});
+
+test("findInflightRunsForIssue: malformed vNext facts fail closed and dedupe a forged legacy terminal manifest", () => {
+  process.env.RELAY_HOME = newRunRelayHome();
+  const repoRoot = setupRepo();
+  const child = writeVnextRun({ repoRoot, issueNumber: 410, corruptFacts: "not-json\n" });
+  writeManifest(path.join(path.dirname(getRunDir(repoRoot, child.runId)), `${child.runId}.md`), {
+    run_id: child.runId, state: STATES.MERGED, git: { working_branch: "issue-410" },
+  });
+  const result = findInflightRunsForIssue(repoRoot, 410);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].runId, child.runId);
+  assert.equal(result[0].state, "operator_attention");
+  assert.match(result[0].reason, /invalid fact journal/);
+});
+
+test("findInflightRunsForIssue: skips vNext only after a conflict-free durable terminal fold", () => {
+  process.env.RELAY_HOME = newRunRelayHome();
+  const repoRoot = setupRepo();
+  const closed = writeVnextRun({ repoRoot, issueNumber: 411, facts: [{
+    event_id: "closed-1", type: "run_closed", at: new Date().toISOString(), actor: "operator",
+    payload: { reason: "done", operator: "operator", last_sha: "a".repeat(40), pr_number: null },
+  }] });
+  assert.ok(closed.runId);
+  assert.deepEqual(findInflightRunsForIssue(repoRoot, 411), []);
+
+  writeVnextRun({ repoRoot, issueNumber: 412, corruptFacts: "{\"partial\":" });
+  const torn = findInflightRunsForIssue(repoRoot, 412);
+  assert.equal(torn.length, 1);
+  assert.equal(torn[0].state, "operator_attention");
 });
 
 test("findInflightRunsForIssue: returns non-terminal runs for the matching issue", () => {

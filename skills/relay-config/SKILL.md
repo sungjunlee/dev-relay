@@ -1,124 +1,36 @@
 ---
 name: relay-config
-argument-hint: "[setup request or command]"
-description: Interactive setup for relay routes. Use when the user asks to set up relay, configure company/personal relay routing, enable OpenCode or Pi, resolve model names, add provider/model routes, check advisory-review routing, or run relay-config doctor/check.
-compatibility: Requires Node.js 18+ and the sibling relay-dispatch skill.
+description: Inspect relay adapters and validate explicit dispatch or primary-review selections.
+compatibility: Requires Node.js 18+.
 metadata:
-  related-skills: "relay, relay-dispatch, relay-review"
-  keywords: "relay setup, relay config, route config, model route, opencode, pi, advisory review, 릴레이 설정, 회사 설정, 개인 설정"
-  entry: scripts/relay-config.js
+  related-skills: "relay, relay-plan, relay-dispatch, relay-review"
+  keywords: "설정, 어댑터, 모델, config, adapter, model"
 ---
-## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; writes go to `${RELAY_HOME:-~/.relay}/routes.json`; legacy `~/.relay/policy.json`, repo `.relay/policy.json`, and `~/.relay/executors.json` are read fallback only when routes.json is absent; optional `RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS` defaults model-list probes to `20000` ms.
-- Files: effective relay routes, optional repo `.relay/routes.json`, legacy fallback files listed above.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/relay-config.js`.
 
 # Relay Config
 
-Set up relay routes interactively. The user should not have to memorize command flags.
-
 ## Use when
 
-- The user asks to set up or configure relay
-- The user wants company-safe strict mode, personal open mode, OpenCode/Pi opt-in, or advisory-review routing
-- The user asks whether a provider/model route such as `example/opencode-model-*` or `openai/*` is available
-- The user asks to resolve a short model name such as `glm-5.2` for a known actor
-- The user asks whether model catalog entries are fresh or stale
-- The user asks to create, show, or remove a route preset such as `light`, `diverse`, or `hardened`
-- The user asks to run relay doctor/check
+- Inspecting installed adapter availability
+- Checking whether an explicit executor/reviewer selection supports a phase
+- Recording an explicit model selection without resolving aliases or catalogs
 
-## Do not use when
-
-- Dispatching implementation work - use `relay-dispatch`
-- Reviewing PRs - use `relay-review`
-- Coordinating parallel implementation leaves - use `relay-fleet`
-
-## Workflow
-
-### 1. Inspect current state
-
-Always start with:
+## Commands
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" inspect --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" doctor --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" \
+  check --phase dispatch --executor opencode --model provider/model --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" \
+  check --phase review --reviewer codex --json
 ```
 
-Use the output to identify the effective routes, source paths, installed harnesses, and whether `~/.relay/executors.json` exists as a legacy fallback.
+Valid operator phases are `dispatch` and `review`. This command does not mutate
+configuration: runtime selection comes only from explicit CLI input followed by
+the immutable run binding and the adapter provider default.
 
-### 2. Infer the setup intent
+## Safety
 
-Infer from the user's words before asking questions:
-
-- `company`, `work`, `회사` -> strict company profile
-- `personal`, `home`, `집`, `개인` -> open personal profile
-- `managed only`, `codex/claude only` -> no unmanaged provider/model route opt-in
-- routes containing `/`, such as `example/opencode-model-*`, `example/pi-*`, `openai/*`, or `ollama/*` -> provider/model route patterns
-- `advisory`, `reviewer`, `documentation`, `docs` -> likely advisory-review phases
-- `preset`, `light`, `diverse`, `hardened`, `프리셋`, `가볍게`, `싸게`, `하드하게` -> preset CRUD or inspection
-
-Ask only for missing decisions, one at a time. Use plain language and wait for the user's answer. Do not use host-specific question primitives as the only path; this skill must work in both Claude Code and Codex.
-
-### 3. Propose before writing
-
-Before mutating routes, show a concise proposal:
-
-- profile to initialize or keep (`company` writes `strict: true`; `personal` writes `strict: false`)
-- managed CLIs that remain model-less (`codex`, `claude`)
-- provider/model routes to add
-- phases and actors for each route
-- default actors to set, if any
-- preset name and bundle fields (`dispatch`, `review`, `advisory_review`, `review_assurance`), if requested
-
-Ask for confirmation. If the user already explicitly approved the exact route changes in the same request, proceed and state what will be written.
-
-### 4. Apply with deterministic commands
-
-Use the wrapper for shorthand, or pass through full flags:
-
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" init company
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" add-route 'example/opencode-model-*' --phase dispatch,advisory_review --executor opencode
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" resolve-model --phase review --reviewer opencode --model glm-5.2 --json
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" catalog-report --json
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" set-default advisory_review.reviewer opencode
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset add light --dispatch opencode:example/opencode-model-fast
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset show light
-```
-
-Generated company and personal profiles must not pin Codex or Claude model names. Do not hardcode company-specific route defaults; use the user's supplied provider/model route patterns.
-
-Consult `references/model-catalog.md` only when live model-list probes fail, the user asks for a model recommendation, or the user asks for catalog freshness; otherwise prefer `doctor` probe output or the user's supplied model id.
-
-### 5. Verify
-
-After changes, run:
-
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" doctor
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" check dispatch opencode example/opencode-model-fast
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" check review opencode example/opencode-model-fast
-```
-
-Adjust the `check` tuple to match the actual actor, phase, and route that was enabled. Report denied tuples clearly and do not treat a denied OpenCode/Pi route as configured.
-
-## Power-user shorthand
-
-The wrapper accepts common shorthand and delegates to `relay-dispatch/scripts/relay-config.js`:
-
-| User form | Core command |
-| --- | --- |
-| `init company` | `init --profile company` |
-| `init personal` | `init --profile personal` |
-| `show` | `show --effective` |
-| `doctor` | `doctor` |
-| `catalog-report` | `catalog-report` |
-| `resolve-model --phase review --reviewer opencode --model glm-5.2` | `resolve-model --phase review --reviewer opencode --model glm-5.2` |
-| `add-route example/opencode-model-* --phase dispatch --executor opencode` | `add-route example/opencode-model-* --phase dispatch --executor opencode` |
-| `preset add light --dispatch opencode:example/opencode-model-fast` | `preset add light --dispatch opencode:example/opencode-model-fast` |
-| `preset remove light` | `preset remove light` |
-| `preset show light` | `preset show light` |
-| `check dispatch opencode example/opencode-model-fast` | `check --phase dispatch --executor opencode --model example/opencode-model-fast` |
-| `check review opencode example/opencode-model-fast` | `check --phase review --reviewer opencode --model example/opencode-model-fast` |
-| `check advisory_review pi example/pi-model-fast` | `check --phase advisory_review --reviewer pi --model example/pi-model-fast` |
-
-Full flag forms continue to pass through. Route semantics live in the sibling `relay-dispatch` script, not this wrapper.
+- Keep executor/reviewer and model selections explicit.
+- Run `doctor --json` to inspect CLI availability.
+- Treat persisted legacy route and model-hint fields as inert historical data.

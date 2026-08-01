@@ -16,9 +16,6 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const {
-  COMMAND_FLAGS,
-} = require("../../../skills/relay-dispatch/scripts/cli-schema");
-const {
   EXECUTION_EVIDENCE_FILENAME,
   writeExecutionEvidence,
 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
@@ -157,9 +154,8 @@ function readEvidence(fixture) {
 }
 
 test("rebrand-evidence flags are registered with the CLI schema", () => {
-  assert.deepEqual(COMMAND_FLAGS["rebrand-evidence"], [
-    "--repo", "--run-id", "--manifest", "--reason", "--rebase-onto-base", "--dry-run", "--json", "--help",
-  ]);
+  assert.match(fs.readFileSync(SCRIPT, "utf-8"), /const CLI_ARG_OPTIONS = \{/);
+  assert.match(fs.readFileSync(SCRIPT, "utf-8"), /reservedFlags:/);
 });
 
 test("happy path rewrites stale evidence to current HEAD and emits one audit event", () => {

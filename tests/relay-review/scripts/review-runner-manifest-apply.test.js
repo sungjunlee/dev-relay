@@ -6,7 +6,6 @@ const os = require("os");
 const path = require("path");
 
 const { STATES, updateManifestState } = require("../../../skills/relay-dispatch/scripts/manifest/lifecycle");
-const { recordAppliedReviewBudget } = require("../../../skills/relay-dispatch/scripts/manifest/review-budget");
 const { createManifestSkeleton, ensureRunLayout } = require("../../../skills/relay-dispatch/scripts/manifest/store");
 const {
   applyPolicyViolationToManifest,
@@ -173,18 +172,6 @@ function assertManifestWriteParity(actual, before, expected) {
   assert.deepEqual(normalizeUpdatedTimestamp(actual), normalizeUpdatedTimestamp(expected));
 }
 
-function expectedAppliedBudget(manifest, {
-  phase = "post_publication",
-  protocolVerification = false,
-  substantiveFailure = false,
-} = {}) {
-  return recordAppliedReviewBudget(manifest, {
-    phase,
-    protocolVerification,
-    substantiveFailure,
-  });
-}
-
 test("manifest-apply/applyVerdictToManifest preserves the PASS field-write contract", () => {
   const manifest = createManifestInState(STATES.REVIEW_PENDING);
   const result = applyVerdictToManifest(
@@ -208,9 +195,6 @@ test("manifest-apply/applyVerdictToManifest preserves the PASS field-write contr
     review: {
       ...manifest.review,
       rounds: 1,
-      round_budget: expectedAppliedBudget(manifest, {
-        protocolVerification: true,
-      }),
       last_review_phase: "post_publication",
       latest_verdict: "lgtm",
       repeated_issue_count: 0,
@@ -242,53 +226,12 @@ test("manifest-apply/applyVerdictToManifest maps internal PASS to publish_pendin
     review: {
       ...manifest.review,
       rounds: 1,
-      round_budget: expectedAppliedBudget(manifest, {
-        phase: "internal",
-        protocolVerification: true,
-      }),
       last_review_phase: "internal",
       latest_verdict: "internal_lgtm",
       repeated_issue_count: 0,
       last_reviewed_sha: "abc123",
       last_gate: null,
     },
-  });
-});
-
-test("manifest-apply migrates legacy delayed-publication rounds before applying public PASS", () => {
-  const manifest = createManifestInState(STATES.REVIEW_PENDING);
-  const { round_budget: _legacyMissingBudget, ...legacyReview } = manifest.review;
-  const legacy = {
-    ...manifest,
-    dispatch: {
-      ...(manifest.dispatch || {}),
-      publish_policy: "after-internal-review",
-    },
-    review: {
-      ...legacyReview,
-      rounds: 2,
-      latest_verdict: "internal_lgtm",
-    },
-  };
-
-  const result = applyVerdictToManifest(
-    legacy,
-    makeVerdict("pass", "ready_to_merge"),
-    3,
-    189,
-    "abc123",
-    0
-  );
-
-  assert.equal(result.state, STATES.READY_TO_MERGE);
-  assert.equal(result.review.last_review_phase, "post_publication");
-  assert.deepEqual(result.review.round_budget.consumed.applied_by_phase, {
-    internal: 2,
-    post_publication: 1,
-  });
-  assert.deepEqual(result.review.round_budget.consumed.protocol_verifications, {
-    internal: 1,
-    post_publication: 1,
   });
 });
 
@@ -341,9 +284,6 @@ test("manifest-apply/applyVerdictToManifest fail-closes PASS with the full rubri
     review: {
       ...manifest.review,
       rounds: 2,
-      round_budget: expectedAppliedBudget(manifest, {
-        substantiveFailure: true,
-      }),
       last_review_phase: "post_publication",
       latest_verdict: "rubric_state_failed_closed",
       repeated_issue_count: 0,
@@ -384,9 +324,6 @@ test("manifest-apply/applyVerdictToManifest preserves the CHANGES_REQUESTED fiel
     review: {
       ...manifest.review,
       rounds: 3,
-      round_budget: expectedAppliedBudget(manifest, {
-        substantiveFailure: true,
-      }),
       last_review_phase: "post_publication",
       latest_verdict: "changes_requested",
       repeated_issue_count: 4,
@@ -396,25 +333,25 @@ test("manifest-apply/applyVerdictToManifest preserves the CHANGES_REQUESTED fiel
   });
 });
 
-test("manifest-apply/applyVerdictToManifest downgrades only all-low-confidence changes_requested verdicts", async (t) => {
+test("manifest-apply/applyVerdictToManifest keeps every changes_requested verdict blocking", async (t) => {
   const cases = [
     {
-      label: "all-low changes_requested becomes external ready_to_merge",
+      label: "all-low external changes_requested stays blocking",
       state: STATES.REVIEW_PENDING,
       verdict: { ...makeVerdict("changes_requested", "changes_requested"), issues: [makeIssue("low"), makeIssue("low")] },
-      expectedState: STATES.READY_TO_MERGE,
-      expectedAction: "await_explicit_merge",
-      expectedLatest: "lgtm",
-      expectedRepeated: 0,
+      expectedState: STATES.CHANGES_REQUESTED,
+      expectedAction: "re_dispatch_requested_changes",
+      expectedLatest: "changes_requested",
+      expectedRepeated: 4,
     },
     {
-      label: "all-low internal changes_requested becomes publish_pending",
+      label: "all-low internal changes_requested stays blocking",
       state: STATES.INTERNAL_REVIEW_PENDING,
       verdict: { ...makeVerdict("changes_requested", "changes_requested"), issues: [makeIssue("low")] },
-      expectedState: STATES.PUBLISH_PENDING,
-      expectedAction: "publish_pr",
-      expectedLatest: "internal_lgtm",
-      expectedRepeated: 0,
+      expectedState: STATES.CHANGES_REQUESTED,
+      expectedAction: "re_dispatch_requested_changes",
+      expectedLatest: "changes_requested",
+      expectedRepeated: 4,
     },
     {
       label: "medium confidence remains changes_requested",
@@ -478,9 +415,6 @@ test("manifest-apply/applyVerdictToManifest refreshes same-state CHANGES_REQUEST
     review: {
       ...manifest.review,
       rounds: 4,
-      round_budget: expectedAppliedBudget(manifest, {
-        substantiveFailure: true,
-      }),
       last_review_phase: "post_publication",
       latest_verdict: "changes_requested",
       repeated_issue_count: 2,
@@ -513,7 +447,6 @@ test("manifest-apply/applyVerdictToManifest preserves the ESCALATED field-write 
     review: {
       ...manifest.review,
       rounds: 5,
-      round_budget: expectedAppliedBudget(manifest),
       last_review_phase: "post_publication",
       latest_verdict: "escalated",
       repeated_issue_count: 0,

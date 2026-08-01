@@ -8,8 +8,6 @@ const path = require("path");
 
 const {
   CLEANUP_STATUSES,
-  DEFAULT_REVIEW_ASSURANCE,
-  REVIEW_ASSURANCE,
   STATES,
   captureAttempt,
   collectEnvironmentSnapshot,
@@ -32,10 +30,6 @@ const {
   validateRunId,
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
-const {
-  extractReviewAssuranceFromRubric,
-  resolveReviewAssurance,
-} = require("../../../skills/relay-dispatch/scripts/manifest/review-assurance");
 const {
   createGrandfatheredRubricAnchor,
 } = require("./test-support");
@@ -120,112 +114,6 @@ test("inferIssueNumber extracts issue numbers from issue branches", () => {
   assert.equal(inferIssueNumber("issue-42"), 42);
   assert.equal(inferIssueNumber("feature/issue-99-auth"), 99);
   assert.equal(inferIssueNumber("feature/auth"), null);
-});
-
-test("createManifestSkeleton defaults and validates review assurance policy", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-assurance-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  initGitRepo(repoRoot);
-
-  const standard = createManifestSkeleton({
-    repoRoot,
-    runId: "issue-528-20260524120000000",
-    branch: "issue-528",
-    baseBranch: "main",
-    issueNumber: 528,
-    worktreePath: path.join(repoRoot, "wt"),
-  });
-  assert.equal(standard.policy.review_assurance, DEFAULT_REVIEW_ASSURANCE);
-  assert.equal(standard.policy.review_assurance_source, "flag");
-  assert.equal(standard.policy.review_assurance_overridden, undefined);
-  assert.equal(standard.review.max_rounds, 2);
-  assert.deepEqual(standard.review.round_budget, {
-    schema_version: 1,
-    topology: "substantive_failures_with_protocol_verifications",
-    limit_source: "review.max_rounds",
-    consumed: {
-      substantive_failures: 0,
-      protocol_verifications: {
-        internal: 0,
-        post_publication: 0,
-      },
-      applied_by_phase: {
-        internal: 0,
-        post_publication: 0,
-      },
-    },
-  });
-
-  const compact = createManifestSkeleton({
-    repoRoot,
-    runId: "issue-528-20260524120030000",
-    branch: "issue-528-compact",
-    baseBranch: "main",
-    issueNumber: 528,
-    worktreePath: path.join(repoRoot, "wt-compact"),
-    reviewAssurance: REVIEW_ASSURANCE.COMPACT,
-  });
-  assert.equal(compact.policy.review_assurance, "compact");
-  assert.equal(compact.review.max_rounds, 1);
-
-  const hardened = createManifestSkeleton({
-    repoRoot,
-    runId: "issue-528-20260524120100000",
-    branch: "issue-528-hardened",
-    baseBranch: "main",
-    issueNumber: 528,
-    worktreePath: path.join(repoRoot, "wt2"),
-    reviewAssurance: REVIEW_ASSURANCE.HARDENED,
-  });
-  assert.equal(hardened.policy.review_assurance, "hardened");
-  assert.equal(hardened.review.max_rounds, 3);
-  for (const field of ["merge", "cleanup", "reviewer_write"]) {
-    assert.equal(compact.policy[field], hardened.policy[field]);
-  }
-  assert.deepEqual(compact.roles, hardened.roles);
-
-  assert.throws(
-    () => createManifestSkeleton({
-      repoRoot,
-      runId: "issue-528-20260524120200000",
-      branch: "issue-528-invalid",
-      baseBranch: "main",
-      issueNumber: 528,
-      worktreePath: path.join(repoRoot, "wt3"),
-      reviewAssurance: "codex-only",
-    }),
-    /invalid review assurance/
-  );
-});
-
-test("rubric review assurance extraction and resolution preserve authoritative provenance", () => {
-  const nestedRubric = [
-    "evaluation:",
-    "  schema_version: 2",
-    "  task_profile:",
-    "    size: L",
-    "    review_assurance: 'hardened' # fixed review anchor",
-  ].join("\n");
-  assert.equal(extractReviewAssuranceFromRubric(nestedRubric), "hardened");
-  assert.equal(extractReviewAssuranceFromRubric("rubric:\n  factors: []\n"), null);
-
-  assert.deepEqual(resolveReviewAssurance({
-    rubricReviewAssurance: "hardened",
-    flagReviewAssurance: "standard",
-    flagWasExplicit: true,
-  }), {
-    level: "hardened",
-    source: "rubric",
-    overridden: "standard",
-  });
-  assert.deepEqual(resolveReviewAssurance({
-    flagReviewAssurance: "compact",
-    flagWasExplicit: true,
-  }), {
-    level: "compact",
-    source: "flag",
-    overridden: null,
-  });
 });
 
 test("createRunId is branch-stable and filesystem-safe", () => {

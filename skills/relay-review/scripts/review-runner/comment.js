@@ -1,6 +1,4 @@
 const { gh } = require("./common");
-const { formatAdvisoryRoundSummary } = require("../advisory-review-schema");
-const { isLowConfidenceAdvisoryPass } = require("./verdict");
 
 const REVIEW_MARKER = "<!-- relay-review -->";
 const REVIEW_ROUND_MARKER = "<!-- relay-review-round -->";
@@ -17,17 +15,8 @@ function appendCommentWarnings(commentBody, warnings = []) {
   return [
     commentBody,
     "",
-    "Advisory review warnings:",
+    "Review warnings:",
     ...warnings.map((warning) => `- ${warning}`),
-  ].join("\n");
-}
-
-function appendAdvisorySummary(commentBody, advisorySummary) {
-  return [
-    commentBody,
-    "",
-    "Advisory review:",
-    ...formatAdvisoryRoundSummary(advisorySummary),
   ].join("\n");
 }
 
@@ -58,7 +47,6 @@ function buildCommentBody(
   {
     warnings = [],
     gateFailure = null,
-    advisorySummary = null,
     appliedVerdict = null,
     originalReviewerVerdict = null,
     relayEscalation = null,
@@ -71,7 +59,7 @@ function buildCommentBody(
     const recoveryCommand = gateFailure.recoveryCommand
       ? `Recovery command: ${gateFailure.recoveryCommand}`
       : "Recovery command: unavailable after escalation";
-    return appendCommentWarnings(appendAdvisorySummary([
+    return appendCommentWarnings([
       REVIEW_ROUND_MARKER,
       `## Relay Review Round ${round}`,
       `Verdict: ${gateVerdict}`,
@@ -86,11 +74,11 @@ function buildCommentBody(
       recoveryCommand,
       "Issues:",
       `- Rubric gate failed closed: ${gateFailure.reason}. ${gateFailure.recovery}`,
-    ].join("\n"), advisorySummary), warnings);
+    ].join("\n"), warnings);
   }
 
   if (verdict.verdict === "pass") {
-    return appendCommentWarnings(appendAdvisorySummary([
+    return appendCommentWarnings([
       REVIEW_MARKER,
       "## Relay Review",
       "Verdict: LGTM",
@@ -99,26 +87,11 @@ function buildCommentBody(
       `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
       `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
       `Rounds: ${round}`,
-    ].join("\n"), advisorySummary), warnings);
-  }
-
-  if (isLowConfidenceAdvisoryPass(verdict)) {
-    return appendCommentWarnings(appendAdvisorySummary([
-      REVIEW_MARKER,
-      "## Relay Review",
-      "Verdict: LGTM",
-      `Summary: ${verdict.summary}`,
-      `Contract: ${formatStatus(verdict.contract_status)}`,
-      `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
-      `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
-      `Rounds: ${round}`,
-      "Low-confidence findings (non-blocking):",
-      formatIssueList(verdict.issues, { includeConfidence: true }),
-    ].join("\n"), advisorySummary), warnings);
+    ].join("\n"), warnings);
   }
 
   if (verdict.verdict === "changes_requested") {
-    return appendCommentWarnings(appendAdvisorySummary([
+    return appendCommentWarnings([
       REVIEW_ROUND_MARKER,
       `## Relay Review Round ${round}`,
       "Verdict: CHANGES_REQUESTED",
@@ -128,7 +101,7 @@ function buildCommentBody(
       `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
       "Issues:",
       formatIssueList(verdict.issues),
-    ].join("\n"), advisorySummary), warnings);
+    ].join("\n"), warnings);
   }
 
   const escalationAudit = relayEscalation
@@ -137,7 +110,7 @@ function buildCommentBody(
       `Escalation trigger: ${relayEscalation.trigger || "unknown"} (reason=${relayEscalation.reason || "unknown"})`,
     ]
     : [];
-  return appendCommentWarnings(appendAdvisorySummary([
+  return appendCommentWarnings([
     REVIEW_MARKER,
     "## Relay Review",
     "Verdict: ESCALATED",
@@ -149,7 +122,7 @@ function buildCommentBody(
     `Rounds: ${round}`,
     "Issues:",
     formatIssueList(verdict.issues),
-  ].join("\n"), advisorySummary), warnings);
+  ].join("\n"), warnings);
 }
 
 function postComment(repoPath, prNumber, commentBody) {
@@ -161,7 +134,6 @@ function postComment(repoPath, prNumber, commentBody) {
 
 module.exports = {
   appendCommentWarnings,
-  appendAdvisorySummary,
   buildCommentBody,
   formatStatus,
   formatIssueList,

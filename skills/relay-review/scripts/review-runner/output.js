@@ -1,34 +1,33 @@
-const { modeLabel } = require("../../../relay-dispatch/scripts/cli-args");
-const { formatAdvisoryRoundSummary } = require("../advisory-review-schema");
+function formatModeLabel(flag, cliArgOptions) {
+  if (!cliArgOptions || !Array.isArray(cliArgOptions.reservedFlags) || !Array.isArray(cliArgOptions.booleanFlags)) {
+    throw new Error("printUsage requires caller-local CLI argument options");
+  }
+  if (!cliArgOptions.reservedFlags.includes(flag)) throw new Error(`unreserved CLI flag: ${flag}`);
+  return cliArgOptions.booleanFlags.includes(flag) ? "[boolean]" : "[value]";
+}
 
-function printUsage() {
+function printUsage(cliArgOptions) {
   console.log("Usage: review-runner.js --repo <path> (--run-id <id> | --branch <name> | --pr <number>) [options]");
   console.log("\nPrepare or apply a structured relay review round.");
   console.log("\nOptions:");
-  console.log(`  --repo <path>                ${modeLabel("--repo")} Repository root (default: .)`);
-  console.log(`  --run-id <id>                ${modeLabel("--run-id")} Relay run identifier`);
-  console.log(`  --branch <name>              ${modeLabel("--branch")} Working branch`);
-  console.log(`  --pr <number>                ${modeLabel("--pr")} PR number`);
-  console.log(`  --manifest <path>            ${modeLabel("--manifest")} Explicit manifest path`);
-  console.log(`  --done-criteria-file <path>  ${modeLabel("--done-criteria-file")} Use fixture file instead of gh issue fetch`);
-  console.log(`  --diff-file <path>           ${modeLabel("--diff-file")} Use fixture file instead of gh pr diff`);
-  console.log(`  --review-file <path>         ${modeLabel("--review-file")} Structured reviewer JSON verdict to apply`);
-  console.log(`  --manual-review-reason <text> ${modeLabel("--manual-review-reason")} Audit reason for manual verdicts under hardened assurance`);
-  console.log(`  --reviewer <name>            ${modeLabel("--reviewer")} Reviewer adapter to invoke (codex|claude|...)`);
-  console.log(`  --reviewer-script <path>     ${modeLabel("--reviewer-script")} Override adapter script path`);
-  console.log(`  --reviewer-model <name>      ${modeLabel("--reviewer-model")} Reviewer model override`);
-  console.log(`  --independent-review-reason <text> ${modeLabel("--independent-review-reason")} Evidence for same-reviewer escalated retry`);
-  console.log(`  --advisory-reviewer <name>   ${modeLabel("--advisory-reviewer")} Optional non-gating reviewer adapter`);
-  console.log(`  --advisory-profile <name>    ${modeLabel("--advisory-profile")} Advisory focus profile (default: blindspot)`);
-  console.log(`  --advisory-reviewer-model <name> ${modeLabel("--advisory-reviewer-model")} Advisory model override`);
-  console.log(`  --advisory-timeout <seconds> ${modeLabel("--advisory-timeout")} Advisory timeout`);
-  console.log(`  --advisory-grace <seconds>   ${modeLabel("--advisory-grace")} Standard-mode critical-path wait window`);
-  console.log(`  --allow-behind-base          ${modeLabel("--allow-behind-base")} Proceed despite a behind-base warning`);
-  console.log(`  --wait-for-checks <seconds>  ${modeLabel("--wait-for-checks")} Wait up to N seconds for PR checks to leave the pending bucket before reviewing`);
-  console.log(`  --detach                     ${modeLabel("--detach")} Run the round in a detached supervisor (crash-only) and print a receipt`);
-  console.log(`  --prepare-only               ${modeLabel("--prepare-only")} Emit prompt bundle only; do not apply verdict`);
-  console.log(`  --no-comment                 ${modeLabel("--no-comment")} Do not post a PR comment`);
-  console.log(`  --json                       ${modeLabel("--json")} Output JSON`);
+  console.log(`  --repo <path>                ${formatModeLabel("--repo", cliArgOptions)} Repository root (default: .)`);
+  console.log(`  --run-id <id>                ${formatModeLabel("--run-id", cliArgOptions)} Relay run identifier`);
+  console.log(`  --branch <name>              ${formatModeLabel("--branch", cliArgOptions)} Working branch`);
+  console.log(`  --pr <number>                ${formatModeLabel("--pr", cliArgOptions)} PR number`);
+  console.log(`  --manifest <path>            ${formatModeLabel("--manifest", cliArgOptions)} Explicit manifest path`);
+  console.log(`  --done-criteria-file <path>  ${formatModeLabel("--done-criteria-file", cliArgOptions)} Use fixture file instead of gh issue fetch`);
+  console.log(`  --diff-file <path>           ${formatModeLabel("--diff-file", cliArgOptions)} Use fixture file instead of gh pr diff`);
+  console.log(`  --review-file <path>         ${formatModeLabel("--review-file", cliArgOptions)} Structured reviewer JSON verdict to apply`);
+  console.log(`  --manual-review-reason <text> ${formatModeLabel("--manual-review-reason", cliArgOptions)} Audit reason for an operator-supplied manual verdict`);
+  console.log(`  --reviewer <name>            ${formatModeLabel("--reviewer", cliArgOptions)} Reviewer adapter to invoke (codex|claude|...)`);
+  console.log(`  --reviewer-script <path>     ${formatModeLabel("--reviewer-script", cliArgOptions)} Override adapter script path`);
+  console.log(`  --reviewer-model <name>      ${formatModeLabel("--reviewer-model", cliArgOptions)} Reviewer model override`);
+  console.log(`  --allow-behind-base          ${formatModeLabel("--allow-behind-base", cliArgOptions)} Proceed despite a behind-base warning`);
+  console.log(`  --wait-for-checks <seconds>  ${formatModeLabel("--wait-for-checks", cliArgOptions)} Wait up to N seconds for PR checks to leave the pending bucket before reviewing`);
+  console.log(`  --detach                     ${formatModeLabel("--detach", cliArgOptions)} Run the round in a detached supervisor (crash-only) and print a receipt`);
+  console.log(`  --prepare-only               ${formatModeLabel("--prepare-only", cliArgOptions)} Emit prompt bundle only; do not apply verdict`);
+  console.log(`  --no-comment                 ${formatModeLabel("--no-comment", cliArgOptions)} Do not post a PR comment`);
+  console.log(`  --json                       ${formatModeLabel("--json", cliArgOptions)} Output JSON`);
 }
 
 function printResult({
@@ -64,10 +63,6 @@ function printResult({
   console.log(`  State:    ${originalState} -> ${updatedManifest.state}`);
   console.log(`  Prompt:   ${promptPath}`);
   console.log(`  Verdict:  ${verdictPath}`);
-  console.log("  Advisory:");
-  for (const line of formatAdvisoryRoundSummary(result.advisorySummary)) {
-    console.log(`    ${line}`);
-  }
   if (redispatchPath) console.log(`  Re-dispatch: ${redispatchPath}`);
   if (result.commentPosted) console.log(`  PR comment posted to #${prNumber}`);
 }

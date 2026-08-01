@@ -2,7 +2,7 @@
 
 Deep-dive into the manifest contract, state machine, and extension points. For overview, see [CLAUDE.md](../CLAUDE.md).
 
-This reference centers on the manifest-backed run lifecycle, plus the readiness boundary that may sit ahead of `relay-plan`. For the full relay-ready control-flow contract, see [docs/relay-ready-routing-and-handoff-design.md](../docs/relay-ready-routing-and-handoff-design.md). For provider/model route policy setup and operator examples, see [docs/model-route-policy.md](../docs/model-route-policy.md). For the public/internal/optional skill tiers, see [operator-surface.md](operator-surface.md).
+This reference centers on the manifest-backed run lifecycle, plus the readiness boundary that may sit ahead of `relay-plan`. For the full relay-ready control-flow contract, see [docs/relay-ready-routing-and-handoff-design.md](../docs/relay-ready-routing-and-handoff-design.md). For explicit adapter/model selection examples, see [docs/model-route-policy.md](../docs/model-route-policy.md). For the public/internal/optional skill tiers, see [operator-surface.md](operator-surface.md).
 
 ## Readiness Boundary
 
@@ -27,7 +27,7 @@ Boundary rules:
 - `/relay` bypasses relay-ready only for issue-first or task-first inputs that are already relay-sized and already have a trustworthy review anchor
 - `/relay` invokes relay-ready for ambiguous, oversized, or anchorless requests, then continues the normal downstream chain once a relay-ready leaf exists
 - readiness interactions are append-only request events: `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`
-- request-level `next_action` is lightweight routing metadata, not a manifest lifecycle state
+- request-level `next_action` is lightweight coordination metadata, not a manifest lifecycle state
 
 ## State Machine
 
@@ -116,11 +116,6 @@ ownership:                      # required with fleet_id; immutable on resume
   track: 2026-07-relay-fleet
   component: relay-fleet
 
-model_hints:
-  dispatch: null                # omit for Codex/Claude managed CLI defaults
-  review: null                  # omit for Codex/Claude managed CLI defaults
-  advisory_review: example/opencode-model-fast  # optional non-gating advisory reviewer model
-
 paths:
   repo_root: /Users/me/project
   worktree: /tmp/relay-wt-issue-42
@@ -133,7 +128,6 @@ policy:
   merge: manual_after_lgtm      # merge strategy
   cleanup: on_close              # when to remove worktree
   reviewer_write: forbid         # reviewer must not mutate code
-  review_assurance: standard      # compact | standard | hardened
   executor_network:
     access: disabled             # disabled | enabled
     mechanism: default           # default | sandbox_workspace_write.network_access
@@ -145,19 +139,6 @@ anchor:
 
 review:
   rounds: 3                   # total applied verdicts; audit/artifact sequence
-  max_rounds: 2               # substantive-failure threshold; compact=1, standard=2, hardened=3
-  round_budget:
-    schema_version: 1
-    topology: substantive_failures_with_protocol_verifications
-    limit_source: review.max_rounds
-    consumed:
-      substantive_failures: 1
-      protocol_verifications:
-        internal: 1
-        post_publication: 1
-      applied_by_phase:
-        internal: 2
-        post_publication: 1
   latest_verdict: pass           # pending | pass | changes_requested | escalated
   repeated_issue_count: 0
   last_reviewed_sha: abc123def
@@ -197,38 +178,30 @@ bootstrap_exempt:
 |-------|---------|
 | `roles.*` | Immutable per-run binding. Decouples who decides, who implements, who validates |
 | `fleet_id`, `ownership` | Fleet child lineage and its validated `{sprint, track, component}` finalize owner; immutable on resume |
-| `model_hints.*` | Optional per-phase model preference. Current runtime consumers: `dispatch`, `review`, `advisory_review`. For unmanaged harnesses, values must resolve to approved provider/model routes. Do not add Codex/Claude model hints in generated company defaults just to pin their managed CLI model. |
-| `dispatch.last_model` / executor config | Dispatch records the effective model route when one exists. The skill-bundled `skills/relay-dispatch/references/executor-models.json` intentionally ships empty; unmanaged executors need an explicit route from CLI/model hints/project routes or a local `~/.relay/executors.json` default, and the selected route still passes through the route policy gate. Codex/Claude managed CLI defaults normally record a null model route. |
-| Route policy | Stored outside the manifest in `~/.relay/policy.json`, optional repo-local `.relay/policy.json`, and optional project-local `~/.relay/projects/<repo-slug>/policy.json`. Executor/reviewer names are harnesses; provider/model route strings are the policy boundary. Final operator precedence is `CLI flags / --route-intent-file -> project routes.json -> routing rules -> defaults -> existing relay defaults -> policy gate`. Adapter capability gates run before this policy gate. |
-| `review.rounds`, `review.round_budget` | `rounds` remains the monotonic applied-verdict/artifact sequence. `round_budget` separately records substantive failures and protocol verification/application consumption by `internal` vs `post_publication`; `max_rounds` is its referenced substantive-failure threshold. Failed invokes update neither counter. |
-| Route plan | Dispatch writes `route-plan.json` in the run directory with effective dispatch/review/advisory routes, source traces, and policy decisions. The manifest stores only a compact `routes.summary` plus `routes.plan_path` so operators can audit routing without bloating the lifecycle contract. |
+| `model_hints.*`, `routes`, `routing` | Legacy persisted fields are retained only as inert historical data. Runtime selection ignores them. |
+| `dispatch.model`, `dispatch.last_model` | Immutable effective model binding for the run. A null value delegates to the adapter provider default. |
+| `review.rounds` | Monotonic applied-verdict/artifact sequence. Failed invokes do not increment it. |
 | Run-dir runtime artifacts | While dispatch is active, `lease.json` records `{ pid, pgid, host, started_at, timeout_s }` for crash-only reconciliation. `pid` is the dispatch supervisor and `pgid` is the detached executor process group. Executor stdout, stderr, and result output live as `dispatch-stdout.log`, `dispatch-stderr.log`, and `dispatch-result.txt` in the same run directory and are referenced from manifest `paths`. |
 | Detached launch receipt | `dispatch.js --detach --json` re-execs dispatch under a detached Node supervisor and returns only after the child has entered `dispatched`, written `lease.json`, and created the real run-dir log files. The receipt includes `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and `reconcileCommand`; it is a launch contract, not a manifest field. |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
-| `policy.review_assurance` | `compact` gives low-risk work the same permission, sandbox, network, repository, SHA, audit, publication, and merge protections but escalates its first substantive failure; `standard` permits one bounded repair; `hardened` permits two and requires stronger review/evidence gates without using agent identity heuristics. Hardened review commands must include an advisory reviewer, and passing verdicts require successful advisory artifacts plus strict execution evidence. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; legacy evidence without that array still falls back to `test_exit_code=0` plus a SHA-bound result hash |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
-| `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; escalated same-adapter retry requires an `--independent-review-reason`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
+| `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
 | `git.pr_number` / `github.pr_created_by_orchestrator` | Orchestrator-owned push + PR creation persists `git.pr_number` for review/merge consumers; `github.pr_created_by_orchestrator` records whether relay created or reused the PR. In delayed-publication runs these fields stay null/absent until `publish-run.js` advances `publish_pending -> review_pending`. See [ADR-0001](../docs/decisions/0001-orchestrator-owns-publication.md) |
 | `bootstrap_exempt.*` | Optional operator-declared reconciliation for runs that predate an artifact writer but are closed after that writer lands |
 
-Manifests without `review.round_budget` use the deterministic
-`legacy_conservative` compatibility bridge: every historical round except a
-definitely passing latest verdict is treated as substantive, and all applied
-rounds are assigned to the phase established from current frontmatter. The next
-applied verdict persists schema version 1.
+### Adapter Capability and Model Binding
 
-### Adapter Capability vs Route Policy
+Relay validates that the selected CLI adapter can safely perform dispatch or
+primary review with the requested containment shape. This includes read-only
+semantics, sandbox metadata, and network metadata. A new run binds the explicit
+`--executor` and optional `--model`; omitting `--model` records the adapter
+provider default as a null binding. A resumed run cannot replace its executor
+or model binding. Historical `model_hints`, `routes`, and `routing` fields are
+readable only for audit and never authorize or select runtime behavior.
 
-Relay evaluates two separate safety layers in this order:
-
-1. Adapter capability gate: validates that the selected CLI adapter can safely perform the requested phase and containment shape. This includes dispatch vs primary review vs advisory review support, read-only semantics, sandbox metadata, and network metadata. Failures are reported as `adapter_capability` and do not imply anything about provider/model approval.
-2. Model-route policy gate: validates the effective provider/model route against `~/.relay/policy.json` plus repo-local `.relay/policy.json`. Failures are reported as `policy_decision` and mean the adapter could perform the phase, but the active profile did not allow the route.
-
-Managed Codex/Claude invocations may intentionally have `model: null`; the default route policy treats those model-less managed CLI calls as allowed. Unmanaged routes such as Pi, OpenCode, and Antigravity remain policy-configurable through `allowed_model_routes` and `denied_model_routes`; changing those allow/deny rules must not require adapter code changes.
-
-The supported adapter capability matrix and new-adapter checklist are published in [`skills/relay-dispatch/references/agent-adapter-platform.md`](../skills/relay-dispatch/references/agent-adapter-platform.md). That reference is the source of truth for dispatch, primary-review, advisory-review, sandbox, read-only, network, structured-output, transport, and app-registration support.
+The supported adapter capability matrix and new-adapter checklist are published in [`skills/relay-dispatch/references/agent-adapter-platform.md`](../skills/relay-dispatch/references/agent-adapter-platform.md). That reference is the source of truth for dispatch, primary-review, containment, structured-output, transport, and app-registration support.
 
 ### Bootstrap exemptions
 
@@ -255,7 +228,7 @@ Semantics:
 
 ## Event Journal
 
-Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `executor_network`, `failure_class`, `before`, `after`, `profile`, `status`, `artifact_path`, `raw_response_path`, `elapsed_ms`, `critical_path_wait_ms`, `consumed_by_phase`, `phase_decision_waited`, `frontier_step_replaced`, `failure_reason`, `state`, `old_max_rounds`, `new_max_rounds`, override audit fields):
+Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `executor_network`, `failure_class`, `before`, `after`, `profile`, `status`, `artifact_path`, `raw_response_path`, `elapsed_ms`, `critical_path_wait_ms`, `consumed_by_phase`, `phase_decision_waited`, `frontier_step_replaced`, `failure_reason`, `state`, override audit fields):
 
 ```jsonl
 {"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":null,"executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"policy_decision":{"allowed":true,"reason":"managed_cli","phase":"dispatch","actor":"codex","model":null}}
@@ -263,7 +236,6 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 {"ts":"2026-04-18T12:08:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"internal_review_pending","state_to":"publish_pending","head_sha":"def456","round":1,"reviewer":"codex","reason":"pass"}
 {"ts":"2026-04-18T12:09:00.000Z","event":"publish_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"publish_pending","state_to":"review_pending","head_sha":"def456","round":null,"reason":"created_pr","pr_number":128,"branch":"issue-42","pr_created_by_orchestrator":true}
 {"ts":"2026-04-18T12:10:00.000Z","event":"review_invoke","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":"codex","model":null}
-{"ts":"2026-04-18T12:11:00.000Z","event":"advisory_review","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":null,"reviewer":"opencode","model":"example/opencode-model-fast","profile":"blindspot","status":"success","artifact_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode.json","raw_response_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode-raw-response.txt","required_count":0,"advisory_count":1,"duplicate_low_confidence_count":0,"elapsed_ms":42000,"advisory_elapsed_ms":42000,"critical_path_wait_ms":5000,"consumed_by_phase":"metrics","phase_decision_waited":true,"frontier_step_replaced":false,"failure_reason":null}
 {"ts":"2026-04-18T12:12:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"changes_requested","head_sha":"def456","round":1,"reviewer":"codex","reason":"changes_requested"}
 {"ts":"2026-04-18T12:40:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"ready_to_merge","head_sha":"ghi789","round":2,"reviewer":"codex","reason":"pass"}
 {"ts":"2026-04-18T12:45:00.000Z","event":"merge_finalize","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"ready_to_merge","state_to":"merged","head_sha":"ghi789","round":2,"reason":"squash"}
@@ -273,15 +245,13 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 
 | Event | Emitted by |
 |-------|------------|
-| `dispatch_start`, `dispatch_interrupted`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js`; `reconcile-run.js` may also emit `dispatch_interrupted` when settling dead or timed-out dispatched runs |
+| `dispatch_start`, `dispatch_interrupted`, `dispatch_result`, `environment_drift` | `relay-dispatch/scripts/dispatch.js`; `reconcile-run.js` may also emit `dispatch_interrupted` when settling dead or timed-out dispatched runs |
 | `publish_result` | `relay-dispatch/scripts/publish-run.js` |
 | `recover_commit`, `recover_commit_failed`, `execution_evidence_rebranded` | `relay-dispatch/scripts/recover-commit.js`, `rebrand-evidence.js` |
 | `iteration_score`, `rubric_quality`, `safety_boundary_violation` | `relay-dispatch/scripts/relay-events.js` (helpers) |
 | `close`, `cleanup_result` | `relay-dispatch/scripts/close-run.js`, `cleanup-worktrees.js` |
-| `policy_updated` | `relay-dispatch/scripts/extend-review-policy.js` |
 | `state_recovery` | `relay-dispatch/scripts/recover-state.js`; `reconcile-run.js` emits it for `dispatched -> review_pending` dead-work recovery |
 | `review_invoke` | `relay-review/scripts/review-runner/reviewer-invoke.js` |
-| `advisory_review` | `relay-review/scripts/review-runner/advisory.js` |
 | `review_apply` | `relay-review/scripts/review-runner.js`, `reviewer-invoke.js` |
 | `pr_number_stamped`, `merge_blocked`, `skip_review`, `force_finalize`, `merge_finalize`, `cleanup_result` | `relay-merge/scripts/finalize-run.js`, `relay-reconcile-artifact.js`, `gate-check.js` |
 | `request_persisted`, `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`, `relay_ready_handoff_persisted` | `relay-ready/scripts/relay-request.js` |
@@ -318,10 +288,6 @@ Each round produces files under `~/.relay/runs/<repo-slug>/<run-id>/`:
 | `review-round-N-raw-response.txt` | Raw reviewer output |
 | `review-round-N-redispatch.md` | Fix prompt (when changes requested) |
 | `review-round-N-policy-violation.txt` | If reviewer mutated code |
-| `review-round-N-advisory-<reviewer>-prompt.md` | Optional non-gating advisory prompt |
-| `review-round-N-advisory-<reviewer>-raw-response.txt` | Optional advisory raw output |
-| `review-round-N-advisory-<reviewer>.json` | Optional validated advisory findings |
-| `review-round-N-advisory-<reviewer>-policy-violation.txt` | If advisory reviewer mutated code; recorded without manifest escalation in v1 |
 
 ## Dispatch Handoff (PR Boundary)
 
@@ -378,7 +344,7 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 1. Add `skills/relay-dispatch/scripts/executors/<name>.js` exporting the 7-field adapter contract documented in [`agent-adapter-platform.md`](../skills/relay-dispatch/references/agent-adapter-platform.md): `cliBinary`, `defaultTimeout`, `validateExecutionMode`, `buildExecCommand`, `finalizeResult`, `register`, and `probe`.
 2. Register the harness descriptor in `skills/relay-dispatch/scripts/agent-adapters/index.js`; update `skills/relay-dispatch/scripts/executors/index.js` only if display order needs a stable compatibility slot.
 3. Add behavior-matrix and probe coverage in `tests/relay-dispatch/scripts/executors.test.js`.
-4. Add adapter capability policy coverage in `tests/relay-dispatch/scripts/agent-adapter-policy.test.js` and docs consistency coverage in `tests/relay-dispatch/scripts/docs-defaults.test.js`.
+4. Add adapter capability coverage in `tests/relay-dispatch/scripts/adapter-contract.test.js` and docs consistency coverage in `tests/relay-dispatch/scripts/docs-defaults.test.js`.
 5. Optional: implement adapter `register(...)` for dispatch-time app registration; unsupported adapters should return `{threadId: null, raw}`.
 
 ### Adding a new reviewer adapter
@@ -395,7 +361,7 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 
 `invoke-reviewer-cursor.js` supports primary review only: it invokes `agent --print --trust --force --mode ask --workspace <repo> --output-format json`, parses the wrapper `result` field into strict verdict JSON, probes auth via `agent status` or `CURSOR_API_KEY`, and enforces a parent-process timeout via `RELAY_CURSOR_REVIEW_TIMEOUT` (default `1800s`). Relay passes `--workspace` only and never `agent --worktree`.
 
-`invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, and `invoke-reviewer-antigravity.js` are phase-aware: `--phase primary_review` validates normal review verdict JSON, while `--phase advisory_review` validates advisory JSON through `advisory-review-schema.js`. OpenCode primary review is route-policy gated and prompt-only read-only with a post-run dirty-worktree guard. Pi invokes `pi --no-session --tools read,grep,find,ls --print` and supplies the complete prompt through stdin, enforces a parent-process timeout via `RELAY_PI_REVIEW_TIMEOUT` (default `1800s`), and uses the same tool allowlist for primary and advisory review. Antigravity targets the `agy` CLI only; because print mode requires a `--prompt` value, relay writes the complete prompt to a temporary file, grants access to its directory with `--add-dir`, and passes only a control-safe file reference through `--prompt`, alongside `--print-timeout <duration> --sandbox`. It relies on dirty-worktree checks rather than Antigravity GUI, IDE, Desktop, plugin runtime, or PTY state. Antigravity live support remains fail-safe experimental until a healthy live canary passes; fake-bin tests alone do not prove live executor or reviewer success, and the fail-safe timeout canary is not healthy success.
+`invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, and `invoke-reviewer-antigravity.js` validate the same primary-review verdict contract. OpenCode uses prompt-only read-only review with a post-run dirty-worktree guard. Pi invokes `pi --no-session --tools read,grep,find,ls --print`, supplies the prompt through stdin, and enforces `RELAY_PI_REVIEW_TIMEOUT` (default `1800s`). Antigravity targets the `agy` CLI only; relay passes a control-safe prompt-file reference with `--print-timeout <duration> --sandbox` and relies on dirty-worktree checks. Antigravity live review support remains experimental until a healthy live canary passes.
 
 ### Shared utilities (cross-skill)
 

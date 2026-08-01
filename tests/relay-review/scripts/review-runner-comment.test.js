@@ -46,7 +46,7 @@ test("comment/buildCommentBody preserves rubric gate failures as CHANGES_REQUEST
   assert.match(body, /Recovery command: node dispatch\.js/);
 });
 
-test("comment/buildCommentBody surfaces downgraded low-confidence findings as non-blocking notes", () => {
+test("comment/buildCommentBody keeps low-confidence requested changes blocking", () => {
   const body = buildCommentBody({
     verdict: "changes_requested",
     summary: "Only speculative findings remain.",
@@ -64,8 +64,7 @@ test("comment/buildCommentBody surfaces downgraded low-confidence findings as no
     }],
   }, 4);
 
-  assert.match(body, /Verdict: LGTM/);
-  assert.match(body, /Low-confidence findings \(non-blocking\):/);
-  assert.match(body, /src\/view\.js:7 — \[low\] Consider tighter naming/);
-  assert.doesNotMatch(body, /Verdict: CHANGES_REQUESTED/);
+  assert.match(body, /Verdict: CHANGES_REQUESTED/);
+  assert.match(body, /src\/view\.js:7 — Consider tighter naming/);
+  assert.doesNotMatch(body, /Verdict: LGTM/);
 });

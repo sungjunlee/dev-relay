@@ -46,8 +46,6 @@ const REVIEWED_SEMANTIC_ROLE_SEEDS = Object.freeze({
     "evidence:read",
     "evidence:write",
   ],
-  "skills/relay-dispatch/scripts/extend-review-policy.js": ["done-criteria:write"],
-  "skills/relay-dispatch/scripts/manifest/guidance.js": ["done-criteria:write"],
   "skills/relay-dispatch/scripts/manifest/inflight-runs.js": ["event:read"],
   "skills/relay-dispatch/scripts/manifest/rubric.js": ["done-criteria:read"],
   "skills/relay-dispatch/scripts/rebrand-evidence.js": [
@@ -62,7 +60,6 @@ const REVIEWED_SEMANTIC_ROLE_SEEDS = Object.freeze({
     "evidence:read",
     "evidence:write",
   ],
-  "skills/relay-dispatch/scripts/reliability-report.js": ["done-criteria:read"],
   "skills/relay-merge/scripts/gate-check.js": [
     "done-criteria:read",
     "manifest:read",
@@ -81,8 +78,6 @@ const REVIEWED_SEMANTIC_ROLE_SEEDS = Object.freeze({
     "done-criteria:read",
     "evidence:read",
   ],
-  "skills/relay-review/scripts/review-runner/advisory.js": ["evidence:read"],
-  "skills/relay-review/scripts/review-runner/confidence-downgrade.js": ["evidence:read"],
   "skills/relay-review/scripts/review-runner/context.js": ["done-criteria:read"],
   "skills/relay-review/scripts/review-runner/execution-evidence.js": [
     "done-criteria:read",
@@ -195,7 +190,7 @@ function scanRegisteredReviewerInvocations(repoRoot, scripts) {
   if (!scripts.includes(source) || !scripts.includes(registry)) return [];
   const registryContent = fs.readFileSync(path.join(repoRoot, registry), "utf8");
   const names = new Set();
-  const reviewerPattern = /\b(?:primaryReviewScript|advisoryReviewScript):\s*["']([^"']+\.js)["']/g;
+  const reviewerPattern = /\bprimaryReviewScript:\s*["']([^"']+\.js)["']/g;
   let match;
   while ((match = reviewerPattern.exec(registryContent)) !== null) names.add(match[1]);
   return [...names].sort(compareText).map((name) => ({
@@ -272,7 +267,7 @@ function scanRequiredRoles(repoRoot) {
 
     const directEvents = /relay-events(?:["'])/.test(content) || script.endsWith("/relay-events.js");
     if (directEvents) {
-      const appends = /\b(?:appendRunEvent|appendEventLine|appendUnregisteredRouteUsedEvent|appendStateRecovery)\b/.test(content);
+      const appends = /\b(?:appendRunEvent|appendEventLine|appendStateRecovery)\b/.test(content);
       const reads = /\b(?:readRunEvents|EVENTS|getEventsPath)\b/.test(content);
       if (appends) addRole(roleMap, script, "event:append");
       if (reads || !appends) addRole(roleMap, script, "event:read");

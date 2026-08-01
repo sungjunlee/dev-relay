@@ -7,6 +7,7 @@ const path = require("path");
 
 const {
   buildReadinessDecision,
+  checkInflightRuns,
   routeFromInflight,
 } = require("../../../skills/relay/scripts/run-preflight");
 
@@ -38,6 +39,7 @@ const EXPECTED_INFLIGHT_INSTRUCTIONS = {
   "existing-open-pr": "Review the existing open PR instead of planning or dispatching a new run.",
   "existing-merged-pr": "Mark the sprint item done if present and stop because the PR is already merged.",
   "inflight-run": "Resume or inspect the existing inflight run and continue from its manifest state.",
+  attention: "Stop before planning or dispatch and inspect the inflight-run scanner failure.",
   continue: "Continue to readiness handling before planning or dispatch.",
 };
 
@@ -129,9 +131,14 @@ test("route inflight routes all carry next-step instruction", () => {
       runCheck: { runs: [{ runId: "run-active" }] },
     },
     {
+      expectedRoute: "attention",
+      prCheck: { status: "not_found", pr: null },
+      runCheck: { status: "unknown", reason: "corrupt run store", runs: [] },
+    },
+    {
       expectedRoute: "continue",
       prCheck: { status: "not_found", pr: null },
-      runCheck: { runs: [] },
+      runCheck: { status: "not_found", runs: [] },
     },
   ];
 
@@ -140,6 +147,21 @@ test("route inflight routes all carry next-step instruction", () => {
     assert.equal(result.route, expectedRoute);
     assert.equal(result.instruction, EXPECTED_INFLIGHT_INSTRUCTIONS[expectedRoute]);
   });
+});
+
+test("route blocks when the inflight scanner cannot establish whether an owner exists", () => {
+  const runCheck = checkInflightRuns("/repo", 404, () => {
+    throw new Error("invalid run ledger");
+  });
+  const result = routeFromInflight({
+    prCheck: { status: "not_found", pr: null },
+    runCheck,
+  });
+  assert.deepEqual(runCheck, { status: "unknown", reason: "invalid run ledger", runs: [] });
+  assert.equal(result.route, "attention");
+  assert.equal(result.next_action, "inspect_inflight_scanner_failure");
+  assert.equal(result.reason, "invalid run ledger");
+  assert.notEqual(result.route, "continue");
 });
 
 function setupRouteGhFixture({ prCandidates = [] } = {}) {

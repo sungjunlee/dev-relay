@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
- * Invoke Pi as an isolated structured primary or advisory reviewer.
+ * Invoke Pi as an isolated structured primary reviewer.
  */
 
 const fs = require("fs");
 const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
+const { piReviewArgs } = require("./reviewer-control-invocations");
 const {
   bindCliArgs,
-  modeLabel,
+  findUnknownFlags,
+  modeLabel: formatCliModeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
   parseReviewerVerdictObject,
@@ -16,54 +18,31 @@ const {
   summarizeFailure,
 } = require("./reviewer-helpers");
 const {
-  parseAdvisoryReview,
-  validateAdvisoryProfile,
-  writeAdvisorySchemaFailure,
-} = require("./advisory-review-schema");
-const {
   execFileSyncWithStdinPrompt,
 } = require("./reviewer-prompt-transport");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help", "-h"];
-const cliArgs = bindCliArgs(args, {
-  commandName: "invoke-reviewer-pi",
+const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
+const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-});
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--prompt-file"],
+};
+const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
+if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 const REVIEW_TIMEOUT_ENV = "RELAY_PI_REVIEW_TIMEOUT";
 const REVIEW_PROVIDER_EXTENSION_ENV = "RELAY_PI_REVIEW_PROVIDER_EXTENSION";
 const DEFAULT_REVIEW_TIMEOUT = "1800s";
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
-  console.log("Usage: invoke-reviewer-pi.js --repo <path> --prompt-file <path> [--phase <name>] [--model <name>] [--profile <name>] [--json]");
+  console.log("Usage: invoke-reviewer-pi.js --repo <path> --prompt-file <path> [--model <name>] [--json]");
   console.log("\nOptions:");
-  console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
-  console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
-  console.log(`  --model <name>       ${modeLabel("--model")} Model override`);
-  console.log(`  --phase <name>       ${modeLabel("--phase")} primary_review or advisory_review`);
-  console.log(`  --profile <name>     ${modeLabel("--profile")} Advisory profile, defaults to blindspot`);
-  console.log(`  --json               ${modeLabel("--json")} Output JSON`);
+  console.log(`  --repo <path>        ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root`);
+  console.log(`  --prompt-file <path> ${formatCliModeLabel("--prompt-file", CLI_ARG_OPTIONS)} Prompt bundle path`);
+  console.log(`  --model <name>       ${formatCliModeLabel("--model", CLI_ARG_OPTIONS)} Model override`);
+  console.log(`  --json               ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
-}
-
-function resolvePhase(value) {
-  const phase = String(value || "primary_review").trim();
-  if (phase !== "primary_review" && phase !== "advisory_review") {
-    throw new Error(`--phase must be primary_review or advisory_review, got ${JSON.stringify(value)}`);
-  }
-  return phase;
-}
-
-function readAdvisoryProfileArg(argv) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = String(argv[index]);
-    if (token === "--profile") {
-      const value = argv[index + 1];
-      return value && !String(value).startsWith("--") ? value : undefined;
-    }
-    if (token.startsWith("--profile=")) return token.slice("--profile=".length);
-  }
-  return undefined;
 }
 
 function parseReviewTimeoutMs(value) {
@@ -133,17 +112,7 @@ function buildTimeoutDiagnosticCommand({ piBin, reviewTimeout }) {
   ].join(" ");
 }
 
-function buildPrompt(promptText, phase) {
-  if (phase === "advisory_review") {
-    return [
-      "[NON-INTERACTIVE ADVISORY REVIEW]",
-      "Return only JSON matching the advisory review shape in the prompt.",
-      "Do not wrap the response in markdown fences.",
-      "Do not modify files, create commits, or write comments. Treat the checkout as read-only.",
-      "",
-      promptText,
-    ].join("\n");
-  }
+function buildPrompt(promptText) {
   return [
     "[NON-INTERACTIVE REVIEW]",
     "Review the provided bundle and return only raw JSON matching this schema:",
@@ -159,17 +128,10 @@ function buildPrompt(promptText, phase) {
   ].join("\n");
 }
 
-function parseResult(result, phase, profile) {
-  if (phase === "advisory_review") {
-    return parseAdvisoryReview(result, {
-      adapter: "pi",
-      phase,
-      profile,
-    });
-  }
+function parseResult(result) {
   return parseReviewerVerdictObject(result, {
     adapter: "pi",
-    phase,
+    phase: "primary_review",
     description: "review verdict",
   });
 }
@@ -178,10 +140,6 @@ function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
   const model = cliArgs.getArg("--model");
-  const phase = resolvePhase(cliArgs.getArg("--phase", "primary_review"));
-  const advisoryProfile = phase === "advisory_review"
-    ? validateAdvisoryProfile(readAdvisoryProfileArg(args) || "blindspot")
-    : "blindspot";
   const piBin = process.env.RELAY_PI_BIN || "pi";
   const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
   const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
@@ -194,20 +152,9 @@ function main() {
   }
 
   const promptText = fs.readFileSync(promptFile, "utf-8").trim();
-  const fullPrompt = buildPrompt(promptText, phase);
+  const fullPrompt = buildPrompt(promptText);
 
-  const execArgs = [
-    "--no-session",
-    "--no-context-files",
-    "--no-extensions",
-    ...(providerExtension ? ["--extension", providerExtension] : []),
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-themes",
-    "--tools", "read,grep,find,ls",
-  ];
-  if (model) execArgs.push("--model", model);
-  execArgs.push("--print");
+  const execArgs = piReviewArgs({ providerExtension, model });
 
   let result;
   try {
@@ -226,7 +173,7 @@ function main() {
     if (isExecTimeout(error)) {
       const diagnosticCommand = buildTimeoutDiagnosticCommand({ piBin, reviewTimeout });
       throw new Error(
-        `Pi reviewer ${phase} timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
+        `Pi primary reviewer timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
         "The pi --print invocation did not return before the parent-process timeout, so relay cannot treat this as healthy review evidence. " +
         `First verify Pi non-interactive auth/provider health with: ${diagnosticCommand}. ` +
         "If that minimal command also times out, record this as a Pi CLI/provider non-interactive blocker; otherwise retry with a larger review timeout or split the review scope."
@@ -240,9 +187,9 @@ function main() {
   }
 
   if (!result) {
-    throw new Error(`Pi reviewer ${phase} did not produce a structured result`);
+    throw new Error("Pi primary reviewer did not produce a structured result");
   }
-  const parsed = parseResult(result, phase, advisoryProfile);
+  const parsed = parseResult(result);
   const output = JSON.stringify(parsed);
 
   if (cliArgs.hasFlag("--json")) {
@@ -256,6 +203,5 @@ try {
   main();
 } catch (error) {
   console.error(`Error: ${error.message}`);
-  writeAdvisorySchemaFailure(error);
   process.exit(1);
 }

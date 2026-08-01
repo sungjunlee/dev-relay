@@ -1,6 +1,6 @@
 # Guidance Packs
 
-Compact execution guidance packs are advisory working-style snippets selected by `task_profile.guidance_packs`. They help the executor choose useful habits for the task shape, but Done Criteria, rubric factors, rubric commands, and scope boundaries remain authoritative.
+Compact execution guidance packs are non-binding working-style snippets selected by `task_profile.guidance_packs`. They help the executor choose useful habits for the task shape, but Done Criteria, rubric factors, rubric commands, and scope boundaries remain authoritative.
 
 This reference is the pack library. Relay-plan renders the selected `#### Guidance` bullets into dispatch prompts. Persisting pack metadata in run artifacts and reporting pack analytics are separate follow-up work.
 
@@ -33,7 +33,7 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 
 #### Rubric still carries
 
-- Required behavior, compatibility, public surface, and scope boundaries must remain in Done Criteria or rubric factors. This pack is advisory and does not override them.
+- Required behavior, compatibility, public surface, and scope boundaries must remain in Done Criteria or rubric factors. This pack is non-binding and does not override them.
 
 ### `verification-evidence`
 
@@ -55,7 +55,7 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 
 #### Rubric still carries
 
-- Required commands, targets, failure thresholds, and evidence fields must remain in Done Criteria or rubric factors. This pack is advisory and cannot replace automated checks.
+- Required commands, targets, failure thresholds, and evidence fields must remain in Done Criteria or rubric factors. This pack is non-binding and cannot replace automated checks.
 
 ### `user-replay-evidence`
 
@@ -77,7 +77,7 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 
 #### Rubric still carries
 
-- Required journeys, target states, evidence format, browser/device coverage, and failure thresholds must remain in Done Criteria or rubric factors. This pack is advisory replay guidance only.
+- Required journeys, target states, evidence format, browser/device coverage, and failure thresholds must remain in Done Criteria or rubric factors. This pack is non-binding replay guidance only.
 
 ### `simplify-pass`
 
@@ -99,7 +99,7 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 
 #### Rubric still carries
 
-- Behavior preservation, public API compatibility, performance constraints, and changed-file scope must remain in Done Criteria or rubric factors. This pack is advisory cleanup guidance only.
+- Behavior preservation, public API compatibility, performance constraints, and changed-file scope must remain in Done Criteria or rubric factors. This pack is non-binding cleanup guidance only.
 
 ### `docs-reader-success`
 
@@ -121,7 +121,7 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 
 #### Rubric still carries
 
-- Required doc artifacts, link or command checks, terminology, and reader outcomes must remain in Done Criteria or rubric factors. This pack is advisory and not a doc acceptance test.
+- Required doc artifacts, link or command checks, terminology, and reader outcomes must remain in Done Criteria or rubric factors. This pack is non-binding and not a doc acceptance test.
 
 ### `trust-boundary`
 
@@ -143,4 +143,4 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 
 #### Rubric still carries
 
-- Trust root, enforcement layer, bypass cases, fail-closed behavior, and regression coverage must remain in Done Criteria or rubric factors. This pack is advisory and pairs with `references/rubric-trust-model.md`.
+- Trust root, enforcement layer, bypass cases, fail-closed behavior, and regression coverage must remain in Done Criteria or rubric factors. This pack is non-binding and pairs with `references/rubric-trust-model.md`.

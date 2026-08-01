@@ -42,7 +42,6 @@ skills/
       create-worktree.js   ← Standalone worktree creation + optional app registration
       cleanup-worktrees.js ← Stale worktree pruning
       close-run.js         ← Force-close non-terminal runs
-      reliability-report.js ← Aggregate run metrics
   relay-review/            ← Independent review (context: fork for fresh eyes)
     scripts/
       review-runner.js       ← Round management, PR comments, manifest updates
@@ -90,11 +89,6 @@ node skills/relay-dispatch/scripts/dispatch.js . -b issue-42 --prompt-file /tmp/
 
 # Worktree cleanup
 node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
-
-# Reliability report
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-role --json
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-dispatch --json
 
 # Review (cross-skill: review-runner lives under relay-review, not relay-dispatch)
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --reviewer codex --json

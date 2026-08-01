@@ -1,5 +1,8 @@
 # Risk-Adaptive Relay Observation Window
 
+> Historical decision. Commands referencing `reliability-report.js` describe a
+> retired runtime surface and must not be used as operator guidance.
+
 Status: bounded observation complete; all target classes continue calibration.
 
 ## Snapshot boundary

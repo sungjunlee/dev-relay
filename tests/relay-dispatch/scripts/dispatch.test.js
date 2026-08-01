@@ -33,14 +33,6 @@ const {
 const {
   buildExecutionEvidencePreflight,
 } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
-const { parseModelHints } = require("../../../skills/relay-dispatch/scripts/model-hints");
-const {
-  extractRubricSize,
-  resolveReasoningEffort,
-  RUBRIC_SIZE_MISSING,
-  RUBRIC_SIZE_UNPARSEABLE,
-} = require("../../../skills/relay-dispatch/scripts/rubric-size");
-const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 const { appendRunEvent, EVENTS, readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const { evaluateReviewGate } = require("../../../skills/relay-merge/scripts/review-gate");
 const { buildRubricGateRedispatchPrompt } = require("../../../skills/relay-review/scripts/review-runner/redispatch");
@@ -1240,7 +1232,7 @@ function runDispatch(repoRoot, args, env) {
   });
 }
 
-function writeAssuranceRubric(reviewAssurance = null) {
+function writeEvaluationRubric() {
   const rubricFile = path.join(
     os.tmpdir(),
     `relay-dispatch-assurance-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.yaml`
@@ -1261,7 +1253,6 @@ function writeAssuranceRubric(reviewAssurance = null) {
     "    factors: []",
     "  task_profile:",
     "    size: M",
-    ...(reviewAssurance ? [`    review_assurance: ${reviewAssurance}`] : []),
   ].join("\n"), "utf-8");
   return rubricFile;
 }
@@ -1630,9 +1621,6 @@ test("dispatch --detach returns a launch receipt while detached supervisor compl
   assert.equal(receipt.status, "detached");
   assert.match(receipt.runId, /^issue-802-/);
   assert.equal(receipt.manifestPath, getManifestPath(repoRoot, receipt.runId));
-  assert.equal(receipt.reviewAssurance, "standard");
-  assert.equal(receipt.reviewAssuranceSource, "flag");
-  assert.equal(receipt.reviewAssuranceOverridden, null);
   assert.equal(Number.isInteger(receipt.supervisorPid), true);
   assert.ok(receipt.supervisorPid > 0);
   assert.equal(receipt.stdoutLog, path.join(getRunDir(repoRoot, receipt.runId), "dispatch-stdout.log"));
@@ -1846,206 +1834,6 @@ test("dispatch --manifest --detach returns a launch receipt while detached resum
     message: "detached resume dispatch completion",
   });
 });
-
-function guidancePrompt({ task = "guidance test task", reviewAssurance = null } = {}) {
-  const reviewAssuranceLines = reviewAssurance ? [`  review_assurance: ${reviewAssurance}`] : [];
-  return [
-    "# Dispatch: Guidance persistence",
-    "",
-    task,
-    "",
-    "## Task Profile",
-    "",
-    "This is advisory planner metadata for executor working style. It is not a reviewer verdict field, manifest role binding, or merge gate.",
-    "",
-    "```yaml",
-    "task_profile:",
-    "  size: M",
-    "  change_type: feature",
-    "  domains:",
-    "    - relay-dispatch",
-    "    - tests",
-    "  risk_tags:",
-    "    - trust-boundary",
-    "    - prompt-contract",
-    "  execution_mode: fresh-context",
-    ...reviewAssuranceLines,
-    "  guidance_packs:",
-    "    - surgical-change",
-    "    - verification-evidence",
-    "    - trust-boundary",
-    "  derivation_inputs:",
-    "    - github_issue_398",
-    "    - issue_394_reference_doc",
-    "```",
-    "",
-    "## Working Guidance",
-    "",
-    "These instructions guide execution style. They do not override Done Criteria, rubric commands, or scope boundaries.",
-    "",
-    "### surgical-change",
-    "- Keep the diff narrow.",
-    "",
-    "### verification-evidence",
-    "- Record changed artifacts and checks.",
-    "",
-    "### trust-boundary",
-    "- Name the trust root and protected decision.",
-  ].join("\n");
-}
-
-function readyLightPrompt({ task = "ready-light dispatch validation" } = {}) {
-  return [
-    "# Dispatch: Ready-light validation",
-    "",
-    task,
-    "",
-    "## Task Profile",
-    "",
-    "```yaml",
-    "task_profile:",
-    "  planning_profile: ready_light",
-    "  size: S",
-    "  change_type: feature",
-    "  domains:",
-    "    - relay-plan",
-    "  risk_tags: []",
-    "  execution_mode: quick",
-    "  review_assurance: standard",
-    "  guidance_packs:",
-    "    - surgical-change",
-    "    - verification-evidence",
-    "```",
-  ].join("\n");
-}
-
-function invalidReviewAssuranceTaskProfilePrompt() {
-  return [
-    "# Dispatch: Invalid task profile metadata",
-    "",
-    "## Task Profile",
-    "",
-    "```yaml",
-    "task_profile:",
-    "  planning_profile: ready_light",
-    "  size: S",
-    "  change_type: feature",
-    "  domains:",
-    "    - relay-plan",
-    "  risk_tags: []",
-    "  execution_mode: quick",
-    "  review_assurance: hardend",
-    "  guidance_packs:",
-    "    - surgical-change",
-    "```",
-  ].join("\n");
-}
-
-function plannerReadyLightPromptWithoutExplicitMarker() {
-  return [
-    "# Dispatch: Planner ready-light validation",
-    "",
-    "Planner-rendered prompt from an existing ready-light route.",
-    "",
-    "## Task Profile",
-    "",
-    "```yaml",
-    "task_profile:",
-    "  size: S",
-    "  change_type: feature",
-    "  domains:",
-    "    - relay-plan",
-    "  risk_tags: []",
-    "  execution_mode: quick",
-    "  review_assurance: standard",
-    "  guidance_packs:",
-    "    - surgical-change",
-    "    - verification-evidence",
-    "```",
-  ].join("\n");
-}
-
-function standardPromptWithReadyLightExample() {
-  return [
-    "# Dispatch: Standard docs task",
-    "",
-    "Update docs that include this example metadata:",
-    "",
-    "```yaml",
-    "planning_profile: ready_light",
-    "route_decision: ready_light",
-    "```",
-    "",
-    "This example is content, not the active task profile.",
-  ].join("\n");
-}
-
-function standardPromptWithTaskProfileExampleBeforeActiveProfile() {
-  return [
-    "# Dispatch: Standard docs task",
-    "",
-    "Update docs that include this example metadata:",
-    "",
-    "```yaml",
-    "task_profile:",
-    "  planning_profile: ready_light",
-    "  size: S",
-    "  guidance_packs:",
-    "    - surgical-change",
-    "```",
-    "",
-    "The example above is content, not the active task profile.",
-    "",
-    "## Task Profile",
-    "",
-    "```yaml",
-    "task_profile:",
-    "  planning_profile: standard",
-    "  size: M",
-    "  change_type: docs",
-    "  domains:",
-    "    - docs",
-    "  risk_tags: []",
-    "  execution_mode: standard",
-    "  review_assurance: standard",
-    "  guidance_packs:",
-    "    - docs-reader-success",
-    "```",
-  ].join("\n");
-}
-
-function readyLightRubricYaml() {
-  return [
-    "rubric:",
-    "  factors:",
-    "    - name: Task-specific check passes",
-    "      tier: contract",
-    "      type: automated",
-    "      command: \"node --test tests/task-specific.test.js\"",
-    "      target: \"exit 0\"",
-  ].join("\n");
-}
-
-function threeFactorRubricYaml() {
-  return [
-    "rubric:",
-    "  factors:",
-    "    - name: Parser path passes",
-    "      tier: contract",
-    "      type: automated",
-    "      command: \"node --test tests/parser.test.js\"",
-    "      target: \"exit 0\"",
-    "    - name: CLI path passes",
-    "      tier: contract",
-    "      type: automated",
-    "      command: \"node --test tests/cli.test.js\"",
-    "      target: \"exit 0\"",
-    "    - name: Error copy remains actionable",
-    "      tier: quality",
-    "      type: evaluated",
-    "      target: \">= 8/10\"",
-  ].join("\n");
-}
 
 function setupDryRunFixtureRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-"));
@@ -3470,116 +3258,6 @@ test("dispatch resume without redispatch artifact still errors with auto-discove
   assert.match(result.stderr, /Auto-discovery looked for review-round-<N>-redispatch\.md/);
 });
 
-test("dispatch stores model_hints for configured phases verbatim", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  allowCodexDispatchModels(relayHome);
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-109-model-hints-new",
-    "--prompt", "persist new-run model hints",
-    "--model-hints", "plan=X,dispatch=Y,review=Z,merge=W",
-    "--json",
-  ], env));
-
-  assert.deepEqual(readManifest(result.manifestPath).data.model_hints, {
-    plan: "X",
-    dispatch: "Y",
-    review: "Z",
-    merge: "W",
-  });
-});
-
-test("dispatch resume replaces model_hints and records model_hints_updated before redispatch", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  allowCodexDispatchModels(relayHome);
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  const first = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-109-model-hints-resume",
-    "--prompt", "initial dispatch",
-    "--model-hints", "dispatch=opus,review=haiku",
-    "--json",
-  ], env));
-  const record = readManifest(first.manifestPath);
-  writeManifest(first.manifestPath, {
-    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
-  }, record.body);
-
-  const second = JSON.parse(runDispatch(repoRoot, [
-    "--run-id", first.runId,
-    "--prompt", "resume dispatch",
-    "--model-hints", "dispatch=sonnet,merge=gpt-5.4",
-    "--json",
-  ], env));
-
-  assert.equal(second.mode, "resume");
-  assert.deepEqual(readManifest(first.manifestPath).data.model_hints, {
-    dispatch: "sonnet",
-    merge: "gpt-5.4",
-  });
-
-  const events = readJsonLines(getEventsPath(repoRoot, first.runId));
-  const updatedEvent = events.find((event) => event.event === "model_hints_updated");
-  assert.deepEqual(updatedEvent.before, {
-    dispatch: "opus",
-    review: "haiku",
-  });
-  assert.deepEqual(updatedEvent.after, {
-    dispatch: "sonnet",
-    merge: "gpt-5.4",
-  });
-});
-
-test("dispatch resume without --model-hints preserves stored hints and emits no model_hints_updated event", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  allowCodexDispatchModels(relayHome);
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  const first = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-109-model-hints-preserve",
-    "--prompt", "initial dispatch",
-    "--model-hints", "dispatch=opus,review=haiku",
-    "--json",
-  ], env));
-  const record = readManifest(first.manifestPath);
-  writeManifest(first.manifestPath, {
-    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
-  }, record.body);
-
-  const expectedHints = JSON.stringify(readManifest(first.manifestPath).data.model_hints);
-  runDispatch(repoRoot, [
-    "--run-id", first.runId,
-    "--prompt", "resume dispatch",
-    "--json",
-  ], env);
-
-  assert.equal(JSON.stringify(readManifest(first.manifestPath).data.model_hints), expectedHints);
-  const events = readJsonLines(getEventsPath(repoRoot, first.runId));
-  assert.equal(events.filter((event) => event.event === "model_hints_updated").length, 0);
-});
-
 const INVALID_MODEL_HINTS = [
   { label: "unknown phase", raw: "foo=bar", pattern: /unknown phase 'foo'/ },
   { label: "missing '='", raw: "dispatch", pattern: /missing '='/ },
@@ -3588,72 +3266,6 @@ const INVALID_MODEL_HINTS = [
   { label: "empty pair", raw: "dispatch=sonnet,,review=opus", pattern: /empty pair/ },
   { label: "duplicate phase", raw: "dispatch=opus,dispatch=sonnet", pattern: /duplicate phase 'dispatch'/ },
 ];
-
-test("parseModelHints rejects invalid model-hints tokens", () => {
-  for (const row of INVALID_MODEL_HINTS) {
-    assert.throws(() => parseModelHints(row.raw), (error) => {
-      assert.match(error.message, row.pattern);
-      return true;
-    }, row.label);
-  }
-});
-
-test("dispatch model-hints parse error skips manifest write", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  assert.throws(() => runDispatch(repoRoot, [
-    "-b", "issue-318-parse-error-no-manifest",
-    "--prompt", "invalid model hints",
-    "--model-hints", "foo=bar",
-  ], env), (error) => {
-    assert.match(String(error.stderr), /invalid --model-hints token/);
-    return true;
-  });
-  assert.equal(listManifestPaths(repoRoot).length, 0);
-});
-
-test("dispatch precedence D1 regression: CLI override beats manifest hint in executor argv", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  allowCodexDispatchModels(relayHome);
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d1.json`);
-  writeArgCaptureCodex(binDir, capturePath);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-  const taskPrompt = "dispatch matrix d1";
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-109-d1",
-    "--prompt", taskPrompt,
-    "--model", "sonnet",
-    "--model-hints", "dispatch=opus",
-    "--json",
-  ], env));
-  const commonGitDir = worktreeCommonGitDir(result.worktree);
-
-  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
-    "exec",
-    "-C", result.worktree,
-    "--color", "never",
-    "-o", result.resultFile,
-    "-c", "model_reasoning_effort=xhigh",
-    "-m", "sonnet",
-    "--sandbox", "workspace-write",
-    "--add-dir", commonGitDir,
-    buildDispatchExecPrompt(taskPrompt),
-  ]);
-  assert.equal(result.codexGitCommonDir, commonGitDir);
-});
 
 test("dispatch precedence D2 regression: CLI override works when manifest hint is absent", () => {
   const { repoRoot, relayHome } = setupRepo();
@@ -3681,53 +3293,12 @@ test("dispatch precedence D2 regression: CLI override works when manifest hint i
     "-C", result.worktree,
     "--color", "never",
     "-o", result.resultFile,
-    "-c", "model_reasoning_effort=xhigh",
     "-m", "sonnet",
     "--sandbox", "workspace-write",
     "--add-dir", commonGitDir,
     buildDispatchExecPrompt(taskPrompt),
   ]);
   assert.equal(result.codexGitCommonDir, commonGitDir);
-});
-
-test("dispatch precedence D3 regression: manifest hint supplies the effective model when CLI is unset", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  allowCodexDispatchModels(relayHome);
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d3.json`);
-  writeArgCaptureCodex(binDir, capturePath);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-  const taskPrompt = "dispatch matrix d3";
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-109-d3",
-    "--prompt", taskPrompt,
-    "--model-hints", "dispatch=opus",
-    "--json",
-  ], env));
-  const commonGitDir = worktreeCommonGitDir(result.worktree);
-
-  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
-    "exec",
-    "-C", result.worktree,
-    "--color", "never",
-    "-o", result.resultFile,
-    "-c", "model_reasoning_effort=xhigh",
-    "-m", "opus",
-    "--sandbox", "workspace-write",
-    "--add-dir", commonGitDir,
-    buildDispatchExecPrompt(taskPrompt),
-  ]);
-  assert.equal(result.codexGitCommonDir, commonGitDir);
-
-  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
-  const dispatchStart = events.find((event) => event.event === "dispatch_start");
-  assert.equal(dispatchStart.model, "opus");
 });
 
 test("dispatch precedence D4 regression: executor argv stays byte-identical when CLI and manifest hint are both absent", () => {
@@ -3755,7 +3326,6 @@ test("dispatch precedence D4 regression: executor argv stays byte-identical when
     "-C", result.worktree,
     "--color", "never",
     "-o", result.resultFile,
-    "-c", "model_reasoning_effort=xhigh",
     "--sandbox", "workspace-write",
     "--add-dir", commonGitDir,
     buildDispatchExecPrompt(taskPrompt),
@@ -3794,16 +3364,17 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
     "-C", result.worktree,
     "--color", "never",
     "-o", result.resultFile,
-    "-c", "model_reasoning_effort=xhigh",
+    "-c", "sandbox_workspace_write.network_access=true",
   ]);
+  assert.equal(capturedArgs.some((arg) => /^model_reasoning_effort=/.test(arg)), false);
   assert.ok(capturedArgs.includes("sandbox_workspace_write.network_access=true"));
   assert.deepEqual(capturedArgs.slice(-3), ["--add-dir", commonGitDir, buildDispatchExecPrompt(taskPrompt)]);
   assert.equal(result.codexGitCommonDir, commonGitDir);
   assert.equal(result.executorNetwork.access, "enabled");
   assert.equal(result.executorNetwork.mechanism, "sandbox_workspace_write.network_access");
-  assert.equal(result.executorPolicy.sandbox.enforcement_level, "native");
-  assert.equal(result.executorPolicy.network.enforcement_level, "native");
-  assert.deepEqual(result.executorPolicy.network.flags, ["-c sandbox_workspace_write.network_access=true"]);
+  assert.equal(result.executorPolicy.supported, true);
+  assert.equal(result.executorPolicy.write, true);
+  assert.equal(result.executorPolicy.networkControl, "native");
 
   const manifest = readManifest(result.manifestPath).data;
   assert.deepEqual(manifest.policy.executor_network, {
@@ -3811,18 +3382,18 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
     mechanism: "sandbox_workspace_write.network_access",
     domains: null,
   });
-  assert.equal(manifest.policy.executor_policy.sandbox.enforcement_level, "native");
-  assert.equal(manifest.policy.executor_policy.network.enforcement_level, "native");
+  assert.equal(manifest.policy.executor_policy.supported, true);
+  assert.equal(manifest.policy.executor_policy.networkControl, "native");
 
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
   const dispatchStart = events.find((event) => event.event === "dispatch_start");
   const dispatchResult = events.find((event) => event.event === "dispatch_result");
   assert.equal(dispatchStart.executor_network.access, "enabled");
   assert.equal(dispatchResult.executor_network.access, "enabled");
-  assert.equal(dispatchStart.executor_policy.sandbox.enforcement_level, "native");
-  assert.equal(dispatchStart.executor_policy.network.enforcement_level, "native");
-  assert.equal(dispatchResult.executor_policy.sandbox.enforcement_level, "native");
-  assert.equal(dispatchResult.executor_policy.network.enforcement_level, "native");
+  assert.equal(dispatchStart.executor_policy.supported, true);
+  assert.equal(dispatchStart.executor_policy.networkControl, "native");
+  assert.equal(dispatchResult.executor_policy.supported, true);
+  assert.equal(dispatchResult.executor_policy.networkControl, "native");
 });
 
 test("dispatch widens codex sandbox via --add-dir <common-git-dir> for worktree (#389 sandbox-widening)", () => {
@@ -3939,12 +3510,8 @@ function writeTempRubric(contents) {
   return rubricFile;
 }
 
-function writeRelayPolicy(relayHome, overrides = {}) {
+function writeRelayPolicy(relayHome) {
   fs.mkdirSync(relayHome, { recursive: true });
-  fs.writeFileSync(path.join(relayHome, "policy.json"), JSON.stringify({
-    ...buildDefaultRelayPolicy(),
-    ...overrides,
-  }, null, 2), "utf-8");
 }
 
 function allowCodexDispatchModels(relayHome) {
@@ -3954,13 +3521,69 @@ function allowCodexDispatchModels(relayHome) {
   });
 }
 
+function createResumableDispatch({ initialArgs = [] } = {}) {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-immutable-resume-binding",
+    "--prompt", "initial binding",
+    ...initialArgs,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body,
+  );
+  return { env, first, repoRoot };
+}
+
+function resumeBindingProcess({ repoRoot, runId, env, args = [] }) {
+  return spawnSync("node", [SCRIPT, repoRoot, "--run-id", runId, "--prompt", "resume binding", ...args, "--json"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+}
+
+test("dispatch resume rejects an executor mismatch before executor invocation", () => {
+  const { env, first, repoRoot } = createResumableDispatch();
+  const result = resumeBindingProcess({ repoRoot, runId: first.runId, env, args: ["--executor", "pi"] });
+
+  assert.notEqual(result.status, 0);
+  assert.match(JSON.parse(result.stdout).error, /--executor cannot replace immutable run binding 'codex'/);
+});
+
+test("dispatch resume rejects a model mismatch before executor invocation", () => {
+  const { env, first, repoRoot } = createResumableDispatch({ initialArgs: ["--model", "gpt-5.6"] });
+  const result = resumeBindingProcess({ repoRoot, runId: first.runId, env, args: ["--model", "gpt-5.5"] });
+
+  assert.notEqual(result.status, 0);
+  assert.match(JSON.parse(result.stdout).error, /--model cannot replace immutable run binding 'gpt-5\.6'/);
+});
+
+test("dispatch resume rejects model injection when a legacy run has no model binding", () => {
+  const { env, first, repoRoot } = createResumableDispatch();
+  const record = readManifest(first.manifestPath);
+  const dispatch = { ...(record.data.dispatch || {}) };
+  delete dispatch.model;
+  delete dispatch.last_model;
+  writeManifest(first.manifestPath, { ...record.data, dispatch }, record.body);
+
+  const result = resumeBindingProcess({ repoRoot, runId: first.runId, env, args: ["--model", "gpt-5.6"] });
+  assert.notEqual(result.status, 0);
+  assert.match(
+    JSON.parse(result.stdout).error,
+    /--model cannot be added to a legacy run without an immutable dispatch model binding/
+  );
+});
+
 test("dispatch opencode executor records provider metadata", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "openai/*", phases: ["dispatch"], executors: ["opencode"] }],
-  });
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode.json`);
   writeArgCaptureOpencode(binDir, capturePath);
@@ -3987,7 +3610,7 @@ test("dispatch opencode executor records provider metadata", () => {
 
   assert.equal(proc.status, 0, proc.stderr);
   assert.match(proc.stderr, /opencode executor is experimental/);
-  assert.match(proc.stderr, /reviewer-policy-opencode\.md/);
+  assert.doesNotMatch(proc.stderr, /reviewer-policy-opencode\.md/);
   const result = JSON.parse(proc.stdout);
 
   assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
@@ -4005,195 +3628,6 @@ test("dispatch opencode executor records provider metadata", () => {
   assert.equal(manifest.dispatch.last_executor, "opencode");
   assert.equal(manifest.dispatch.last_model, "openai/gpt-5");
   assert.equal(manifest.dispatch.last_provider, "openai");
-});
-
-test("dispatch denies disallowed executor route before spawning the executor", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "strict-deny-unknown",
-    deny_unknown_model_routes: true,
-  });
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-policy-denied-${Date.now()}.json`);
-  writeArgCaptureOpencode(binDir, capturePath);
-  const rubricFile = writeTempRubric("size: \"S\"\nrubric:\n  factors: []\n");
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-policy-denied",
-    "-p", "must not spawn opencode",
-    "-e", "opencode",
-    "-m", "example/opencode-model-fast",
-    "--rubric-file", rubricFile,
-    "--json",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      RELAY_HOME: relayHome,
-    },
-  });
-
-  assert.notEqual(proc.status, 0);
-  assert.equal(fs.existsSync(capturePath), false);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.status, "failed");
-  assert.equal(result.policy_decision.allowed, false);
-  assert.equal(result.policy_decision.phase, "dispatch");
-  assert.equal(result.policy_decision.actor_field, "executor");
-  assert.equal(result.policy_decision.executor, "opencode");
-  assert.equal(result.policy_decision.model, "example/opencode-model-fast");
-  assert.equal(result.policy_decision.reason, "unknown_model_route");
-  assert.match(result.error, /reason=unknown_model_route/);
-  assert.equal(result.hint, "run relay-config to register this route");
-  assert.equal(result.adapter_capability.adapter, "opencode");
-  assert.equal(result.adapter_capability.phase, "dispatch");
-  assert.equal(result.adapter_capability.safe, true);
-  assert.equal(result.executor_policy.adapter, "opencode");
-});
-
-test("dispatch prints relay-config route hint for text route denial", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "strict-deny-unknown",
-    deny_unknown_model_routes: true,
-  });
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-policy-denied-text-${Date.now()}.json`);
-  writeArgCaptureOpencode(binDir, capturePath);
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-policy-denied-text",
-    "-p", "must not spawn opencode",
-    "-e", "opencode",
-    "-m", "example/opencode-model-fast",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      RELAY_HOME: relayHome,
-    },
-  });
-
-  assert.notEqual(proc.status, 0);
-  assert.equal(fs.existsSync(capturePath), false);
-  assert.match(proc.stderr, /Error: relay policy denied model route.*reason=unknown_model_route/);
-  assert.match(proc.stderr, /hint: run relay-config to register this route/);
-});
-
-test("dispatch reports adapter-capability denial before model-route policy", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "allow-antigravity-dispatch",
-    allowed_model_routes: [{ route: "google/*", phases: ["dispatch"], executors: ["antigravity"] }],
-  });
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-antigravity-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-capability-denied-${Date.now()}.json`);
-  writeArgCaptureAntigravity(binDir, capturePath);
-  const rubricFile = writeTempRubric("size: \"S\"\nrubric:\n  factors: []\n");
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-capability-denied",
-    "-p", "must not spawn antigravity",
-    "-e", "antigravity",
-    "-m", "google/gemini-cli",
-    "--sandbox", "read-only",
-    "--rubric-file", rubricFile,
-    "--json",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      RELAY_HOME: relayHome,
-    },
-  });
-
-  assert.notEqual(proc.status, 0);
-  assert.equal(fs.existsSync(capturePath), false);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.status, "failed");
-  assert.equal(result.executor, "antigravity");
-  assert.equal(result.adapter_capability.adapter, "antigravity");
-  assert.equal(result.adapter_capability.phase, "dispatch");
-  assert.equal(result.adapter_capability.safe, false);
-  assert.match(result.adapter_capability.fail_closed_reasons.join("\n"), /read-only dispatch is not safely representable/);
-  assert.equal(result.policy_decision, undefined);
-});
-
-test("dispatch opencode executor fails closed when no model route is supplied", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
-  });
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-bundled-default.json`);
-  writeArgCaptureOpencode(binDir, capturePath);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-  const taskPrompt = "test missing opencode model route";
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-opencode-bundled-default",
-    "-p", taskPrompt,
-    "-e", "opencode",
-    "--json",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  assert.notEqual(proc.status, 0);
-  assert.equal(fs.existsSync(capturePath), false);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.status, "failed");
-  assert.equal(result.policy_decision.reason, "missing_model_route");
-  assert.equal(result.policy_decision.model, null);
-  assert.equal(result.hint, "run relay-config to set a default model for this route");
-});
-
-test("dispatch prints relay-config default-model hint for text unresolved model", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
-  });
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-missing-model-text-${Date.now()}.json`);
-  writeArgCaptureOpencode(binDir, capturePath);
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-opencode-missing-model-text",
-    "-p", "test missing opencode model route",
-    "-e", "opencode",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      RELAY_HOME: relayHome,
-    },
-  });
-
-  assert.notEqual(proc.status, 0);
-  assert.equal(fs.existsSync(capturePath), false);
-  assert.match(proc.stderr, /Error: relay policy denied model route.*reason=missing_model_route/);
-  assert.match(proc.stderr, /hint: run relay-config to set a default model for this route/);
 });
 
 test("dispatch reports install hint when executor CLI is missing in JSON and text modes", () => {
@@ -4224,228 +3658,16 @@ test("dispatch reports install hint when executor CLI is missing in JSON and tex
 
     assert.notEqual(proc.status, 0);
     assert.match(proc.stderr, /Error: opencode CLI not found\./);
-    assert.match(proc.stderr, /hint: install the opencode CLI and ensure it is on PATH/);
+    assert.match(proc.stderr, /hint: Install 'opencode' and ensure it is available on PATH\./);
     if (jsonOut) {
       const result = JSON.parse(proc.stdout);
       assert.equal(result.status, "failed");
       assert.equal(result.error, "opencode CLI not found.");
-      assert.equal(result.hint, "install the opencode CLI and ensure it is on PATH");
+      assert.equal(result.hint, "Install 'opencode' and ensure it is available on PATH.");
     } else {
       assert.equal(proc.stdout, "");
     }
   }
-});
-
-test("dispatch opencode executor lets RELAY_HOME executors config override bundled model", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
-  });
-  fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
-    executors: {
-      opencode: {
-        default_model: "example/opencode-model-local",
-        candidate_models: ["example/opencode-model-local"],
-      },
-    },
-  }, null, 2), "utf-8");
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-local-default.json`);
-  writeArgCaptureOpencode(binDir, capturePath);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-  const taskPrompt = "test local opencode default";
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-opencode-local-default",
-    "-p", taskPrompt,
-    "-e", "opencode",
-    "--json",
-  ], env));
-
-  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
-    model: "example/opencode-model-local",
-    taskPrompt,
-  });
-
-  const manifest = readManifest(result.manifestPath).data;
-  assert.equal(manifest.dispatch.last_model, "example/opencode-model-local");
-  assert.equal(manifest.dispatch.last_provider, "example");
-});
-
-test("dispatch lets local executor config define defaults for executors absent from bundled config", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  allowCodexDispatchModels(relayHome);
-  fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
-    executors: {
-      codex: {
-        default_model: "gpt-5.5",
-      },
-    },
-  }, null, 2), "utf-8");
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-codex-local-default.json`);
-  writeArgCaptureCodex(binDir, capturePath);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-codex-local-default",
-    "-p", "codex local default model",
-    "--json",
-  ], env));
-  const args = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
-
-  assert.equal(result.status, "completed");
-  assert.equal(args[args.indexOf("-m") + 1], "gpt-5.5");
-});
-
-test("dispatch codex executor ignores malformed local executor model config", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-codex-malformed-local-model-config.json`);
-  writeArgCaptureCodex(binDir, capturePath);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-  const taskPrompt = "codex should ignore unrelated malformed executor config";
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-codex-ignore-malformed-model-config",
-    "-p", taskPrompt,
-    "--json",
-  ], env));
-  const args = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
-
-  assert.equal(result.status, "completed");
-  assert.equal(args.includes("-m"), false);
-});
-
-test("dispatch opencode invalid local default fails closed without bundled fallback", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
-  });
-  fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
-    executors: {
-      opencode: {
-        default_model: 123,
-      },
-    },
-  }), "utf-8");
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-invalid-local-default.json`);
-  writeArgCaptureOpencode(binDir, capturePath);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-  const taskPrompt = "invalid local config should not invent an opencode default";
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-opencode-invalid-local-default",
-    "-p", taskPrompt,
-    "-e", "opencode",
-    "--json",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  assert.notEqual(proc.status, 0);
-  assert.match(proc.stderr, /Warning: ignoring optional executor model config/);
-  assert.match(proc.stderr, /default_model must be a non-empty string/);
-  assert.equal(fs.existsSync(capturePath), false);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.policy_decision.reason, "missing_model_route");
-  assert.equal(result.policy_decision.model, null);
-});
-
-test("dispatch opencode explicit --model skips malformed local executor model config", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
-  });
-  fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-explicit-malformed-local.json`);
-  writeArgCaptureOpencode(binDir, capturePath);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-  const taskPrompt = "explicit opencode model should ignore malformed default config";
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-opencode-explicit-ignore-malformed-model-config",
-    "-p", taskPrompt,
-    "-e", "opencode",
-    "-m", "example/opencode-model-local",
-    "--json",
-  ], env));
-
-  assert.equal(result.status, "completed");
-  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
-    model: "example/opencode-model-local",
-    taskPrompt,
-  });
-});
-
-test("dispatch opencode malformed local default fails closed without bundled fallback", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  writeRelayPolicy(relayHome, {
-    profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
-  });
-  fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
-  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-malformed-local-default.json`);
-  writeArgCaptureOpencode(binDir, capturePath);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-  const taskPrompt = "malformed local config should not invent an opencode default";
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-opencode-malformed-local-default",
-    "-p", taskPrompt,
-    "-e", "opencode",
-    "--json",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  assert.notEqual(proc.status, 0);
-  assert.match(proc.stderr, /Warning: ignoring optional executor model config/);
-  assert.equal(fs.existsSync(capturePath), false);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.policy_decision.reason, "missing_model_route");
-  assert.equal(result.policy_decision.model, null);
 });
 
 function reasoningArgValue(args) {
@@ -4477,22 +3699,17 @@ function captureCodexReasoning({ branch, rubricText = null, extraArgs = [] }) {
   return JSON.parse(fs.readFileSync(capturePath, "utf-8"));
 }
 
-test("dispatch scales codex reasoning effort by rubric size", () => {
-  for (const [size, expected] of [
-    ["S", "medium"],
-    ["M", "high"],
-    ["L", "xhigh"],
-    ["XL", "xhigh"],
-  ]) {
+test("dispatch does not synthesize codex reasoning from rubric size", () => {
+  for (const size of ["S", "M", "L", "XL"]) {
     const args = captureCodexReasoning({
       branch: `issue-reasoning-size-${size.toLowerCase()}`,
       rubricText: `size: "${size}"\nrubric:\n  factors: []\n`,
     });
-    assert.equal(reasoningArgValue(args), `model_reasoning_effort=${expected}`);
+    assert.equal(reasoningArgValue(args), null);
   }
 });
 
-test("dispatch --reasoning overrides rubric-size codex reasoning effort", () => {
+test("dispatch --reasoning forwards an explicit codex selection", () => {
   const args = captureCodexReasoning({
     branch: "issue-reasoning-override",
     rubricText: "size: \"L\"\nrubric:\n  factors: []\n",
@@ -4501,22 +3718,18 @@ test("dispatch --reasoning overrides rubric-size codex reasoning effort", () => 
   assert.equal(reasoningArgValue(args), "model_reasoning_effort=low");
 });
 
-test("dispatch falls back to xhigh codex reasoning when rubric size is missing or unrecognized", () => {
-  const injectedRubricWithoutSize = captureCodexReasoning({
-    branch: "issue-reasoning-injected-rubric-without-size",
-  });
-  const noSize = captureCodexReasoning({
-    branch: "issue-reasoning-no-size",
-    rubricText: "rubric:\n  factors: []\n",
-  });
-  const weirdSize = captureCodexReasoning({
-    branch: "issue-reasoning-weird-size",
-    rubricText: "size: \"WEIRD\"\nrubric:\n  factors: []\n",
-  });
-
-  assert.equal(reasoningArgValue(injectedRubricWithoutSize), "model_reasoning_effort=xhigh");
-  assert.equal(reasoningArgValue(noSize), "model_reasoning_effort=xhigh");
-  assert.equal(reasoningArgValue(weirdSize), "model_reasoning_effort=xhigh");
+test("dispatch keeps reasoning omitted when the rubric has no usable size", () => {
+  for (const [branch, rubricText] of [
+    ["issue-reasoning-injected-rubric-without-size", null],
+    ["issue-reasoning-no-size", "rubric:\n  factors: []\n"],
+    ["issue-reasoning-weird-size", "size: \"WEIRD\"\nrubric:\n  factors: []\n"],
+  ]) {
+    const args = captureCodexReasoning({
+      branch,
+      rubricText,
+    });
+    assert.equal(reasoningArgValue(args), null);
+  }
 });
 
 test("dispatch leaves claude executor argv untouched by rubric-size reasoning", () => {
@@ -4542,234 +3755,6 @@ test("dispatch leaves claude executor argv untouched by rubric-size reasoning", 
   const args = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
   assert.equal(args.includes("-c"), false);
   assert.equal(args.some((arg) => arg.startsWith("model_reasoning_effort=")), false);
-});
-
-test("dispatch dry-run resolves effective_dispatch_model from model hints and emits zero events", () => {
-  const { repoRoot, relayHome, rubricFile } = setupDryRunFixtureRepo();
-  writeRelayPolicy(relayHome, {
-    profile: "allow-codex-hint",
-    allowed_model_routes: [{ route: "opus", phases: ["dispatch"], executors: ["codex"] }],
-  });
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  const stdout = execFileSync("node", [SCRIPT, repoRoot,
-    "-b", "issue-109-dry-run-model-hints",
-    "--prompt", "dry run model hints",
-    "--rubric-file", rubricFile,
-    "--model-hints", "dispatch=opus",
-    "--dry-run",
-    "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    stdio: "pipe",
-    env,
-  });
-  const result = JSON.parse(stdout);
-
-  assert.equal(result.effective_dispatch_model, "opus");
-  assert.equal(result.policy_decision.allowed, true);
-  assert.equal(result.policy_decision.reason, "allowed_model_route");
-  assert.equal(result.policy_decision.matched_route, "opus");
-  assert.equal(listManifestPaths(repoRoot).length, 0);
-});
-
-test("dispatch dry-run includes managed default policy decision details", () => {
-  const { repoRoot, relayHome, rubricFile } = setupDryRunFixtureRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-bin-"));
-  writeFakeCodex(binDir);
-  const stdout = execFileSync("node", [SCRIPT, repoRoot,
-    "-b", "issue-policy-dry-run",
-    "--prompt", "dry run policy decision",
-    "--rubric-file", rubricFile,
-    "--dry-run",
-    "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    stdio: "pipe",
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      RELAY_HOME: relayHome,
-    },
-  });
-  const result = JSON.parse(stdout);
-
-  assert.deepEqual({
-    ...result.policy_decision,
-    policy: {
-      ...result.policy_decision.policy,
-      sources: {
-        ...result.policy_decision.policy.sources,
-        project: "<project-policy>",
-      },
-    },
-  }, {
-    allowed: true,
-    reason: "managed_cli",
-    phase: "dispatch",
-    actor_field: "executor",
-    actor: "codex",
-    executor: "codex",
-    reviewer: null,
-    model: null,
-    matched_route: null,
-    policy: {
-      status: "defaulted",
-      sources: {
-        global: path.join(relayHome, "policy.json"),
-        repo: path.join(repoRoot, ".relay", "policy.json"),
-        project: "<project-policy>",
-      },
-    },
-  });
-  assert.ok(result.policy_decision.policy.sources.project.startsWith(path.join(relayHome, "projects")));
-  assert.equal(path.basename(result.policy_decision.policy.sources.project), "policy.json");
-});
-
-test("dispatch routing dry-run JSON explains CLI tags and selected advisory defaults", () => {
-  const { repoRoot, relayHome, rubricFile, env } = setupDryRunFixtureRepo();
-  writeRelayPolicy(relayHome, {
-    profile: "routing-dry-run",
-    routing_rules: [
-      {
-        name: "docs",
-        match: { tags: ["docs"] },
-        advisory_review: { reviewer: "claude", profile: "blindspot" },
-      },
-    ],
-  });
-
-  const stdout = runDispatch(repoRoot, [
-    "-b", "issue-routing-dry-run",
-    "--prompt", "dry run routing decision",
-    "--rubric-file", rubricFile,
-    "--tags", "docs",
-    "--dry-run",
-    "--json",
-  ], env);
-  const result = JSON.parse(stdout);
-
-  assert.equal(result.routing_decision.effective_source, "cli");
-  assert.deepEqual(result.routing_decision.source_tags.cli, ["docs"]);
-  assert.equal(result.routing_decision.matched_rule.name, "docs");
-  assert.deepEqual(result.routing_decision.selected.advisory_review, [{
-    reviewer: "claude",
-    profile: "blindspot",
-    trigger: "every_round",
-    gating: false,
-  }]);
-});
-
-test("explicit empty routed advisory selection survives preset injection", () => {
-  const { repoRoot, relayHome, rubricFile, env } = setupDryRunFixtureRepo();
-  writeRelayPolicy(relayHome, {
-    profile: "routing-empty-advisory",
-    routing_rules: [
-      {
-        name: "docs",
-        match: { tags: ["docs"] },
-        advisory_review: [],
-      },
-    ],
-    presets: {
-      light: {
-        advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
-      },
-    },
-    allowed_model_routes: [
-      { route: "example/pi-model-*", phases: ["advisory_review"], reviewers: ["pi"] },
-    ],
-  });
-
-  const stdout = runDispatch(repoRoot, [
-    "-b", "issue-routing-empty-advisory",
-    "--prompt", "dry run empty advisory selection",
-    "--rubric-file", rubricFile,
-    "--tags", "docs",
-    "--route-preset", "light",
-    "--dry-run",
-    "--json",
-  ], env);
-  const result = JSON.parse(stdout);
-
-  assert.equal(result.routing_decision.matched_rule.name, "docs");
-  // [] is a selection ("no advisory lanes"), not absence: the preset's
-  // advisory lanes must not overwrite it.
-  assert.deepEqual(result.routing_decision.selected.advisory_review, []);
-});
-
-test("dispatch routing dry-run text explains no-match decisions", () => {
-  const { repoRoot, relayHome, rubricFile, env } = setupDryRunFixtureRepo();
-  writeRelayPolicy(relayHome, {
-    profile: "routing-no-match",
-    routing_rules: [
-      {
-        name: "docs",
-        match: { tags: ["docs"] },
-        advisory_review: { reviewer: "opencode" },
-      },
-    ],
-  });
-
-  const stdout = runDispatch(repoRoot, [
-    "-b", "issue-routing-no-match",
-    "--prompt", "dry run routing no match",
-    "--rubric-file", rubricFile,
-    "--tags", "security",
-    "--dry-run",
-  ], env);
-
-  assert.match(stdout, /Routing:\s+no match/);
-  assert.match(stdout, /Tags:\s+cli=security .*effective=security/);
-  assert.match(stdout, /Selected:\s+advisory_review=\(none\)/);
-});
-
-test("dispatch resume --dry-run with new --model-hints reports the new hint in effective_dispatch_model and does NOT write the manifest or emit events", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  allowCodexDispatchModels(relayHome);
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  const first = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-109-model-hints-dry-run-resume",
-    "--prompt", "initial dispatch",
-    "--model-hints", "dispatch=opus",
-    "--json",
-  ], env));
-  const record = readManifest(first.manifestPath);
-  writeManifest(first.manifestPath, {
-    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
-  }, record.body);
-
-  const beforeManifest = readManifest(first.manifestPath).data;
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "--run-id", first.runId,
-    "--prompt", "resume dispatch dry-run",
-    "--model-hints", "dispatch=sonnet",
-    "--dry-run",
-    "--json",
-  ], env));
-
-  assert.equal(result.effective_dispatch_model, "sonnet");
-  const afterManifest = readManifest(first.manifestPath).data;
-  assert.equal(afterManifest.model_hints.dispatch, "opus");
-  const events = readJsonLines(getEventsPath(repoRoot, first.runId));
-  assert.equal(events.filter((event) => event.event === "model_hints_updated").length, 0);
-  assert.deepEqual(afterManifest.model_hints, beforeManifest.model_hints);
 });
 
 test("dispatch resumes rubric fail-closed recovery runs from changes_requested", () => {
@@ -5766,7 +4751,6 @@ test("dispatch with --executor pi invokes Pi and copies stdout into the result f
   assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
     "--no-session",
     "--model", "openai/gpt-5",
-    "--thinking", "high",
     "--print", buildDispatchExecPrompt(taskPrompt),
   ]);
 
@@ -5819,7 +4803,9 @@ test("dispatch with --executor antigravity invokes agy and copies stdout into th
   assert.equal(manifest.dispatch.last_provider, "google");
   assert.equal(manifest.policy.executor_policy.cli.binary, "agy");
   assert.equal(manifest.policy.executor_policy.cli.version, "agy 1.0.2");
-  assert.deepEqual(manifest.policy.executor_policy.sandbox.flags, ["--sandbox", "--add-dir <git-common-dir>"]);
+  assert.equal(manifest.policy.executor_policy.supported, true);
+  assert.equal(manifest.policy.executor_policy.write, true);
+  assert.equal(manifest.policy.executor_policy.networkControl, "informational");
 });
 
 test("dispatch with --executor cline invokes Cline and extracts run_result.text into the result file", () => {
@@ -6295,224 +5281,6 @@ fs.writeFileSync = function patchedWriteFileSync(filePath, data, options) {
   assert.equal(marker.lease.pgid, marker.executorPid);
   assert.notEqual(marker.lease.pgid, staleLease.pgid);
   assert.equal(fs.existsSync(marker.leasePath), false);
-});
-
-test("dispatch persists selected guidance metadata in run artifacts and events", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-398-guidance",
-    "--prompt", guidancePrompt(),
-    "--json",
-  ], env));
-
-  assert.equal(result.status, "completed");
-  const manifest = readManifest(result.manifestPath).data;
-  assert.deepEqual(manifest.advisory.guidance.guidance_packs, [
-    "surgical-change",
-    "verification-evidence",
-    "trust-boundary",
-  ]);
-  assert.deepEqual(manifest.advisory.guidance.task_profile_summary, {
-    size: "M",
-    change_type: "feature",
-    domains: ["relay-dispatch", "tests"],
-    risk_tags: ["trust-boundary", "prompt-contract"],
-    execution_mode: "fresh-context",
-    derivation_inputs: ["github_issue_398", "issue_394_reference_doc"],
-  });
-  assert.equal(manifest.advisory.guidance.artifact_path, "guidance-metadata.json");
-  assert.equal(manifest.roles.executor, "codex");
-  assert.equal(manifest.review.latest_verdict, "pending");
-
-  const artifact = JSON.parse(fs.readFileSync(path.join(result.runDir, "guidance-metadata.json"), "utf-8"));
-  assert.equal(artifact.dispatch_prompt_path, "dispatch-prompt.md");
-  assert.equal(artifact.rubric_path, "rubric.yaml");
-  assert.deepEqual(artifact.guidance_packs, manifest.advisory.guidance.guidance_packs);
-  assert.deepEqual(artifact.task_profile_summary, manifest.advisory.guidance.task_profile_summary);
-
-  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
-  const guidanceEvent = events.find((event) => event.event === "guidance_selected");
-  assert.ok(guidanceEvent, "guidance_selected event should be appended");
-  assert.equal(typeof guidanceEvent.ts, "string");
-  assert.equal(guidanceEvent.run_id, result.runId);
-  assert.deepEqual(guidanceEvent.guidance_packs, artifact.guidance_packs);
-  assert.deepEqual(guidanceEvent.task_profile_summary, artifact.task_profile_summary);
-});
-
-test("dispatch keeps rubric-omission default and flag over prompt task_profile assurance", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-
-  const defaultResult = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-profile-assurance",
-    "--prompt", guidancePrompt({ reviewAssurance: "hardened" }),
-    "--json",
-  ], env));
-
-  assert.equal(defaultResult.status, "completed");
-  const defaultManifest = readManifest(defaultResult.manifestPath).data;
-  assert.equal(defaultResult.reviewAssurance, "standard");
-  assert.equal(defaultResult.reviewAssuranceSource, "flag");
-  assert.equal(defaultManifest.policy.review_assurance, "standard");
-  assert.equal(defaultManifest.policy.review_assurance_source, "flag");
-  assert.equal(defaultManifest.advisory.guidance.task_profile_summary.review_assurance, "hardened");
-
-  const flagResult = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-profile-assurance-flag",
-    "--prompt", guidancePrompt({ reviewAssurance: "hardened" }),
-    "--review-assurance", "standard",
-    "--json",
-  ], env));
-
-  assert.equal(flagResult.status, "completed");
-  const flagManifest = readManifest(flagResult.manifestPath).data;
-  assert.equal(flagResult.reviewAssurance, "standard");
-  assert.equal(flagResult.reviewAssuranceSource, "flag");
-  assert.equal(flagManifest.policy.review_assurance, "standard");
-  assert.equal(flagManifest.policy.review_assurance_source, "flag");
-  assert.equal(flagManifest.advisory.guidance.task_profile_summary.review_assurance, "hardened");
-});
-
-test("dispatch uses rubric assurance over prompt metadata and persists its resolved cap and source", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-rubric-assurance-bin-"));
-  writeFakeCodex(binDir);
-  const rubricFile = writeAssuranceRubric("compact");
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-rubric-assurance-only",
-    "--prompt", guidancePrompt({ reviewAssurance: "hardened" }),
-    "--rubric-file", rubricFile,
-    "--json",
-  ], env));
-
-  const manifest = readManifest(result.manifestPath).data;
-  assert.equal(result.reviewAssurance, "compact");
-  assert.equal(result.reviewAssuranceSource, "rubric");
-  assert.equal(result.reviewAssuranceOverridden, null);
-  assert.equal(manifest.policy.review_assurance, "compact");
-  assert.equal(manifest.policy.review_assurance_source, "rubric");
-  assert.equal(manifest.policy.review_assurance_overridden, undefined);
-  assert.equal(manifest.advisory.guidance.task_profile_summary.review_assurance, "hardened");
-  assert.equal(manifest.review.max_rounds, 1);
-});
-
-test("dispatch uses the review assurance flag when the rubric omits the field", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-flag-assurance-bin-"));
-  writeFakeCodex(binDir);
-  const rubricFile = writeAssuranceRubric();
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-flag-assurance-only",
-    "--prompt", "use the dispatch assurance flag",
-    "--rubric-file", rubricFile,
-    "--review-assurance", "hardened",
-    "--json",
-  ], env));
-
-  const manifest = readManifest(result.manifestPath).data;
-  assert.equal(result.reviewAssurance, "hardened");
-  assert.equal(result.reviewAssuranceSource, "flag");
-  assert.equal(result.reviewAssuranceOverridden, null);
-  assert.equal(manifest.policy.review_assurance, "hardened");
-  assert.equal(manifest.policy.review_assurance_source, "flag");
-  assert.equal(manifest.review.max_rounds, 3);
-});
-
-test("dispatch records a disagreeing assurance flag while the rubric wins", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-assurance-conflict-bin-"));
-  writeFakeCodex(binDir);
-  const rubricFile = writeAssuranceRubric("hardened");
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-assurance-conflict",
-    "--prompt", "record the assurance conflict",
-    "--rubric-file", rubricFile,
-    "--review-assurance", "standard",
-    "--json",
-  ], env));
-
-  const manifest = readManifest(result.manifestPath).data;
-  assert.equal(result.reviewAssurance, "hardened");
-  assert.equal(result.reviewAssuranceSource, "rubric");
-  assert.equal(result.reviewAssuranceOverridden, "standard");
-  assert.equal(manifest.policy.review_assurance, "hardened");
-  assert.equal(manifest.policy.review_assurance_source, "rubric");
-  assert.equal(manifest.policy.review_assurance_overridden, "standard");
-  assert.equal(manifest.review.max_rounds, 3);
-});
-
-test("dispatch resume preserves guidance metadata without injecting stale Working Guidance blocks", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-
-  const first = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-398-guidance-resume",
-    "--prompt", guidancePrompt({ task: "initial guided dispatch" }),
-    "--json",
-  ], env));
-  const record = readManifest(first.manifestPath);
-  writeManifest(
-    first.manifestPath,
-    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
-    record.body
-  );
-
-  const second = JSON.parse(runDispatch(repoRoot, [
-    "--run-id", first.runId,
-    "--prompt", "fix review feedback without a new task profile",
-    "--json",
-  ], env));
-
-  assert.equal(second.mode, "resume");
-  const manifest = readManifest(first.manifestPath).data;
-  assert.deepEqual(manifest.advisory.guidance.guidance_packs, [
-    "surgical-change",
-    "verification-evidence",
-    "trust-boundary",
-  ]);
-
-  const artifact = JSON.parse(fs.readFileSync(path.join(second.runDir, "guidance-metadata.json"), "utf-8"));
-  assert.equal(artifact.source, "manifest-preserved");
-  assert.deepEqual(artifact.guidance_packs, manifest.advisory.guidance.guidance_packs);
-
-  const dispatchPrompt = fs.readFileSync(path.join(second.runDir, "dispatch-prompt.md"), "utf-8");
-  assert.match(dispatchPrompt, /fix review feedback without a new task profile/);
-  assert.doesNotMatch(dispatchPrompt, /## Working Guidance/);
-
-  const guidanceEvents = readJsonLines(getEventsPath(repoRoot, first.runId))
-    .filter((event) => event.event === "guidance_selected");
-  assert.equal(guidanceEvents.length, 2);
-  assert.deepEqual(guidanceEvents[1].guidance_packs, guidanceEvents[0].guidance_packs);
-  assert.equal(guidanceEvents[1].guidance_source, "manifest-preserved");
 });
 
 test("dispatch with --executor claude supports resume", () => {
@@ -7018,7 +5786,6 @@ test("dispatch lets explicit role env vars override the unknown defaults", () =>
   const result = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-198-role-override",
     "--prompt", "respect explicit role bindings",
-    "--review-assurance", "hardened",
     "--json",
   ], {
     ...env,
@@ -7029,7 +5796,6 @@ test("dispatch lets explicit role env vars override the unknown defaults", () =>
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.roles.orchestrator, "claude");
   assert.equal(manifest.roles.reviewer, "claude");
-  assert.equal(manifest.policy.review_assurance, "hardened");
 });
 
 test("dispatch dry-run never invokes orchestrator push or PR creation", () => {
@@ -7288,7 +6054,7 @@ test("dispatch orchestrator-commits uncommitted codex runs by default", () => {
     },
     codexMode: "uncommitted",
   });
-  const rubricFile = writeAssuranceRubric("hardened");
+  const rubricFile = writeEvaluationRubric();
 
   const result = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-508-codex-default-auto-recover",
@@ -7378,7 +6144,7 @@ test("dispatch commit keeps tracked runtime-root changes but excludes adjacent m
     },
     codexMode: "runtime-root-uncommitted",
   });
-  const rubricFile = writeAssuranceRubric("hardened");
+  const rubricFile = writeEvaluationRubric();
 
   const result = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-1121-runtime-root-reviewable",
@@ -7457,7 +6223,7 @@ for (const scenario of [
       },
       codexMode: scenario.codexMode,
     });
-    const rubricFile = writeAssuranceRubric("hardened");
+    const rubricFile = writeEvaluationRubric();
 
     const result = JSON.parse(runDispatch(repoRoot, [
       "-b", scenario.branch,
@@ -7536,7 +6302,7 @@ for (const scenario of [
       },
       codexMode: scenario.codexMode,
     });
-    const rubricFile = writeAssuranceRubric("hardened");
+    const rubricFile = writeEvaluationRubric();
 
     const result = JSON.parse(runDispatch(repoRoot, [
       "-b", scenario.branch,
@@ -7600,7 +6366,7 @@ for (const scenario of [
       },
       codexMode: scenario.codexMode,
     });
-    const rubricFile = writeAssuranceRubric("hardened");
+    const rubricFile = writeEvaluationRubric();
 
     const result = JSON.parse(runDispatch(repoRoot, [
       "-b", scenario.branch,
@@ -7667,7 +6433,7 @@ for (const scenario of [
       relayHome,
       codexMode: scenario.codexMode,
     });
-    const rubricFile = writeAssuranceRubric("hardened");
+    const rubricFile = writeEvaluationRubric();
 
     const dispatched = spawnSync(process.execPath, [
       SCRIPT,
@@ -7708,7 +6474,7 @@ test("dispatch fails closed when an orchestrator-owned commit hook changes the v
     "",
   ].join("\n"), "utf-8");
   fs.chmodSync(hookPath, 0o755);
-  const rubricFile = writeAssuranceRubric("hardened");
+  const rubricFile = writeEvaluationRubric();
 
   const dispatched = spawnSync(process.execPath, [
     SCRIPT,
@@ -7768,7 +6534,7 @@ test("dispatch fails closed when an executor-direct commit hook changes the veri
     "",
   ].join("\n"), "utf-8");
   fs.chmodSync(hookPath, 0o755);
-  const rubricFile = writeAssuranceRubric("hardened");
+  const rubricFile = writeEvaluationRubric();
 
   const dispatched = spawnSync(process.execPath, [
     SCRIPT,
@@ -8221,7 +6987,7 @@ test("dispatch escalates Antigravity zero-exit runs with only runtime metadata d
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 
-test("dispatch preserves Antigravity completed-uncommitted for non-runtime repository dirt", () => {
+test("dispatch orchestrator-commits Antigravity non-runtime repository dirt by default", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   process.env.RELAY_HOME = relayHome;
   writeRelayPolicy(relayHome, {
@@ -8245,17 +7011,18 @@ test("dispatch preserves Antigravity completed-uncommitted for non-runtime repos
     "--json",
   ], env));
 
-  assert.equal(result.status, "completed-uncommitted");
-  assert.equal(result.commitMode, "completed-uncommitted, recover-commit required");
+  assert.equal(result.status, "completed");
+  assert.equal(result.commitMode, "orchestrator-committed");
   assert.equal(result.runState, STATES.REVIEW_PENDING);
-  assert.equal(result.commits, "");
-  assert.match(result.uncommitted, /README\.md/);
+  assert.match(result.commits, /Relay run/);
+  assert.equal(result.uncommitted, null);
+  assert.equal(result.prNumber, 594);
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
-  assert.equal(manifest.git.pr_number, null);
-  assert.deepEqual(readJsonLines(ghLogPath), []);
-  assert.deepEqual(readJsonLines(execLogPath), []);
-  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+  assert.equal(manifest.git.pr_number, 594);
+  assert(readJsonLines(ghLogPath).some((args) => args[0] === "pr" && args[1] === "create"));
+  assert(readJsonLines(execLogPath).some(({ command, args }) => command === "git" && args.includes("push")));
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 1);
 });
 
 test("dispatch --auto-recover-commit orchestrator-commits non-codex completed-uncommitted runs (#393)", () => {
@@ -8410,7 +7177,7 @@ test("dispatch seeds execution evidence test_command from structured verificatio
       prCreateUrl: "https://example.test/acme/dev-relay/pull/1099",
     },
   });
-  const rubricFile = writeAssuranceRubric("hardened");
+  const rubricFile = writeEvaluationRubric();
 
   const result = JSON.parse(runDispatch(fixture.repoRoot, [
     "-b", "issue-1099-gate-seeded-evidence",
@@ -8464,7 +7231,7 @@ test("dispatch cannot execute a gate with orchestrator environment privileges", 
     os.tmpdir(),
     `relay-orchestrator-env-sentinel-${process.pid}-${Date.now()}`
   );
-  const rubricFile = writeAssuranceRubric("hardened");
+  const rubricFile = writeEvaluationRubric();
   fs.writeFileSync(
     rubricFile,
     fs.readFileSync(rubricFile, "utf-8").replace(
@@ -8757,214 +7524,6 @@ test("dispatch dry-run includes rubric file info", () => {
   ], env));
 
   assert.equal(result.rubricFile, rubricFile);
-
-  fs.unlinkSync(rubricFile);
-});
-
-test("dispatch rejects invalid ready-light rubric before accepting rubric file", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-
-  const rubricFile = path.join(os.tmpdir(), `rubric-ready-light-invalid-${Date.now()}.yaml`);
-  fs.writeFileSync(rubricFile, "rubric:\n  factors: []\n", "utf-8");
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-ready-light-invalid-rubric",
-    "--prompt", readyLightPrompt(),
-    "--rubric-file", rubricFile,
-    "--dry-run", "--json",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  assert.notEqual(proc.status, 0);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.status, "failed");
-  assert.equal(result.error_code, "ready_light_factor_count");
-  assert.match(result.error, /Ready-light S rubrics require 1-2 substantive factors/);
-
-  fs.unlinkSync(rubricFile);
-});
-
-test("dispatch reports invalid task_profile metadata through failEarly", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-
-  const rubricFile = path.join(os.tmpdir(), `rubric-invalid-task-profile-${Date.now()}.yaml`);
-  fs.writeFileSync(rubricFile, readyLightRubricYaml(), "utf-8");
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-invalid-task-profile",
-    "--prompt", invalidReviewAssuranceTaskProfilePrompt(),
-    "--rubric-file", rubricFile,
-    "--dry-run", "--json",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  assert.notEqual(proc.status, 0);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.status, "failed");
-  assert.equal(result.error_code, "task_profile_parse_failed");
-  assert.match(result.error, /Invalid task_profile metadata/);
-
-  fs.unlinkSync(rubricFile);
-});
-
-test("dispatch ignores ready-light examples outside structured task profile metadata", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-
-  const rubricFile = path.join(os.tmpdir(), `rubric-standard-example-${Date.now()}.yaml`);
-  fs.writeFileSync(rubricFile, threeFactorRubricYaml(), "utf-8");
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-standard-ready-light-example",
-    "--prompt", standardPromptWithReadyLightExample(),
-    "--rubric-file", rubricFile,
-    "--dry-run", "--json",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  assert.equal(proc.status, 0, proc.stderr || proc.stdout);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.mode, "new");
-
-  fs.unlinkSync(rubricFile);
-});
-
-test("dispatch ignores task_profile examples before active Task Profile metadata", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-
-  const rubricFile = path.join(os.tmpdir(), `rubric-standard-task-profile-example-${Date.now()}.yaml`);
-  fs.writeFileSync(rubricFile, threeFactorRubricYaml(), "utf-8");
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
-    "-b", "issue-standard-task-profile-example",
-    "--prompt", standardPromptWithTaskProfileExampleBeforeActiveProfile(),
-    "--rubric-file", rubricFile,
-    "--dry-run", "--json",
-  ])], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  assert.equal(proc.status, 0, proc.stderr || proc.stdout);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.mode, "new");
-
-  fs.unlinkSync(rubricFile);
-});
-
-test("dispatch validates retained ready-light rubric on resume", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-
-  const rubricFile = path.join(os.tmpdir(), `rubric-ready-light-valid-${Date.now()}.yaml`);
-  fs.writeFileSync(rubricFile, readyLightRubricYaml(), "utf-8");
-
-  const first = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-ready-light-resume-invalid-retained",
-    "--prompt", readyLightPrompt(),
-    "--rubric-file", rubricFile,
-    "--json",
-  ], env));
-
-  const record = readManifest(first.manifestPath);
-  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
-  writeManifest(first.manifestPath, updated, record.body);
-  fs.writeFileSync(path.join(getRunDir(repoRoot, first.runId), "rubric.yaml"), "rubric:\n  factors: []\n", "utf-8");
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot,
-    "--run-id", first.runId,
-    "--prompt", readyLightPrompt({ task: "resume ready-light validation" }),
-    "--dry-run", "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  assert.notEqual(proc.status, 0);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.status, "failed");
-  assert.equal(result.error_code, "ready_light_factor_count");
-
-  fs.unlinkSync(rubricFile);
-});
-
-test("dispatch preserves manifest ready-light marker when prompt profile omits it", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-
-  const rubricFile = path.join(os.tmpdir(), `rubric-ready-light-manifest-marker-${Date.now()}.yaml`);
-  fs.writeFileSync(rubricFile, readyLightRubricYaml(), "utf-8");
-
-  const first = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-ready-light-manifest-marker",
-    "--prompt", readyLightPrompt(),
-    "--rubric-file", rubricFile,
-    "--json",
-  ], env));
-  const record = readManifest(first.manifestPath);
-  const manifest = {
-    ...record.data,
-    advisory: {
-      ...(record.data.advisory || {}),
-      guidance: {
-        guidance_packs: ["surgical-change", "verification-evidence"],
-        task_profile_summary: {
-          route_decision: "ready_light",
-          size: "S",
-          guidance_packs: ["surgical-change", "verification-evidence"],
-        },
-      },
-    },
-  };
-  writeManifest(first.manifestPath, updateManifestState(manifest, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"), record.body);
-  fs.writeFileSync(rubricFile, "rubric:\n  factors: []\n", "utf-8");
-
-  const proc = spawnSync("node", [SCRIPT, repoRoot,
-    "--run-id", first.runId,
-    "--prompt", plannerReadyLightPromptWithoutExplicitMarker(),
-    "--rubric-file", rubricFile,
-    "--dry-run", "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env,
-  });
-
-  assert.notEqual(proc.status, 0);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(result.error_code, "ready_light_factor_count");
 
   fs.unlinkSync(rubricFile);
 });
@@ -9800,89 +8359,6 @@ function writeRubricFixture(contents) {
   return rubricPath;
 }
 
-test("extractRubricSize accepts size and size_class at top-level and nested indentation", async (t) => {
-  const cases = [
-    { name: "top-level size:", input: "size: M\n", expected: "M" },
-    { name: "top-level size_class:", input: "size_class: M\n", expected: "M" },
-    { name: "nested rubric size:", input: "rubric:\n  size: M\n", expected: "M" },
-    { name: "nested rubric size_class:", input: "rubric:\n  size_class: M\n", expected: "M" },
-  ];
-
-  for (const entry of cases) {
-    await t.test(entry.name, () => {
-      const rubricPath = writeRubricFixture(entry.input);
-      assert.equal(extractRubricSize(rubricPath), entry.expected);
-    });
-  }
-});
-
-test("extractRubricSize returns exported sentinels for missing and unparseable size fields", () => {
-  const missingPath = writeRubricFixture("rubric:\n  criteria: []\n");
-  const unparseablePath = writeRubricFixture("rubric:\n  size: garbage\n");
-
-  assert.equal(extractRubricSize(missingPath), RUBRIC_SIZE_MISSING);
-  assert.equal(extractRubricSize(unparseablePath), RUBRIC_SIZE_UNPARSEABLE);
-  assert.notEqual(RUBRIC_SIZE_MISSING, RUBRIC_SIZE_UNPARSEABLE);
-});
-
-test("resolveReasoningEffort maps valid rubric size without stderr", () => {
-  const rubricPath = writeRubricFixture("rubric:\n  size_class: M\n");
-  const writes = [];
-  const originalWrite = process.stderr.write;
-  process.stderr.write = (chunk, ...rest) => {
-    writes.push(String(chunk));
-    return true;
-  };
-  try {
-    assert.equal(resolveReasoningEffort({ rubricPath }), "high");
-  } finally {
-    process.stderr.write = originalWrite;
-  }
-
-  assert.equal(writes.join(""), "");
-});
-
-test("resolveReasoningEffort falls back for missing rubric size without requiring a warning", () => {
-  const rubricPath = writeRubricFixture("rubric:\n  criteria: []\n");
-  assert.equal(resolveReasoningEffort({ rubricPath }), "xhigh");
-});
-
-test("resolveReasoningEffort warns and falls back for unparseable rubric size", () => {
-  const rubricPath = writeRubricFixture("rubric:\n  size: 42\n");
-  const writes = [];
-  const originalWrite = process.stderr.write;
-  process.stderr.write = (chunk, ...rest) => {
-    writes.push(String(chunk));
-    return true;
-  };
-  try {
-    assert.equal(resolveReasoningEffort({ rubricPath }), "xhigh");
-  } finally {
-    process.stderr.write = originalWrite;
-  }
-
-  const stderr = writes.join("");
-  assert.match(stderr, /unparseable|invalid/i);
-  assert.match(stderr, new RegExp(rubricPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-});
-
-test("resolveReasoningEffort override returns directly and silences unparseable warnings", () => {
-  const rubricPath = writeRubricFixture("rubric:\n  size: garbage\n");
-  const writes = [];
-  const originalWrite = process.stderr.write;
-  process.stderr.write = (chunk, ...rest) => {
-    writes.push(String(chunk));
-    return true;
-  };
-  try {
-    assert.equal(resolveReasoningEffort({ override: "medium", rubricPath }), "medium");
-  } finally {
-    process.stderr.write = originalWrite;
-  }
-
-  assert.equal(writes.join(""), "");
-});
-
 test("dispatch canonicalizes typed fleet ownership and rejects only real resume-time drift", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
@@ -9942,6 +8418,47 @@ test("dispatch canonicalizes typed fleet ownership and rejects only real resume-
   assert.match(rejected.stderr, /cannot change immutable manifest\.ownership/);
   assert.deepEqual(readManifest(first.manifestPath).data.ownership, ownership);
   assert.equal(fs.existsSync(path.join(first.worktree, "resume.txt")), false);
+});
+
+test("fleet dispatch binds an explicit issue on feature branches and rejects resume-time replacement", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-explicit-issue-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const ownership = {
+    sprint: "backlog/sprints/2026-07-relay-fleet.md",
+    track: "2026-07-relay-fleet",
+    component: "relay-fleet",
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "feature/fleet-explicit-issue",
+    "--issue-number", "957",
+    "--prompt", "persist explicit fleet issue",
+    "--fleet-id", "fleet-957-explicit-issue",
+    "--ownership-json", JSON.stringify(ownership),
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  assert.equal(record.data.issue.number, 957);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "explicit_issue_resume_test"),
+    record.body
+  );
+
+  const rejected = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--manifest", first.manifestPath,
+    "--issue-number", "958",
+    "--prompt", "must not replace explicit issue",
+    "--dry-run",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /cannot replace immutable run issue binding '957'/);
+  assert.equal(readManifest(first.manifestPath).data.issue.number, 957);
 });
 
 test("direct dispatch resume cannot backfill a legacy fleet child and names the audited migration path", () => {

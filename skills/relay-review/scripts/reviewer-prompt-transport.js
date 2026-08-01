@@ -20,7 +20,7 @@ function reviewedDiffPath(promptFile) {
   const resolved = path.resolve(promptFile);
   const basename = path.basename(resolved);
   const roundPrompt = basename.match(
-    /^review-round-(\d+)(?:-advisory-.+)?-prompt\.md$/
+    /^review-round-(\d+)-prompt\.md$/
   );
   if (roundPrompt) {
     return path.join(

@@ -263,14 +263,6 @@ function getProjectConfigPath(repoRoot, options = {}) {
   return path.join(getProjectDir(repoRoot, options), "project.json");
 }
 
-function getProjectPolicyPath(repoRoot, options = {}) {
-  return path.join(getProjectDir(repoRoot, options), "policy.json");
-}
-
-function getProjectRoutesPath(repoRoot, options = {}) {
-  return path.join(getProjectDir(repoRoot, options), "routes.json");
-}
-
 function getFleetManifestPath(repoRoot, fleetId) {
   return path.join(getFleetsDir(repoRoot), `${requireValidFleetId(fleetId)}.md`);
 }
@@ -297,10 +289,6 @@ function getManifestPath(repoRoot, runId) {
 
 function getEventsPath(repoRoot, runId) {
   return path.join(getRunDir(repoRoot, runId), "events.jsonl");
-}
-
-function getRoutePlanPath(repoRoot, runId) {
-  return path.join(getRunDir(repoRoot, runId), "route-plan.json");
 }
 
 function listManifestPaths(repoRoot) {
@@ -649,13 +637,10 @@ module.exports = {
   getManifestPath,
   getProjectConfigPath,
   getProjectDir,
-  getProjectPolicyPath,
-  getProjectRoutesPath,
   getProjectsBase,
   getRelayHome,
   getRelayWorktreeBase,
   getRepoSlug,
-  getRoutePlanPath,
   getRunDir,
   getRunsBase,
   getRunsDir,

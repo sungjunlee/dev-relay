@@ -211,7 +211,7 @@ function buildFixtureRepo() {
     path.join(repoRoot, "skills", "relay-dispatch", "scripts", "agent-adapters", "index.js"),
     [
       "function listAgentAdapters() {",
-      "  return [{ reviewer: { primaryReviewScript: 'adapter-reviewer.js', advisoryReviewScript: null } }];",
+      "  return [{ reviewer: { primaryReviewScript: 'adapter-reviewer.js' } }];",
       "}",
       "module.exports = { listAgentAdapters };",
       "",
@@ -246,13 +246,13 @@ test("scanner recognizes require, documentation, rule 3 adapter descriptor, and 
   });
 });
 
-test("cli-schema.js command registration alone does not count as script reachability", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "script-reachability-cli-schema-"));
+test("generic flag-registry command registration alone does not count as script reachability", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "script-reachability-flag-registry-"));
   writeFile(path.join(repoRoot, "README.md"), "No command names here.\n");
   writeFile(path.join(repoRoot, "CLAUDE.md"), "No command names here.\n");
   writeFile(path.join(repoRoot, "skills", "fixture", "SKILL.md"), "No script references here.\n");
   writeFile(path.join(repoRoot, "skills", "relay-dispatch", "SKILL.md"), "Adapter registry: agent-adapters/index.js.\n");
-  writeFile(path.join(repoRoot, "skills", "fixture", "scripts", "cli-schema.js"), [
+  writeFile(path.join(repoRoot, "skills", "fixture", "scripts", "flag-registry.js"), [
     "const COMMAND_FLAGS = {",
     "  'zz-orphan-probe': ['--json'],",
     "};",
@@ -272,7 +272,7 @@ test("cli-schema.js command registration alone does not count as script reachabi
       repoRoot,
     }),
     [
-      "skills/fixture/scripts/cli-schema.js",
+      "skills/fixture/scripts/flag-registry.js",
       "skills/fixture/scripts/zz-orphan-probe.js",
     ],
   );
@@ -291,14 +291,13 @@ test("allowlist entries must exist on disk", () => {
   );
 });
 
-test("real adapter reviewer, executor, and advisory-worker scripts are reachable", () => {
+test("real adapter reviewer and executor scripts are reachable", () => {
   const orphans = new Set(findUnreachableScripts());
   [
     "skills/relay-dispatch/scripts/executors/codex.js",
     "skills/relay-dispatch/scripts/executors/opencode.js",
     "skills/relay-review/scripts/invoke-reviewer-codex.js",
     "skills/relay-review/scripts/invoke-reviewer-opencode.js",
-    "skills/relay-review/scripts/advisory-worker.js",
   ].forEach((relativePath) => {
     assert.ok(!orphans.has(relativePath), `${relativePath} must be reachable`);
   });

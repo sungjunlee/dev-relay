@@ -43,7 +43,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route 
   - `chain-abort`: probe returns `bypass=false`, prompt is allowed, user answers `abort`; `instruction` names `readiness_check_failed` and tells the operator to close the run with the script's event payload.
   - `noninteractive-fail`: route decision is `readiness_prompt` or `needs_split` and no prompt is allowed; `instruction` names `readiness_check_failed_nontty` and tells the operator to close the run with the script's event payload.
 
-Route decisions are advisory labels, not lifecycle states:
+Route decisions are non-binding labels, not lifecycle states:
 
 - `ready_single`: preserve the existing bypass fast path.
 - `ready_light`: keep the task on relay, but plan it as a small quick task with compact rubric guidance. This is only for non-bypass `next_action=proceed` results with no high-risk readiness signal.

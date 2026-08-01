@@ -19,7 +19,6 @@ const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-
 const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-merge", "scripts", "relay-reconcile-artifact.js");
-const REPORT_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "reliability-report.js");
 
 function initGitRepo(repoRoot) {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -155,11 +154,6 @@ test("relay-reconcile-artifact stamps bootstrap exemption, emits force event, an
   const manifest = readManifest(fixture.manifestPath).data;
   const events = readRunEvents(fixture.repoRoot, fixture.runId);
   const forceEvent = events.find((event) => event.event === "force_finalize");
-  const report = JSON.parse(execFileSync("node", [
-    REPORT_SCRIPT,
-    "--repo", fixture.repoRoot,
-    "--json",
-  ], { encoding: "utf-8" }));
 
   assert.equal(result.previousState, STATES.REVIEW_PENDING);
   assert.equal(result.state, STATES.MERGED);
@@ -185,7 +179,6 @@ test("relay-reconcile-artifact stamps bootstrap exemption, emits force event, an
   assert.equal(forceEvent?.prior_state, STATES.REVIEW_PENDING);
   assert.equal(forceEvent?.required_reason, "run predates the artifact writer");
   assert.equal(forceEvent?.operator_initiated, true);
-  assert.equal(report.bootstrap_exempt_runs, 1);
 });
 
 test("relay-reconcile-artifact is idempotent for identical already-exempt merged manifests", () => {

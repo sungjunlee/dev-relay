@@ -17,7 +17,7 @@ That's it. `dispatch.js` and `probe-executor-env.js` will pick up the new execut
 
 The full contract, capability matrix, and adapter checklist live in `skills/relay-dispatch/references/agent-adapter-platform.md`.
 
-opencode is an experimental dispatch executor. Reviewer policy is defined in `relay-dispatch/references/reviewer-policy-opencode.md`. opencode does not provide native sandbox enforcement; warnings surface this fact at dispatch time.
+opencode is an experimental dispatch executor. It does not provide native sandbox enforcement; warnings surface this fact at dispatch time, and an independent primary review remains required.
 
 antigravity targets the Google Antigravity `agy` CLI only. The relay adapter does not read Antigravity IDE/Desktop state, GUI sessions, plugin runtime, or PTY state. `agy --version` is recorded as CLI-version evidence separately from any desktop app version.
 

@@ -212,20 +212,7 @@ Expect:
 - close appends lifecycle evidence and runs cleanup policy
 - dirty worktrees stay explicit follow-up
 
-### 12. Reliability report derives the initial scorecard from raw history
-
-Command:
-
-```bash
-node --test tests/relay-dispatch/scripts/reliability-report.test.js
-```
-
-Expect:
-
-- the report derives the initial 5 metrics from manifests + events only
-- no aggregate counters are stored in the manifest
-
-### 13. Repo-local janitor cleans stale terminal runs only
+### 12. Repo-local janitor cleans stale terminal runs only
 
 Command:
 

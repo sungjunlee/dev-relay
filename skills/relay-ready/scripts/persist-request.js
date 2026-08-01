@@ -6,7 +6,8 @@ const path = require("path");
 const { persistRequestContract } = require("./relay-request");
 const {
   bindCliArgs,
-  modeLabel,
+  findUnknownFlags,
+  modeLabel: formatCliModeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 
 function isObject(value) {
@@ -123,10 +124,17 @@ function validateContractAgainstSchema(contract, schema) {
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--contract-file", "--json", "--help", "-h"];
-const cliArgs = bindCliArgs(args, {
-  commandName: "persist-request",
+const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-});
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--contract-file"],
+};
+const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
+if (unknownFlags.length) {
+  console.error(`Error: unknown flags: ${unknownFlags.join(", ")}`);
+  process.exit(1);
+}
+const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: persist-request.js --repo <path> --contract-file <path> [--json]");
@@ -134,9 +142,9 @@ if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Persist a relay-ready request artifact and one-or-more leaf handoff bundles.");
   console.log("");
   console.log("Options:");
-  console.log(`  --repo <path>          ${modeLabel("--repo")} Repository root`);
-  console.log(`  --contract-file <path> ${modeLabel("--contract-file")} Request contract JSON path`);
-  console.log(`  --json                 ${modeLabel("--json")} Output JSON`);
+  console.log(`  --repo <path>          ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root`);
+  console.log(`  --contract-file <path> ${formatCliModeLabel("--contract-file", CLI_ARG_OPTIONS)} Request contract JSON path`);
+  console.log(`  --json                 ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 

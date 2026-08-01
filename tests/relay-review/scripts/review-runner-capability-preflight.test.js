@@ -12,7 +12,7 @@ const { createEnforcementFixture, DEFAULT_ENFORCEMENT_RUBRIC } = require("../../
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
 
-function setupRun() {
+function setupRun({ escalated = true } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-capability-preflight-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
@@ -30,13 +30,15 @@ function setupRun() {
   const { manifestPath, runDir } = ensureRunLayout(repoRoot, runId);
   let manifest = createManifestSkeleton({
     repoRoot, runId, branch: "issue-910", baseBranch: "main", issueNumber: 910,
-    worktreePath, orchestrator: "codex", executor: "codex", reviewer: "codex",
+    worktreePath, orchestrator: "codex", executor: "codex", reviewer: "cline",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest.anchor = createEnforcementFixture({ repoRoot, runId, state: "loaded", rubricContent: DEFAULT_ENFORCEMENT_RUBRIC }).anchor;
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   manifest.review.last_reviewer = "codex";
-  manifest = updateManifestState(manifest, STATES.ESCALATED, "inspect_review_failure");
+  if (escalated) {
+    manifest = updateManifestState(manifest, STATES.ESCALATED, "inspect_review_failure");
+  }
   writeManifest(manifestPath, manifest);
   if (priorHome === undefined) delete process.env.RELAY_HOME; else process.env.RELAY_HOME = priorHome;
   const doneCriteriaPath = path.join(repoRoot, "done.md");
@@ -76,7 +78,6 @@ test("entry preflight rejects before swap, events, artifacts, or checks wait", (
   const beforeData = readManifest(fixture.manifestPath).data;
   assert.equal(beforeData.state, STATES.ESCALATED);
   assert.equal(beforeData.review.last_reviewer, "codex");
-  assert.equal(beforeData.review.reviewer_swap_count, 0);
   const eventsPath = path.join(fixture.runDir, "events.jsonl");
   const eventsBefore = fs.existsSync(eventsPath) ? fs.readFileSync(eventsPath) : null;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-capability-gh-"));
@@ -88,13 +89,12 @@ test("entry preflight rejects before swap, events, artifacts, or checks wait", (
   const result = run(fixture, ["--wait-for-checks", "30"], { PATH: `${binDir}${path.delimiter}${process.env.PATH}` });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /supports advisory_review but not primary_review/);
+  assert.match(result.stderr, /does not support primary_review/);
   assert.match(result.stderr, /Primary-review-capable adapters:/);
   assert.deepEqual(fs.readFileSync(fixture.manifestPath), before, "manifest remains byte-identical");
   assert.equal(fs.existsSync(ghMarker), false, "CI checks were never queried");
   assert.deepEqual(roundArtifacts(fixture.runDir), []);
   assert.deepEqual(fs.existsSync(eventsPath) ? fs.readFileSync(eventsPath) : null, eventsBefore);
-  assert.equal(readEvents(eventsPath).some((event) => event.event === "reviewer_swap"), false);
 });
 
 test("detach parent rejects without receipt, lease, supervisor, or round artifacts", () => {
@@ -104,7 +104,7 @@ test("detach parent rejects without receipt, lease, supervisor, or round artifac
   const result = run(fixture, ["--detach"], { TMPDIR: detachTmp });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /supports advisory_review but not primary_review/);
+  assert.match(result.stderr, /does not support primary_review/);
   assert.doesNotMatch(result.stdout, /detached|receipt|sentinel|lease/i);
   assert.equal(fs.existsSync(path.join(fixture.runDir, "lease.json")), false);
   const detachDirs = fs.readdirSync(detachTmp).filter((name) => name.startsWith("relay-review-detach-"));
@@ -114,13 +114,13 @@ test("detach parent rejects without receipt, lease, supervisor, or round artifac
 });
 
 test("review-file and reviewer-script overrides bypass capability preflight", () => {
-  const reviewFileFixture = setupRun();
+  const reviewFileFixture = setupRun({ escalated: false });
   const reviewFile = path.join(reviewFileFixture.repoRoot, "verdict.json");
   fs.writeFileSync(reviewFile, "{}\n");
   const fromFile = run(reviewFileFixture, ["--review-file", reviewFile, "--prepare-only"]);
   assert.equal(fromFile.status, 0, `${fromFile.stderr}\n${fromFile.stdout}`);
 
-  const scriptFixture = setupRun();
+  const scriptFixture = setupRun({ escalated: false });
   const reviewerScript = path.join(scriptFixture.repoRoot, "reviewer.js");
   fs.writeFileSync(reviewerScript, "#!/usr/bin/env node\n", "utf-8");
   fs.chmodSync(reviewerScript, 0o755);

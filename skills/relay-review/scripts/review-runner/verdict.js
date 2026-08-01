@@ -69,50 +69,9 @@ function validateIssue(issue, index) {
   }
 }
 
-function hasBlockingRubricScores(verdict) {
-  return (Array.isArray(verdict?.rubric_scores) ? verdict.rubric_scores : []).some((score) => {
-    if (score?.status === "fail") return true;
-    if (score?.tier !== "quality") return false;
-    const numericScore = getRubricScoreNumber(score);
-    const targetScore = getRubricTargetNumber(score);
-    return numericScore !== null && targetScore !== null && numericScore < targetScore;
-  });
-}
-
-function isLowConfidenceAdvisoryPass(verdict) {
-  return verdict?.verdict === "changes_requested"
-    && Array.isArray(verdict.issues)
-    && verdict.issues.length > 0
-    && verdict.issues.every((issue) => issue?.confidence === "low")
-    && !hasBlockingRubricScores(verdict);
-}
-
 function getAppliedVerdict(verdict) {
   if (ALLOWED_APPLIED_VERDICTS.has(verdict?.applied_verdict)) return verdict.applied_verdict;
-  if (isLowConfidenceAdvisoryPass(verdict)) return "pass";
   return verdict?.verdict || null;
-}
-
-function buildConfidenceDowngrade(verdict) {
-  const lowConfidenceCount = Array.isArray(verdict?.issues)
-    ? verdict.issues.filter((issue) => issue?.confidence === "low").length
-    : 0;
-  return {
-    applied: isLowConfidenceAdvisoryPass(verdict),
-    lowConfidenceCount,
-  };
-}
-
-function buildLowConfidencePassGateVerdict(verdict, passNextActions = ["ready_to_merge"]) {
-  const nextActions = Array.isArray(passNextActions)
-    ? passNextActions
-    : Array.from(passNextActions || []);
-  return {
-    ...verdict,
-    verdict: "pass",
-    next_action: nextActions[0] || "ready_to_merge",
-    issues: [],
-  };
 }
 
 function validateRubricScore(score, index) {
@@ -290,11 +249,7 @@ module.exports = {
   ALLOWED_LINEAGE_VALUES,
   ALLOWED_SCORE_TIERS,
   ALLOWED_REVIEW_STATUSES,
-  buildConfidenceDowngrade,
-  buildLowConfidencePassGateVerdict,
   getAppliedVerdict,
-  hasBlockingRubricScores,
-  isLowConfidenceAdvisoryPass,
   parseReviewVerdict,
   validateIssue,
   validateReviewVerdict,

@@ -42,9 +42,10 @@ list of files whose patches were omitted. The marker, observed byte size, and
 threshold are persisted in `review-round-N-diff.patch`. Operator-supplied
 `--diff-file` content remains an unguarded, verbatim escape hatch.
 
-The runner reviews the retained checkout recorded in `paths.worktree`, not the repo root. It records `review.last_reviewed_sha`; `review.rounds` remains the total applied-verdict/artifact sequence. Cap accounting is separate under `review.round_budget`: blocking substantive failures consume the threshold referenced by `review.max_rounds` (compact defaults to `1`, standard to `2`, hardened to `3`), while successful protocol verification is recorded by `internal` or `post_publication` phase and is exempt from that threshold. Thus standard assurance can apply one substantive `changes_requested`, verify its corrected internal result, and perform the required post-publication verification even though the last artifact is global round 3. Reviewer invocation failures do not apply a verdict and consume neither axis.
-
-New manifests persist `round_budget.schema_version=1`, its topology and limit source, `consumed.substantive_failures`, and phase-specific protocol/application counts. Legacy manifests without the block resolve through a deterministic conservative bridge; their next applied verdict persists the normalized block. A still-higher `review.max_rounds` remains an explicit experimental policy extension. Repeated-issue, flip-flop, stale-SHA, advisory, and lifecycle gates remain independent and can escalate earlier.
+The runner reviews the retained checkout recorded in `paths.worktree`, not the
+repo root. It records `review.last_reviewed_sha`; `review.rounds` remains the
+total applied-verdict/artifact sequence. Reviewer invocation failures do not
+apply a verdict.
 
 ## Audit Trail
 
@@ -53,40 +54,12 @@ When applying a verdict, the runner:
 - validates the JSON verdict
 - optionally invokes the reviewer adapter itself when `--reviewer <name>` is used
 - preflights `execution-evidence.json` before invoking a primary reviewer; missing, stale, invalid, symlinked, or strict-failing evidence exits with JSON status and leaves the manifest in `review_pending`
-- fails fast for `policy.review_assurance=hardened` unless `--advisory-reviewer <name>` is present, except in `--prepare-only` mode
 - computes and overrides `quality_execution_status` from `execution-evidence.json`; strict gates prefer `verification_runs[]` when present and otherwise use the legacy `test_*` fields
 - rejects the round if the reviewer mutates the repo and escalates the manifest
 - writes the PR audit comment
 - updates the relay manifest to `ready_to_merge`, `changes_requested`, or `escalated`
 
-Reviewer adapter capabilities are shared with dispatch adapter metadata. See `../../relay-dispatch/references/agent-adapter-platform.md` for the supported adapter matrix, including primary vs advisory review support, read-only enforcement, structured-output shape, and the new-adapter checklist. Antigravity review support is for the `agy` CLI only, not GUI/IDE/Desktop flows.
-
-## Advisory Lane Semantics
-
-Advisory review is configured as a list of lanes. Each lane has `reviewer`, optional `model`, `profile`, `trigger`, and `gating`. Profile defaults are part of lane normalization: `blindspot` defaults to `trigger=every_round,gating=false`; `adversarial` defaults to `trigger=on_pass,gating=true`; explicit `trigger` or `gating` values override the profile default. Route planning and review-runner normalization must agree on these defaults.
-
-`every_round` lanes start before the primary reviewer completes and settle against one round-start deadline. `on_pass` lanes start only after the primary verdict plus all `every_round` gates produce a pass-equivalent outcome; they share a fresh settlement deadline for that trigger group. The runner folds advisory outcomes after each trigger group. Non-gating standard lanes record artifacts, warnings, and metrics only. Gating lanes can demote an applied pass when a successful advisory result reports `required_findings`; hardened assurance treats advisory failures, missing advisory evidence, and required findings as gates. Bucket identity is authoritative: an omitted `severity` is accepted only for `duplicate_or_low_confidence` and normalized to `P3` while remaining non-required. Missing `severity` in either actionable bucket is still a schema failure. Adapter-side schema failures emit the stable `advisory_schema_validation_failed` signal plus the pre-validation model response so the runner can durably preserve every attempt before its single bounded retry.
-
-Lane-driven demotion is capped at two demotions per run. A third lane-driven demotion escalates for owner decision instead of feeding another automatic fix loop. When a gating lane demotes because of required findings, the redispatch prompt includes that lane's required findings as actionable fix items. The `advisory_review` event already carries lane identity (`reviewer`, `model`, `profile`, `trigger`, `gating`), and `reliability-report --by-lane` derives per-lane counts from those events plus `review_apply` demotion signals.
-
-Legacy partial advisory overlays such as `{ "model": "..." }` compose onto exactly one inherited lane. They fail closed against a multi-lane inherited list; operators must spell out the full lane list instead of relying on ambiguous merge behavior.
-
-Lane composition is operator/orchestrator judgment, not script policy. Low-risk tasks usually need no lane or one blindspot lane. Security, concurrency, migration, or invariant-heavy tasks can add an adversarial gating lane. Broad changes can use multiple reviewers/models, but scripts do not auto-select lanes based on task risk.
-
-### Cline advisory timeout budget
-
-For `cline` advisory lanes, `executeAdvisoryRequest` exports the lane's effective `timeoutSeconds` into the adapter child as `RELAY_CLINE_REVIEW_TIMEOUT="<timeoutSeconds>s"`. That lane budget supersedes any inherited `RELAY_CLINE_REVIEW_TIMEOUT` in the review-runner process so one number governs both the parent `execFileSync` kill and the adapter's internal `--timeout` (env − 60s headroom). Operator knob: `--advisory-timeout`. Direct (non-advisory) invocations of `invoke-reviewer-cline.js` keep the existing env contract and default (`1800s`).
-
-### Cline prompt-file compatibility transport
-
-Cline JSON mode requires a positional prompt and rejects relay's stdin-only
-transport as interactive. Relay therefore writes the complete advisory prompt
-to a temporary file under `--cwd` and passes only a short workspace-relative
-reference, `@.relay-review-cline-prompt-*/review-prompt.md`. Cline CLI 3.0.47
-ignores mentions outside that workspace and tokenizes mentions at whitespace.
-This keeps prompt text and NUL bytes out of argv, records
-`prompt_file_reference` compatibility evidence, and removes the temporary
-directory after success, parse failure, provider failure, or parent timeout.
+Reviewer adapter capabilities are shared with dispatch adapter metadata. See `../../relay-dispatch/references/agent-adapter-platform.md` for the supported adapter matrix, including primary review support, read-only enforcement, structured-output shape, and the new-adapter checklist. Antigravity review support is for the `agy` CLI only, not GUI/IDE/Desktop flows.
 
 ### Pi provider extension isolation
 
@@ -126,11 +99,8 @@ When the Codex CLI exits and its stdout/stderr matches the stable usage-limit pr
 
 ## Codex-only Operation Regression
 
-Codex-only operation is covered as a regression for `policy.review_assurance=hardened`, not a Codex-only policy special case. When `roles.orchestrator`, `roles.executor`, and `roles.reviewer` are all `codex`, the runner still follows the same manifest policy contract used by any other role names. Advisory evidence is required for passing hardened rounds, advisory required findings block the pass, and strict execution evidence must bind to the reviewed head.
-
-## Independent Review Attempts
-
-Escalated runs may be reopened for one independent review attempt. A different `--reviewer` records a `reviewer_swap` event with `reason=different_reviewer:<from>-><to>`. Reusing the same adapter requires `--independent-review-reason <text>` so the audit trail explains how the attempt is independent, such as a fresh ephemeral context, different model hint, or materially different prompt bundle.
+Codex-only operation follows the same reviewed-SHA and explicit-verdict
+contract used by any other role names.
 
 ## Detached Review Rounds (`--detach`)
 
@@ -147,7 +117,7 @@ Run-dir artifacts the detached round adds (foreground rounds write none of these
 - `lease.json` — the run-dir lease written via `run-runtime-state.js` `writeRunLease` (`pid`, `pgid`, `host`, `started_at`, `timeout_s`). Operators identify and kill only this owned `pgid` (`kill -TERM -<pgid>`); the lease is left in place after the round so its shape stays inspectable, and the next detached round overwrites it.
 - `review-round-N.done` — the completion sentinel (`{ status: "complete" | "failed", exitCode, finishedAt }`), analogous to the gate `.done` sentinel.
 
-`--detach` composes with the normal round flags (`--reviewer`, `--reviewer-model`, `--advisory-reviewer` and lanes, `--wait-for-checks`, `--no-comment`). It is rejected — with a clear error, not silently ignored — when combined with `--prepare-only` (only emits the prompt bundle) or with a `--review-file` apply (applies an already-produced verdict without invoking the reviewer), because detaching adds nothing there.
+`--detach` composes with the normal round flags (`--reviewer`, `--reviewer-model`, `--wait-for-checks`, `--no-comment`). It is rejected — with a clear error, not silently ignored — when combined with `--prepare-only` (only emits the prompt bundle) or with a `--review-file` apply (applies an already-produced verdict without invoking the reviewer), because detaching adds nothing there.
 
 ### Recovery: killed between verdict persistence and manifest apply
 

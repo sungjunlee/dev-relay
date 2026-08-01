@@ -2,7 +2,6 @@
 const fs = require("fs");
 const path = require("path");
 const { STATES } = require("../../relay-dispatch/scripts/manifest/lifecycle");
-const { isHardenedReviewAssurance } = require("../../relay-dispatch/scripts/manifest/review-assurance");
 const { ensureRunLayout, getRunDir } = require("../../relay-dispatch/scripts/manifest/paths");
 const { buildReviewRunnerRubricGateFailure, loadRubricFromRunDir } = require("../../relay-dispatch/scripts/manifest/rubric");
 const { git } = require("./review-runner/common");
@@ -10,42 +9,40 @@ const { getGhLogin, parseRemoteHost, resolveContext, resolveIssueNumber, resolve
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
 const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
-const { applyQualityExecutionStatus, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
+const {
+  applyQualityExecutionStatus,
+  buildExecutionEvidenceFailureVerdict,
+  buildMissingExecutionEvidenceVerdict,
+  computeQualityExecutionStatus,
+} = require("./review-runner/execution-evidence");
 const { printFailureAndExit } = require("./review-runner/failure-output");
 const { buildRedispatchPrompt, detectChurnGrowth } = require("./review-runner/redispatch");
 const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
-const { enforceRoundCap } = require("./review-runner/round-cap");
 const { passNextActionsFor, reviewPhaseFor, writeRoundArtifacts } = require("./review-runner/round-artifacts");
 const { maybeBlockForBehindBasePreflight, maybeBlockForExecutionEvidencePreflight } = require("./review-runner/preflight");
 const { preflightResolvedPrimaryReviewer } = require("./review-runner/entry-preflight");
-const { buildPrimaryReviewerPreflight, loadReviewText, loadRunRoutePlan, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
-const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
-const { appendAdvisoryRunsForTrigger, resolveAdvisoryConfig } = require("./review-runner/advisory-orchestration");
-const { settleAdvisoryGatesForRound } = require("./review-runner/advisory-gates");
+const { buildPrimaryReviewerPreflight, loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { printResult, printUsage } = require("./review-runner/output");
 const { maybeWaitForChecks } = require("./review-runner/check-wait");
-const { validateReviewerScoresForArtifact } = require("./review-runner/evaluation-channels");
 const { finalizeRound } = require("./review-runner/finalize-round");
-const { assertKnownReviewRunnerFlags, parseReviewRunnerCliArgs } = require("./review-runner/cli");
+const { CLI_ARG_OPTIONS, assertKnownReviewRunnerFlags, parseReviewRunnerCliArgs } = require("./review-runner/cli");
 const { beginDetachSupervisorIfRequested, dispatchReviewEntry } = require("./review-runner/detach");
 const { args, cliArgs, options } = parseReviewRunnerCliArgs(process.argv.slice(2));
 if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
-  printUsage();
+  printUsage(CLI_ARG_OPTIONS);
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 async function run() {
   assertKnownReviewRunnerFlags(args);
   const {
-    advisoryGraceArg, advisoryProfileArg, advisoryReviewerArg, advisoryReviewerModel, allowBehindBase,
-    advisoryTimeoutArg, branchArg, diffFile, doneCriteriaFile, independentReviewReason,
+    allowBehindBase, branchArg, diffFile, doneCriteriaFile,
     jsonOut, manifestPathArg, manualReviewReason, noComment, prArg, prepareOnly, repoArg,
     repoPath, reviewFile, reviewerArg, reviewerModel, reviewerScriptArg, runIdArg, waitForChecksArg,
   } = options;
   if (manualReviewReason && !reviewFile) throw new Error("--manual-review-reason requires --review-file");
   const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFile);
   const { body, manifestPath } = manifest;
-  let { data } = manifest;
-  data = maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath, { independentReviewReason });
+  const { data } = manifest;
 
   const internalReview = data.state === STATES.INTERNAL_REVIEW_PENDING;
   if (![STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(data.state)) {
@@ -63,36 +60,12 @@ async function run() {
   // before the long-running reviewer invocation so the parent can return and the round
   // survives the invoker's death.
   beginDetachSupervisorIfRequested({ runRepoPath, runId: data.run_id, round, runDir, manifestPath });
-  const runRoutePlan = loadRunRoutePlan(runRepoPath, data.run_id).plan;
-  const resolvedAdvisoryConfig = resolveAdvisoryConfig({
-    advisoryGraceArg,
-    advisoryProfileArg,
-    advisoryReviewerArg,
-    advisoryReviewerModel,
-    advisoryTimeoutArg,
-    data,
-    routePlan: runRoutePlan,
-  });
-  const advisoryConfig = resolvedAdvisoryConfig;
-  const hardenedAssurance = isHardenedReviewAssurance(data);
-
   let reviewedHeadSha = null;
   try {
     reviewedHeadSha = git(reviewRepoPath, "rev-parse", "HEAD").trim();
   } catch {}
 
   const reviewPhase = reviewPhaseFor(internalReview);
-  const reviewBudget = enforceRoundCap({
-    body,
-    data,
-    manifestPath,
-    phase: reviewPhase,
-    prNumber,
-    reviewedHeadSha,
-    round,
-    runRepoPath,
-  });
-
   const checkWait = maybeWaitForChecks({ internalReview, prepareOnly, prNumber, round, runDir, runRepoPath, waitForChecksArg });
 
   const {
@@ -119,7 +92,7 @@ async function run() {
     console.log(`  Warning: diff growing without convergence (${churnGrowth.prevPrevLines} → ${churnGrowth.prevLines} → ${churnGrowth.curLines} lines, +${growth}%)`);
   }
 
-  const reviewerName = resolveReviewerName(data, reviewerArg, { routePlan: runRoutePlan });
+  const reviewerName = resolveReviewerName(data, reviewerArg);
   const reviewerScript = reviewFile ? null : resolveReviewerScript(reviewerName, reviewerScriptArg);
   const result = {
     branch,
@@ -139,8 +112,6 @@ async function run() {
     reviewFile: reviewFile || null,
     reviewHeadSha: reviewedHeadSha,
     reviewRepoPath,
-    reviewAssurance: data.policy?.review_assurance || "standard",
-    reviewBudget,
     reviewPhase,
     prReviewSignals,
     manualReviewReason: manualReviewReason || null,
@@ -154,7 +125,6 @@ async function run() {
     state: data.state, convergenceSummary: null, verdictPath: null,
   };
   if (checkWait) result.checkWait = checkWait.summary;
-  let advisoryRuns = [], advisoryResults = [], gateResult = null;
   let primaryReviewerPreflight = null;
 
   if (prepareOnly) {
@@ -162,13 +132,7 @@ async function run() {
     return;
   }
   if (maybeBlockForBehindBasePreflight({ allowBehindBase, data, jsonOut, result, reviewRepoPath, reviewedHeadSha, round, runRepoPath })) return;
-  if (maybeBlockForExecutionEvidencePreflight({ data, jsonOut, result, reviewFile, runRepoPath, reviewedHeadSha, round, runDir, strict: hardenedAssurance })) return;
-  if (hardenedAssurance && !(advisoryConfig.lanes || []).length) {
-    throw new Error(
-      "policy.review_assurance=hardened requires --advisory-reviewer <name>, route-plan advisory_review.reviewer, or manifest routing.selected.advisory_review.reviewer so the round produces advisory evidence. " +
-      "Run with a configured advisory reviewer, configure routing, or lower the manifest policy before review."
-    );
-  }
+  if (maybeBlockForExecutionEvidencePreflight({ data, jsonOut, result, reviewFile, runRepoPath, reviewedHeadSha, round, runDir, strict: false })) return;
   if (!reviewFile) {
     primaryReviewerPreflight = buildPrimaryReviewerPreflight({
       data,
@@ -176,15 +140,8 @@ async function run() {
       reviewerName,
       reviewerScript,
       runRepoPath,
-      routePlan: runRoutePlan,
     });
   }
-  const advisoryStartOptions = {
-    branch, config: advisoryConfig, data, diffText, doneCriteria, doneCriteriaSource,
-    issueNumber, prNumber, reviewedHeadSha, reviewRepoPath, round, rubricLoad, runDir, runRepoPath,
-  };
-  if ((advisoryConfig.lanes || []).length) result.advisoryReviews = [];
-  advisoryRuns = appendAdvisoryRunsForTrigger({ advisoryRuns, result, startOptions: advisoryStartOptions, trigger: "every_round" });
   const { rawResponsePath, reviewText } = loadReviewText({
     body,
     data,
@@ -201,7 +158,6 @@ async function run() {
     runDir,
     runRepoPath,
     reviewerPreflight: primaryReviewerPreflight,
-    routePlan: runRoutePlan,
   });
   result.rawResponsePath = rawResponsePath;
   const prSignalsPassBlockReason = !internalReview && prReviewSignals?.status === "failed"
@@ -215,37 +171,24 @@ async function run() {
     requireExecutionStatus: false,
     disallowPassReason: prSignalsPassBlockReason,
   });
-  if (rubricLoad.state === "loaded") {
-    validateReviewerScoresForArtifact(rubricLoad, verdict.rubric_scores);
-  }
   const executionStatus = computeQualityExecutionStatus({
     runDir,
     reviewedHead: reviewedHeadSha,
-    strict: hardenedAssurance,
+    strict: false,
     manifestData: data,
   });
   verdict = applyQualityExecutionStatus(verdict, executionStatus);
-  const primaryReviewerVerdict = verdict;
-  const gateSettlement = await settleAdvisoryGatesForRound({
-    advisoryConfig,
-    advisoryRuns,
-    currentState: data.state,
-    executionStatus,
-    hardenedAssurance,
-    internalReview,
-    laneDemotionCount: Number(data.review?.lane_demotions || 0),
-    manualReviewReason,
-    prSignalsPassBlockReason,
-    result,
-    reviewFile,
-    startOptions: advisoryStartOptions,
-    verdict,
+  if (verdict.verdict === "pass" && executionStatus.status !== "pass") {
+    verdict = executionStatus.status === "missing"
+      ? buildMissingExecutionEvidenceVerdict(verdict)
+      : buildExecutionEvidenceFailureVerdict(verdict);
+  }
+  validateReviewVerdict(verdict, {
+    passNextActions: passNextActionsFor(internalReview),
+    disallowPassReason: prSignalsPassBlockReason,
   });
-  ({ advisoryResults, advisoryRuns, gateResult, verdict } = gateSettlement);
 
   finalizeRound({
-    advisoryConfig,
-    advisoryResults,
     body,
     checkWait,
     churnGrowth,
@@ -254,8 +197,6 @@ async function run() {
     doneCriteria,
     doneCriteriaPath,
     doneCriteriaSource,
-    gateResult,
-    hardenedAssurance,
     internalReview,
     jsonOut,
     manifestPath,
@@ -264,7 +205,7 @@ async function run() {
     prepareOnly,
     prNumber,
     promptPath,
-    primaryReviewerVerdict,
+    primaryReviewerVerdict: verdict,
     result,
     reviewedHeadSha,
     reviewerName,

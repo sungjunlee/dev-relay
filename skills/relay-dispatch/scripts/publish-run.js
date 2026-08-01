@@ -10,17 +10,22 @@ const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 
 const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--manifest", "--dry-run", "--json", "--help", "-h"];
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--dry-run", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--branch", "--manifest"],
+};
 
 function printUsage() {
   console.log("Usage: publish-run.js --repo <repo> --run-id <id> [options]");
   console.log("       publish-run.js --manifest <path> [options]");
   console.log("\nOptions:");
-  console.log(`  --repo      ${modeLabel("--repo")} Repository root`);
-  console.log(`  --run-id    ${modeLabel("--run-id")} Relay run id`);
-  console.log(`  --branch    ${modeLabel("--branch")} Resolve run by working branch`);
-  console.log(`  --manifest  ${modeLabel("--manifest")} Relay manifest path`);
-  console.log(`  --dry-run   ${modeLabel("--dry-run")} Validate and print without pushing`);
-  console.log(`  --json      ${modeLabel("--json")} Output as JSON`);
+  console.log(`  --repo      ${modeLabel("--repo", CLI_ARG_OPTIONS)} Repository root`);
+  console.log(`  --run-id    ${modeLabel("--run-id", CLI_ARG_OPTIONS)} Relay run id`);
+  console.log(`  --branch    ${modeLabel("--branch", CLI_ARG_OPTIONS)} Resolve run by working branch`);
+  console.log(`  --manifest  ${modeLabel("--manifest", CLI_ARG_OPTIONS)} Relay manifest path`);
+  console.log(`  --dry-run   ${modeLabel("--dry-run", CLI_ARG_OPTIONS)} Validate and print without pushing`);
+  console.log(`  --json      ${modeLabel("--json", CLI_ARG_OPTIONS)} Output as JSON`);
 }
 
 function readDispatchResult(repoRoot, runId) {
@@ -284,9 +289,9 @@ async function publishRun(options) {
 }
 
 async function main(argv) {
-  const unknown = findUnknownFlags(argv, KNOWN_FLAGS);
+  const unknown = findUnknownFlags(argv, CLI_ARG_OPTIONS);
   if (unknown.length) throw new Error(`unknown flags: ${unknown.join(", ")}`);
-  const cliArgs = bindCliArgs(argv, { commandName: "publish-run", reservedFlags: KNOWN_FLAGS });
+  const cliArgs = bindCliArgs(argv, CLI_ARG_OPTIONS);
   if (!argv.length || cliArgs.hasFlag(["--help", "-h"])) {
     printUsage();
     process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);

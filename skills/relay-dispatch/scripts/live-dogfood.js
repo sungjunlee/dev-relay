@@ -46,7 +46,7 @@ const REVIEWER_SCRIPT_BY_ADAPTER = Object.freeze({
 
 const DEFAULT_REVIEW_PHASE_BY_ADAPTER = Object.freeze({
   pi: "primary_review",
-  opencode: "advisory_review",
+  opencode: "primary_review",
   antigravity: "primary_review",
 });
 
@@ -79,34 +79,14 @@ const LIVE_DOGFOOD_SCENARIOS = Object.freeze([
     healthyPromotion: false,
   },
   {
-    name: "opencode-advisory",
-    adapter: "opencode",
-    phase: "advisory_review",
-    category: "healthy-review",
-    classifier: "standard-json",
-    defaultEnabled: true,
-    healthyPromotion: true,
-    env: { name: "RELAY_OPENCODE_REVIEW_TIMEOUT", option: "opencodeReviewTimeout" },
-  },
-  {
     name: "opencode-primary",
     adapter: "opencode",
     phase: "primary_review",
     category: "healthy-review",
     classifier: "standard-json",
-    defaultEnabled: false,
-    healthyPromotion: true,
-    env: { name: "RELAY_OPENCODE_REVIEW_TIMEOUT", option: "opencodeReviewTimeout" },
-  },
-  {
-    name: "pi-advisory",
-    adapter: "pi",
-    phase: "advisory_review",
-    category: "healthy-review",
-    classifier: "standard-json",
     defaultEnabled: true,
     healthyPromotion: true,
-    env: { name: "RELAY_PI_REVIEW_TIMEOUT", option: "piReviewTimeout" },
+    env: { name: "RELAY_OPENCODE_REVIEW_TIMEOUT", option: "opencodeReviewTimeout" },
   },
   {
     name: "pi-primary",
@@ -124,16 +104,6 @@ const LIVE_DOGFOOD_SCENARIOS = Object.freeze([
     phase: "primary_review",
     category: "healthy-review",
     classifier: "antigravity-primary",
-    defaultEnabled: true,
-    healthyPromotion: true,
-    env: { name: "RELAY_ANTIGRAVITY_REVIEW_TIMEOUT", option: "antigravityReviewTimeout" },
-  },
-  {
-    name: "antigravity-advisory",
-    adapter: "antigravity",
-    phase: "advisory_review",
-    category: "healthy-review",
-    classifier: "standard-json",
     defaultEnabled: true,
     healthyPromotion: true,
     env: { name: "RELAY_ANTIGRAVITY_REVIEW_TIMEOUT", option: "antigravityReviewTimeout" },
@@ -271,70 +241,19 @@ function parseArgs(argv) {
   return parsed;
 }
 
-function buildAllowedModelRoutes(options = {}) {
-  const piModel = options.piModel || DEFAULTS.piModel;
-  const opencodeModel = options.opencodeModel || DEFAULTS.opencodeModel;
-  const antigravityModel = options.antigravityModel || DEFAULTS.antigravityModel;
-
-  return [
-    piModel ? {
-      route: piModel,
-      phases: ["dispatch", "review"],
-      executors: ["pi"],
-      reviewers: ["pi"],
-    } : null,
-    opencodeModel ? {
-      route: opencodeModel,
-      phases: ["dispatch", "advisory_review"],
-      executors: ["opencode"],
-      reviewers: ["opencode"],
-    } : null,
-    antigravityModel ? {
-      route: antigravityModel,
-      phases: ["dispatch", "review", "advisory_review"],
-      executors: ["antigravity"],
-      reviewers: ["antigravity"],
-    } : null,
-  ].filter(Boolean);
-}
-
-function buildPolicy(options = {}) {
-  return {
-    version: 1,
-    profile: "live-adapter-dogfood",
-    defaults: {
-      dispatch: { executor: "codex" },
-      review: { reviewer: "codex" },
-      advisory_review: null,
-    },
-    managed_cli: ["codex", "claude"],
-    allowed_model_routes: buildAllowedModelRoutes(options),
-    denied_model_routes: [],
-    routing_rules: [],
-    deny_unknown_model_routes: true,
-  };
-}
-
-function ensureRelayHome(relayHome, options = {}) {
+function ensureRelayHome(relayHome) {
   const resolved = relayHome
     ? path.resolve(relayHome)
     : fs.mkdtempSync(path.join(os.tmpdir(), "relay-live-dogfood-"));
   fs.mkdirSync(resolved, { recursive: true });
-  fs.writeFileSync(path.join(resolved, "policy.json"), `${JSON.stringify(buildPolicy(options), null, 2)}\n`, "utf-8");
   return resolved;
 }
 
 function writePromptFiles(relayHome, options = {}) {
   const promptDir = path.join(relayHome, "dogfood-prompts");
   fs.mkdirSync(promptDir, { recursive: true });
-  const advisoryPrompt = path.join(promptDir, "advisory-prompt.md");
   const primaryPrompt = path.join(promptDir, "primary-prompt.md");
   const rubric = path.join(promptDir, "antigravity-dispatch-noop-rubric.yaml");
-  fs.writeFileSync(advisoryPrompt, [
-    "Return exactly one advisory JSON object for a relay live dogfood canary.",
-    "The object must contain profile, summary, required_findings, advisory_findings, and duplicate_or_low_confidence.",
-    "",
-  ].join("\n"), "utf-8");
   fs.writeFileSync(primaryPrompt, [
     "Return exactly one relay primary review verdict JSON object.",
     "Use verdict=pass, contract_status=pass, quality_review_status=pass, next_action=ready_to_merge, no issues, and empty scope drift.",
@@ -357,7 +276,6 @@ function writePromptFiles(relayHome, options = {}) {
     const canaryLine = `relay live dogfood dispatch canary ${executor} ${dispatchStamp}`;
     const promptFile = path.join(promptDir, `${executor}-dispatch-canary-prompt.md`);
     const rubricFile = path.join(promptDir, `${executor}-dispatch-canary-rubric.yaml`);
-    const routeIntentFile = path.join(promptDir, `${executor}-dispatch-canary-route-intent.json`);
     fs.writeFileSync(promptFile, [
       `Create or update ${canaryFile} with exactly one line:`,
       canaryLine,
@@ -371,14 +289,10 @@ function writePromptFiles(relayHome, options = {}) {
       "    weight: 1",
       "",
     ].join("\n"), "utf-8");
-    fs.writeFileSync(routeIntentFile, `${JSON.stringify({
-      dispatch: { executor, model: modelForAdapter(options, executor) },
-      review: { reviewer: "codex" },
-    }, null, 2)}\n`, "utf-8");
-    dispatchCanaries[executor] = { promptFile, rubricFile, routeIntentFile, canaryFile, canaryLine };
+    dispatchCanaries[executor] = { promptFile, rubricFile, canaryFile, canaryLine };
   }
 
-  return { advisoryPrompt, primaryPrompt, rubric, dispatchCanaries, dispatchStamp };
+  return { primaryPrompt, rubric, dispatchCanaries, dispatchStamp };
 }
 
 function plannedStep(name, command, notes = "") {
@@ -487,9 +401,6 @@ function classifyProbeJson(result) {
   if (parsed.agent_probe_error) {
     return { outcome: OUTCOMES.FAIL, parsed, notes: `agent_probe_error: ${parsed.agent_probe_error}` };
   }
-  if (parsed.policy_decision?.allowed !== true) {
-    return { outcome: OUTCOMES.FAIL, parsed, notes: `policy denied route: ${parsed.policy_decision?.reason || "unknown"}` };
-  }
   if (!String(parsed.agent_tools_raw || "").trim()) {
     return { outcome: OUTCOMES.FAIL, parsed, notes: "probe returned no agent_tools_raw evidence" };
   }
@@ -558,7 +469,7 @@ function classifyAntigravityDispatch(result) {
   return classifyHealthyDispatch(result);
 }
 
-function buildDispatchCommand({ node, repo, branch, executor, model, routeIntentFile, promptFile, rubricFile, timeoutSeconds }) {
+function buildDispatchCommand({ node, repo, branch, executor, model, promptFile, rubricFile, timeoutSeconds }) {
   const command = [
     node,
     path.join(SCRIPT_REPO_ROOT, "skills/relay-dispatch/scripts/dispatch.js"),
@@ -567,13 +478,10 @@ function buildDispatchCommand({ node, repo, branch, executor, model, routeIntent
     "--prompt-file", promptFile,
     "--rubric-file", rubricFile,
     "--timeout", String(timeoutSeconds),
+    "--executor", executor,
+    "--model", model,
     "--json",
   ];
-  if (routeIntentFile) {
-    command.splice(command.length - 1, 0, "--route-intent-file", routeIntentFile);
-  } else {
-    command.splice(command.length - 1, 0, "--executor", executor, "--model", model);
-  }
   return command;
 }
 
@@ -640,9 +548,7 @@ function buildReviewScenarioCommand({ node, repo, prompts, options, scenario }) 
   const script = REVIEWER_SCRIPT_BY_ADAPTER[scenario.adapter];
   if (!script) throw new Error(`unknown reviewer dogfood adapter: ${scenario.adapter}`);
 
-  const promptFile = scenario.phase === "advisory_review"
-    ? prompts.advisoryPrompt
-    : prompts.primaryPrompt;
+  const promptFile = prompts.primaryPrompt;
   const command = [
     node,
     path.join(SCRIPT_REPO_ROOT, "skills/relay-review/scripts", script),
@@ -680,7 +586,6 @@ function buildHealthyDispatchScenarioCommand({ node, repo, prompts, options, sce
     branch: `${options.dispatchBranchPrefix}-${scenario.adapter}-${prompts.dispatchStamp}`,
     executor: scenario.adapter,
     model: modelForAdapter(options, scenario.adapter),
-    routeIntentFile: canary.routeIntentFile,
     promptFile: canary.promptFile,
     rubricFile: canary.rubricFile,
     timeoutSeconds: options.dispatchTimeoutSeconds,
@@ -763,7 +668,7 @@ function runDogfood(options = {}, deps = {}) {
   const spawnImpl = deps.spawnSync || spawnSync;
   const repo = path.resolve(options.repo || ".");
   const effectiveOptions = { ...DEFAULTS, ...options };
-  const relayHome = ensureRelayHome(options.relayHome, effectiveOptions);
+  const relayHome = ensureRelayHome(options.relayHome);
   let dispatchBase = null;
   if (includesDispatchCanaryScenario(effectiveOptions) && !effectiveOptions.dryRun) {
     dispatchBase = prepareDispatchBaseRepo({ repo, relayHome, options: effectiveOptions, spawnImpl });
@@ -773,7 +678,6 @@ function runDogfood(options = {}, deps = {}) {
   const envBase = {
     ...process.env,
     RELAY_HOME: relayHome,
-    RELAY_POLICY_PATH: path.join(relayHome, "policy.json"),
   };
   const steps = buildSteps({ repo: executionRepo, relayHome, prompts, options: effectiveOptions });
 
@@ -864,7 +768,7 @@ function printHelp() {
   console.log("  --command-timeout-ms <ms>             Harness per-command timeout (default: 300000)");
   console.log("");
   console.log("Examples:");
-  console.log("  live-dogfood.js --repo . --opencode-model <opencode-provider>/<opencode-model> --scenario opencode-advisory --json");
+  console.log("  live-dogfood.js --repo . --opencode-model <opencode-provider>/<opencode-model> --scenario opencode-primary --json");
   console.log("  live-dogfood.js --repo . --pi-model <pi-provider>/<pi-model> --scenario pi-primary --json");
 }
 
@@ -894,8 +798,6 @@ if (require.main === module) {
 
 module.exports = {
   OUTCOMES,
-  buildPolicy,
-  buildAllowedModelRoutes,
   classifyAntigravityDispatch,
   classifyAntigravityFailSafeTimeout,
   classifyAntigravityNoOpDispatch,

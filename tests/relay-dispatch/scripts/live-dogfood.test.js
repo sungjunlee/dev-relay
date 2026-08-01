@@ -3,11 +3,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { evaluateRelayRoute } = require("../../../skills/relay-dispatch/scripts/relay-policy");
-
 const {
   OUTCOMES,
-  buildPolicy,
   classifyAntigravityDispatch,
   classifyAntigravityFailSafeTimeout,
   classifyAntigravityNoOpDispatch,
@@ -35,9 +32,8 @@ function jsonResult(payload, status = 0) {
   return { status, stdout: `${JSON.stringify(payload)}\n`, stderr: "" };
 }
 
-test("live dogfood uses temp RELAY_HOME by default and writes scoped policy", () => {
+test("live dogfood uses a private temporary RELAY_HOME by default", () => {
   const repo = tempDir("relay-live-dogfood-repo-");
-  const homeBefore = path.join(os.homedir(), ".relay", "policy.json");
   const calls = [];
   const result = runDogfood({
     repo,
@@ -55,17 +51,8 @@ test("live dogfood uses temp RELAY_HOME by default and writes scoped policy", ()
   assert.equal(calls.length, 0);
   assert.equal(result.temp_relay_home, true);
   assert.match(result.relay_home, /relay-live-dogfood-/);
-  assert.ok(fs.existsSync(path.join(result.relay_home, "policy.json")));
-  const policy = JSON.parse(fs.readFileSync(path.join(result.relay_home, "policy.json"), "utf-8"));
-  assert.equal(policy.profile, "live-adapter-dogfood");
-  assert.deepEqual(policy.allowed_model_routes.map((entry) => entry.route), [
-    "example/pi-model-fast",
-    "example/opencode-model-fast",
-    "google/antigravity-cli",
-  ]);
-  assert.deepEqual(policy.allowed_model_routes[0].reviewers, ["pi"]);
-  assert.deepEqual(policy.allowed_model_routes[1].reviewers, ["opencode"]);
-  assert.ok(!result.relay_home.startsWith(path.dirname(homeBefore)) || result.relay_home !== path.dirname(homeBefore));
+  assert.ok(!fs.existsSync(path.join(result.relay_home, "policy.json")));
+  assert.notEqual(result.relay_home, path.join(os.homedir(), ".relay"));
 });
 
 test("live dogfood exposes explicit scenario metadata rows", () => {
@@ -76,12 +63,9 @@ test("live dogfood exposes explicit scenario metadata rows", () => {
     ["probe-pi", "pi", "probe", "probe"],
     ["probe-opencode", "opencode", "probe", "probe"],
     ["probe-antigravity", "antigravity", "probe", "probe"],
-    ["opencode-advisory", "opencode", "advisory_review", "healthy-review"],
     ["opencode-primary", "opencode", "primary_review", "healthy-review"],
-    ["pi-advisory", "pi", "advisory_review", "healthy-review"],
     ["pi-primary", "pi", "primary_review", "healthy-review"],
     ["antigravity-primary", "antigravity", "primary_review", "healthy-review"],
-    ["antigravity-advisory", "antigravity", "advisory_review", "healthy-review"],
     ["antigravity-primary-fail-safe-timeout", "antigravity", "primary_review", "fail-safe"],
     ["antigravity-dispatch-fail-safe-noop", "antigravity", "dispatch", "fail-safe"],
     ["pi-dispatch-canary", "pi", "dispatch", "healthy-dispatch"],
@@ -97,16 +81,14 @@ test("live dogfood exposes explicit scenario metadata rows", () => {
 
   assert.equal(rows.get("antigravity-primary-fail-safe-timeout").healthyPromotion, false);
   assert.equal(rows.get("antigravity-dispatch-fail-safe-noop").healthyPromotion, false);
-  assert.equal(rows.get("opencode-primary").defaultEnabled, false);
+  assert.equal(rows.get("opencode-primary").defaultEnabled, true);
   assert.equal(rows.get("opencode-primary").healthyPromotion, true);
-  assert.equal(rows.get("pi-advisory").healthyPromotion, true);
-  assert.equal(rows.get("antigravity-advisory").healthyPromotion, true);
   assert.equal(rows.get("pi-dispatch-canary").healthyPromotion, true);
   assert.equal(rows.get("opencode-dispatch-canary").healthyPromotion, true);
   assert.equal(rows.get("antigravity-dispatch-canary").healthyPromotion, true);
 });
 
-test("live dogfood healthy dispatch canaries use run-level route intent files", () => {
+test("live dogfood healthy dispatch canaries bind explicit executor/model flags", () => {
   const repo = tempDir("relay-live-dogfood-repo-");
   const result = runDogfood({
     repo,
@@ -119,17 +101,9 @@ test("live dogfood healthy dispatch canaries use run-level route intent files", 
   for (const name of ["pi-dispatch-canary", "opencode-dispatch-canary", "antigravity-dispatch-canary"]) {
     const step = result.outcomes.find((entry) => entry.name === name);
     assert.ok(step, `${name} planned`);
-    assert.match(step.command, /--route-intent-file /);
-    assert.doesNotMatch(step.command, / --executor /);
-    assert.doesNotMatch(step.command, / --model /);
-    const routeIntentPath = step.command.match(/--route-intent-file ([^ ]+)/)?.[1];
-    assert.ok(routeIntentPath, `${name} route intent path`);
-    const routeIntent = JSON.parse(fs.readFileSync(routeIntentPath, "utf-8"));
-    assert.equal(routeIntent.dispatch.executor, name.replace("-dispatch-canary", ""));
-    assert.equal(routeIntent.review.reviewer, "codex");
-    if (routeIntent.dispatch.executor === "antigravity") {
-      assert.equal(routeIntent.dispatch.model, "google/antigravity-cli");
-    }
+    assert.doesNotMatch(step.command, /--route-intent-file /);
+    assert.match(step.command, new RegExp(`--executor ${name.replace("-dispatch-canary", "")}`));
+    assert.match(step.command, /--model /);
   }
 });
 
@@ -204,30 +178,24 @@ test("live dogfood can target OpenCode primary review without enabling it by def
 
   assert.deepEqual(result.outcomes.map((step) => step.name), ["opencode-primary"]);
   assert.match(result.outcomes[0].command, /invoke-reviewer-opencode\.js/);
-  assert.match(result.outcomes[0].command, /--phase primary_review/);
+  assert.match(result.outcomes[0].command, /--model example\/opencode-model-fast/);
 });
 
 test("live dogfood classifies mocked command outcomes and preserves markdown distinctions", () => {
   const repo = tempDir("relay-live-dogfood-repo-");
   const relayHome = tempDir("relay-live-dogfood-home-");
   const responses = [
-    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"pi\"}" }),
-    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"opencode\"}" }),
-    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"agy\"}" }),
-    jsonResult({ profile: "blindspot", advisory_findings: [] }),
-    jsonResult({ profile: "blindspot", advisory_findings: [] }),
+    jsonResult({ agent_tools_raw: "{\"version\":\"pi\"}" }),
+    jsonResult({ agent_tools_raw: "{\"version\":\"opencode\"}" }),
+    jsonResult({ agent_tools_raw: "{\"version\":\"agy\"}" }),
+    jsonResult({ verdict: "pass", summary: "OpenCode ok." }),
     jsonResult({ verdict: "pass", summary: "Pi ok." }),
-    jsonResult({ profile: "blindspot", advisory_findings: [] }),
     jsonResult({ verdict: "pass", summary: "Antigravity ok." }),
     { status: 1, stdout: "", stderr: "Antigravity reviewer primary_review timed out after 2s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT)." },
     jsonResult({ status: "completed-no-op", runState: "review_pending", prNumber: null }),
   ];
   const calls = [];
-  const previousPolicyPath = process.env.RELAY_POLICY_PATH;
-  process.env.RELAY_POLICY_PATH = path.join(tempDir("relay-live-dogfood-external-"), "policy.json");
-  let result;
-  try {
-    result = runDogfood({
+  const result = runDogfood({
       repo,
       relayHome,
       commandTimeoutMs: 1000,
@@ -241,36 +209,26 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
         calls.push({ command, args, env: options.env });
         return responses.shift();
       },
-    });
-  } finally {
-    if (previousPolicyPath === undefined) delete process.env.RELAY_POLICY_PATH;
-    else process.env.RELAY_POLICY_PATH = previousPolicyPath;
-  }
+  });
 
-  assert.equal(calls.length, 10);
+  assert.equal(calls.length, 8);
   assert.deepEqual(result.outcomes.map((step) => step.name), [
     "probe-pi",
     "probe-opencode",
     "probe-antigravity",
-    "opencode-advisory",
-    "pi-advisory",
+    "opencode-primary",
     "pi-primary",
     "antigravity-primary",
-    "antigravity-advisory",
     "antigravity-primary-fail-safe-timeout",
     "antigravity-dispatch-fail-safe-noop",
   ]);
   assert.equal(calls[0].env.RELAY_HOME, relayHome);
-  assert.equal(calls[0].env.RELAY_POLICY_PATH, path.join(relayHome, "policy.json"));
+  assert.equal(calls[0].env.RELAY_POLICY_PATH, undefined);
   assert.equal(calls[3].env.RELAY_OPENCODE_REVIEW_TIMEOUT, "1s");
   assert.equal(calls[4].env.RELAY_PI_REVIEW_TIMEOUT, "1s");
-  assert.equal(calls[5].env.RELAY_PI_REVIEW_TIMEOUT, "1s");
-  assert.equal(calls[6].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "90s");
-  assert.equal(calls[7].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "90s");
-  assert.equal(calls[8].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "2s");
+  assert.equal(calls[5].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "90s");
+  assert.equal(calls[6].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "2s");
   assert.deepEqual(result.outcomes.map((step) => step.outcome), [
-    OUTCOMES.PASS,
-    OUTCOMES.PASS,
     OUTCOMES.PASS,
     OUTCOMES.PASS,
     OUTCOMES.PASS,
@@ -287,7 +245,6 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
   assert.match(markdown, /`timeout` is inconclusive/);
   assert.match(markdown, /not healthy success/);
   assert.match(markdown, /\| `antigravity-primary` \| `pass` \|/);
-  assert.match(markdown, /\| `antigravity-advisory` \| `pass` \|/);
   assert.match(markdown, /\| `antigravity-primary-fail-safe-timeout` \| `fail-safe-pass` \|/);
   assert.match(markdown, /\| `antigravity-dispatch-fail-safe-noop` \| `fail-safe-pass` \|/);
 });
@@ -298,13 +255,11 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
   const responses = [
     { status: 0, stdout: "", stderr: "" },
     { status: 0, stdout: "", stderr: "" },
-    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"pi\"}" }),
-    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"opencode\"}" }),
-    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"agy\"}" }),
-    jsonResult({ profile: "blindspot", advisory_findings: [] }),
-    jsonResult({ profile: "blindspot", advisory_findings: [] }),
+    jsonResult({ agent_tools_raw: "{\"version\":\"pi\"}" }),
+    jsonResult({ agent_tools_raw: "{\"version\":\"opencode\"}" }),
+    jsonResult({ agent_tools_raw: "{\"version\":\"agy\"}" }),
+    jsonResult({ verdict: "pass", summary: "OpenCode ok." }),
     jsonResult({ verdict: "pass", summary: "Pi ok." }),
-    jsonResult({ profile: "blindspot", advisory_findings: [] }),
     jsonResult({ verdict: "pass", summary: "Antigravity ok." }),
     { status: 1, stdout: "", stderr: "Antigravity reviewer primary_review timed out after 2s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT)." },
     jsonResult({ status: "completed-no-op", runState: "review_pending", prNumber: null }),
@@ -329,7 +284,7 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     },
   });
 
-  assert.equal(calls.length, 16);
+  assert.equal(calls.length, 14);
   assert.equal(calls[0].command, "git");
   assert.deepEqual(calls[0].args.slice(0, 3), ["worktree", "add", "--detach"]);
   assert.equal(calls[0].args[4], "origin/main");
@@ -341,34 +296,30 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     "probe-pi",
     "probe-opencode",
     "probe-antigravity",
-    "opencode-advisory",
-    "pi-advisory",
+    "opencode-primary",
     "pi-primary",
     "antigravity-primary",
-    "antigravity-advisory",
     "antigravity-primary-fail-safe-timeout",
     "antigravity-dispatch-fail-safe-noop",
     "pi-dispatch-canary",
     "opencode-dispatch-canary",
     "antigravity-dispatch-canary",
   ]);
-  assert.deepEqual(result.outcomes.slice(10).map((step) => step.outcome), [
+  assert.deepEqual(result.outcomes.slice(8).map((step) => step.outcome), [
     OUTCOMES.PASS,
     OUTCOMES.PASS,
     OUTCOMES.PASS,
   ]);
-  for (const [call, executor] of calls.slice(12, 15).map((call, index) => [call, ["pi", "opencode", "antigravity"][index]])) {
+  for (const [call, executor] of calls.slice(10, 13).map((call, index) => [call, ["pi", "opencode", "antigravity"][index]])) {
     assert.match(call.args[call.args.indexOf("-b") + 1], /^healthy-dogfood-(pi|opencode|antigravity)-\d+$/);
     assert.equal(call.args[call.args.indexOf("--timeout") + 1], "222");
     assert.ok(call.args.includes("--prompt-file"));
     assert.ok(call.args.includes("--rubric-file"));
-    assert.ok(call.args.includes("--route-intent-file"));
-    assert.equal(call.args.includes("--executor"), false);
-    assert.equal(call.args.includes("--model"), false);
-    const routeIntent = JSON.parse(fs.readFileSync(call.args[call.args.indexOf("--route-intent-file") + 1], "utf-8"));
-    assert.equal(routeIntent.dispatch.executor, executor);
+    assert.equal(call.args.includes("--route-intent-file"), false);
+    assert.equal(call.args[call.args.indexOf("--executor") + 1], executor);
+    assert.ok(call.args.includes("--model"));
   }
-  assert.deepEqual(calls[15].args.slice(0, 3), ["worktree", "remove", "--force"]);
+  assert.deepEqual(calls[13].args.slice(0, 3), ["worktree", "remove", "--force"]);
 });
 
 test("live dogfood dispatch canary refuses dirty clean-base worktrees before creating live branches", () => {
@@ -452,69 +403,12 @@ test("live dogfood defaults use realistic healthy reviewer timeouts and bounded 
   assert.equal(parsed.antigravityFailSafeReviewTimeout, "3s");
 });
 
-test("live dogfood policy reflects requested model route overrides", () => {
-  const policy = buildPolicy({
-    piModel: "custom-pi/model-a",
-    opencodeModel: "custom-opencode/model-b",
-    antigravityModel: "custom-google/agy",
-  });
-
-  assert.deepEqual(policy.allowed_model_routes.map((entry) => entry.route), [
-    "custom-pi/model-a",
-    "custom-opencode/model-b",
-    "custom-google/agy",
-  ]);
-  assert.deepEqual(policy.allowed_model_routes[0].executors, ["pi"]);
-  assert.deepEqual(policy.allowed_model_routes[0].reviewers, ["pi"]);
-  assert.deepEqual(policy.allowed_model_routes[1].phases, ["dispatch", "advisory_review"]);
-  assert.deepEqual(policy.allowed_model_routes[2].executors, ["antigravity"]);
-  assert.deepEqual(policy.allowed_model_routes[2].phases, ["dispatch", "review", "advisory_review"]);
-});
-
-test("live dogfood policy does not widen same-route actor phase scope", () => {
-  const policy = buildPolicy({
-    piModel: "example/pi-model-fast",
-    opencodeModel: "example/opencode-model-fast",
-  });
-  assert.equal(evaluateRelayRoute(policy, {
-    phase: "review",
-    reviewer: "pi",
-    model: "example/pi-model-fast",
-  }).allowed, true);
-  assert.equal(evaluateRelayRoute(policy, {
-    phase: "advisory_review",
-    reviewer: "opencode",
-    model: "example/opencode-model-fast",
-  }).allowed, true);
-  assert.equal(evaluateRelayRoute(policy, {
-    phase: "review",
-    reviewer: "opencode",
-    model: "example/opencode-model-fast",
-  }).allowed, false);
-  assert.equal(evaluateRelayRoute(policy, {
-    phase: "advisory_review",
-    reviewer: "pi",
-    model: "example/pi-model-fast",
-  }).allowed, false);
-  assert.equal(evaluateRelayRoute(policy, {
-    phase: "advisory_review",
-    reviewer: "antigravity",
-    model: "google/antigravity-cli",
-  }).allowed, true);
-});
-
 test("classification helpers separate harness timeout from safe adapter timeout", () => {
   assert.equal(classifyProbeJson(jsonResult({
-    policy_decision: { allowed: true },
     agent_probe_error: "pi CLI not found",
     agent_tools_raw: "{}",
   })).outcome, OUTCOMES.FAIL);
   assert.equal(classifyProbeJson(jsonResult({
-    policy_decision: { allowed: false, reason: "unknown_model_route" },
-    agent_tools_raw: "{}",
-  })).outcome, OUTCOMES.FAIL);
-  assert.equal(classifyProbeJson(jsonResult({
-    policy_decision: { allowed: true },
     agent_tools_raw: "{\"version\":\"1\"}",
   })).outcome, OUTCOMES.PASS);
   assert.equal(classifyAntigravityPrimary({ error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" }).outcome, OUTCOMES.TIMEOUT);

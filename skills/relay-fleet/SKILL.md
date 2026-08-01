@@ -1,6 +1,6 @@
 ---
 name: relay-fleet
-description: Drive already-planned relay leaves through fan-out, review, serial merge, crash recovery, and fleet status.
+description: Drive an immutable cohort of already-planned relay leaves through fan-out and derived status.
 compatibility: Requires git, gh CLI, Node.js 18+, and sibling relay-dispatch/relay-merge skills.
 argument-hint: --fleet-id <id> --leaves-file <path>
 metadata:
@@ -9,8 +9,8 @@ metadata:
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
-- Files: leaves JSON passed by `--leaves-file`, child prompt/rubric/Done Criteria files, and fleet/child run manifests under `~/.relay/runs/`.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js`, `${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/merge-queue.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js`.
+- Files: leaves JSON passed by `--leaves-file`, child prompt/rubric/Done Criteria files, immutable cohorts under `~/.relay/fleets/`, and child runs under `~/.relay/runs/`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js`.
 
 # relay-fleet
 
@@ -28,7 +28,7 @@ metadata:
 - Dispatching a single task or run — use `relay-dispatch`
 - Reviewing one standalone child PR — use `relay-review`
 
-Run multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. The default command is the full crash-only drive: fan-out -> review/publication/redispatch loop -> serial merge queue -> `closed` when every child is terminal.
+Run multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. A fleet stores only one immutable cohort. Status is derived afresh from child vNext runs (with read-only legacy manifest fallback); it never owns child state, retry history, or a cache.
 
 Design rationale, rejected alternatives, non-goals, and the Phase 2/3 roadmap: [references/design.md](references/design.md).
 
@@ -50,8 +50,8 @@ relay-fleet only fans out already-decomposed leaf contracts; it never splits a r
 
 All leaves must carry the same normalized owner. `ownership.track` must equal the basename of `ownership.sprint` without `.md`; `component` is a separate dev-backlog scope key and need not equal the track. Before admission, the canonical path, track, and component must exactly match the trusted schema-v2 `sprint-state.js --track` result, and the path must resolve to an existing regular file in the current repo's `backlog/sprints/`; relay-fleet does not parse that markdown. Missing, malformed, contradictory, unresolved, stale, or mixed-track ownership is rejected before a fleet manifest or child dispatch exists: one fleet is one track.
 
-Optional per-leaf fields are passed through to `dispatch.js`: `request_id`, `leaf_id`, `executor`, `model`, `model_hints`, `sandbox`, `network_access`, `timeout`, `reasoning`, `copy`, `test_command`, and `register`. An optional `depends_on` array of `leaf_ref` strings records ordering intent: a reference to another leaf in the *same* leaves file fails closed at load time (dispatch that leaf in an earlier wave and drop the reference here); a reference to a `leaf_ref` outside this file is accepted silently and assumed already satisfied.
-If a leaf's executor route is denied or its model is unresolved, pause that leaf and use `relay-config` to register the route or set the default before resuming the fleet.
+Optional per-leaf fields are passed through to `dispatch.js`: `request_id`, `leaf_id`, `executor`, `model`, `sandbox`, `network_access`, `timeout`, `reasoning`, `copy`, `test_command`, and `register`. Submit dependent work in a later fleet wave after its prerequisite fleet is terminal; the immutable cohort intentionally carries no second dependency scheduler.
+If a leaf selects an unsupported executor or an unavailable model provider, pause that leaf and correct the explicit leaf input before resuming the fleet.
 
 ## Commands
 
@@ -72,15 +72,9 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --status
 ```
 
-Omit `--fleet-id` to list every fleet for the current repository without modifying manifests:
+The cohort is written with exclusive creation. Repeating exactly the same normalized leaves is idempotent; any byte difference fails closed. `--status` never writes it.
 
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" --repo . --status
-```
-
-The operator-entry sunset is complete: `relay-fleet.js --resume` is removed and hard-errors with guidance to rerun the idempotent default drive, which resumes in place. `relay-fleet.js --review` and `merge-queue.js` are internal/debug-only re-entry paths, not documented operator entry points.
-
-Dry-run validates the leaf file and invokes child `dispatch.js --dry-run` for each leaf without writing a fleet manifest:
+Dry-run validates the leaf file and invokes child `dispatch.js --dry-run` for each leaf without writing a cohort:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
@@ -93,18 +87,14 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 
 ## Behavior
 
-- The default command invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per undispatched leaf and always passes `--fleet-id` plus the typed `--ownership-json` owner.
-- Existing fleet manifests are continued idempotently. With the same `--leaves-file`, already-dispatched children are not re-dispatched; with no `--leaves-file`, persisted fleet leaves are reused when dispatch recovery needs them.
-- An active pre-ownership fleet cannot use persisted-only resume. Reconstruct the original single-track leaves from trusted sprint-state JSON and rerun the owning fleet with that validated single-track `--leaves-file`; relay-fleet audits the whole cohort before backfilling. Terminal legacy children remain inspectable without backfill.
-- Re-runs fail closed if a child manifest owner differs from its persisted leaf; relay-fleet never rewrites `manifest.ownership`.
-- The drive invokes `skills/relay-review/scripts/review-runner.js` for children in `internal_review_pending` or `review_pending`, publishes `publish_pending` children, and redispatches `changes_requested` children until each reaches `ready_to_merge` or `escalated`.
-- The drive then invokes the serial merge queue, which calls `skills/relay-merge/scripts/finalize-run.js` for one `ready_to_merge` child at a time. When a child merge fails, it marks that child `merge_blocked` and continues with the next ready child.
-- The fleet moves to `closed` only when every child is terminal: `merged`, `closed`, or `escalated`. Escalated children close the fleet with a nonzero exit and operator-attention summary; `merge_blocked` keeps the fleet open in `merging`.
+- The default command invokes `skills/relay-dispatch/scripts/dispatch.js` once per leaf that has no derived child run, and always passes `--fleet-id` plus the typed `--ownership-json` owner.
+- A child matches only when its immutable parent id, branch, Done Criteria hash, and ownership digest all match its cohort leaf. Zero matches is retry-pending; multiple matches or an unmatched parent child is operator attention.
+- `--review` additionally drives review-pending children and serially finalizes ready-to-merge children. It writes no fleet state; each child remains the sole owner of its lifecycle.
+- Pre-manifest failures have no durable synthetic child record. The same cohort invocation retries its no-run leaf, while the subprocess receipt is the immediate evidence.
+- The fleet is `closed` only when every derived child is `merged`. `escalated`, merge blocks, drift, duplicate matches, and orphan parent children remain operator attention.
 - Each child dispatch owns worktree creation, in-flight run checks, executor invocation, and child run manifest writes.
 - Fleet issue locks are checked before each child spawn; `dispatch.js --fleet-id` performs the durable lock during the actual child run.
-- Re-runs reconcile both directions: they re-adopt child run manifests whose `fleet_id` points back to this fleet, mark no-manifest interrupted children as `dispatch_failed_pre_manifest`, skip still-running child subprocesses, and continue recoverable work.
-- `--status` is read-only and uses the relay-dispatch fleet summary derivation rules. Without `--fleet-id`, it lists repo-scoped fleets and their terminal/total child counts.
-- `--status` operator_attention may include `stalled_executor` when a child's run lease is live, `dispatch-stdout.log` is still 0 bytes, and lease age exceeds 15 minutes (`RELAY_FLEET_STALL_THRESHOLD_MS` override only). Visibility only — no kill. Mid-run stalls after the first stdout byte are not detected.
+- `--status` is read-only and derives the complete view from immutable cohort bytes plus child records. It never creates files, changes child manifests, or repairs historical fleet artifacts.
 
 ## SPOF
 

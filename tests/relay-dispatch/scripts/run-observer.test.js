@@ -15,16 +15,24 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { observeRun } = require("../../../skills/relay-dispatch/scripts/run-observer");
 
-function writeFakeGh(binDir) {
+function writeFakeGh(binDir, callLog) {
   const ghPath = path.join(binDir, "gh");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const { execFileSync } = require("child_process");
+const fs = require("fs");
 const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(callLog)}, JSON.stringify(args) + "\\n");
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ nameWithOwner: "owner/repo" }));
+  process.exit(0);
+}
 if (args[0] === "pr" && args[1] === "list") {
   process.stdout.write("[]");
   process.exit(0);
 }
 if (args[0] === "pr" && args[1] === "view") {
-  process.stdout.write(JSON.stringify({ number: Number(args[2]), state: "OPEN", url: "https://example.test/pr/" + args[2], headRefName: "issue-827" }));
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  process.stdout.write(JSON.stringify({ number: Number(args[2]), state: "OPEN", url: "https://example.test/pr/" + args[2], headRefName: "issue-827", headRefOid: head, baseRefName: "main", mergeCommit: null }));
   process.exit(0);
 }
 process.stderr.write("unexpected gh args: " + args.join(" "));
@@ -40,8 +48,9 @@ function setupRun({ state = STATES.DISPATCHED, missingWorktree = false } = {}) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-observer-repo-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-observer-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-observer-gh-")));
+  const ghCallLog = path.join(binDir, "calls.jsonl");
   process.env.RELAY_HOME = relayHome;
-  process.env.RELAY_GH_BIN = writeFakeGh(binDir);
+  process.env.RELAY_GH_BIN = writeFakeGh(binDir, ghCallLog);
 
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Observer Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -81,10 +90,23 @@ function setupRun({ state = STATES.DISPATCHED, missingWorktree = false } = {}) {
     reviewer: "codex",
   });
   manifest.anchor.rubric_path = "rubric.yaml";
+  manifest.anchor.done_criteria_path = path.join(layout.runDir, "done-criteria.md");
+  manifest.anchor.done_criteria_sha256 = "d".repeat(64);
   manifest.git.head_sha = startHead;
-  manifest = updateManifestState(manifest, state, state === STATES.DISPATCHED ? "await_dispatch_result" : "next");
+  if (state === STATES.READY_TO_MERGE) {
+    manifest.state = STATES.READY_TO_MERGE;
+    manifest.next_action = "merge";
+    manifest.git.pr_number = 42;
+    manifest.review.rounds = 1;
+    manifest.review.latest_verdict = "lgtm";
+    manifest.review.last_reviewed_sha = startHead;
+    manifest.review.last_reviewer = "codex";
+  } else {
+    manifest = updateManifestState(manifest, state, state === STATES.DISPATCHED ? "await_dispatch_result" : "next");
+  }
   writeManifest(layout.manifestPath, manifest);
   fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), "rubric:\n  size_class: S\n", "utf-8");
+  fs.writeFileSync(path.join(layout.runDir, "done-criteria.md"), "done\n", "utf-8");
 
   return {
     repoRoot,
@@ -93,6 +115,7 @@ function setupRun({ state = STATES.DISPATCHED, missingWorktree = false } = {}) {
     runDir: layout.runDir,
     manifestPath: layout.manifestPath,
     worktreePath,
+    ghCallLog,
     restore() {
       if (previousRelayHome === undefined) delete process.env.RELAY_HOME;
       else process.env.RELAY_HOME = previousRelayHome;
@@ -203,6 +226,54 @@ test("observer classifies dead work", () => {
     assert.equal(row.classification, "dead_with_work");
     assert.equal(row.worktree.reviewable_dirt, true);
   } finally {
+    fixture.restore();
+  }
+});
+
+test("ready observer emits shadow parity from fresh Git and GitHub observations", () => {
+  const fixture = setupRun({ state: STATES.READY_TO_MERGE });
+  const telemetryDirectory = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "relay-observer-shadow-")),
+  );
+  const previous = process.env.RELAY_VNEXT_SHADOW_TELEMETRY_DIR;
+  process.env.RELAY_VNEXT_SHADOW_TELEMETRY_DIR = telemetryDirectory;
+  try {
+    const row = observeRun({ repo: fixture.repoRoot, runId: fixture.runId });
+    assert.equal(row.classification, "ready_to_merge");
+    assert.equal(row.pr.lookup_status, "ok");
+    assert.equal(row.shadow_comparison.legacy.action, "merge");
+    assert.equal(row.shadow_comparison.vnext.action, "merge");
+    assert.equal(row.shadow_comparison.agree, true);
+    assert.equal(
+      fs.existsSync(path.join(telemetryDirectory, `${fixture.runId}.jsonl`)),
+      true,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.RELAY_VNEXT_SHADOW_TELEMETRY_DIR;
+    else process.env.RELAY_VNEXT_SHADOW_TELEMETRY_DIR = previous;
+    fixture.restore();
+  }
+});
+
+test("disabled shadow telemetry makes no repository identity GitHub call", () => {
+  const fixture = setupRun();
+  const previous = process.env.RELAY_VNEXT_SHADOW_TELEMETRY_DIR;
+  delete process.env.RELAY_VNEXT_SHADOW_TELEMETRY_DIR;
+  try {
+    const row = observeRun({ repo: fixture.repoRoot, runId: fixture.runId });
+    assert.equal("shadow_comparison" in row, false);
+    const calls = fs.readFileSync(fixture.ghCallLog, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(JSON.parse);
+    assert.equal(
+      calls.filter((call) => call[0] === "repo" && call[1] === "view").length,
+      0,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.RELAY_VNEXT_SHADOW_TELEMETRY_DIR;
+    else process.env.RELAY_VNEXT_SHADOW_TELEMETRY_DIR = previous;
     fixture.restore();
   }
 });

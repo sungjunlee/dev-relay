@@ -7,9 +7,11 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
+const { claudeReviewArgs } = require("./reviewer-control-invocations");
 const {
   bindCliArgs,
-  modeLabel,
+  findUnknownFlags,
+  modeLabel: formatCliModeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
   parseReviewerJsonObject,
@@ -22,19 +24,23 @@ const {
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
-const cliArgs = bindCliArgs(args, {
-  commandName: "invoke-reviewer-claude",
+const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-});
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--prompt-file"],
+};
+const unknownFlags = findUnknownFlags(args, CLI_ARG_OPTIONS);
+if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+const cliArgs = bindCliArgs(args, CLI_ARG_OPTIONS);
 const CLAUDE_AUTH_PATTERNS = [/not logged/i, /please run \/login/i];
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-reviewer-claude.js --repo <path> --prompt-file <path> [--model <name>] [--json]");
   console.log("\nOptions:");
-  console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
-  console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
-  console.log(`  --model <name>       ${modeLabel("--model")} Model override`);
-  console.log(`  --json               ${modeLabel("--json")} Output JSON`);
+  console.log(`  --repo <path>        ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Repository root`);
+  console.log(`  --prompt-file <path> ${formatCliModeLabel("--prompt-file", CLI_ARG_OPTIONS)} Prompt bundle path`);
+  console.log(`  --model <name>       ${formatCliModeLabel("--model", CLI_ARG_OPTIONS)} Model override`);
+  console.log(`  --json               ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output JSON`);
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
@@ -45,7 +51,7 @@ function isClaudeBareAuthError(text) {
 
 function buildClaudeAuthError() {
   return new Error(
-    "claude --bare mode is not authenticated. It uses a separate token from the interactive Claude OAuth session. Set ANTHROPIC_API_KEY or run `claude login --api-key` before using `--reviewer claude` (directly or via reviewer-swap). See skills/relay-review/SKILL.md."
+    "claude --bare mode is not authenticated. It uses a separate token from the interactive Claude OAuth session. Set ANTHROPIC_API_KEY or run `claude login --api-key` before using `--reviewer claude`. See skills/relay-review/SKILL.md."
   );
 }
 
@@ -99,15 +105,7 @@ function main() {
     promptText,
   ].join("\n");
 
-  const execArgs = [
-    "-p",
-    "--bare",
-    "--no-session-persistence",
-    "--output-format", "text",
-    "--json-schema", JSON.stringify(REVIEWER_VERDICT_JSON_SCHEMA),
-    "--allowedTools=Read",
-  ];
-  if (model) execArgs.push("--model", model);
+  const execArgs = claudeReviewArgs({ schema: REVIEWER_VERDICT_JSON_SCHEMA, model });
 
   let result;
   try {

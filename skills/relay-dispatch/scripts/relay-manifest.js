@@ -8,9 +8,6 @@ const rubric = require("./manifest/rubric");
 const cleanup = require("./manifest/cleanup");
 const attempts = require("./manifest/attempts");
 const environment = require("./manifest/environment");
-const guidance = require("./manifest/guidance");
-const reviewAssurance = require("./manifest/review-assurance");
-const reviewBudget = require("./manifest/review-budget");
 
 module.exports = {
   ...paths,
@@ -20,7 +17,4 @@ module.exports = {
   ...cleanup,
   ...attempts,
   ...environment,
-  ...guidance,
-  ...reviewAssurance,
-  ...reviewBudget,
 };

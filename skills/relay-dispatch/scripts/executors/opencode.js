@@ -31,7 +31,7 @@ function validateExecutionMode({ sandbox, networkAccess }) {
       "opencode executor: --network-access 'enabled' is informational only; opencode does not gate network access at the executor level."
     );
   }
-  warnings.push("opencode executor is experimental; review boundary defined in relay-dispatch/references/reviewer-policy-opencode.md.");
+  warnings.push("opencode executor is experimental; an independent primary review is required.");
   return { ok: true, warnings };
 }
 

@@ -31,9 +31,8 @@ function writeText(filePath, text) {
 /**
  * Publish JSON so readers only ever observe an absent or complete file.
  *
- * Settlement readers may poll an advisory artifact while a detached worker (or
- * the lane reaper) is publishing it. A direct overwrite exposes truncated JSON
- * between truncate and write, so every advisory result publication routes here.
+ * Readers may poll an artifact while another process is publishing it. A direct
+ * overwrite exposes truncated JSON between truncate and write.
  */
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

@@ -14,11 +14,11 @@ node skills/relay-merge/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --sk
 
 ```bash
 node skills/relay-merge/scripts/finalize-run.js --repo . --run-id "$RUN_ID" \
-  --force-finalize-nonready --reason "reviewer-swap exhausted, diff clean per manual inspection" --json
+  --force-finalize-nonready --reason "review loop exhausted, diff clean per manual inspection" --json
 ```
 
 Use this only when an operator has independently checked that the PR is mergeable but the manifest cannot reach `ready_to_merge`.
-Typical cases: state stuck at `escalated` with a clean diff; reviewer-swap unavailable; manifest/PR state desync. If the PR is already MERGED and review PASS audits exist for its head, run plain `finalize-run` instead; it now completes the already-merged recovery without this force flag.
+Typical cases: state stuck at `escalated` with a clean diff; primary review unavailable; manifest/PR state desync. If the PR is already MERGED and review PASS audits exist for its head, run plain `finalize-run` instead; it now completes the already-merged recovery without this force flag.
 This path is loud on purpose: it records a `force_finalize` event before merge and writes `last_force` into the manifest.
 `--force-finalize-nonready` requires `--reason <non-empty-text>`.
 `--dry-run` is observation-only on this path: it does not append `force_finalize`.
