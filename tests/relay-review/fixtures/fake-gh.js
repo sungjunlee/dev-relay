@@ -19,6 +19,19 @@ const bodySnapshotResponse = (fixture) => ({
   closingIssuesReferences: fixture.closingIssuesReferences || [],
 });
 
+const vnextFinalizeResponse = (fixture) => ({
+  number: fixture.number || 123,
+  state: fixture.state || "OPEN",
+  headRefName: fixture.headRefName || "fixture-branch",
+  headRefOid: fixture.headRefOid || "a".repeat(40),
+  baseRefName: fixture.baseRefName || "main",
+  headRepository: fixture.headRepository || { nameWithOwner: "fixture/repo" },
+  headRepositoryOwner: fixture.headRepositoryOwner || { login: "fixture" },
+  mergeCommit: fixture.mergeCommit || null,
+  autoMergeRequest: fixture.autoMergeRequest || null,
+  mergeStateStatus: fixture.mergeStateStatus || "CLEAN",
+});
+
 // This is the fixture's single source of truth for accepted gh pr view field lists.
 // Keep builders deterministic: generated fake-gh scripts serialize their return values.
 const PR_VIEW_JSON_REGISTRY = Object.freeze({
@@ -47,6 +60,7 @@ const PR_VIEW_JSON_REGISTRY = Object.freeze({
     const state = loadState();
     return { state: state.state, mergeCommit: state.mergeCommit };
   },
+  "number,state,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus": vnextFinalizeResponse,
   "comments,commits,mergeable,statusCheckRollup": mergeGateResponse,
   "baseRefName,comments,commits,mergeable,statusCheckRollup": mergeGateResponse,
   "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid": mergeGateResponse,
@@ -126,6 +140,7 @@ function saveChecksIndex(next) {
   }
 }
 const mergeGateResponse = ${mergeGateResponse.toString()};
+const vnextFinalizeResponse = ${vnextFinalizeResponse.toString()};
 const prViewJsonRegistry = {
 ${serializedPrViewRegistry}
 };

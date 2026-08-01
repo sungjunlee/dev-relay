@@ -6,18 +6,25 @@ const path = require("path");
 
 const scoreReadiness = require("./score-readiness");
 const { READINESS_CONDITIONS } = require("./score-readiness");
-const { appendEventLineToPath, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
-const { bindCliArgs } = require("../../relay-dispatch/scripts/cli-args");
 
 const KNOWN_FLAGS = [
   "--body",
   "--body-file",
-  "--issue-number",
-  "--manifest",
   "--json",
   "--help",
   "-h",
 ];
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--json", "--help", "-h"],
+  verbatimValueFlags: ["--body", "--body-file"],
+};
+function parseCli(argv) {
+  const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_ARG_OPTIONS.booleanFlags), verbatim = new Set(CLI_ARG_OPTIONS.verbatimValueFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (flag, value) => value !== undefined && (verbatim.has(flag) || (!String(value).startsWith("--") && !known.has(String(value))));
+  argv.forEach((token, index) => { const flag = name(token); if (known.has(flag) && !bool.has(flag) && !String(token).includes("=") && accepts(flag, argv[index + 1])) consumed.add(index + 1); });
+  const unknown = argv.filter((token, index) => !consumed.has(index) && String(token).startsWith("-") && !known.has(name(token))); if (unknown.length) throw new Error(`unknown flags: ${unknown.join(", ")}`);
+  return { hasFlag: (flags) => (Array.isArray(flags) ? flags : [flags]).some((flag) => argv.some((token, index) => !consumed.has(index) && (token === flag || String(token).startsWith(`${flag}=`)))), getArg: (flag, fallback) => { for (let index = 0; index < argv.length; index += 1) { if (consumed.has(index)) continue; const token = String(argv[index]); if (token === flag || token.startsWith(`${flag}=`)) { const value = token === flag ? argv[index + 1] : token.slice(flag.length + 1); if (!accepts(flag, value)) return fallback; if (verbatim.has(flag) && !String(value).trim()) throw new Error(`${flag} requires a non-empty value`); return value; } } return fallback; } };
+}
 
 const CONDITION_LABELS = Object.freeze({
   [READINESS_CONDITIONS.VAGUE_VERB]: "vague verb",
@@ -43,12 +50,6 @@ function clipLine(value, maxLength = 140) {
   const normalized = String(value || "").replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, maxLength - 3)}...`;
-}
-
-function parsePositiveInteger(value) {
-  if (value === undefined) return null;
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function readInput(cliArgs) {
@@ -150,34 +151,6 @@ function buildDegradedEnvelope(error, elapsedMs) {
   };
 }
 
-function resolveEventsPath(manifestPath) {
-  const resolved = path.resolve(manifestPath);
-  if (path.basename(resolved) === "events.jsonl" || resolved.endsWith(".jsonl")) {
-    return resolved;
-  }
-  if (resolved.endsWith(".md")) {
-    const runId = path.basename(resolved, ".md");
-    return path.join(path.dirname(resolved), runId, "events.jsonl");
-  }
-  return resolved;
-}
-
-function appendReadinessProbeEvent(manifestPath, envelope, issueNumber) {
-  const eventsPath = resolveEventsPath(manifestPath);
-  const record = {
-    ts: new Date().toISOString(),
-    event: EVENTS.READINESS_PROBE,
-    actor: "relay-ready",
-    issue_number: issueNumber,
-    readiness_score: envelope.readiness_score,
-    bypass: envelope.bypass,
-    next_action: envelope.next_action,
-    task_shape: envelope.task_shape,
-    elapsed_ms: envelope.elapsed_ms,
-  };
-  appendEventLineToPath(eventsPath, record);
-}
-
 function formatHuman(envelope) {
   return [
     `readiness_score=${JSON.stringify(envelope.readiness_score)}`,
@@ -196,18 +169,13 @@ function usage() {
     "Options:",
     "  --body <text>        Issue body text",
     "  --body-file <path>   Issue body file",
-    "  --issue-number <n>   Optional event tag",
-    "  --manifest <path>    Optional events.jsonl or run manifest path",
     "  --json               Emit JSON envelope",
   ].join("\n");
 }
 
 function main(argv = process.argv.slice(2)) {
   const startedAt = process.hrtime.bigint();
-  const cliArgs = bindCliArgs(argv, {
-    commandName: "probe-readiness",
-    reservedFlags: KNOWN_FLAGS,
-  });
+  const cliArgs = parseCli(argv);
   const jsonOut = cliArgs.hasFlag("--json");
 
   if (cliArgs.hasFlag(["--help", "-h"])) {
@@ -224,19 +192,6 @@ function main(argv = process.argv.slice(2)) {
     envelope = buildDegradedEnvelope(error, elapsedMsSince(startedAt));
   }
 
-  const manifestPath = cliArgs.getArg("--manifest");
-  if (manifestPath) {
-    try {
-      appendReadinessProbeEvent(
-        manifestPath,
-        envelope,
-        parsePositiveInteger(cliArgs.getArg("--issue-number"))
-      );
-    } catch {
-      // The probe is fail-open: event persistence failures must not block /relay.
-    }
-  }
-
   process.stdout.write(jsonOut ? `${JSON.stringify(envelope)}\n` : `${formatHuman(envelope)}\n`);
   return 0;
 }
@@ -245,6 +200,11 @@ if (require.main === module) {
   try {
     process.exitCode = main();
   } catch (error) {
+    if (/^unknown flags:/.test(String(error?.message || ""))) {
+      process.stderr.write(`${error.message}\n`);
+      process.exitCode = 1;
+      return;
+    }
     const envelope = buildDegradedEnvelope(error, 0);
     process.stdout.write(`${JSON.stringify(envelope)}\n`);
     process.exitCode = 0;

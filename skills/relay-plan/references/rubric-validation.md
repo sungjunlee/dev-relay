@@ -79,7 +79,6 @@ TDD skip reason: none declared (test infra available; planner did not opt in)
 Calibration status: skipped (S task)
 Risk signals: none
 Rationale: Recovered Done Criteria require one observable behavior change; no design-bearing quality judgment was introduced.
-Historical signal: no historical data available
 Probe signal:
 probe_signal.test_infra: node:test
 TDD suggestion: decline (S-size mechanical task)
@@ -144,9 +143,6 @@ TDD applied (tdd_anchor): 1
 TDD anchors: `tests/front-matter.test.js` via `jest` (Parser rejects malformed front matter)
 Calibration status: skipped (S/M task)
 Risk signals: none
-Historical signal:
-historical_signal.stuck_factors: Docs (met_rate=0.5, avg_rounds_to_met=3); Coverage (met_rate=0.6667, avg_rounds_to_met=1.5)
-historical_signal.avg_rounds: contract.avg_rounds_to_met=1.5; quality.avg_rounds_to_met=1; metrics.median_rounds_to_ready=3
 Probe signal:
 probe_signal.test_infra: jest
 TDD suggestion: enable tdd_anchor on Parser rejects malformed front matter (probe runner: jest)
@@ -157,8 +153,8 @@ probe_signal.scripts: npm run lint, npm run test, npm run typecheck
 Grade: A
 Action: dispatch allowed
 
-No-history + no-signal example
-------------------------------
+No-signal example
+-----------------
 Prerequisites count: 2
 Contract factors: 2
 Quality factors: 2
@@ -171,9 +167,6 @@ TDD applied (tdd_anchor): 0
 TDD skip reason: no_runner (auto-derived — probe reported no test infra)
 Calibration status: skipped (S/M task)
 Risk signals: none
-Historical signal: Empty-data state — historical signal not available, proceed to rubric design.
-historical_signal.stuck_factors: no historical data available
-historical_signal.avg_rounds: no historical data available
 Probe signal: no quality infra detected.
 probe_signal.test_infra: no quality infra detected
 TDD suggestion: none (no_test_infra)
@@ -198,9 +191,6 @@ TDD applied (tdd_anchor): 0
 TDD skip reason: no_runner (auto-derived — probe unavailable, treated as no test infra)
 Calibration status: skipped (S/M task)
 Risk signals: none
-Historical signal: Reliability report unavailable: Unexpected end of JSON input. Proceeding without historical signal.
-historical_signal.stuck_factors: no historical data available
-historical_signal.avg_rounds: no historical data available
 Probe signal: Probe signals unavailable: probe timed out after 30s. Proceeding without probe signal.
 probe_signal.test_infra: no quality infra detected
 TDD suggestion: none (no_test_infra)

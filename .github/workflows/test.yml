@@ -9,20 +9,31 @@ on:
 jobs:
   test:
     name: test (${{ matrix.suite }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        suite:
-          - relay-ready
-          - relay-plan
-          - relay-dispatch
-          - relay-review
-          - relay-merge
-          - relay
-          - relay-config
-          - relay-fleet
-          - skills-lint
+        include:
+          - suite: relay-ready
+            runner: ubuntu-latest
+          - suite: relay-plan
+            runner: ubuntu-latest
+          # These suites exercise the production observer boundary, whose
+          # write-isolation contract is intentionally backed by sandbox-exec.
+          - suite: relay-dispatch
+            runner: macos-latest
+          - suite: relay-review
+            runner: ubuntu-latest
+          - suite: relay-merge
+            runner: macos-latest
+          - suite: relay
+            runner: ubuntu-latest
+          - suite: relay-config
+            runner: ubuntu-latest
+          - suite: relay-fleet
+            runner: ubuntu-latest
+          - suite: skills-lint
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,10 +41,10 @@ jobs:
           node-version: '22'
       - name: Run test suites (${{ matrix.suite }})
         run: |
-          shopt -s nullglob
-          files=(
-            tests/${{ matrix.suite }}/scripts/*.test.js
-          )
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(find "tests/${{ matrix.suite }}/scripts" -type f -name '*.test.js' -print | LC_ALL=C sort)
           count=${#files[@]}
           echo "Matched $count test file(s)"
           if [ "$count" -eq 0 ]; then

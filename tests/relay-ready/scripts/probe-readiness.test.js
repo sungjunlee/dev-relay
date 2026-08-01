@@ -140,31 +140,10 @@ The request combines user-facing product flows with platform foundation work fro
   assert.match(humanResult.stdout, /"strength":"strong"/);
 });
 
-test("manifest_event_appended writes one readiness_probe line with probe payload", (t) => {
-  const eventsPath = path.join(os.tmpdir(), `relay-437-test-events-${process.pid}-${Date.now()}.jsonl`);
-  t.after(() => fs.rmSync(eventsPath, { force: true }));
-
-  const result = runProbe([
-    "--json",
-    "--body",
-    deterministic5KbBypassBody(),
-    "--manifest",
-    eventsPath,
-    "--issue-number",
-    "437",
-  ]);
-
-  assert.equal(result.status, 0, result.stderr);
-  const envelope = parseJson(result.stdout);
-  const lines = fs.readFileSync(eventsPath, "utf-8").trim().split("\n");
-  assert.equal(lines.length, 1);
-  const event = JSON.parse(lines[0]);
-  assert.equal(event.event, "readiness_probe");
-  assert.equal(event.issue_number, 437);
-  assert.deepEqual(event.readiness_score, envelope.readiness_score);
-  assert.equal(event.bypass, envelope.bypass);
-  assert.equal(event.next_action, envelope.next_action);
-  assert.equal(event.elapsed_ms, envelope.elapsed_ms);
+test("probe rejects the retired run-manifest event surface", () => {
+  const result = runProbe(["--json", "--body", deterministic5KbBypassBody(), "--manifest", "/tmp/old-run.md"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /unknown flags: --manifest/);
 });
 
 test("non_interactive_abort_signal exposes bypass and escalate action for orchestrator routing", () => {
@@ -217,11 +196,9 @@ test("static audit confirms probe CLI has no subprocess prompting imports", () =
   }
 });
 
-test("static audit confirms probe CLI uses relay-events helper for event writes", () => {
+test("static audit confirms probe CLI has no run event writer", () => {
   const source = fs.readFileSync(SCRIPT, "utf-8");
-
-  assert.match(source, /appendEventLineToPath/);
-  assert.doesNotMatch(source, /appendTextFileWithoutFollowingSymlinks/);
+  assert.doesNotMatch(source, /relay-events|appendEventLineToPath|--manifest/);
 });
 
 test("malformed input fails open with exit 0 and a degraded proceed envelope", () => {

@@ -1,433 +1,78 @@
-const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { spawnSync } = require("child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const test = require("node:test");
 
-const REPO_ROOT = path.join(__dirname, "..", "..", "..");
-const SCRIPT = path.join(REPO_ROOT, "skills", "relay-config", "scripts", "relay-config.js");
+const SCRIPT = path.join(__dirname, "../../../skills/relay-config/scripts/relay-config.js");
 
-function tempDir(prefix = "relay-config-wrapper-") {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
-}
+test("relay-config check reports an explicit adapter/model selection", () => {
+  const result = spawnSync(process.execPath, [SCRIPT,
+    "check", "--phase", "dispatch", "--executor", "codex",
+    "--model", "openai/gpt-5", "--json",
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.adapter, "codex");
+  assert.equal(output.model, "openai/gpt-5");
+  assert.equal(output.model_source, "explicit");
+  assert.equal(output.capability.supported, true);
+});
 
-function envFor(relayHome, extra = {}) {
-  const env = {
-    ...process.env,
-    PATH: "/usr/bin:/bin",
-    RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "50",
-    ...extra,
-    RELAY_HOME: relayHome,
-  };
-  if (!Object.prototype.hasOwnProperty.call(extra, "RELAY_POLICY_PATH")) {
-    delete env.RELAY_POLICY_PATH;
+test("relay-config rejects unsupported primary-review adapters", () => {
+  const result = spawnSync(process.execPath, [SCRIPT,
+    "check", "--phase", "review", "--reviewer", "cline", "--json",
+  ], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /cannot run primary_review/);
+});
+
+test("relay-config requires the exact actor flag for each phase", () => {
+  const invalid = [
+    ["dispatch", "--reviewer", "codex"],
+    ["dispatch", "--executor", "codex", "--reviewer", "claude"],
+    ["review", "--executor", "codex"],
+    ["review", "--reviewer", "codex", "--executor", "claude"],
+  ];
+  for (const args of invalid) {
+    const result = spawnSync(process.execPath, [SCRIPT, "check", "--phase", ...args], { encoding: "utf8" });
+    assert.notEqual(result.status, 0, args.join(" "));
+    assert.match(result.stderr, /requires --(?:executor|reviewer) only/, args.join(" "));
   }
-  if (!Object.prototype.hasOwnProperty.call(extra, "RELAY_EXECUTORS_PATH")) {
-    delete env.RELAY_EXECUTORS_PATH;
+});
+
+test("relay-config no longer exposes mutation, presets, or catalog commands", () => {
+  for (const command of ["init", "preset", "resolve-model", "set-default", "add-route"]) {
+    const result = spawnSync(process.execPath, [SCRIPT, command, "--json"], { encoding: "utf8" });
+    assert.notEqual(result.status, 0, command);
+    assert.match(result.stderr, /unknown command/, command);
   }
-  return env;
-}
-
-function runConfig(args, { relayHome = tempDir(), cwd = REPO_ROOT, env = {} } = {}) {
-  const result = spawnSync(process.execPath, [SCRIPT, ...args], {
-    cwd,
-    env: envFor(relayHome, env),
-    encoding: "utf-8",
-  });
-  return {
-    ...result,
-    relayHome,
-    combined: `${result.stdout}\n${result.stderr}`,
-  };
-}
-
-function parseJson(result) {
-  assert.equal(result.stderr, "", result.stderr);
-  return JSON.parse(result.stdout);
-}
-
-function readRoutes(relayHome) {
-  return JSON.parse(fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8"));
-}
-
-function writeRoutes(relayHome, routes) {
-  fs.writeFileSync(path.join(relayHome, "routes.json"), `${JSON.stringify(routes, null, 2)}\n`, "utf-8");
-}
-
-function writeFakeOpencode(binDir, models = []) {
-  const opencodePath = path.join(binDir, "opencode");
-  fs.writeFileSync(opencodePath, `#!/bin/sh
-if [ "$1" = "models" ]; then
-  cat <<'EOF'
-${models.join("\n")}
-EOF
-  exit 0
-fi
-if [ "$1" = "--version" ]; then
-  printf 'opencode-fake\\n'
-  exit 0
-fi
-exit 0
-`, "utf-8");
-  fs.chmodSync(opencodePath, 0o755);
-}
-
-test("init company shorthand delegates to core init --profile company routes config", () => {
-  const relayHome = tempDir();
-
-  const result = runConfig(["init", "company", "--json"], { relayHome });
-
-  assert.equal(result.status, 0, result.combined);
-  assert.equal(parseJson(result).profile, "company");
-  assert.deepEqual(readRoutes(relayHome), {
-    version: 2,
-    strict: true,
-    routes: [],
-    denied_routes: [],
-  });
-  assert.equal(fs.existsSync(path.join(relayHome, "policy.json")), false);
 });
 
-test("show shorthand adds --effective", () => {
-  const relayHome = tempDir();
-  assert.equal(runConfig(["init", "personal", "--json"], { relayHome }).status, 0);
-
-  const result = runConfig(["show", "--json"], { relayHome });
-
-  assert.equal(result.status, 0, result.combined);
-  const output = parseJson(result);
-  assert.equal(output.ok, true);
-  assert.equal(output.status, "ok");
-  assert.equal(output.policy.profile, "routes-config");
-  assert.equal(output.policy.deny_unknown_model_routes, false);
-});
-
-test("check shorthand maps reviewer phases to reviewer-only core checks", () => {
-  const relayHome = tempDir();
-  assert.equal(runConfig(["init", "company", "--json"], { relayHome }).status, 0);
-  assert.equal(runConfig([
-    "add-route",
-    "example/opencode-model-*",
-    "--phase",
-    "advisory_review",
-    "--reviewer",
-    "opencode",
-    "--json",
-  ], { relayHome }).status, 0);
-
-  const result = runConfig([
-    "check",
-    "advisory_review",
-    "opencode",
-    "example/opencode-model-fast",
-    "--json",
-  ], { relayHome });
-
-  assert.equal(result.status, 0, result.combined);
-  assert.equal(parseJson(result).decision.reason, "allowed_model_route");
-});
-
-test("resolve-model passes through wrapper and resolves live short model names", () => {
-  const relayHome = tempDir();
-  const binDir = tempDir("relay-config-model-bin-");
-  writeFakeOpencode(binDir, ["opencode-go/glm-5.2", "openai/gpt-5.3-codex-spark"]);
-  assert.equal(runConfig([
-    "add-route",
-    "opencode-go/*",
-    "--phase",
-    "review",
-    "--reviewer",
-    "opencode",
-    "--json",
-  ], { relayHome }).status, 0);
-
-  const result = runConfig([
-    "resolve-model",
-    "--phase",
-    "review",
-    "--reviewer",
-    "opencode",
-    "--model",
-    "glm-5.2",
-    "--json",
-  ], {
-    relayHome,
-    env: {
-      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
-      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "5000",
-    },
+test("relay-config doctor reports all seven built-in adapters without policy writes", () => {
+  const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-config-path-"));
+  const result = spawnSync(process.execPath, [SCRIPT, "doctor", "--json"], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: emptyPath },
   });
-
-  assert.equal(result.status, 0, result.combined);
-  const output = parseJson(result);
-  assert.equal(output.resolved_route, "opencode-go/glm-5.2");
-  assert.equal(output.source, "live_probe");
-  assert.equal(output.policy_decision.reason, "allowed_model_route");
-});
-
-test("catalog-report passes through wrapper", () => {
-  const result = runConfig(["catalog-report", "--json"]);
-
-  assert.equal(result.status, 0, result.combined);
-  const output = parseJson(result);
-  assert.equal(output.ok, true);
-  assert.ok(output.catalog.summary.total > 0);
-  assert.equal(output.catalog.summary.total, output.catalog.entries.length);
-});
-
-test("doctor warns when a review route names an advisory-only adapter", () => {
-  const relayHome = tempDir();
-  writeRoutes(relayHome, {
-    version: 2,
-    routes: [{ route: "cline-pass/*", phases: ["review"], reviewers: ["cline"] }],
-  });
-
-  const jsonResult = runConfig(["doctor", "--json"], { relayHome });
-  assert.equal(jsonResult.status, 0, jsonResult.combined);
-  const advisory = parseJson(jsonResult).advisories.find((entry) => entry.kind === "advisory_only_primary_reviewer");
-  assert.deepEqual(advisory, {
-    kind: "advisory_only_primary_reviewer",
-    adapter: "cline",
-    route: "cline-pass/*",
-    source: "routes[0]",
-  });
-
-  const humanResult = runConfig(["doctor"], { relayHome });
-  assert.equal(humanResult.status, 0, humanResult.combined);
-  assert.match(humanResult.stdout, /advisory: routes\[0\] configures advisory-only adapter 'cline' for primary review/);
-});
-
-test("doctor stays quiet when primary-review routes use capable adapters", () => {
-  const relayHome = tempDir();
-  writeRoutes(relayHome, {
-    version: 2,
-    routes: [{ route: "openai/*", phases: ["review"], reviewers: ["codex"] }],
-  });
-
-  const result = runConfig(["doctor", "--json"], { relayHome });
-  assert.equal(result.status, 0, result.combined);
-  assert.equal(
-    parseJson(result).advisories.some((entry) => entry.kind === "advisory_only_primary_reviewer"),
-    false
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout).adapters.map((entry) => entry.adapter),
+    ["claude", "codex", "opencode", "pi", "antigravity", "cursor", "cline"],
   );
 });
 
-test("add-route refuses an inexecutable cline advisory model with the expected format", () => {
-  const relayHome = tempDir();
-
-  const actorUnscoped = runConfig([
-    "add-route",
-    "cline-pass/glm-5.2",
-    "--phase",
-    "advisory_review",
-    "--json",
-  ], { relayHome });
-  assert.notEqual(actorUnscoped.status, 0, actorUnscoped.combined);
-  assert.match(actorUnscoped.combined, /cannot execute/i);
-  assert.match(actorUnscoped.combined, /modelType\/model/);
-  assert.match(actorUnscoped.combined, /cline-pass\/modelType\/model/);
-  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
-
-  const result = runConfig([
-    "add-route",
-    "cline-pass/glm-5.2",
-    "--phase",
-    "advisory_review",
-    "--reviewer",
-    "cline",
-    "--json",
-  ], { relayHome });
-
-  assert.notEqual(result.status, 0, result.combined);
-  assert.match(result.combined, /cannot execute/i);
-  assert.match(result.combined, /modelType\/model/);
-  assert.match(result.combined, /cline-pass\/modelType\/model/);
-  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
-
-  const extraSegment = runConfig([
-    "add-route",
-    "cline-pass/z-ai/glm/5.2",
-    "--phase",
-    "advisory_review",
-    "--reviewer",
-    "cline",
-    "--json",
-  ], { relayHome });
-  assert.notEqual(extraSegment.status, 0, extraSegment.combined);
-  assert.match(extraSegment.combined, /cline-pass\/modelType\/model/);
-  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
-
-  const valid = runConfig([
-    "add-route",
-    "cline-pass/z-ai/glm-5.2",
-    "--phase",
-    "advisory_review",
-    "--reviewer",
-    "cline",
-    "--json",
-  ], { relayHome });
-  assert.equal(valid.status, 0, valid.combined);
-  assert.equal(readRoutes(relayHome).routes[0].route, "cline-pass/z-ai/glm-5.2");
-});
-
-test("preset add resolves compact actor short-model and stores explicit route provenance", () => {
-  const relayHome = tempDir();
-  const binDir = tempDir("relay-config-preset-model-bin-");
-  writeFakeOpencode(binDir, ["opencode-go/glm-5.2"]);
-
-  const result = runConfig([
-    "preset",
-    "add",
-    "light",
-    "--dispatch",
-    "opencode:glm-5.2",
-    "--json",
-  ], {
-    relayHome,
-    env: {
-      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
-      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "5000",
-    },
-  });
-
-  assert.equal(result.status, 0, result.combined);
-  const routes = readRoutes(relayHome);
-  assert.deepEqual(routes.presets.light.dispatch, {
-    executor: "opencode",
-    model: "opencode-go/glm-5.2",
-  });
-  assert.equal(routes.presets.light.model_resolution.dispatch.original_input, "opencode:glm-5.2");
-  assert.equal(routes.presets.light.model_resolution.dispatch.resolved_route, "opencode-go/glm-5.2");
-  assert.equal(routes.presets.light.model_resolution.dispatch.source, "live_probe");
-
-  const output = parseJson(result);
-  assert.equal(output.preset.model_resolution.dispatch.original_input, "opencode:glm-5.2");
-});
-
-test("preset add refuses a catalog fallback that cannot execute as a cline advisory model", () => {
-  const relayHome = tempDir();
-
-  const result = runConfig([
-    "preset",
-    "add",
-    "diverse",
-    "--advisory-review",
-    "cline:glm-5.2",
-    "--advisory-profile",
-    "blindspot",
-    "--json",
-  ], { relayHome });
-
-  assert.notEqual(result.status, 0, result.combined);
-  assert.match(result.combined, /cannot execute/i);
-  assert.match(result.combined, /modelType\/model/);
-  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
-});
-
-test("strict preset add rejects unresolved unregistered compact routes", () => {
-  const relayHome = tempDir();
-  const binDir = tempDir("relay-config-preset-strict-bin-");
-  writeFakeOpencode(binDir, ["opencode-go/glm-5.2"]);
-  assert.equal(runConfig(["init", "company", "--json"], { relayHome }).status, 0);
-
-  const result = runConfig([
-    "preset",
-    "add",
-    "light",
-    "--dispatch",
-    "opencode:glm-5.2",
-    "--json",
-  ], {
-    relayHome,
-    env: {
-      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
-      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "5000",
-    },
-  });
-
-  assert.notEqual(result.status, 0);
-  assert.match(result.combined, /unknown_model_route|unregistered/i);
-  const output = JSON.parse(result.stdout);
-  assert.equal(output.resolution.error, "unknown_model_route");
-  assert.equal(output.resolution.resolved_route, "opencode-go/glm-5.2");
-});
-
-test("preset subcommands pass through wrapper shorthand", () => {
-  const relayHome = tempDir();
-
-  const add = runConfig([
-    "preset",
-    "add",
-    "compact",
-    "--review-assurance",
-    "compact",
-    "--json",
-  ], { relayHome });
-  assert.equal(add.status, 0, add.combined);
-  assert.deepEqual(readRoutes(relayHome), {
-    version: 2,
-    presets: {
-      compact: { review_assurance: "compact" },
-    },
-  });
-
-  const show = runConfig(["preset", "show", "compact", "--json"], { relayHome });
-  assert.equal(show.status, 0, show.combined);
-  assert.equal(parseJson(show).preset.review_assurance, "compact");
-
-  const remove = runConfig(["preset", "remove", "compact", "--json"], { relayHome });
-  assert.equal(remove.status, 0, remove.combined);
-  assert.equal(Object.prototype.hasOwnProperty.call(readRoutes(relayHome), "presets"), false);
-});
-
-test("inspect reports effective policy, doctor output, and executors config state", () => {
-  const relayHome = tempDir();
-  const executorsPath = path.join(relayHome, "executors.json");
-  fs.writeFileSync(executorsPath, "{\"executors\":{}}\n", "utf-8");
-
-  const result = runConfig(["inspect", "--json"], { relayHome });
-
-  assert.equal(result.status, 0, result.combined);
-  const output = parseJson(result);
-  assert.equal(output.ok, true);
-  assert.equal(output.policy.status, "defaulted");
-  assert.equal(output.executorsConfig.path, executorsPath);
-  assert.equal(output.executorsConfig.exists, true);
-  assert.equal(output.projectConfig.status, "absent");
-  assert.match(output.projectConfig.path, /\/projects\/dev-relay-[a-f0-9]{8}\/project\.json$/);
-  assert.ok(output.doctor.tools.some((tool) => tool.name === "codex"));
-});
-
-test("inspect human output describes routes without policy prose", () => {
-  const relayHome = tempDir();
-
-  const result = runConfig(["inspect"], { relayHome });
-
-  assert.equal(result.status, 0, result.combined);
-  assert.match(result.stdout, /routes status:/i);
-  assert.doesNotMatch(result.stdout.replace(/policy\.json/g, "legacy-file"), /\bpolicy\b/i);
-});
-
-test("help advertises natural-language setup and provider/model boundary", () => {
-  const result = runConfig(["--help"]);
-
-  assert.equal(result.status, 0, result.combined);
-  assert.match(result.stdout, /relay setup 해줘/);
-  assert.match(result.stdout, /provider\/model route strings are the routing boundary/i);
-  assert.match(result.stdout, /add-route <pattern>/);
-  assert.match(result.stdout, /preset add\|remove\|show/);
-  assert.match(result.stdout, /allow-route <pattern>.*deprecated/i);
-  assert.doesNotMatch(result.stdout, /\bpolicy\b/i);
-});
-
-test("inspect rejects unsupported arguments instead of ignoring them", () => {
-  const flag = runConfig(["inspect", "--bogus"]);
-
-  assert.notEqual(flag.status, 0, flag.combined);
-  assert.match(flag.combined, /unsupported arguments for inspect: --bogus/);
-
-  const positional = runConfig(["inspect", "extra"]);
-  assert.notEqual(positional.status, 0, positional.combined);
-  assert.match(positional.combined, /unsupported arguments for inspect: extra/);
+test("operator docs use the executable explicit check syntax and no route setup surface", () => {
+  const root = path.resolve(__dirname, "../../..");
+  const documents = [
+    "README.md",
+    "docs/model-route-policy.md",
+    "docs/relay-operator-guide.md",
+    "skills/relay-config/SKILL.md",
+    "references/install-graph.md",
+  ].map((file) => fs.readFileSync(path.join(root, file), "utf8")).join("\n");
+  assert.match(documents, /check --phase dispatch --executor/);
+  assert.match(documents, /check --phase review --reviewer/);
+  assert.doesNotMatch(documents, /relay-config Set up|check dispatch opencode|check review pi|delegates all policy mutations/);
 });

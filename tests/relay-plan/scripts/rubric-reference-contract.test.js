@@ -75,7 +75,7 @@ test("rubric design guide states the reference use contract", () => {
   assert.match(text, /Do not copy a whole domain reference into a dispatch prompt/);
   assert.match(text, /Acceptance Criteria \(AC\) are high-priority evidence, not the only source/);
   assert.match(text, /inferred Done Criteria/);
-  assert.match(text, /fix_hint.*historical plateaus or non-obvious score transitions/);
+  assert.match(text, /fix_hint.*optional aids for non-obvious score transitions/);
   assert.match(text, /Reviewer verdicts record numeric quality scores separately from pass\/fail state/);
   assert.match(text, /score: 7\.5, target_score: 8/);
 });
@@ -155,7 +155,8 @@ test("planner input signals document harness context as weak planning context", 
   assert.match(skill, /task-relevant local harness context as weak inputs only/);
   assert.match(skill, /authority hierarchy/);
   assert.match(signals, /## Signal authority hierarchy/);
-  assert.match(signals, /Project harness context, probe signal, historical signal, and optional subsystem scout notes/);
+  assert.match(signals, /Project harness context, probe signal, and optional subsystem scout notes/);
+  assert.match(signals, /former `historical_signal\.\*` runtime-analytics channel was retired/);
   assert.match(signals, /weak planning context/);
   assert.match(signals, /AGENTS\.md/);
   assert.match(signals, /CLAUDE\.md/);
@@ -234,7 +235,7 @@ test("planning guidance makes observation precede optional domain lenses", () =>
   assert.match(channels, /contract-satisfying result\s+could still fail/i);
   assert.match(channels, /domain expert.*generic checklist/i);
   assert.match(channels, /missing required observation.*blocks.*quality/is);
-  assert.match(lenses, /advisory questions/i);
+  assert.match(lenses, /non-binding questions/i);
   assert.match(lenses, /select, combine, replace, or omit/i);
   assert.match(lenses, /rendered output.*user flows.*viewports/is);
   assert.match(lenses, /documentation/i);

@@ -1,6 +1,6 @@
 # Observation Lenses
 
-Use these as advisory questions after the planner identifies the artifact, intended
+Use these as non-binding questions after the planner identifies the artifact, intended
 user, usage context, and available observation surfaces. Lenses expand inquiry; they
 do not create requirements or Earned Rubric factors.
 

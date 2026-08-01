@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract_version": 1,
+  "scope": "relay runtime durable invariants",
+  "invariants": [
+    {
+      "id": "RR-01",
+      "name": "worktree_containment",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-01 vNext worktree containment"
+    },
+    {
+      "id": "RR-02",
+      "name": "frozen_outcome_contract",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-02 vNext frozen outcome contract"
+    },
+    {
+      "id": "RR-03",
+      "name": "immutable_identity",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-03 vNext immutable identity"
+    },
+    {
+      "id": "RR-04",
+      "name": "single_actor",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-04 vNext single actor"
+    },
+    {
+      "id": "RR-05",
+      "name": "append_only_attempts",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-05 vNext append-only attempts"
+    },
+    {
+      "id": "RR-06",
+      "name": "exact_review_binding",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-06 vNext exact review binding"
+    },
+    {
+      "id": "RR-07",
+      "name": "independent_review",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-07 vNext independent review"
+    },
+    {
+      "id": "RR-08",
+      "name": "explicit_merge",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-08 vNext explicit merge"
+    },
+    {
+      "id": "RR-09",
+      "name": "merge_provenance",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-09 vNext merge provenance"
+    },
+    {
+      "id": "RR-10",
+      "name": "crash_safe_idempotency",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/recover-scenario-matrix.test.js##1135 recovery crash matrix is idempotent before and after every emitted durable fact"
+    },
+    {
+      "id": "RR-11",
+      "name": "terminal_irreversibility",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-11 vNext terminal irreversibility"
+    },
+    {
+      "id": "RR-12",
+      "name": "external_revalidation",
+      "status": "vnext_gate",
+      "vnext_test_path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js#RR-12 vNext external revalidation"
+    }
+  ]
+}

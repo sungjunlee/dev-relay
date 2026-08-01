@@ -19,7 +19,7 @@ Pre-flight DC review for hidden ambiguity has higher leverage than improving cod
 | PR | Issue | R1 catch | Audit item |
 |---|---|---|---|
 | #448 | #372 | `output_path` scope under `artifacts/<id>/` (DC implied, didn't state) | 3 (implicit scope) |
-| #449 | #381 | runner `--json` coupled to advisory output filename (DC said independent) | 4 (coupling default) |
+| #449 | #381 | runner `--json` coupled to secondary output filename (DC said independent) | 4 (coupling default) |
 | #450 | #373 | repeat-finding detector matched only `title` (AC said "title or body") | 2 (AND/OR boundary) |
 | #451 | #376 | prediction heuristic full-title vs shared-substring (DC ambiguous) | 5 (heuristic precision) |
 | #452 | #374 | `artifact_start trust_level` on frozen helper (AC6 over-spec) | 1 (frozen-helper field) |
@@ -52,7 +52,7 @@ Worked: #372 DC said "artifact lifecycle events store outputs at `output_path`" 
 
 For each "independent vs coupled" axis (CLI flag + side effect, function arg + state mutation, schema field + invariant), state the default literally. Codex defaults to COUPLED when coupling reduces parameter count or simplifies the call shape. If the AC requires independence, say "X must remain independent of Y" and add the test that fails when they're coupled.
 
-Worked: #381 AC said "runner `--json` flag controls report format only" and showed the advisory output filename as a separate field. Codex coupled them: `--json` switched both the report and the output filename. R1 catch.
+Worked: #381 AC said "runner `--json` flag controls report format only" and showed the secondary output filename as a separate field. Codex coupled them: `--json` switched both the report and the output filename. R1 catch.
 
 ### Item 5 — Heuristic precision
 

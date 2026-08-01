@@ -2,14 +2,14 @@
 name: relay-dispatch
 argument-hint: "<repo-path> (-b <branch> | --run-id <id>) -p <prompt> [options]"
 description: Dispatch implementation tasks via worktree isolation. Use when delegating work to an executor, running background dispatches, or parallelizing independent tasks.
-compatibility: Requires executor CLI (e.g., codex), git, and Node.js 18+.
+compatibility: Requires executor CLI, git, Node.js 18+, and macOS sandbox-exec for local executor write isolation.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-review, relay-merge"
   keywords: "디스패치, 실행, dispatch, executor, worktree"
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
-- Files: dispatch prompt (`--prompt-file` or `--prompt`), required evaluation artifact or legacy rubric via `--rubric-file`, optional Done Criteria file, request/leaf ids, copied files, and retained run manifest.
+- Files: dispatch prompt (`--prompt-file` or `--prompt`), required rubric via `--rubric-file`, optional Done Criteria file, and optional repository-relative copied files.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # Relay Dispatch
@@ -44,31 +44,44 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e codex
 
 For background and parallel dispatch, see `../relay/SKILL.md` § Batch Mode (single source of truth for the parallel-fork flow).
 
-Supported executors: `codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`, and `cline`. For non-default routes, pass `--executor pi`, `--executor antigravity`, `--executor cursor`, `--executor cline`, or another supported executor with a route-policy-approved model.
+Supported executors: `codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`, and `cline`. Select one with `--executor`; select a model explicitly with `--model` or omit it to use the adapter provider default.
 
-Default timeouts are `codex: 2400` and `claude/opencode/pi/antigravity/cursor/cline: 1800`. Model examples, capability gates, and the 7-field executor contract are documented in `references/agent-adapter-platform.md` and `references/model-routing.md`.
+Default timeouts are `codex: 2400` and `claude/opencode/pi/antigravity/cursor/cline: 1800`. Capability negotiation and the adapter contract are documented in `references/agent-adapter-platform.md`.
 
 ## Options
 
-All CLI flags are registered with an explicit `parsed` or `verbatim` read mode. See `references/cli-schema.md` before adding or changing flags.
+The CLI has a closed option contract. Unsupported flags fail closed.
 
 Essential flags:
 
-- `--branch, -b` starts a new retained run; `--run-id` or `--manifest` resumes one.
+- `--branch, -b` starts a new retained run; `--run-id` requests a same-run redispatch.
 - `--prompt, -p` or `--prompt-file` supplies the executor prompt.
-- `--rubric-file` is required for new dispatches from relay-plan and carries either structured evaluation channels or a readable legacy rubric.
-- `--executor, -e`, `--model, -m`, and `--model-hints` select harness/model routes subject to policy.
-- `--review-assurance compact | standard | hardened` sets the default assurance level; the rubric's `task_profile.review_assurance` is authoritative when present, and a disagreement is resolved to the rubric and recorded (see `references/cli-schema.md` § Review Assurance Resolution). `--request-id`, `--leaf-id`, and `--done-criteria-file` persist review and readiness anchors. Fleet dispatch also requires typed `--ownership-json` with `sprint`, `track`, and `component`; it is immutable on resume.
+- `--rubric-file` is required for new dispatches. `--done-criteria-file` freezes a separate review anchor; otherwise the rubric is frozen as Done Criteria.
+- `--executor, -e` and `--model, -m` select execution. Resume cannot replace the executor bound in `run.json`.
+- `--sandbox`, `--network-access`, `--timeout`, `--reasoning`, and `--copy` configure the attempt. Copy inputs must be regular files contained by the repository.
+- `--credential-env NAME` and `--credential-file ID=/absolute/source` explicitly opt a credential into a foreground attempt. They are repeatable, adapter-declared, and incompatible with `--detach`.
+- `--fleet-id` requires typed `--ownership-json` with exactly `sprint`, `track`, and `component`; parent and ownership digest are immutable.
 - `--detach` starts a detached dispatch supervisor, prints a receipt, and returns before executor completion.
-- `--dry-run` validates without executing; `--json` returns structured output for orchestration.
+- `--dry-run` is a zero-write preflight for inputs, branch, capabilities, registration support, and invocation shape.
+- `--bootstrap-vnext` remains sealed until independently verifiable zero-active-run plus 30-day/30-run zero-legacy-read evidence exists; normal calls require an active vNext marker.
+- `--json` returns structured output for orchestration.
 
-Manifest layout is `~/.relay/runs/<repo-slug>/<run-id>.md` plus `events.jsonl`; readiness linkage is persisted as `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path`. Model precedence and route-policy behavior are documented in `references/model-routing.md`.
+The durable layout is `~/.relay/runs/<repo-slug>/<run-id>/`: immutable `run.json`, `done-criteria.md`, and `rubric.yaml`; append-only `events.jsonl`; and per-attempt prompt, log, and result artifacts. Legacy manifests, routing hints, and readiness identity flags do not participate in dispatch.
 
-Detached JSON receipts include `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and a copy-pasteable `reconcileCommand`. The supervisor writes `lease.json` and runtime logs in the run directory; use `reconcile-run.js --dry-run --json` to poll or diagnose a detached run.
+The actual executor process tree runs under a host-enforced macOS
+`sandbox-exec` boundary. `workspace-write` permits writes only inside the
+retained worktree, the exact attempt result artifact, and an attempt-private
+temp directory; the exact `/dev/null` device is available only for descendant
+stdio, and `read-only` omits worktree writes. The `osascript` AppleEvent entry
+point, active checkouts, sibling
+worktrees, home, broad temp, and other paths are never writable. Unsupported platforms fail closed before migration,
+run, prompt, or attempt state is written.
 
-### Executor model routing
+Executor attempts intentionally cannot write linked-worktree Git administration,
+objects, refs, config, or hooks. They leave reviewable dirty worktree bytes; only
+the canonical `relay-recover recover` operation may commit, push, and publish them.
 
-For precedence, managed CLI defaults, unmanaged route requirements, and optional `~/.relay/executors.json` overrides, see `references/model-routing.md`. Short version: explicit `--model` wins; `model_hints` are hints, not approval; unmanaged executors need allowed provider/model routes.
+JSON uses snake_case. Foreground output includes `status`, `run_id`, `run_dir`, `worktree`, `attempt_id`, `host_handle`, `host_status`, `outcome`, and `inspection`. A detached launch receipt includes `status: "dispatched"`, those durable identities, `dispatcher_pid`, and the initial `inspection`. Per-attempt log paths are recorded in `attempt_started`.
 
 ### Timeout guidance
 
@@ -76,41 +89,35 @@ Use defaults for simple work, `--timeout 3600` when implementation plus verifica
 
 ## Verify Success
 
-JSON output reports `status`, `runId`, `manifestPath`, `runState`, `cleanupPolicy`. Map status → next step:
-- `completed` + `internal_review_pending` → run relay-review before PR publication (`--publish-policy after-internal-review`)
-- `completed-with-warning` + `internal_review_pending` → inspect worktree, then run internal relay-review
-- `completed` + `review_pending` → proceed to relay-review (default immediate publication path)
-- `completed-with-warning` + `review_pending` → inspect uncommitted work, then review
-- `failed` + `escalated` → inspect error, fix or re-dispatch
+Treat `inspection.recommended_action` as the next-step authority. `completed` means both the durable host and adapter outcome succeeded; `failed` means either side failed. `cancelled` covers cancellation and timeout. The process exits non-zero for unsuccessful terminal outcomes.
 
-Successful dispatches retain the worktree by default — use the returned `runId` to continue. Resume only from `changes_requested`; dispatch reuses the same run + worktree. On re-dispatch, previous attempt evidence + reviewer feedback are auto-prepended, including legacy Score Log content when present (storage: `~/.relay/runs/<slug>/<run-id>/previous-attempts.json`).
+Successful dispatches retain the worktree. A `--run-id` call first performs a read-only inspection and proceeds only when both the folded action and recommendation are exactly `redispatch`. After acquiring the run lock it repeats that inspection and requires the same action key before writing a prompt or attempt fact; terminal, stale, review, publication, merge, and operator-attention actions fail closed.
 
-Publication policy:
-- Default direct dispatch behavior is `--publish-policy immediate`: push/open PR, then `review_pending`.
-- Full `/relay` orchestration uses `--publish-policy after-internal-review`: retain the branch locally in `internal_review_pending`, require relay-review LGTM, then run `publish-run.js` to push/open PR and move to `review_pending`.
-- `publish-run.js` is valid only from `publish_pending`; it writes a `publish_result` event and stamps `git.pr_number`.
+Publication is not part of dispatch. Dispatch records the executor attempt and
+returns the derived action. Use `relay-recover inspect`, then the idempotent
+`relay-recover recover` operation to commit, push, and create or reuse the
+exact PR authorized by current facts.
 
-Risk-aware task profiles derive compact/standard/hardened from task properties, never model identity. Compact keeps the same permission, sandbox, network, repository, SHA, audit, publication, and merge boundaries with a one-round review cap; hardened uses the existing delayed-publication and advisory-gated path. See `../relay-plan/references/risk-assurance.md`.
+Claude, Codex, OpenCode, Pi, and Cursor prompts use bound stdin transport.
+Antigravity and Cline are explicit argv-visible exceptions with a 256 KiB
+prompt limit and local process-list exposure. Primary review uses the same
+explicit adapter credential catalog and never discovers an ambient HOME.
 
 ### Handling Failures
 
 | Failure | Action |
 |---|---|
-| Timeout (with commits) | `completed-with-warning` — check worktree for uncommitted changes, proceed to review |
-| Timeout (no commits) | Increase `--timeout` or split task into smaller pieces |
-| Executor error / no commits | Read result file; revise prompt and re-dispatch |
-| Route denied or model unresolved | Run `relay-config` to register the route or set the executor default model, then re-dispatch |
-| Branch publication / PR creation failed | Inspect the dispatch error and outer-shell GitHub auth. `relay-dispatch` handles publication from the orchestrator shell. |
+| Timeout or cancellation | Inspect the retained worktree and typed recommendation; never treat it as completed |
+| Executor or output-parse error | Read the attempt logs/result and follow the typed recommendation |
+| Resume denied | Follow `inspection.recommended_action`; dispatch only admits exact `redispatch` |
+| Publication / PR creation failed | Use canonical `relay-recover inspect` and idempotent `recover`; dispatch does not publish |
 | Branch conflicts | Resolve in worktree or create fresh worktree from updated main |
 | Network/transient error | Wait 30s, retry once. If it fails again, escalate to user |
 
 ## Recovery and operator utilities
 
-- Crash-only settlement after signal/reboot/OOM or from another shell → `references/recovery-playbook.md` (`reconcile-run.js`).
-- Executor finished but did not commit / push / open the PR → `references/recovery-playbook.md` (`recover-commit.js`).
-- Manifest state needs adjustment after an external event (direct push, hung dispatch, escalation) → `references/recovery-playbook.md` (`recover-state.js`, includes the whitelist transition table).
-- A run needs an exceptional monotonic `review.max_rounds` increase → `references/review-policy-extension.md` (`extend-review-policy.js`; cap extension is not convergence evidence).
-- Standalone worktree creation, cleanup, run-close, reliability report → `references/operator-utilities.md`.
+- Any interrupted or externally changed run → inspect with canonical `relay-recover.js inspect`, then apply only its typed recommendation with `relay-recover.js recover --reason ...`; see `references/recovery-playbook.md`.
+- Interrupted or externally changed runs → `references/operator-utilities.md`.
 
 ## Caveats
 

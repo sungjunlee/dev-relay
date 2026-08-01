@@ -198,47 +198,6 @@ Expect:
 - manifest state stays `merged` while `cleanup.status` becomes `succeeded`
 - dirty retained worktrees are preserved and become `manual_cleanup_required`
 
-### 11. Close-run explicitly terminates stale non-terminal runs
-
-Command:
-
-```bash
-node --test tests/relay-dispatch/scripts/close-run.test.js
-```
-
-Expect:
-
-- non-terminal runs can transition to `closed` with a required reason
-- close appends lifecycle evidence and runs cleanup policy
-- dirty worktrees stay explicit follow-up
-
-### 12. Reliability report derives the initial scorecard from raw history
-
-Command:
-
-```bash
-node --test tests/relay-dispatch/scripts/reliability-report.test.js
-```
-
-Expect:
-
-- the report derives the initial 5 metrics from manifests + events only
-- no aggregate counters are stored in the manifest
-
-### 13. Repo-local janitor cleans stale terminal runs only
-
-Command:
-
-```bash
-node --test tests/relay-dispatch/scripts/cleanup-worktrees.test.js
-```
-
-Expect:
-
-- stale `merged` runs are cleaned via their manifest metadata
-- stale non-terminal runs are reported with an explicit `close-run.js` command
-- cleanup results are written back to the manifest
-
 ### 14. Live Codex-as-orchestrator validation report
 
 Report:

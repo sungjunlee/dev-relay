@@ -8,7 +8,7 @@
  *
  * Options:
  *   --executor, -e <name>  Executor to probe (required)
- *   --model, -m <route>    Provider/model route for unmanaged executor policy
+ *   --model, -m <route>    Explicit provider/model selection recorded in output
  *   --timeout <seconds>    Probe timeout (default: 30)
  *   --project-only         Skip agent probe, only scan project tools
  *   --json                 Output as JSON (default: human-readable)
@@ -16,17 +16,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const {
-  bindCliArgs,
-  getPositionals,
-  modeLabel,
-} = require("../../relay-dispatch/scripts/cli-args");
-const { getExecutor, listExecutors } = require("../../relay-dispatch/scripts/executors");
-const { resolveExecutorDefaultModel } = require("../../relay-dispatch/scripts/executor-model-config");
-const { evaluateRelayPolicyGate, formatRelayPolicyGateMessage } = require("../../relay-dispatch/scripts/relay-policy-gate");
-
-const MANAGED_MODELLESS_EXECUTORS = new Set(["codex", "claude", "cursor"]);
-const PROBE_POLICY_PHASE = "dispatch";
+const { getAdapter, listAdapters } = require("../../relay-dispatch/scripts/adapters");
 
 // ---------------------------------------------------------------------------
 // CLI (only when run directly)
@@ -37,23 +27,29 @@ function parseCli(argv) {
   const KNOWN_FLAGS = [
     "--executor", "-e", "--model", "-m", "--timeout", "--project-only", "--json", "--help", "-h",
   ];
-  const cliArgs = bindCliArgs(args, {
-    commandName: "probe-executor-env",
+  const CLI_ARG_OPTIONS = {
     reservedFlags: KNOWN_FLAGS,
-  });
-
+    booleanFlags: ["--project-only", "--json", "--help", "-h"],
+    verbatimValueFlags: [],
+  };
+  const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_ARG_OPTIONS.booleanFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (value) => value !== undefined && !String(value).startsWith("--") && !known.has(String(value));
+  args.forEach((token, index) => { const flag = name(token); if (known.has(flag) && !bool.has(flag) && !String(token).includes("=") && accepts(args[index + 1])) consumed.add(index + 1); });
+  const unknownFlags = args.filter((token, index) => !consumed.has(index) && String(token).startsWith("-") && !known.has(name(token))); if (unknownFlags.length) throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+  const variants = (flag) => Array.isArray(flag) ? flag : [flag];
+  const cliArgs = { hasFlag: (flags) => variants(flags).some((flag) => args.some((token, index) => !consumed.has(index) && (token === flag || String(token).startsWith(`${flag}=`)))), getArg: (flags, fallback) => { for (const flag of variants(flags)) for (let index = 0; index < args.length; index += 1) { if (consumed.has(index)) continue; const token = String(args[index]); if (token === flag || token.startsWith(`${flag}=`)) { const value = token === flag ? args[index + 1] : token.slice(flag.length + 1); if (!accepts(value)) return fallback; return value; } } return fallback; } };
+  const formatCliModeLabel = (flag) => CLI_ARG_OPTIONS.booleanFlags.includes(flag) ? "[boolean]" : "[value]";
   if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
-    console.log(`Usage: probe-executor-env.js <repo-path> --executor <${listExecutors().join("|")}> [options]`);
+    console.log(`Usage: probe-executor-env.js <repo-path> --executor <${listAdapters().join("|")}> [options]`);
     console.log("\nOptions:");
-    console.log(`  --executor, -e   ${modeLabel("--executor")} Executor to probe (${listExecutors().join(", ")})`);
-    console.log(`  --model, -m      ${modeLabel("--model")} Provider/model route for unmanaged executors; ignored for codex/claude`);
-    console.log(`  --timeout        ${modeLabel("--timeout")} Probe timeout in seconds (default: 30)`);
-    console.log(`  --project-only   ${modeLabel("--project-only")} Skip agent probe, only scan project tools`);
-    console.log(`  --json           ${modeLabel("--json")} Output as JSON`);
+    console.log(`  --executor, -e   ${formatCliModeLabel("--executor", CLI_ARG_OPTIONS)} Executor to probe (${listAdapters().join(", ")})`);
+    console.log(`  --model, -m      ${formatCliModeLabel("--model", CLI_ARG_OPTIONS)} Explicit provider/model selection`);
+    console.log(`  --timeout        ${formatCliModeLabel("--timeout", CLI_ARG_OPTIONS)} Probe timeout in seconds (default: 30)`);
+    console.log(`  --project-only   ${formatCliModeLabel("--project-only", CLI_ARG_OPTIONS)} Skip agent probe, only scan project tools`);
+    console.log(`  --json           ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Output as JSON`);
     process.exit(0);
   }
 
-  const repoPathRaw = getPositionals(args, "probe-executor-env")[0];
+  const repoPathRaw = args.find((token, index) => !consumed.has(index) && !String(token).startsWith("-"));
 
   return {
     repoPath: path.resolve(repoPathRaw || "."),
@@ -195,20 +191,12 @@ function deriveTestInfra(projectTools) {
 function probeAgent(executor, timeout) {
   let adapter;
   try {
-    adapter = getExecutor(executor);
+    adapter = getAdapter(executor);
   } catch {
-    return { error: `unknown executor: ${executor}`, raw: null };
+    return { status: "unknown", error: `unknown executor: ${executor}`, version: null };
   }
-  return adapter.probe({ timeout });
-}
-
-function nonEmptyString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function resolveEffectiveProbeModel(executor, model, { relayHome = process.env.RELAY_HOME, repoRoot = null } = {}) {
-  if (MANAGED_MODELLESS_EXECUTORS.has(executor)) return null;
-  return nonEmptyString(model) || resolveExecutorDefaultModel(executor, { relayHome, repoRoot });
+  const probe = adapter.probe({ timeoutMs: timeout * 1000 });
+  return { status: probe.status, error: probe.error, version: probe.raw };
 }
 
 // ---------------------------------------------------------------------------
@@ -218,40 +206,19 @@ function resolveEffectiveProbeModel(executor, model, { relayHome = process.env.R
 function run({ repoPath, executor, model, timeout, projectOnly, jsonOut }) {
   const projectTools = scanProjectTools(repoPath);
 
-  let agentProbe = { error: null, raw: null };
-  let policyDecision = null;
+  let executorAvailability = { status: "not_requested", error: null, version: null };
   if (!projectOnly) {
-    const effectiveProbeModel = resolveEffectiveProbeModel(executor, model, { repoRoot: repoPath });
-    // The probe checks whether the selected executor route is acceptable for
-    // dispatch. relay-config exposes dispatch/review policy phases, not a
-    // separate operator-facing probe phase.
-    policyDecision = evaluateRelayPolicyGate({
-      repoRoot: repoPath,
-      phase: PROBE_POLICY_PHASE,
-      executor,
-      model: effectiveProbeModel,
-    });
-    if (policyDecision.allowed) {
-      agentProbe = probeAgent(executor, timeout);
-    } else {
-      agentProbe = {
-        error: `policy disallowed: ${formatRelayPolicyGateMessage(policyDecision)}`,
-        raw: null,
-      };
-    }
+    executorAvailability = probeAgent(executor, timeout);
   }
 
   const result = {
     executor: executor || null,
+    model: typeof model === "string" && model.trim() ? model.trim() : null,
     repo: repoPath,
-    agent_tools_raw: agentProbe.raw,
-    agent_probe_error: agentProbe.error || null,
+    executor_availability: executorAvailability,
     test_infra: deriveTestInfra(projectTools),
     project_tools: projectTools,
   };
-  if (!projectOnly) {
-    result.policy_decision = policyDecision;
-  }
 
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
@@ -259,12 +226,12 @@ function run({ repoPath, executor, model, timeout, projectOnly, jsonOut }) {
     console.log(`Executor environment probe: ${executor || "(project-only)"}`);
     console.log(`Repo: ${repoPath}\n`);
 
-    if (agentProbe.error) {
-      console.log(`Agent probe: ${agentProbe.error}`);
-    } else if (agentProbe.raw) {
-      console.log(`Agent tools:\n${agentProbe.raw}`);
+    if (executorAvailability.error) {
+      console.log(`Executor availability: ${executorAvailability.error}`);
+    } else if (executorAvailability.version) {
+      console.log(`Executor version: ${executorAvailability.version}`);
     } else if (!projectOnly) {
-      console.log("Agent tools: none discovered");
+      console.log("Executor version: unavailable");
     }
 
     if (projectTools.frameworks.length > 0) {

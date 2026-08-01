@@ -68,11 +68,6 @@
     "readiness": {
       "$ref": "#/$defs/readiness",
       "description": "Request-level readiness scores copied to the request artifact frontmatter."
-    },
-    "next_action": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Optional producer hint for the immediate next relay step. persist-request.js currently persists relay_plan after a successful handoff freeze."
     }
   },
   "additionalProperties": true,
@@ -146,7 +141,15 @@
     },
     "RequestArtifact": {
       "type": "object",
-      "description": "Persisted request artifact frontmatter written to ~/.relay/requests/<repo-slug>/<request-id>.md. All fields are optional in this definition because preflight and relay-ready artifacts may be partially populated over time.",
+      "description": "Final immutable request artifact frontmatter written to ~/.relay/requests/<repo-slug>/<request-id>.md after every bundle file is durable and before the last completion marker is published.",
+      "required": [
+        "request_id",
+        "state",
+        "leaf_count",
+        "next_action",
+        "source",
+        "paths"
+      ],
       "additionalProperties": true,
       "properties": {
         "request_id": {
@@ -157,7 +160,8 @@
         "state": {
           "type": "string",
           "minLength": 1,
-          "description": "Current request artifact state, such as relay_ready."
+          "const": "relay_ready",
+          "description": "The only persisted request state. Conversation shaping is transient."
         },
         "leaf_id": {
           "type": "string",
@@ -166,7 +170,7 @@
         },
         "leaf_count": {
           "type": "integer",
-          "minimum": 0,
+          "minimum": 1,
           "description": "Number of relay-ready leaf handoffs persisted for this request."
         },
         "next_action": {
@@ -237,20 +241,6 @@
               "additionalProperties": {
                 "$ref": "#/$defs/stringArray"
               }
-            }
-          }
-        },
-        "timestamps": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "created_at": {
-              "type": "string",
-              "minLength": 1
-            },
-            "updated_at": {
-              "type": "string",
-              "minLength": 1
             }
           }
         }

@@ -6,7 +6,6 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 
 const { deriveTestInfra, scanProjectTools, probeAgent } = require("../../../skills/relay-plan/scripts/probe-executor-env");
-const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-plan", "scripts", "probe-executor-env.js");
 
@@ -20,14 +19,6 @@ function envForRelayHome(relayHome, extra = {}) {
     delete env.RELAY_POLICY_PATH;
   }
   return env;
-}
-
-function writeRelayPolicy(relayHome, overrides = {}) {
-  fs.mkdirSync(relayHome, { recursive: true });
-  fs.writeFileSync(path.join(relayHome, "policy.json"), JSON.stringify({
-    ...buildDefaultRelayPolicy(),
-    ...overrides,
-  }, null, 2), "utf-8");
 }
 
 function writeFakePi(binDir, markerPath) {
@@ -172,7 +163,7 @@ test("deriveTestInfra exposes runner candidates for TDD fallback", () => {
 // probeAgent (raw text pass-through, no parsing)
 // ---------------------------------------------------------------------------
 
-test("probeAgent returns raw text from a fake codex executor", () => {
+test("probeAgent reports deterministic adapter availability without running a model turn", () => {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-fakecodex-"));
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
@@ -186,10 +177,9 @@ process.stdout.write('[{"name":"/browse","type":"skill","description":"Headless 
   process.env.PATH = `${binDir}:${origPath}`;
   try {
     const result = probeAgent("codex", 10);
+    assert.equal(result.status, "available");
     assert.equal(result.error, null);
-    assert.ok(result.raw);
-    assert.match(result.raw, /\/browse/);
-    assert.match(result.raw, /skill/);
+    assert.equal(result.version, "codex-fake");
   } finally {
     process.env.PATH = origPath;
   }
@@ -199,7 +189,7 @@ test("probeAgent returns error for unknown executor", () => {
   const result = probeAgent("unknown-executor", 5);
   assert.ok(result.error);
   assert.match(result.error, /unknown executor/);
-  assert.equal(result.raw, null);
+  assert.equal(result.version, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -225,6 +215,17 @@ test("CLI --project-only works without executor", () => {
   assert.ok(output.project_tools.scripts.some((s) => s.name === "npm run test"));
   assert.ok(output.project_tools.frameworks.some((f) => f.name === "jest"));
   assert.deepEqual(output.project_tools.ci, []);
+});
+
+test("CLI keeps the repository positional after a boolean flag", () => {
+  const repoPath = "/definitely/not-a-repo-for-relay-cli-taxonomy";
+  const result = spawnSync("node", [SCRIPT, "--project-only", repoPath, "--json"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.repo, path.resolve(repoPath));
 });
 
 test("CLI requires --executor when not --project-only", () => {
@@ -255,11 +256,12 @@ test("CLI handles missing executor gracefully", () => {
   });
   assert.equal(result.status, 0, `stderr: ${result.stderr}`);
   const output = JSON.parse(result.stdout);
-  assert.ok(output.agent_probe_error);
-  assert.equal(output.agent_tools_raw, null);
+  assert.equal(output.executor_availability.status, "skipped");
+  assert.ok(output.executor_availability.error);
+  assert.equal(output.executor_availability.version, null);
 });
 
-test("CLI help advertises unmanaged executor model route override", () => {
+test("CLI help advertises explicit model selection", () => {
   const result = spawnSync("node", [SCRIPT, "--help"], {
     encoding: "utf-8",
     stdio: "pipe",
@@ -269,17 +271,9 @@ test("CLI help advertises unmanaged executor model route override", () => {
   assert.match(result.stdout, /provider\/model/i);
 });
 
-test("CLI probes pi when explicit model route is allowed for dispatch policy", () => {
+test("CLI probes pi and records the explicit model selection", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-allowed-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-policy-home-"));
-  writeRelayPolicy(relayHome, {
-    profile: "allow-pi-dispatch-probe",
-    allowed_model_routes: [{
-      route: "example/opencode-model-*",
-      phases: ["dispatch"],
-      executors: ["pi"],
-    }],
-  });
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-bin-"));
   const markerPath = path.join(binDir, "pi-invoked.txt");
   writeFakePi(binDir, markerPath);
@@ -301,137 +295,9 @@ test("CLI probes pi when explicit model route is allowed for dispatch policy", (
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.existsSync(markerPath), true);
   const output = JSON.parse(result.stdout);
-  assert.equal(output.agent_probe_error, null);
-  assert.match(output.agent_tools_raw, /pi-fake/);
-  assert.equal(output.policy_decision.allowed, true);
-  assert.equal(output.policy_decision.phase, "dispatch");
-  assert.equal(output.policy_decision.actor_field, "executor");
-  assert.equal(output.policy_decision.executor, "pi");
-  assert.equal(output.policy_decision.model, "example/opencode-model-fast");
-  assert.equal(output.policy_decision.reason, "allowed_model_route");
-  assert.equal(output.policy_decision.matched_route, "example/opencode-model-*");
-});
-
-test("CLI denied pi probe without model route fails closed before adapter probe", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-missing-model-"));
-  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-missing-model-home-"));
-  writeRelayPolicy(relayHome, {
-    profile: "allow-pi-dispatch-probe-requires-route",
-    allowed_model_routes: [{
-      route: "example/opencode-model-*",
-      phases: ["dispatch"],
-      executors: ["pi"],
-    }],
-  });
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-missing-model-bin-"));
-  const markerPath = path.join(binDir, "pi-invoked.txt");
-  writeFakePi(binDir, markerPath);
-
-  const result = spawnSync("node", [
-    SCRIPT,
-    repoRoot,
-    "--executor", "pi",
-    "--json",
-  ], {
-    encoding: "utf-8",
-    stdio: "pipe",
-    env: envForRelayHome(relayHome, {
-      PATH: `${binDir}:${process.env.PATH}`,
-    }),
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.existsSync(markerPath), false);
-  const output = JSON.parse(result.stdout);
-  assert.equal(output.agent_tools_raw, null);
-  assert.match(output.agent_probe_error, /policy disallowed/);
-  assert.match(output.agent_probe_error, /model=\(none\)/);
-  assert.equal(output.policy_decision.allowed, false);
-  assert.equal(output.policy_decision.phase, "dispatch");
-  assert.equal(output.policy_decision.actor_field, "executor");
-  assert.equal(output.policy_decision.executor, "pi");
-  assert.equal(output.policy_decision.model, null);
-  assert.equal(output.policy_decision.reason, "missing_model_route");
-});
-
-test("CLI denied pi probe reports the explicit unknown model route", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-denied-"));
-  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-denied-home-"));
-  writeRelayPolicy(relayHome, {
-    profile: "deny-unknown-pi-dispatch-probe",
-    allowed_model_routes: [{
-      route: "openai/*",
-      phases: ["dispatch"],
-      executors: ["pi"],
-    }],
-  });
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-denied-bin-"));
-  const markerPath = path.join(binDir, "pi-invoked.txt");
-  writeFakePi(binDir, markerPath);
-
-  const result = spawnSync("node", [
-    SCRIPT,
-    repoRoot,
-    "--executor", "pi",
-    "--model", "example/opencode-unknown",
-    "--json",
-  ], {
-    encoding: "utf-8",
-    stdio: "pipe",
-    env: envForRelayHome(relayHome, {
-      PATH: `${binDir}:${process.env.PATH}`,
-    }),
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.existsSync(markerPath), false);
-  const output = JSON.parse(result.stdout);
-  assert.equal(output.agent_tools_raw, null);
-  assert.match(output.agent_probe_error, /policy disallowed/);
-  assert.match(output.agent_probe_error, /model=example\/opencode-unknown/);
-  assert.equal(output.policy_decision.allowed, false);
-  assert.equal(output.policy_decision.phase, "dispatch");
-  assert.equal(output.policy_decision.actor_field, "executor");
-  assert.equal(output.policy_decision.executor, "pi");
-  assert.equal(output.policy_decision.model, "example/opencode-unknown");
-  assert.equal(output.policy_decision.reason, "unknown_model_route");
-});
-
-test("CLI reports missing opencode model without invoking adapter probe", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-denied-"));
-  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-home-"));
-  // Open-by-default posture (#781): the deny path now requires strict routes config.
-  fs.writeFileSync(path.join(relayHome, "routes.json"), JSON.stringify({
-    version: 2,
-    strict: true,
-  }, null, 2), "utf-8");
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-bin-"));
-  const markerPath = path.join(binDir, "opencode-invoked.txt");
-  const opencodePath = path.join(binDir, "opencode");
-  fs.writeFileSync(opencodePath, `#!/usr/bin/env node
-const fs = require("fs");
-fs.writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join(" "), "utf-8");
-process.stdout.write("opencode-fake\\n");
-`, "utf-8");
-  fs.chmodSync(opencodePath, 0o755);
-
-  const result = spawnSync("node", [SCRIPT, repoRoot, "-e", "opencode", "--json"], {
-    encoding: "utf-8",
-    stdio: "pipe",
-    env: envForRelayHome(relayHome, {
-      PATH: `${binDir}:${process.env.PATH}`,
-    }),
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.existsSync(markerPath), false);
-  const output = JSON.parse(result.stdout);
-  assert.equal(output.agent_tools_raw, null);
-  assert.match(output.agent_probe_error, /policy disallowed/);
-  assert.equal(output.policy_decision.allowed, false);
-  assert.equal(output.policy_decision.phase, "dispatch");
-  assert.equal(output.policy_decision.actor_field, "executor");
-  assert.equal(output.policy_decision.executor, "opencode");
-  assert.equal(output.policy_decision.model, null);
-  assert.equal(output.policy_decision.reason, "missing_model_route");
+  assert.equal(output.executor_availability.status, "available");
+  assert.equal(output.executor_availability.error, null);
+  assert.match(output.executor_availability.version, /pi-fake/);
+  assert.equal(output.executor, "pi");
+  assert.equal(output.model, "example/opencode-model-fast");
 });

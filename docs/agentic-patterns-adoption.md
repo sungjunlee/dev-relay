@@ -1,5 +1,8 @@
 # Agentic Engineering Patterns Adoption — Discussion Document
 
+> Historical record. The reliability-report references below describe a retired
+> runtime surface and are not current operator instructions.
+
 **Source**: [Simon Willison — Agentic Engineering Patterns](https://simonwillison.net/guides/agentic-engineering-patterns/) + HN discussion ([GeekNews](https://news.hada.io/topic?id=27206))
 **Date**: 2026-04-12 (updated 2026-05-29)
 **Scope**: dev-relay + dev-backlog

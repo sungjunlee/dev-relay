@@ -13,7 +13,6 @@ task_profile:
     - relay-plan
   risk_tags: []
   execution_mode: standard
-  review_assurance: standard
   guidance_packs:
     - verification-evidence
 ```

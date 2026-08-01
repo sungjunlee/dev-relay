@@ -53,13 +53,13 @@ While iterating, run only the targeted or touched suites needed to verify the cu
 ## Completion Responsibilities
 Choose the implementation, exploration, test, and repair sequence that best fits the task.
 
-  0. PREREQUISITE GATE: Follow Test-run Discipline for the declared Verification checks. Run long repo-wide checks once as the final gate before committing. Any final verification failure must be fixed before completion.
+  0. PREREQUISITE GATE: Follow Test-run Discipline for the declared Verification checks. Run long repo-wide checks once as the final gate before returning. Any final verification failure must be fixed before completion.
 - Implement every Done Criteria outcome within the stated scope boundaries.
 - Run relevant verification and fix failures found.
 - Capture concise verification evidence expected by the run: commands and result summaries plus concrete artifact references for the Done Criteria.
 - Treat tests, manifests, PR description text, and executor reports as proxy signals, not proof by themselves; point to the implementation or reviewable artifact that makes each outcome independently verifiable.
-- Completion requires both the captured evidence and confirmation that the final work is committed.
+- Completion requires both the captured evidence and reviewable dirty-worktree changes. Do not write linked-worktree Git administration, objects, refs, config, or hooks.
 
 ## When Satisfied
-Commit your final work to the branch with a clear message. The orchestrator handles `git push` + `gh pr create` after the dispatch returns (and is idempotent if you also push or open a PR yourself). Do NOT skip the commit — that is the one step the orchestrator cannot recover automatically.
+Leave the verified implementation in the retained worktree and return concise evidence. Do not run `git add`, `git commit`, `git push`, or create a PR: after dispatch returns, canonical `relay-recover recover` alone commits, pushes, and creates or reuses the exact authorized PR.
 ```

@@ -14,11 +14,11 @@ Before dispatch, persist the finished evaluation artifact to a file and pass it 
 
 The domain `rubric-*.md` files are **candidate axis libraries**, not dispatch templates. Use them to sharpen task-specific judgment:
 
-- Pick only the axes earned by task-specific evidence: explicit AC, inferred Done Criteria, repo conventions, historical signal, probe signal, or concrete risk.
+- Pick only the axes earned by task-specific evidence: explicit AC, inferred Done Criteria, repo conventions, probe signal, or concrete risk.
 - Do not copy a whole domain reference into a dispatch prompt.
 - S-size mechanical tasks may use Verification with zero Earned Rubric factors.
 - Add Earned Rubric factors only when the task has real design judgment or risk that a command cannot verify.
-- Treat `fix_hint` examples as optional escalation aids for historical plateaus or non-obvious score transitions, not default implementation instructions.
+- Treat `fix_hint` examples as optional aids for non-obvious score transitions, not default implementation instructions.
 
 ## Factor Fields
 
@@ -69,7 +69,6 @@ List the evidence that defines success for this task:
 - Explicit AC, if present
 - Inferred Done Criteria from the user request, issue body, relay-ready handoff, and nearby repo conventions
 - Repo quality signals from available tests, lint, typecheck, CI, and scripts
-- Historical relay signals such as stuck factors, repeated reviewer findings, reviewer yield, and average rounds
 - Task risk such as trust boundaries, data loss, migrations, user-visible flows, performance, or operational failure modes
 
 If explicit AC and inferred Done Criteria disagree, resolve the conflict before drafting factors. Run the [pre-flight ambiguity audit](dc-preflight-audit.md) before freezing the Done Criteria, then persist planner-authored Done Criteria when the final anchor differs from the issue body or intake handoff.
@@ -138,7 +137,7 @@ anchors:
 
 Use one sentence per level. If weak/adequate/strong are hard to distinguish, omit or refine the factor. Numeric mapping is optional and follows the qualitative anchors only when it improves a real decision.
 
-Add `fix_hint` only when anchors are not enough, usually because historical signals show a plateau or the mid-to-high transition requires a non-obvious technique:
+Add `fix_hint` only when anchors are not enough and a score transition requires a non-obvious technique:
 
 ```yaml
 fix_hint:

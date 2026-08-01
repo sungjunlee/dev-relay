@@ -11,7 +11,7 @@ const {
   ownershipsEqual,
   parseOwnershipJson,
   validateOwnershipSprintFile,
-} = require("../../../skills/relay-dispatch/scripts/ownership");
+} = require("../../../skills/relay-fleet/scripts/ownership");
 const {
   OWNER_SOURCES,
   readManifestOwnership,

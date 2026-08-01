@@ -17,22 +17,16 @@ const CLI_TARGETS = [
     ["123", "--no-merge"], "--no-merge"],
   ["relay-dispatch", "skills/relay-dispatch/scripts/dispatch.js",
     [".", "--branch", "fake", "--prompt", "x", "--no-merge"], "--no-merge"],
-  ["relay-dispatch", "skills/relay-dispatch/scripts/close-run.js",
-    ["--repo", ".", "--run-id", "fake", "--reason", "test", "--no-merge"], "--no-merge"],
-  ["relay-dispatch", "skills/relay-dispatch/scripts/cleanup-worktrees.js",
-    ["--repo", ".", "--no-merge"], "--no-merge"],
-  ["relay-dispatch", "skills/relay-dispatch/scripts/reconcile-run.js",
-    ["--repo", ".", "--run-id", "fake", "--no-merge"], "--no-merge"],
-  ["relay-dispatch", "skills/relay-dispatch/scripts/relay-config.js",
-    ["init", "--profile", "company", "--no-merge"], "--no-merge"],
-  ["relay-dispatch", "skills/relay-dispatch/scripts/recover-state.js",
-    ["--repo", ".", "--run-id", "fake", "--to", "review_pending",
-     "--reason", "test", "--no-merge"], "--no-merge"],
-  ["relay-dispatch", "skills/relay-dispatch/scripts/extend-review-policy.js",
-    ["--repo", ".", "--run-id", "fake", "--max-rounds", "3",
-     "--reason", "test", "--no-merge"], "--no-merge"],
+  ["relay", "skills/relay/scripts/relay-recover.js",
+    ["inspect", "--repo", ".", "--run-id", "fake", "--no-merge"], "--no-merge"],
   ["relay-review", "skills/relay-review/scripts/review-runner.js",
     ["--repo", ".", "--run-id", "fake", "--no-merge"], "--no-merge"],
+  ["relay-plan", "skills/relay-plan/scripts/probe-executor-env.js",
+    ["--project-only", "--no-merge"], "--no-merge"],
+  ["relay-ready", "skills/relay-ready/scripts/persist-request.js",
+    ["--json", "--no-merge"], "--no-merge"],
+  ["relay-ready", "skills/relay-ready/scripts/probe-readiness.js",
+    ["--json", "--no-merge"], "--no-merge"],
 ];
 
 for (const [skill, scriptRel, args, unknownFlag] of CLI_TARGETS) {
@@ -44,8 +38,8 @@ for (const [skill, scriptRel, args, unknownFlag] of CLI_TARGETS) {
     const combined = `${result.stdout}\n${result.stderr}`;
     assert.notStrictEqual(result.status, 0,
       `expected non-zero exit; got ${result.status}\n${combined}`);
-    assert.ok(/unknown flag/i.test(combined),
-      `expected stderr to mention "unknown flag"; got:\n${combined}`);
+    assert.ok(/unknown (?:flag|option)/i.test(combined),
+      `expected stderr to mention an unknown option; got:\n${combined}`);
     assert.ok(combined.includes(unknownFlag),
       `expected stderr to name the flag ${unknownFlag}; got:\n${combined}`);
   });

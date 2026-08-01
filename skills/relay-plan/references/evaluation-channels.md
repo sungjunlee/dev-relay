@@ -64,7 +64,7 @@ Missing required observation blocks unsupported quality claims instead of produc
 invented scores.
 
 Use `observation-lenses.md` only to expand these questions. Lenses are optional and
-advisory: select, combine, replace, or omit them. A design lens requires rendered output
+non-binding: select, combine, replace, or omit them. A design lens requires rendered output
 through relevant user flows and viewports; code inspection alone is not design
 observation. Non-visual work uses its own available surfaces and does not inherit a
 browser requirement.

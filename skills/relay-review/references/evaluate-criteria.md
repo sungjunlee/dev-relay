@@ -39,20 +39,9 @@ Note: The reviewer does NOT fix code directly — all fixes go through the execu
 
 **Re-dispatch rules:** file:line references, what to fix (not how), "do not change anything else".
 
-**Convergence model:** `review.rounds` is the global applied-verdict sequence, not
-the repair budget. Compact escalates its first substantive failure. Standard
-allows two review rounds in its targeted repair cycle: one independent review
-and one review of the corrected result after re-dispatch. It allows one
-substantive failure to enter that repair; corrected-result and post-publication
-PASS verification are protocol work and do not consume the substantive budget.
-Hardened admits one further substantive repair cycle.
-
-An explicit extended policy for experimental work may persist a still-higher
-`review.max_rounds`. This changes the substantive-failure threshold referenced by
-`review.round_budget.limit_source`; it retains repeated-issue, flip-flop, SHA,
-advisory, lifecycle, and audit gates.
-
-**After the configured cap:** Escalate — show the user the PR URL, list unresolved
-issues, and let them decide. More default rounds are not evidence of convergence.
+`review.rounds` is the monotonic applied-verdict sequence. Convergence is
+determined by the reviewed SHA, Done Criteria, repeated-issue/flip-flop checks,
+and an explicit passing verdict; the runtime does not impose a mutable round
+budget.
 
 Lineage grammar for repeated review findings is documented separately in `review-lineage.md`.

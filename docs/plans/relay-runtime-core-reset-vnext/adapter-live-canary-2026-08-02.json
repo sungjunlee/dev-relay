@@ -1,0 +1,400 @@
+{
+  "schema_version": 2,
+  "evidence_status": "incomplete_non_release",
+  "generated_at": "2026-08-01T17:45:18.778Z",
+  "timeout_ms": 5000,
+  "provenance": {
+    "git_head": "6565b3e868a28ae880a635ac985b18916b7be98e",
+    "git_tree": "11230dff2792b275d66bbaf8d82c31358ff707b3",
+    "dirty_digest": "a68533260bc79e01ab8c63ee488a5243018dddce2767ac5673830954542e6ba4",
+    "runner_sha256": "e19c91064ddbe670e4cad7f2a05fc5d9a871ae7dde358b681886d75908a5c4b1",
+    "runtime_sha256": {
+      "host.js": "61c26673fad8f3f4072ad7ea1aac37fe0f33d60d918c893c7d78d03aed251751",
+      "run-store.js": "f6b4cb7998e4437e0fb7597e14b4ea58deb64bd70369166b1e1b5eb00abbd75b",
+      "adapter-contract.js": "603114b913c74904ebc1938c4b39bc8f27fb7b7c7cc89f8550efbdb45526c886"
+    },
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.22.3"
+  },
+  "policy": {
+    "required_cells": [
+      "claude:dispatch",
+      "claude:primary_review",
+      "codex:dispatch",
+      "codex:primary_review",
+      "opencode:dispatch",
+      "opencode:primary_review",
+      "pi:dispatch",
+      "pi:primary_review",
+      "antigravity:dispatch",
+      "antigravity:primary_review",
+      "cursor:dispatch",
+      "cursor:primary_review",
+      "cline:dispatch"
+    ],
+    "acceptance": "every required cell must pass its production phase; not_run, skip, failure, and fallback are non-release"
+  },
+  "results": [
+    {
+      "adapter": "claude",
+      "phase": "dispatch",
+      "model": "default",
+      "provider": "anthropic",
+      "nonce_sha256": "ab587cd6f1b2558e47ac52fa0506977b682a9e75173be6e184b78a3fea884a32",
+      "prompt_sha256": "3ac190e6cbe2fb512034b9970bb9bbb5c2bf058b1cab12e1325234ea027a8b8a",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "2.1.220 (Claude Code)",
+        "executable": {
+          "name": "2.1.220",
+          "dev": 16777231,
+          "ino": 533174420,
+          "mode": 33261,
+          "sha256": "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "claude",
+      "phase": "primary_review",
+      "model": "default",
+      "provider": "anthropic",
+      "nonce_sha256": "4bce45f921635e9ded18ff7f62dadec8258c91de9008b7a0fc2fd06b938203ad",
+      "prompt_sha256": "2fca8d260070cf03ff99d132d598ce19566ee545c193969b85bd686d1cedb9e1",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "2.1.220 (Claude Code)",
+        "executable": {
+          "name": "2.1.220",
+          "dev": 16777231,
+          "ino": 533174420,
+          "mode": 33261,
+          "sha256": "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "codex",
+      "phase": "dispatch",
+      "model": "default",
+      "provider": "openai",
+      "nonce_sha256": "8228b16fff6d7c00f027cbbaf1a358fc7d7d3a4cc9412561f43886a9b2a23d75",
+      "prompt_sha256": "ffdc5b2c463d0908757f09ea0f6e3fd74b19cccf6f81a4752b2851482ac50c26",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "codex-cli 0.146.0",
+        "executable": {
+          "name": "codex",
+          "dev": 16777231,
+          "ino": 554030196,
+          "mode": 33261,
+          "sha256": "ae1d3ffe6d48aec6a4dc3f50e7eb8e0d11962485a6a9406c5a7012139383da02"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "codex",
+      "phase": "primary_review",
+      "model": "default",
+      "provider": "openai",
+      "nonce_sha256": "5e14db01e95695795917ce7d517d4a3f42d15e570c1d8abde2daa30817c275cf",
+      "prompt_sha256": "914afda06f1c64505f22177268b3985be5e73e57b5823e7572ee2ed83d142d26",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "codex-cli 0.146.0",
+        "executable": {
+          "name": "codex",
+          "dev": 16777231,
+          "ino": 554030196,
+          "mode": 33261,
+          "sha256": "ae1d3ffe6d48aec6a4dc3f50e7eb8e0d11962485a6a9406c5a7012139383da02"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "opencode",
+      "phase": "dispatch",
+      "model": "opencode-go/glm-5.2",
+      "provider": "opencode-go",
+      "nonce_sha256": "25d4eb84acf4feef475353b8032bb451afad38162afa0e0d219a1b7df3fe6f0f",
+      "prompt_sha256": "e9ee8e34b99fa95b957ec2d3b4192c29d574bd4715a1f0e0a248f5d8b0e055ea",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "1.18.10",
+        "executable": {
+          "name": "opencode",
+          "dev": 16777231,
+          "ino": 556129373,
+          "mode": 33261,
+          "sha256": "7f488b3f084de90a638785b3116d5e05449a584694aa81c9a757da49139857c1"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "opencode",
+      "phase": "primary_review",
+      "model": "opencode-go/glm-5.2",
+      "provider": "opencode-go",
+      "nonce_sha256": "dfe9b4883897f1292bd86623061c6b46f3f4171339cc11e31d735c5683b6b155",
+      "prompt_sha256": "3310cac03fe181dc3296f528d02dab31833f83816c9e6f50ca5049951efe285a",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "1.18.10",
+        "executable": {
+          "name": "opencode",
+          "dev": 16777231,
+          "ino": 556129373,
+          "mode": 33261,
+          "sha256": "7f488b3f084de90a638785b3116d5e05449a584694aa81c9a757da49139857c1"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "pi",
+      "phase": "dispatch",
+      "model": "default",
+      "provider": "pi",
+      "nonce_sha256": "f63756987caacdd0f07e4880be11fe905d784da8bd0b47b493ee36f34156e7d4",
+      "prompt_sha256": "86e19fce085c5a7d8e614c47308379eb883a324a4d0f950fd36dda7492fa6af8",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "0.83.0",
+        "executable": {
+          "name": "cli.js",
+          "dev": 16777231,
+          "ino": 548923668,
+          "mode": 33261,
+          "sha256": "af302f231437eaf6f37691bce4b34234fcb626bcb5eb3910d4fc3f6519bf78ca"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "pi",
+      "phase": "primary_review",
+      "model": "default",
+      "provider": "pi",
+      "nonce_sha256": "371ffec192af871802ae2ebecc477d2d5030cfe68f12eb8b60b5384ce3c80424",
+      "prompt_sha256": "22374c99400e61ef1fee7573a5e0a1540484eea8b3316802a7af75e6f3f3d005",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "0.83.0",
+        "executable": {
+          "name": "cli.js",
+          "dev": 16777231,
+          "ino": 548923668,
+          "mode": 33261,
+          "sha256": "af302f231437eaf6f37691bce4b34234fcb626bcb5eb3910d4fc3f6519bf78ca"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "antigravity",
+      "phase": "dispatch",
+      "model": "default",
+      "provider": "google",
+      "nonce_sha256": "1f5d167378cf03074d479a0a4946e041cc06a670761fe88ec67de0875c89793d",
+      "prompt_sha256": "a02cbdf586bd6c797760b4be93dd4d3fa1a351c2a0222fc24cba1ab8bff50f00",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "1.1.9",
+        "executable": {
+          "name": "agy",
+          "dev": 16777231,
+          "ino": 552960449,
+          "mode": 33261,
+          "sha256": "a27bff8d7c47fe5407e6740f14ecef73e86fb65ec73fec77b0765f8849024383"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "antigravity",
+      "phase": "primary_review",
+      "model": "default",
+      "provider": "google",
+      "nonce_sha256": "13ccd8579d455ef64f143ff9736c44955a74f89e3a4a1963479d307b308ced0d",
+      "prompt_sha256": "5ce010ce937fcf0a0b54709b7a672df2cbcef8e0d6107be2c066429c06b6f67e",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "1.1.9",
+        "executable": {
+          "name": "agy",
+          "dev": 16777231,
+          "ino": 552960449,
+          "mode": 33261,
+          "sha256": "a27bff8d7c47fe5407e6740f14ecef73e86fb65ec73fec77b0765f8849024383"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "cursor",
+      "phase": "dispatch",
+      "model": "default",
+      "provider": "cursor",
+      "nonce_sha256": "19776d9eeaa5e1ea1ad13b4d069be1621c4d8b4c0c84913b770a461eabd3c7ce",
+      "prompt_sha256": "ba0c2703eb4979c68b6a7e889d7942f5d1f8394aef613fa7d9124fb6a1c20822",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "2026.07.23-e383d2b",
+        "executable": {
+          "name": "cursor-agent",
+          "dev": 16777231,
+          "ino": 531978739,
+          "mode": 33261,
+          "sha256": "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "cursor",
+      "phase": "primary_review",
+      "model": "default",
+      "provider": "cursor",
+      "nonce_sha256": "2f6bdbd01f5b2af17064ddf15420304c186d54b8b3300f203d90f6bbc594415e",
+      "prompt_sha256": "407b1f227580a83d5159c3d4c29ac9d64ff99ca95b04e775762defc211e7f10d",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "2026.07.23-e383d2b",
+        "executable": {
+          "name": "cursor-agent",
+          "dev": 16777231,
+          "ino": 531978739,
+          "mode": 33261,
+          "sha256": "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    },
+    {
+      "adapter": "cline",
+      "phase": "dispatch",
+      "model": "default",
+      "provider": "cline-pass",
+      "nonce_sha256": "b136c8a5126e525791aaf3a2f2ba62b69bf1ff9811d5c360b3b60839754cfa32",
+      "prompt_sha256": "b04a837c955feccb1de34e354820c6283a5290287678975b74eb3fbd276312dd",
+      "status": "not_run",
+      "reason": "not_run_credentials_unavailable",
+      "probe": {
+        "status": "available",
+        "version": "3.0.47",
+        "executable": {
+          "name": "cline",
+          "dev": 16777231,
+          "ino": 546531812,
+          "mode": 33261,
+          "sha256": "71d1b27aeeebdaa0b91c4babddd1f635eb7f5783257c2b3324a2cb22924cf60f"
+        }
+      },
+      "credential_request": {
+        "env_names": [],
+        "file_ids": []
+      },
+      "checks": {}
+    }
+  ],
+  "summary": {
+    "required": 13,
+    "passed": 0,
+    "not_run": 13,
+    "failed": 0,
+    "missing": [
+      "claude:dispatch",
+      "claude:primary_review",
+      "codex:dispatch",
+      "codex:primary_review",
+      "opencode:dispatch",
+      "opencode:primary_review",
+      "pi:dispatch",
+      "pi:primary_review",
+      "antigravity:dispatch",
+      "antigravity:primary_review",
+      "cursor:dispatch",
+      "cursor:primary_review",
+      "cline:dispatch"
+    ]
+  },
+  "generated_by": "tests/relay-dispatch/scripts/adapter-live-canary-runner.js"
+}

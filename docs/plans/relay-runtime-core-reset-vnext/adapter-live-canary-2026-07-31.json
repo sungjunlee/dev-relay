@@ -1,0 +1,100 @@
+{
+  "evidence_status": "superseded_incomplete",
+  "superseded_by": "adapter-live-canary-2026-08-02.json",
+  "non_release_reason": "Historical diagnostic skipped all required live invocations and predates the 13-cell acceptance matrix.",
+  "generated_at": "2026-07-31T08:46:10.843Z",
+  "timeout_ms": 30000,
+  "results": [
+    {
+      "adapter": "claude",
+      "phase": "primary_review",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "raw": "2.1.220 (Claude Code)"
+      },
+      "status": "skipped",
+      "reason": "credentials_unavailable",
+      "detail": "Error: claude --bare mode is not authenticated. It uses a separate token from the interactive Claude OAuth session. Set ANTHROPIC_API_KEY or run `claude login --api-key` before using `--reviewer claude` (directly or via reviewer-swap). See skills/relay-review/SKILL.md."
+    },
+    {
+      "adapter": "codex",
+      "phase": "primary_review",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "raw": "codex-cli 0.144.4"
+      },
+      "status": "skipped",
+      "reason": "execution_environment_unavailable",
+      "detail": "Error: Codex reviewer primary_review failed; model=default; raw_response=/var/folders/c8/n5scqmgx5c5_t4hrrr6mjbzm0000gn/T/relay-review-codex-87411-1785487557578-raw-response.txt; WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)\n2026-07-31T08:45:57.647475Z  WARN codex_state::runtime: failed to open state db at /Users/sjlee/.codex/state_5.sqlite: failed to open state DB at /Users/sjlee/.codex/state_5.sqlite: error returned from database: (code: 8) attempt to write a readonly database\n2026-07-31T08:45:57.647518Z  WARN codex_rollout::state_db: failed to initialize state runtime: failed to initialize state runtime at /Users/sjlee/.codex: failed to open state DB at /Users/sjlee/.codex/state_5.sqlite: error returned from database: (code: 8) attempt to write a readonly database: error returned from database: (code: 8) attempt to write a readonly database: (code: 8) attempt to write a readonly database\nError: failed to initialize in-process app-server client: Operation not permitted (os error 1)"
+    },
+    {
+      "adapter": "opencode",
+      "phase": "primary_review",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "raw": "1.17.18"
+      },
+      "status": "skipped",
+      "reason": "execution_environment_unavailable",
+      "detail": "Error: opencode primary_review reviewer failed: \u001b[91m\u001b[1mError: \u001b[0mUnexpected error\n\nUnknown: FileSystem.open (/Users/sjlee/.local/share/opencode/log/opencode.log)"
+    },
+    {
+      "adapter": "pi",
+      "phase": "primary_review",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "raw": "0.83.0"
+      },
+      "status": "skipped",
+      "reason": "credentials_unavailable",
+      "detail": "Error: Pi reviewer failed: Warning: (startup session lookup, global settings) EPERM: operation not permitted, mkdir '/Users/sjlee/.pi/agent/settings.json.lock'\nWarning: (runtime creation, global settings) EPERM: operation not permitted, mkdir '/Users/sjlee/.pi/agent/settings.json.lock'\nWarning: (runtime creation, global settings) EPERM: operation not permitted, mkdir '/Users/sjlee/.pi/agent/settings.json.lock'\nNo API key found for the selected model.\n\nUse /login to log into a provider via OAuth or API key. See:\n  /Users/sjlee/.local/share/mise/installs/node/22.22.3/lib/node_modules/@earendil-works/pi-coding-agent/docs/providers.md\n  /Users/sjlee/.local/share/mise/installs/node/22.22.3/lib/node_modules/@earendil-works/pi-coding-agent/docs/models.md"
+    },
+    {
+      "adapter": "antigravity",
+      "phase": "primary_review",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "raw": "1.1.9"
+      },
+      "status": "skipped",
+      "reason": "execution_environment_unavailable",
+      "detail": "Error: Antigravity reviewer failed: ERROR: logging before google.Init: E0731 17:46:03.410048       1 main.go:352] Failed to redirect output for CLI: creating log file: opening log file: open /Users/sjlee/.gemini/antigravity-cli/log/cli-20260731_174603.log: operation not permitted\nERROR: logging before google.Init: I0731 17:46:03.410141      82 server.go:1416] Starting language server process with pid 88565\nERROR: logging before google.Init: E0731 17:46:03.410386      82 server.go:1401] Failed to initialize crash reporter: failed to setup crash output: open /Users/sjlee/.gemini/antigravity-cli/crashes/crash_88565_977a475b-7519-4ec5-843d-0c0c89f71e39.log: operation not permitted\nERROR: logging before google.Init: I0731 17:46:03.411786      82 server.go:1466] Language server version: 1.1.9\nERROR: logging before google.Init: I0731 17:46:03.411811      82 server.go:545] Language server will attempt to listen on host localhost\nERROR: logging before google.Init: E0731 17:46:03.412454      82 main.go:469] CLI failed to start - listen tcp 127.0.0.1:0: bind: operation not permitted\n(1) attached stack trace\n  -- stack trace:\n  | google3/third_party/jetski/language_server/language_server.setUpServerPortListeners\n  | \tthird_party/jetski/language_server/server.go:557\n  | google3/third_party/jetski/language_server/language_server.CreateLanguageServerAndServe\n  | \tthird_party/jetski/language_server/server.go:1477\n  | main.main.func4\n  | \tthird_party/jetski/cmd/cli/main.go:467\n  | runtime.goexit\n  | \tthird_party/go/gc/src/runtime/asm_arm64.s:1039\nWraps: (2) listen tcp 127.0.0.1:0\nWraps: (3) bind\nWraps: (4) operation not permitted\nError types: (1) *withstack.withStack (2) *net.OpError (3) *os.SyscallError (4) syscall.Errno"
+    },
+    {
+      "adapter": "cursor",
+      "phase": "primary_review",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "raw": "2026.07.23-e383d2b"
+      },
+      "status": "skipped",
+      "reason": "credentials_unavailable",
+      "detail": "Error: Cursor reviewer auth probe failed: ERROR: SecItemCopyMatching failed -50"
+    },
+    {
+      "adapter": "cline",
+      "phase": "advisory_review",
+      "probe": {
+        "status": "available",
+        "error": null,
+        "raw": "3.0.47"
+      },
+      "status": "skipped",
+      "reason": "execution_environment_unavailable",
+      "detail": "Error: adapter=cline phase=advisory_review Cline JSONL output is empty; no advisory candidates found; stderr tail: k-9w1tjvck.js:1085:5034)\\n    at async start (/$bunfs/root/chunk-9w1tjvck.js:1086:5083)\\n    at async v$ (/$bunfs/root/chunk-n5vyxyf4.js:6:2418)\\n    at async Tn (/$bunfs/root/chunk-fk6bmcz5.js:23:1027)\\n    at async <anonymous> (/$bunfs/root/apps/cli/src/index.js:3:2944)\\n    at processTicksAndRejections (native:7:39)\",\"code\":\"SQLITE_READONLY\",\"errno\":8,\"byteOffset\":-1},\"msg\":\"CLI task run failed\"}\n{\"ts\":\"2026-07-31T08:46:09.758Z\",\"type\":\"error\",\"message\":\"attempt to write a readonly database\"}. Cline advisory review must return JSON in run_result.text, then the last text content_end, then single-line plain-JSON stdout; relay cannot treat this as healthy advisory evidence.\n\nCline stderr:\n{\"level\":30,\"time\":\"2026-07-31T08:46:08.669Z\",\"pid\":88916,\"hostname\":\"Sungjuns-MacBook-Air.local\",\"name\":\"cline.cli\",\"component\":\"main\",\"interactive\":false,\"hasPrompt\":true,\"cwd\":\"/var/folders/c8/n5scqmgx5c5_t4hrrr6mjbzm0000gn/T/relay-adapter-live-canary-dkZnke/repo\",\"msg\":\"CLI run started\"}\n{\"level\":30,\"time\":\"2026-07-31T08:46:08.945Z\",\"pid\":88916,\"hostname\":\"Sungjuns-MacBook-Air.local\",\"name\":\"cline.cli\",\"component\":\"main\",\"backendMode\":\"local\",\"forceLocalBackend\":true,\"msg\":\"CLI core runtime routing selected\"}\n{\"level\":30,\"time\":\"2026-07-31T08:46:09.166Z\",\"pid\":88916,\"hostname\":\"Sungjuns-MacBook-Air.local\",\"name\":\"cline.cli\",\"component\":\"main\",\"telemetrySink\":\"TelemetryLoggerSink\",\"event\":\"workspace.initialized\",\"properties\":{\"root_count\":1,\"vcs_types\":[\"git\"],\"is_multi_root\":false,\"has_git\":true,\"has_mercurial\":false,\"init_duration_ms\":208.07737500000007,\"feature_flag_enabled\":true,\"extension_version\":\"3.0.47\",\"cline_type\":\"cli\",\"platform\":\"cline\",\"platform_version\":\"v24.3.0\",\"os_type\":\"darwin\",\"os_version\":\"unknown\",\"distinct_id\":\"c41bcc3dd08836bbf0b917ca9225a6ca660e890f68d8192c330e6c488d5afcd2\"},\"msg\":\"telemetry.event\"}\n{\"level\":30,\"time\":\"2026-07-31T08:46:09.277Z\",\"pid\":88916,\"hostname\":\"Sungjuns-MacBook-Air.local\",\"name\":\"cline.cli\",\"component\":\"main\",\"telemetrySink\":\"TelemetryLoggerSink\",\"event\":\"task.restarted\",\"properties\":{\"ulid\":\"1785487568949_ng71o\",\"apiProvider\":\"cline-pass\",\"agentId\":\"agent_1785487569276_hiyl4z\",\"agentKind\":\"root\",\"conversationId\":\"conv_1785487569276_rng0p17\",\"isSubagent\":false,\"extension_version\":\"3.0.47\",\"cline_type\":\"cli\",\"platform\":\"cline\",\"platform_version\":\"v24.3.0\",\"os_type\":\"darwin\",\"os_version\":\"unknown\",\"distinct_id\":\"c41bcc3dd08836bbf0b917ca9225a6ca660e890f68d8192c330e6c488d5afcd2\"},\"msg\":\"telemetry.event\"}\n{\"level\":30,\"time\":\"2026-07-31T08:46:09.278Z\",\"pid\":88916,\"hostname\":\"Sungjuns-MacBook-Air.local\",\"name\":\"cline.cli\",\"component\":\"main\",\"telemetrySink\":\"TelemetryLoggerSink\",\"event\":\"task.agent_created\",\"properties\":{\"ulid\":\"1785487568949_ng71o\",\"modelId\":\"z-ai/glm-5.2\",\"provider\":\"cline-pass\",\"agentId\":\"agent_1785487569276_hiyl4z\",\"agentKind\":\"root\",\"conversationId\":\"conv_1785487569276_rng0p17\",\"isSubagent\":false,\"timestamp\":\"2026-07-31T08:46:09.277Z\",\"extension_version\":\"3.0.47\",\"cline_type\":\"cli\",\"platform\":\"cline\",\"platform_version\":\"v24.3.0\",\"os_type\":\"darwin\",\"os_version\":\"unknown\",\"distinct_id\":\"c41bcc3dd08836bbf0b917ca9225a6ca660e890f68d8192c330e6c488d5afcd2\"},\"msg\":\"telemetry.event\"}\n{\"level\":30,\"time\":\"2026-07-31T08:46:09.753Z\",\"pid\":88916,\"hostname\":\"Sungjuns-MacBook-Air.local\",\"name\":\"cline.cli\",\"component\":\"main\",\"telemetrySink\":\"TelemetryLoggerSink\",\"event\":\"task.mention_search_results\",\"properties\":{\"queryLength\":50,\"resultCount\":1,\"searchType\":\"file\",\"isEmpty\":false,\"timestamp\":\"2026-07-31T08:46:09.753Z\",\"extension_version\":\"3.0.47\",\"cline_type\":\"cli\",\"platform\":\"cline\",\"platform_version\":\"v24.3.0\",\"os_type\":\"darwin\",\"os_version\":\"unknown\",\"distinct_id\":\"c41bcc3dd08836bbf0b917ca9225a6ca660e890f68d8192c330e6c488d5afcd2\"},\"msg\":\"telemetry.event\"}\n{\"level\":30,\"time\":\"2026-07-31T08:46:09.753Z\",\"pid\":88916,\"hostname\":\"Sungjuns-MacBook-Air.local\",\"name\":\"cline.cli\",\"component\":\"main\",\"telemetrySink\":\"TelemetryLoggerSink\",\"event\":\"task.mention_used\",\"properties\":{\"mentionType\":\"file\",\"contentLength\":50,\"timestamp\":\"2026-07-31T08:46:09.753Z\",\"extension_version\":\"3.0.47\",\"cline_type\":\"cli\",\"platform\":\"cline\",\"platform_version\":\"v24.3.0\",\"os_type\":\"darwin\",\"os_version\":\"unknown\",\"distinct_id\":\"c41bcc3dd08836bbf0b917ca9225a6ca660e890f68d8192c330e6c488d5afcd2\"},\"msg\":\"telemetry.event\"}\n{\"level\":30,\"time\":\"2026-07-31T08:46:09.755Z\",\"pid\":88916,\"hostname\":\"Sungjuns-MacBook-Air.local\",\"name\":\"cline.cli\",\"component\":\"main\",\"telemetrySink\":\"TelemetryLoggerSink\",\"event\":\"sdk.error\",\"properties\":{\"sessionId\":\"1785487568949_ng71o\",\"providerId\":\"cline-pass\",\"modelId\":\"z-ai/glm-5.2\",\"component\":\"core\",\"operation\":\"session.start\",\"severity\":\"error\",\"handled\":false,\"error_type\":\"SQLiteError\",\"error_message\":\"attempt to write a readonly database\",\"error_code\":\"SQLITE_READONLY\",\"extension_version\":\"3.0.47\",\"cline_type\":\"cli\",\"platform\":\"cline\",\"platform_version\":\"v24.3.0\",\"os_type\":\"darwin\",\"os_version\":\"unknown\",\"distinct_id\":\"c41bcc3dd08836bbf0b917ca9225a6ca660e890f68d8192c330e6c488d5afcd2\"},\"msg\":\"telemetry.event\"}\n{\"level\":50,\"time\":\"2026-07-31T08:46:09.757Z\",\"pid\":88916,\"hostname\":\"Sungjuns-MacBook-Air.local\",\"name\":\"cline.cli\",\"component\":\"main\",\"err\":{\"type\":\"Error\",\"message\":\"attempt to write a readonly database\",\"stack\":\"SQLiteError: attempt to write a readonly database\\n    at run (unknown)\\n    at #run (bun:sqlite:185:20)\\n    at W0 (/$bunfs/root/chunk-9w1tjvck.js:371:30478)\\n    at upsertSession (/$bunfs/root/chunk-9w1tjvck.js:847:1527)\\n    at createRootSessionWithArtifacts (/$bunfs/root/chunk-9w1tjvck.js:819:1511)\\n    at hH (/$bunfs/root/chunk-9w1tjvck.js:1084:19246)\\n    at ensureSessionPersisted (/$bunfs/root/chunk-9w1tjvck.js:1085:26597)\\n    at executeTurn (/$bunfs/root/chunk-9w1tjvck.js:1085:22709)\\n    at async startResolvedSession (/$bunfs/root/chunk-9w1tjvck.js:1085:12604)\\n    at async startSession (/$bunfs/root/chunk-9w1tjvck.js:1085:5034)\\n    at async start (/$bunfs/root/chunk-9w1tjvck.js:1086:5083)\\n    at async v$ (/$bunfs/root/chunk-n5vyxyf4.js:6:2418)\\n    at async Tn (/$bunfs/root/chunk-fk6bmcz5.js:23:1027)\\n    at async <anonymous> (/$bunfs/root/apps/cli/src/index.js:3:2944)\\n    at processTicksAndRejections (native:7:39)\",\"code\":\"SQLITE_READONLY\",\"errno\":8,\"byteOffset\":-1},\"msg\":\"CLI task run failed\"}\n{\"ts\":\"2026-07-31T08:46:09.758Z\",\"type\":\"error\",\"message\":\"attempt to write a readonly database\"}"
+    }
+  ],
+  "summary": {
+    "passed": 0,
+    "skipped": 7,
+    "failed": 0
+  },
+  "generated_by": "skills/relay-dispatch/scripts/adapter-live-canary.js",
+  "command": "node skills/relay-dispatch/scripts/adapter-live-canary.js --timeout-ms 30000 --output docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-07-31.json"
+}

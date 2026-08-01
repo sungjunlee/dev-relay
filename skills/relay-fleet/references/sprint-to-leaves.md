@@ -56,7 +56,6 @@ from selector calls that resolved different owners.
 | `active_sprint.path` | `leaves[].ownership.sprint` | Copy the JSON path. After canonicalization, it must resolve to an existing regular file in the current repo's `backlog/sprints/`; relay-fleet does not parse that markdown. An absolute path from another checkout remains valid when its canonical repo-relative sprint exists in the current repo. |
 | `active_sprint.track` | `leaves[].ownership.track` | Copy the canonical track. It must equal the `active_sprint.path` filename basename without `.md`. If an older schema-v2 producer omits it, use `active_sprint.frontmatter.track`, then that basename, matching the #955 resolver normalization. |
 | `active_sprint.frontmatter.component` | `leaves[].ownership.component` | Require exactly one lowercase kebab-case component; missing or multiple components stop planning. |
-| relay-ready artifact, when present | `leaves[].request_id`, `leaves[].leaf_id` | Optional lineage fields. Include them only when relay-ready persisted a request/leaf handoff for this item; sprint-state does not invent them. |
 | relay-plan artifacts | `leaves[].prompt_file`, `leaves[].rubric_file`, `leaves[].done_criteria_file` | Required per leaf. These are authored before fan-out; see the planning boundary below. |
 
 Example shape after filtering and planning:
@@ -100,12 +99,11 @@ not perform planning.
 
 Run one fleet per sprint batch and per owning track. relay-fleet compares the
 full normalized owner on every leaf and rejects missing, contradictory, or
-mixed-track input before it creates a fleet manifest or invokes dispatch. A
+mixed-track input before it creates its immutable cohort or invokes dispatch. A
 track is canonical only when it equals the sprint filename basename without
 `.md`; component remains an independent dev-backlog scope key and may differ
 from the track. A
-`next_batch` is one parallel-safe wave, so the new leaves file SHOULD NOT
-prefill same-wave `depends_on` entries. If an item depends on another sprint
+`next_batch` is one parallel-safe wave. If an item depends on another sprint
 item, dev-backlog's batch contract requires that dependent work to appear in a
 later batch.
 
@@ -118,12 +116,8 @@ Sprint-file writes are single-writer. The orchestrator session performs
 entries. Fleet children MUST NOT write under `backlog/`; doing so creates a
 multi-worktree source-of-truth hazard.
 
-## Legacy ownership migration
+## Cutover boundary
 
-An active pre-ownership fleet remains fail-closed on persisted-only resume.
-Recover or reconstruct its original leaves from trusted dev-backlog sprint-state
-JSON, validate that every owner belongs to the same track, then rerun the owning
-fleet with the validated single-track `--leaves-file`. relay-fleet preflights the
-entire cohort before it performs the audited child-manifest and leaves-store
-backfill; direct `dispatch.js --manifest` resume cannot add or infer the owner.
-Terminal legacy children remain inspectable without backfill.
+relay-fleet is vNext-only. A historical fleet without an immutable cohort, or
+with only legacy manifests, is not adopted or backfilled. Drain it with the
+historical runtime or create a new fleet id from a newly validated leaves file.

@@ -1,5 +1,8 @@
 # Relay Instruction Altitude — Retiring the Unreliability Tax
 
+> Historical proposal. The reliability-report references below describe a
+> retired runtime surface and are not current operator instructions.
+
 Status: proposal (2026-07-26)
 Builds on: **#1025 (shipped, PR #1034, merged 2026-07-19)** — Risk-adaptive relay simplification. That epic already reduced the *prescription tax*; this PRD addresses the second tax #1025 named but did not tackle.
 Related: `docs/plans/2026-07-19-risk-adaptive-relay-simplification-design.md`, ADR-0001 (orchestrator owns publication), auto-recover-commit (#508, #1060), recover-commit bug cluster (#806, #856, #793, #904, #876)

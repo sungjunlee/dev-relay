@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "kind": "relay_runtime_migration_inventory",
+  "repository": {
+    "remote": "sungjunlee/dev-relay",
+    "identity": "Git common-dir scoped clone"
+  },
+  "decision_observation": {
+    "observed_at": "2026-08-01T06:11:54.302Z",
+    "active_legacy_run_count": 1,
+    "oldest_active_legacy_age_hours": 35
+  },
+  "selected_strategy": "drain_and_cutover",
+  "selection_rule": "active_legacy_run_count <= 5 and oldest_active_legacy_age_hours is null or less than 72",
+  "drain_completion": {
+    "observed_at": "2026-08-01T06:11:54.365Z",
+    "active_legacy_run_count": 0,
+    "oldest_active_legacy_age_hours": null
+  },
+  "evidence_scope": {
+    "checked_in_preimage": "cutover-decision-preimage-2026-08-01.json",
+    "checked_in_preimage_sha256": "b366ac8d267f6168c54cbd889534b2fb461b7ba8e717fafbb0266b18ca73f21a",
+    "historical_operator_evidence": "The archived relay manifest, event-journal hashes, one-run decision inventory, and zero-run drain inventory were observed during the drain. Their source bytes are not checked in and must not be treated as independently test-verified evidence."
+  },
+  "archived_source_run_evidence": {
+    "issue": "#1118",
+    "run_id": "issue-1118-20260730181218333-33897c8c",
+    "created_at": "2026-07-30T18:12:20.207Z",
+    "head_sha": "7c83ed0620ec25b4e182c10813724dde02fbf9d7",
+    "archive_tag": "archive/relay-issue-1118-vnext-drain",
+    "close_event": {
+      "occurred_at": "2026-08-01T06:11:54.302Z",
+      "state_from": "escalated",
+      "state_to": "closed",
+      "reason": "Drain legacy run for Runtime Core Reset vNext; superseded by append-only verification facts and canonical inspect/recover, preserved as archive/relay-issue-1118-vnext-drain at 7c83ed0",
+      "jsonl_record_sha256": "499eddf1fbc5b8a1bcb8c463b84b7a80072f7c155ff9600bf63f6f403a2c43e6"
+    },
+    "cleanup_event_occurred_at": "2026-08-01T06:11:54.365Z",
+    "manifest_sha256": "af8b2f48fae13969b6ab1136796c5d0df2d50a6cde4b2e2772eca5f9880d6b98",
+    "events_sha256": "3c1de2ec669d52da5633bff176c71b5fc37a8d95a48b2188f6130e6ec0a4dddd",
+    "status_at_inventory": "drained_to_archive",
+    "source": "historical operator observation of the archived relay manifest and events journal",
+    "note": "Tests verify the checked-in preimage digest plus archive tag/commit syntax and cross-document consistency only. They do not fetch the archive ref or inspect or mutate a user-home relay store."
+  }
+}

@@ -15,8 +15,3 @@ Dry run:
   Cleanup:  on_close
   Timeout:  2400s
   Rubric:   /tmp/issue187-fixtures/rubric.yaml
-  Assurance: standard (source=flag)
-  Policy:   allowed phase=dispatch executor=codex model=(none) reason=managed_cli
-  Routing: no match (no_routing_rule_matched)
-  Tags:    effective=(none)
-  Selected: advisory_review=(none)

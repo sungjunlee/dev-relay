@@ -18,10 +18,18 @@ function discoverTestSuites(testsDir = TESTS_DIR) {
     .filter((suite) => {
       const scriptsDir = path.join(testsDir, suite, "scripts");
       return fs.existsSync(scriptsDir)
-        && fs.readdirSync(scriptsDir, { withFileTypes: true })
-          .some((entry) => entry.isFile() && entry.name.endsWith(".test.js"));
+        && discoverTestsRecursively(scriptsDir).length > 0;
     })
     .sort();
+}
+
+function discoverTestsRecursively(root) {
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const absolute = path.join(root, entry.name);
+    if (entry.isDirectory()) return discoverTestsRecursively(absolute);
+    return entry.isFile() && entry.name.endsWith(".test.js") ? [absolute] : [];
+  });
 }
 
 function indentation(line) {
@@ -39,6 +47,19 @@ function extractSuiteMatrix(content) {
     const trimmed = suiteLine.trim();
     if (trimmed === "" || trimmed.startsWith("#")) continue;
     if (indentation(suiteLine) <= matrixIndent) break;
+    if (trimmed === "include:") {
+      const includeIndent = indentation(suiteLine);
+      const suites = [];
+      for (let entryIndex = suiteIndex + 1; entryIndex < lines.length; entryIndex += 1) {
+        const entryLine = lines[entryIndex];
+        const entry = entryLine.trim();
+        if (entry === "" || entry.startsWith("#")) continue;
+        if (indentation(entryLine) <= includeIndent) break;
+        const match = entry.match(/^-\s+suite:\s+([a-z0-9]+(?:-[a-z0-9]+)*)$/);
+        if (match) suites.push(match[1]);
+      }
+      return suites;
+    }
     if (trimmed !== "suite:") continue;
 
     const suiteIndent = indentation(suiteLine);
@@ -60,15 +81,17 @@ function extractSuiteMatrix(content) {
 }
 
 function assertMatrixRunsGuardedSuiteGlob(content) {
-  const guardMatch = content.match(/files=\(([\s\S]*?)\)/);
-  assert.ok(guardMatch, "workflow must declare an empty-glob guard: files=( ... )");
+  assert.match(content, /files=\(\)/, "workflow must initialize a guarded files array");
   const runMatch = content.match(/Run test suites[\s\S]*$/);
   assert.ok(runMatch, "workflow must declare a 'Run test suites' step");
   assert.match(
-    guardMatch[1],
-    /tests\/\$\{\{\s*matrix\.suite\s*\}\}\/scripts\/\*\.test\.js/,
-    "empty-glob guard must resolve the current matrix.suite",
+    runMatch[0],
+    /find "tests\/\$\{\{\s*matrix\.suite\s*\}\}\/scripts" -type f -name '\*\.test\.js'/,
+    "portable file discovery must recursively resolve the current matrix.suite",
   );
+  assert.match(runMatch[0], /while IFS= read -r file; do[\s\S]*files\+=\("\$file"\)/);
+  assert.match(runMatch[0], /count=\$\{#files\[@\]\}/);
+  assert.match(runMatch[0], /if \[ "\$count" -eq 0 \]; then[\s\S]*exit 1[\s\S]*fi/);
   assert.match(
     runMatch[0],
     /node --test --test-concurrency=1 "\$\{files\[@\]\}"/,
@@ -100,6 +123,7 @@ function writeFile(filePath, content) {
 function buildFixture({ wired }) {
   const testsDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-coverage-tests-"));
   writeFile(path.join(testsDir, "newskill", "scripts", "example.test.js"), "// fixture\n");
+  writeFile(path.join(testsDir, "newskill", "scripts", "nested", "example.test.js"), "// fixture\n");
   const matrixEntry = wired ? "\n          - newskill" : "";
   const workflow = [
     "    strategy:",
@@ -108,9 +132,14 @@ function buildFixture({ wired }) {
     "    steps:",
     "      - name: Run test suites (${{ matrix.suite }})",
     "        run: |",
-    "          files=(",
-    "            tests/${{ matrix.suite }}/scripts/*.test.js",
-    "          )",
+    "          files=()",
+    "          while IFS= read -r file; do",
+    "            files+=(\"$file\")",
+    "          done < <(find \"tests/${{ matrix.suite }}/scripts\" -type f -name '*.test.js' -print | LC_ALL=C sort)",
+    "          count=${#files[@]}",
+    "          if [ \"$count\" -eq 0 ]; then",
+    "            exit 1",
+    "          fi",
     "          node --test --test-concurrency=1 \"${files[@]}\"",
     "",
   ].join("\n");
@@ -143,4 +172,22 @@ test("coverage guard flags a filesystem suite omitted from the matrix", () => {
   } finally {
     fs.rmSync(testsDir, { recursive: true, force: true });
   }
+});
+
+test("workflow recursively includes nested test files", () => {
+  const { testsDir, workflow } = buildFixture({ wired: true });
+  try {
+    assertMatrixRunsGuardedSuiteGlob(workflow);
+    const scriptsDir = path.join(testsDir, "newskill", "scripts");
+    assert.equal(discoverTestsRecursively(scriptsDir).length, 2);
+    assert.equal(discoverTestsRecursively(path.join(scriptsDir, "nested")).length, 1);
+  } finally {
+    fs.rmSync(testsDir, { recursive: true, force: true });
+  }
+});
+
+test("coverage guard rejects a workflow without the zero-test failure branch", () => {
+  const { workflow } = buildFixture({ wired: true });
+  const unguarded = workflow.replace(/\s+count=\$\{#files\[@\]\}[\s\S]*?\s+fi\n/, "\n");
+  assert.throws(() => assertMatrixRunsGuardedSuiteGlob(unguarded), /count|zero-test|match/i);
 });

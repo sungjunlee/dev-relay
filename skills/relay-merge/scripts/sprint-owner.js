@@ -35,7 +35,7 @@ const {
   parseComponents,
   probeSprintStateBinary,
   validateSprintStatePayload,
-} = require("../../relay-dispatch/scripts/sprint-state");
+} = require("./sprint-state");
 
 const OWNER_SOURCES = Object.freeze({
   EXPLICIT_SPRINT: "explicit_sprint",
@@ -119,14 +119,14 @@ function parseIssueComponent(issueBody) {
 }
 
 /**
- * Manifest/call seam for fleet (#957): prefer `ownership`, accept legacy aliases.
+ * Manifest/call seam for fleet (#957): prefer `ownership`, accept the durable
+ * fleet alias retained by existing manifests.
  * Returns a partial handle object or null.
  */
 function readManifestOwnership(manifest) {
   if (!manifest || typeof manifest !== "object") return null;
   const raw = manifest.ownership
     || manifest.fleet_ownership
-    || manifest.routing?.ownership
     || null;
   if (!raw || typeof raw !== "object") return null;
   const sprint = raw.sprint || raw.sprint_path || raw.sprintPath || null;

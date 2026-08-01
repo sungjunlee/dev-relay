@@ -2,23 +2,28 @@
 "use strict";
 
 const { execFileSync } = require("child_process");
+const fs = require("fs");
 const path = require("path");
 
+const { inspectProductionRun, recoverProductionRun } = require("../../relay-dispatch/scripts/recover");
 const {
-  bindCliArgs,
-  findUnknownFlags,
-} = require("../../relay-dispatch/scripts/cli-args");
-const { findInflightRunsForIssue } = require("../../relay-dispatch/scripts/manifest/inflight-runs");
-const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
-const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
-const { EVENTS } = require("../../relay-dispatch/scripts/relay-events");
-const { buildRunReconcileAdvisory } = require("../../relay-dispatch/scripts/reconcile-advisory");
+  canonicalRepoRoot,
+  readRunCandidates,
+  resolveRunById,
+} = require("./relay-status");
 
 const EVENT_FIELD = "event";
+const EVENTS = Object.freeze({
+  READINESS_PROBE: "readiness_probe",
+  BYPASS_OVERRIDE_BY_USER: "bypass_override_by_user",
+  READINESS_CHECK_FAILED: "readiness_check_failed",
+  READINESS_CHECK_FAILED_NONTTY: "readiness_check_failed_nontty",
+});
 const INFLIGHT_ROUTE_INSTRUCTIONS = {
   "existing-open-pr": "Review the existing open PR instead of planning or dispatching a new run.",
   "existing-merged-pr": "Mark the sprint item done if present and stop because the PR is already merged.",
   "inflight-run": "Resume or inspect the existing inflight run and continue from its manifest state.",
+  attention: "Stop before planning or dispatch and inspect the inflight-run scanner failure.",
   continue: "Continue to readiness handling before planning or dispatch.",
 };
 const BRANCH_INSTRUCTIONS = {
@@ -50,6 +55,11 @@ const KNOWN_FLAGS = [
   "--previous-head-sha",
   "--previous-last-reviewed-sha",
   "--reconcile",
+  "--recover",
+  "--reason",
+  "--actor",
+  "--verification-file",
+  "--break-lock",
   "--skip-readiness",
   "--bypass-readiness",
   "--skip-readiness-reason",
@@ -58,10 +68,21 @@ const KNOWN_FLAGS = [
   "--help",
   "-h",
 ];
+const CLI_ARG_OPTIONS = {
+  reservedFlags: KNOWN_FLAGS,
+  booleanFlags: ["--reconcile", "--recover", "--break-lock", "--skip-readiness", "--bypass-readiness", "--non-interactive", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--branch", "--body", "--body-file", "--manifest", "--skip-readiness-reason", "--reason", "--actor", "--verification-file"],
+};
+function parseCli(argv) {
+  const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_ARG_OPTIONS.booleanFlags), verbatim = new Set(CLI_ARG_OPTIONS.verbatimValueFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (flag, value) => value !== undefined && (verbatim.has(flag) || (!String(value).startsWith("--") && !known.has(String(value))));
+  argv.forEach((token, index) => { const flag = name(token); if (known.has(flag) && !bool.has(flag) && !String(token).includes("=") && accepts(flag, argv[index + 1])) consumed.add(index + 1); });
+  const unknown = argv.filter((token, index) => !consumed.has(index) && String(token).startsWith("-") && !known.has(name(token))); if (unknown.length) throw new Error(`unknown flags: ${unknown.join(", ")}`);
+  const variants = (flag) => Array.isArray(flag) ? flag : [flag]; return { hasFlag: (flags) => variants(flags).some((flag) => argv.some((token, index) => !consumed.has(index) && (token === flag || String(token).startsWith(`${flag}=`)))), getArg: (flags, fallback) => { for (const flag of variants(flags)) for (let index = 0; index < argv.length; index += 1) { if (consumed.has(index)) continue; const token = String(argv[index]); if (token === flag || token.startsWith(`${flag}=`)) { const value = token === flag ? argv[index + 1] : token.slice(flag.length + 1); if (!accepts(flag, value)) return fallback; if (verbatim.has(flag) && !String(value).trim()) throw new Error(`${flag} requires a non-empty value`); return value; } } return fallback; } };
+}
 
 function usage() {
   return [
-    "Usage: run-preflight.js --stage <route|review> [options]",
+    "Usage: run-preflight.js --stage <route|review|merge> [options]",
     "",
     "Route stage:",
     "  --repo <path>              Repository root, default .",
@@ -77,13 +98,17 @@ function usage() {
     "",
     "Review stage:",
     "  --repo <path>              Repository root, default .",
-    "  --run-id <id>              Resolve manifest by run id",
-    "  --manifest <path>          Resolve manifest by path",
-    "  --branch <name>            Resolve manifest by branch",
-    "  --pr <n>                   Resolve manifest by PR number",
+    "  --run-id <id>              Resolve a validated vNext run.json by run id",
+    "  --manifest <path>          Compatibility name for a vNext run.json path",
+    "  --branch <name>            Resolve an unambiguous vNext run by branch",
+    "  --pr <n>                   Resolve an unambiguous vNext run by observed PR number",
     "  --previous-rounds <n>      Previous review.rounds snapshot for comparison",
     "  --previous-verdict <name>  Previous review.latest_verdict snapshot for comparison",
-    "  --reconcile                Mutate dead dispatched runs by running reconcile-run.js (default: dry-run verdict only)",
+    "  --reconcile, --recover     Apply the canonical inspected recovery action",
+    "  --reason <text>            Required audit reason for recovery",
+    "  --actor <name>             Recovery actor (default: git user.name)",
+    "  --verification-file <path> Immutable verification input when requested",
+    "  --break-lock               Permit audited stale-owner lock recovery",
   ].join("\n");
 }
 
@@ -176,7 +201,33 @@ function checkPullRequest(repoRoot, branch) {
   }
 }
 
-function checkInflightRuns(repoRoot, issueNumber) {
+async function scanInflightVnextRuns(repoRoot, issueNumber) {
+  const prefix = `issue-${issueNumber}`;
+  const candidates = readRunCandidates(repoRoot).filter(({ record }) => (
+    record.run_id === prefix
+    || record.run_id.startsWith(`${prefix}-`)
+    || record.git.branch === prefix
+    || record.git.branch.startsWith(`${prefix}-`)
+  ));
+  const inspected = await Promise.all(candidates.map(async ({ runDir, record }) => ({
+    runDir,
+    record,
+    inspection: await inspectProductionRun({ runDir }),
+  })));
+  return inspected
+    .filter(({ inspection }) => inspection.derived?.terminal !== true)
+    .map(({ runDir, record, inspection }) => ({
+      runId: record.run_id,
+      runDir,
+      phase: inspection.derived?.phase || "unknown",
+      action: inspection.recommended_action?.kind || inspection.derived?.action || "unknown",
+      reason: inspection.recommended_action?.reason || inspection.derived?.reason || null,
+      prNumber: inspection.derived?.pr_number || null,
+      blockers: inspection.blockers || [],
+    }));
+}
+
+async function checkInflightRuns(repoRoot, issueNumber, scanner = scanInflightVnextRuns) {
   if (!issueNumber) {
     return {
       status: "skipped",
@@ -186,7 +237,7 @@ function checkInflightRuns(repoRoot, issueNumber) {
   }
 
   try {
-    const runs = findInflightRunsForIssue(repoRoot, issueNumber);
+    const runs = await scanner(repoRoot, issueNumber);
     return {
       status: runs.length ? "found" : "not_found",
       reason: null,
@@ -227,6 +278,16 @@ function routeFromInflight({ prCheck, runCheck }) {
       next_action: "resume_or_inspect_inflight_run",
       prNumber: prCheck.pr?.number || null,
       runId: runCheck.runs[0].runId,
+    };
+  }
+  if (runCheck.status === "unknown") {
+    return {
+      route: "attention",
+      instruction: INFLIGHT_ROUTE_INSTRUCTIONS.attention,
+      next_action: "inspect_inflight_scanner_failure",
+      prNumber: null,
+      runId: null,
+      reason: runCheck.reason || "inflight_scan_unknown",
     };
   }
   return {
@@ -420,8 +481,8 @@ function promptAllowedForCurrentProcess({ nonInteractive }) {
   return !nonInteractive && process.stdin.isTTY === true && process.stderr.isTTY === true;
 }
 
-function runRouteStage(cliArgs) {
-  const repoRoot = path.resolve(cliArgs.getArg("--repo") || ".");
+async function runRouteStage(cliArgs) {
+  const repoRoot = canonicalRepoRoot(cliArgs.getArg("--repo") || ".");
   const issueNumber = parsePositiveInteger(cliArgs.getArg("--issue-number"), "--issue-number");
   const branch = normalizeBlank(cliArgs.getArg("--branch")) || (issueNumber ? `issue-${issueNumber}` : null);
   const body = cliArgs.getArg("--body");
@@ -431,7 +492,7 @@ function runRouteStage(cliArgs) {
   const promptAllowed = promptAllowedForCurrentProcess({ nonInteractive });
 
   const prCheck = checkPullRequest(repoRoot, branch);
-  const runCheck = checkInflightRuns(repoRoot, issueNumber);
+  const runCheck = await checkInflightRuns(repoRoot, issueNumber);
   const inflight = {
     issueNumber,
     branch,
@@ -463,7 +524,7 @@ function runRouteStage(cliArgs) {
   }
 
   return {
-    ok: true,
+    ok: inflight.route !== "attention",
     stage: "route",
     repo: repoRoot,
     inflight,
@@ -471,26 +532,54 @@ function runRouteStage(cliArgs) {
   };
 }
 
-function resolveReviewManifest(cliArgs, repoRoot) {
-  const manifestPath = normalizeBlank(cliArgs.getArg("--manifest"));
+async function resolveReviewRun(cliArgs, repoRoot) {
+  const runPath = normalizeBlank(cliArgs.getArg("--manifest"));
   const runId = normalizeBlank(cliArgs.getArg("--run-id"));
   const branch = normalizeBlank(cliArgs.getArg("--branch"));
   const prNumber = parsePositiveInteger(cliArgs.getArg("--pr"), "--pr");
-  return resolveManifestRecord({
-    repoRoot,
-    manifestPath,
-    runId,
-    branch,
-    prNumber,
-  });
+  const selectors = [runPath, runId, branch, prNumber].filter((value) => value !== null && value !== undefined);
+  if (selectors.length === 0) throw new Error("review stage requires --run-id, --manifest, --branch, or --pr");
+  const candidates = readRunCandidates(repoRoot);
+  let selected = runId ? resolveRunById(repoRoot, runId) : null;
+  if (runPath) {
+    const resolved = fs.realpathSync(path.resolve(runPath));
+    if (path.basename(resolved) !== "run.json") {
+      throw new Error("--manifest is retired; pass the canonical vNext run.json path");
+    }
+    const matches = candidates.filter(({ runDir }) => path.join(runDir, "run.json") === resolved);
+    if (matches.length !== 1) throw new Error("vNext run.json does not belong to this repository");
+    if (selected && selected.runDir !== matches[0].runDir) throw new Error("run selectors identify different vNext runs");
+    selected = matches[0];
+  }
+  if (branch) {
+    const matches = candidates.filter(({ record }) => record.git.branch === branch);
+    if (matches.length !== 1) throw new Error(matches.length ? `branch is ambiguous: ${branch}` : `vNext run not found for branch: ${branch}`);
+    if (selected && selected.runDir !== matches[0].runDir) throw new Error("run selectors identify different vNext runs");
+    selected = matches[0];
+  }
+  if (prNumber !== null) {
+    if (selected) {
+      const inspection = await inspectProductionRun({ runDir: selected.runDir });
+      if (inspection.derived?.pr_number !== prNumber) throw new Error("run selectors identify different vNext runs");
+      selected = { ...selected, inspection };
+    } else {
+      const inspected = await Promise.all(candidates.map(async (candidate) => ({
+        ...candidate,
+        inspection: await inspectProductionRun({ runDir: candidate.runDir }),
+      })));
+      const matches = inspected.filter(({ inspection }) => inspection.derived?.pr_number === prNumber);
+      if (matches.length !== 1) throw new Error(matches.length ? `PR is ambiguous: #${prNumber}` : `vNext run not found for PR: #${prNumber}`);
+      selected = matches[0];
+    }
+  }
+  return selected;
 }
 
-function snapshotReview(record) {
-  const data = record.data || {};
-  const rounds = Number(data.review?.rounds || 0);
-  const latestVerdict = data.review?.latest_verdict || null;
-  const headSha = data.git?.head_sha || null;
-  const lastReviewedSha = data.review?.last_reviewed_sha || null;
+function snapshotReview(record, runDir, inspection) {
+  const reviews = (inspection.facts || []).filter((fact) => fact.type === "review_recorded");
+  const latest = reviews.at(-1) || null;
+  const headSha = inspection.derived?.head_sha || null;
+  const lastReviewedSha = inspection.derived?.reviewed_sha || latest?.payload?.reviewed_sha || null;
   let shaState = "missing_head_sha";
   if (headSha && lastReviewedSha && headSha === lastReviewedSha) {
     shaState = "reviewed_current_head";
@@ -501,111 +590,46 @@ function snapshotReview(record) {
   }
 
   return {
-    run_id: data.run_id || path.basename(record.manifestPath, ".md"),
-    manifest_path: record.manifestPath,
-    state: data.state || null,
-    branch: data.git?.working_branch || null,
-    pr_number: data.git?.pr_number || null,
-    rounds,
-    latest_verdict: latestVerdict,
+    run_id: record.run_id,
+    run_path: path.join(runDir, "run.json"),
+    phase: inspection.derived?.phase || "unknown",
+    action: inspection.recommended_action?.kind || inspection.derived?.action || "unknown",
+    action_reason: inspection.recommended_action?.reason || inspection.derived?.reason || null,
+    blockers: inspection.blockers || [],
+    branch: record.git.branch,
+    pr_number: inspection.derived?.pr_number || null,
+    rounds: reviews.length,
+    latest_verdict: latest?.payload?.verdict || null,
     head_sha: headSha,
     last_reviewed_sha: lastReviewedSha,
     sha_state: shaState,
   };
 }
 
-function fetchLivePrHead(repoRoot, prNumber) {
-  if (!prNumber) {
+function buildReadyStatus(snapshot) {
+  if (snapshot.action !== "merge") {
+    const stale = snapshot.action === "review" && snapshot.action_reason === "review_stale";
     return {
-      status: "skipped",
-      reason: "missing_pr_number",
-      pr_number: null,
-      head_ref_name: null,
-      head_sha: null,
-      command: null,
-    };
-  }
-
-  const args = [
-    "pr",
-    "view",
-    String(prNumber),
-    "--json",
-    "number,headRefName,headRefOid",
-  ];
-  try {
-    const parsed = execGhJson(repoRoot, args);
-    return {
-      status: "found",
-      reason: null,
-      pr_number: Number(parsed?.number || prNumber),
-      head_ref_name: parsed?.headRefName || null,
-      head_sha: parsed?.headRefOid || null,
-      command: ["gh", ...args],
-    };
-  } catch (error) {
-    return {
-      status: "unknown",
-      reason: summarizeExecError(error),
-      pr_number: prNumber,
-      head_ref_name: null,
-      head_sha: null,
-      command: ["gh", ...args],
-    };
-  }
-}
-
-function buildReadyStatus(snapshot, repoRoot) {
-  if (snapshot.state !== "ready_to_merge") {
-    return {
-      status: "not_ready",
-      reason: `state_${snapshot.state || "unknown"}`,
+      status: stale ? "stale_ready" : "not_ready",
+      reason: snapshot.action_reason || `action_${snapshot.action}`,
       pr_number: snapshot.pr_number || null,
       old_sha: snapshot.last_reviewed_sha || snapshot.head_sha || null,
-      new_sha: null,
+      new_sha: snapshot.head_sha || null,
       reviewed_sha: snapshot.last_reviewed_sha || null,
-      manifest_head_sha: snapshot.head_sha || null,
-      next_action: "continue_review_flow",
+      observed_head_sha: snapshot.head_sha || null,
+      next_action: stale ? "rerun_review" : snapshot.action,
     };
   }
-
-  const oldSha = snapshot.last_reviewed_sha || snapshot.head_sha || null;
-  const live = fetchLivePrHead(repoRoot, snapshot.pr_number);
-  if (live.status !== "found" || !live.head_sha) {
-    return {
-      status: "unknown",
-      reason: live.reason || live.status,
-      pr_number: live.pr_number || snapshot.pr_number || null,
-      old_sha: oldSha,
-      new_sha: live.head_sha || null,
-      reviewed_sha: snapshot.last_reviewed_sha || null,
-      manifest_head_sha: snapshot.head_sha || null,
-      head_ref_name: live.head_ref_name || snapshot.branch || null,
-      next_action: "inspect_pr_head_before_merge",
-    };
-  }
-
-  const differsFromReviewed = Boolean(snapshot.last_reviewed_sha && live.head_sha !== snapshot.last_reviewed_sha);
-  const differsFromManifestHead = Boolean(snapshot.head_sha && live.head_sha !== snapshot.head_sha);
-  const stale = differsFromReviewed || differsFromManifestHead;
-  const staleOldSha = differsFromReviewed
-    ? snapshot.last_reviewed_sha
-    : differsFromManifestHead
-      ? snapshot.head_sha
-      : oldSha;
-
   return {
-    status: stale ? "stale_ready" : "merge_ready",
-    reason: stale ? "live_pr_head_drift" : null,
-    pr_number: live.pr_number || snapshot.pr_number || null,
-    old_sha: staleOldSha || null,
-    new_sha: live.head_sha,
+    status: "merge_ready",
+    reason: null,
+    pr_number: snapshot.pr_number || null,
+    old_sha: snapshot.last_reviewed_sha || snapshot.head_sha || null,
+    new_sha: snapshot.head_sha || null,
     reviewed_sha: snapshot.last_reviewed_sha || null,
-    manifest_head_sha: snapshot.head_sha || null,
-    head_ref_name: live.head_ref_name || snapshot.branch || null,
-    next_action: stale
-      ? "recover_ready_to_review_pending_then_rerun_review"
-      : "proceed_to_merge",
+    observed_head_sha: snapshot.head_sha || null,
+    head_ref_name: snapshot.branch || null,
+    next_action: "proceed_to_merge",
   };
 }
 
@@ -644,71 +668,82 @@ function compareReviewSnapshot(current, cliArgs) {
   };
 }
 
-function runReviewStage(cliArgs) {
-  const repoRoot = path.resolve(cliArgs.getArg("--repo") || ".");
-  let record = resolveReviewManifest(cliArgs, repoRoot);
-  const reconcile = buildRunReconcileAdvisory({
-    repoRoot,
-    manifestPath: record.manifestPath,
-    data: record.data,
-    mutate: cliArgs.hasFlag("--reconcile"),
-  });
-  if (reconcile.mutated && reconcile.verdict?.state && reconcile.verdict.state !== record.data?.state) {
-    record = {
-      manifestPath: record.manifestPath,
-      ...readManifest(record.manifestPath),
-    };
+async function runReviewStage(cliArgs, stage = "review") {
+  const repoRoot = canonicalRepoRoot(cliArgs.getArg("--repo") || ".");
+  const selected = await resolveReviewRun(cliArgs, repoRoot);
+  let inspection = selected.inspection || await inspectProductionRun({ runDir: selected.runDir });
+  const mutate = cliArgs.hasFlag("--reconcile") || cliArgs.hasFlag("--recover");
+  let recovery = null;
+  if (mutate) {
+    if (cliArgs.hasFlag("--reconcile") && cliArgs.hasFlag("--recover")) {
+      throw new Error("--reconcile and --recover are aliases and cannot be combined");
+    }
+    const reason = String(cliArgs.getArg("--reason") || "").trim();
+    if (!reason) throw new Error("--reconcile/--recover requires --reason <audit text>");
+    let actor = String(cliArgs.getArg("--actor") || "").trim();
+    if (!actor) {
+      try { actor = execFileSync("git", ["-C", repoRoot, "config", "user.name"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+      catch { actor = process.env.USER || "relay-operator"; }
+    }
+    recovery = await recoverProductionRun({
+      runDir: selected.runDir,
+      actor,
+      reason,
+      expectedActionKey: inspection.recommended_action.key,
+      verificationFile: normalizeBlank(cliArgs.getArg("--verification-file")) || null,
+      breakLock: cliArgs.hasFlag("--break-lock"),
+      activeCheckout: repoRoot,
+    });
+    inspection = recovery.after || await inspectProductionRun({ runDir: selected.runDir });
   }
-  const snapshot = snapshotReview(record);
+  const snapshot = snapshotReview(selected.record, selected.runDir, inspection);
   return {
     ok: true,
-    stage: "review",
+    stage,
     repo: repoRoot,
     snapshot,
-    ready_status: buildReadyStatus(snapshot, repoRoot),
-    reconcile,
+    ready_status: buildReadyStatus(snapshot),
+    inspection: {
+      action: inspection.recommended_action,
+      blockers: inspection.blockers,
+    },
+    recovery,
     comparison: compareReviewSnapshot(snapshot, cliArgs),
   };
 }
 
-function main(argv = process.argv.slice(2)) {
-  const cliArgs = bindCliArgs(argv, {
-    commandName: "run-preflight",
-    reservedFlags: KNOWN_FLAGS,
-  });
+async function main(argv = process.argv.slice(2)) {
+  const cliArgs = parseCli(argv);
 
   if (cliArgs.hasFlag(["--help", "-h"])) {
     process.stdout.write(`${usage()}\n`);
     return 0;
   }
 
-  const unknownFlags = findUnknownFlags(argv, KNOWN_FLAGS);
-  if (unknownFlags.length) {
-    throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
-  }
 
   const stage = normalizeBlank(cliArgs.getArg("--stage"));
   if (stage === "route") {
-    process.stdout.write(`${JSON.stringify(runRouteStage(cliArgs))}\n`);
+    const result = await runRouteStage(cliArgs);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return result.ok ? 0 : 1;
+  }
+  if (stage === "review" || stage === "merge") {
+    process.stdout.write(`${JSON.stringify(await runReviewStage(cliArgs, stage))}\n`);
     return 0;
   }
-  if (stage === "review") {
-    process.stdout.write(`${JSON.stringify(runReviewStage(cliArgs))}\n`);
-    return 0;
-  }
-  throw new Error("--stage must be one of: route, review");
+  throw new Error("--stage must be one of: route, review, merge");
 }
 
 if (require.main === module) {
-  try {
-    process.exitCode = main();
-  } catch (error) {
+  main().then((code) => {
+    process.exitCode = code;
+  }).catch((error) => {
     process.stdout.write(`${JSON.stringify({
       ok: false,
       error: error.message,
     })}\n`);
     process.exitCode = 1;
-  }
+  });
 }
 
 module.exports = {

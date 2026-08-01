@@ -10,7 +10,7 @@ metadata:
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
 - Files: relay-ready handoff, task file, issue/user text, optional local harness context (`AGENTS.md`, `CLAUDE.md`, `CHARTER.md`, `spec/capabilities.md`, active sprint notes), optional `/tmp/done-criteria-<N>.md`, `/tmp/dispatch-<N>.md`, and compatibility-named `/tmp/rubric-<N>.yaml` evaluation artifact.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # Relay Plan
 
@@ -47,25 +47,21 @@ If the relay-ready anchor is incomplete, surface the ambiguity or persist planne
 ### 2. Gather planning signals
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js" --repo . --json
-```
-
-```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js" . --project-only --json
 ```
 
-Read historical relay signal, repo-local quality signal, and task-relevant local harness context as weak inputs only. They inform wording, prerequisites, commands, and where to look; they do not gate dispatch or override the task. Field meanings and authority hierarchy: `references/signals.md`.
+Read repo-local quality signal and task-relevant local harness context as weak inputs only. They inform wording, prerequisites, commands, and where to look; they do not gate dispatch or override the task. Field meanings and authority hierarchy: `references/signals.md`.
 
 ### 3. Normalize planning inputs
 
-Keep explicit AC, inferred Done Criteria, relay-ready handoff, project harness context, repo signal, historical signal, optional subsystem scout notes, and task risk as separate evidence channels until the review anchor is written.
+Keep explicit AC, inferred Done Criteria, relay-ready handoff, project harness context, repo signal, optional subsystem scout notes, and task risk as separate evidence channels until the review anchor is written.
 
 ### 4. Recover Done Criteria
 
 Identify the evaluation source model:
 - Explicit AC from the task source, when present
 - Inferred Done Criteria from user intent, issue body, relay-ready handoff, and nearby repo conventions
-- Repo/historical signals from probes, available commands, stuck factors, repeated reviewer findings, round cost, and task-class calibration
+- Repo signals from probes, available commands, and task-relevant conventions
 - Task-specific risk from touched domains, trust boundaries, data loss, migrations, UX flows, or operational failure modes
 
 If AC are missing, vague, or incomplete, write observable Done Criteria first. Treat explicit AC as high-priority evidence, not the only source. Before freezing, run the [pre-flight ambiguity audit](references/dc-preflight-audit.md). If the final review anchor is planner-authored or differs from the task source, persist it in step 7.
@@ -90,7 +86,7 @@ evaluation:
 ```
 
 Tests, builds, type checks, lint, artifact existence, and other binary evidence belong under Verification. Zero Earned Rubric factors is valid. A factor is earned only when Gradient, Observable, Actionable, and Consequential all hold; use qualitative weak/adequate/strong anchors before any optional numeric mapping. See `references/evaluation-channels.md`.
-Observe before deriving quality: identify the artifact, intended user, usage context, and available surfaces, then use optional advisory questions from `references/observation-lenses.md`.
+Observe before deriving quality: identify the artifact, intended user, usage context, and available surfaces, then use optional questions from `references/observation-lenses.md`.
 
 ### 6. Validate and simplify the channels
 
@@ -102,11 +98,11 @@ Before persisting, apply `references/rubric-simplification.md`: rewrite HOW into
 
 Persist only when planning writes the final Done Criteria, or expands, rejects, or narrows issue-body AC. This includes AC-missing inputs, user-provided descriptions, and any case where planning changes the issue-body AC.
 
-Before Step 7, the orchestrator/planner must allocate the `RUN_ID` that dispatch will later reuse. Use the same valid run id in this persistence command and in Step 8's `relay-dispatch --run-id "$RUN_ID"` handoff; if no Done Criteria persistence is needed, dispatch may allocate the run id itself.
+Publish the final bytes to an explicit path whose parent directory already exists and is not a symlink. This step never allocates a run id and rejects output under `~/.relay/runs`; dispatch creates the run and freezes these bytes later.
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js" --repo . \
-  --run-id "$RUN_ID" --file /tmp/done-criteria-<N>.md --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js" \
+  --output /tmp/done-criteria-<N>.md --file /tmp/done-criteria-source-<N>.md --json
 ```
 
 Skip this step when the issue or relay-ready handoff already provides the final Done Criteria without planner changes.
@@ -115,15 +111,15 @@ Skip this step when the issue or relay-ready handoff already provides the final 
 
 Write the dispatch prompt and evaluation YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Pass the evaluation artifact through the compatibility-named `--rubric-file`; `references/iteration-protocol.md` defines the compact evidence-and-commit contract plus optional TDD flavor.
 
-Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, and the recommended `relay-dispatch` command. Derive compact, standard, or hardened assurance from authority, reversibility, blast radius, and trust boundaries via `references/risk-assurance.md`; never from executor or reviewer identity.
+Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, and the recommended `relay-dispatch` command.
 
-If the recommended executor or reviewer route/model cannot resolve, point the operator to `relay-config` to register the route or set the default before dispatch.
+Use `relay-config doctor` or `relay-config check` to validate an explicit adapter/model selection; relay-config has no mutable route catalog or defaults.
 
 When Step 7 persisted Done Criteria, the dispatch handoff must preserve both anchors:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
-  --run-id "$RUN_ID" --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \
+  --branch issue-<N>-<slug> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \
   --done-criteria-file <done-criteria-path>
 ```
 

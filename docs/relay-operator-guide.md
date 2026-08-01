@@ -1,240 +1,172 @@
-# Relay Operator Guide
+# Relay Operator Guide (vNext)
 
-This guide keeps operational detail out of the top-level README. Most users should start with `/relay`; use the lower-level skills only when you need manual phase control, debugging, batch execution, or adapter work.
+Relay vNext stores an immutable run record and folds append-only facts into one
+derived action. The action returned by inspection is the authority; do not infer
+state from a PR comment, a legacy manifest, or an executor transcript.
 
 ## Default Workflow
 
-Use `/relay` as a natural-language handoff:
-
 ```text
-/relay Work through the issues above
-/relay Handle issue #42
-/relay Implement the search filter task from the sprint file
+prepare frozen Done Criteria -> dispatch -> inspect -> recover -> review -> merge
+                                      ^                 |
+                                      +--- redispatch ---+
 ```
 
-The orchestrator reads the available task evidence, prepares a rubric, dispatches an executor in a worktree, reviews the PR in a fresh context, and stops at `ready_to_merge`.
+1. Dispatch a new immutable run. New runs require a frozen rubric or Done
+   Criteria source and an active sealed vNext generation.
 
-Use `/relay-merge` only after you decide to land the reviewed PR:
+   ```bash
+   node skills/relay-dispatch/scripts/dispatch.js . \
+     -b issue-42 --prompt-file /tmp/dispatch.md --rubric-file /tmp/rubric.yaml \
+     --executor codex --detach --json
+   ```
 
-```text
-/relay-merge Merge the reviewed relay PR
-/relay-merge 130
-```
+2. Inspect without mutation. Wait while the recommended action is `wait`.
 
-## Setup Workflow
+   ```bash
+   node skills/relay/scripts/relay-recover.js inspect --repo . --run-id <id> --json
+   ```
 
-Use `/relay-config` to set route policy rather than editing JSON by hand:
+3. When action is `recover`, use the returned action key. This is the sole
+   operation that may commit, push, create/reuse a PR, record verification, or
+   close a dead attempt.
 
-```text
-/relay-config Set up relay for my company environment
-/relay-config Only allow OpenCode through example/opencode-model-* at work
-$relay-config Use example/opencode-model-fast for personal advisory review
-$relay-config Use my selected OpenCode provider/model route for personal dispatch and review dogfood
-```
+   ```bash
+   node skills/relay/scripts/relay-recover.js recover --repo . --run-id <id> \
+     --reason "publish reviewed work" --expected-action-key <key> --json
+   ```
 
-Route policy is based on provider/model routes, not only harness names. Managed Codex and Claude CLIs work by default when no policy exists. OpenCode, Pi, Antigravity, Cline, and advisory reviewers require explicit route approval. See [model-route-policy.md](model-route-policy.md) for the full policy shape and precedence order.
+4. When action is `review`, run the immutable bound primary reviewer.
 
-Project-local route UX lives outside the repo under `~/.relay/projects/<repo-slug>/project.json`, `~/.relay/projects/<repo-slug>/policy.json`, and `~/.relay/projects/<repo-slug>/routes.json`. Policy is authorization; `routes.json` stores preferences only and cannot grant routes. Use `relay-config plan-run --json` to preview the effective dispatch/review/advisory routing before dispatch, and use `--route-intent-file` for one-off run overrides. Dispatch persists the audited decision as `route-plan.json` in the run directory.
+   ```bash
+   node skills/relay-review/scripts/review-runner.js \
+     --repo . --run-id <id> --json
+   ```
+
+   A request for changes returns `redispatch`; dispatch again with the same
+   `--run-id`, then follow inspection and recovery again. A passing review
+   returns `merge`.
+
+5. Merge only on explicit operator authority.
+
+   ```bash
+   node skills/relay-merge/scripts/gate-check.js --repo . --run-id <id> --json
+   node skills/relay-merge/scripts/finalize-run.js \
+     --repo . --run-id <id> --merge-method squash --json
+   ```
+
+`finalize-run` requires the exact current PR source SHA, a passing independent
+review, passed verification for the frozen Done Criteria, and a fresh GitHub
+observation. It has no review or state bypass.
+
+## Close a run
+
+Use the canonical recovery operation with an explicit operator and reason.
+Closing appends a `run_closed` fact and is idempotent only for the same intent;
+it cannot be applied to an already merged run.
 
 ## Skills
 
-| Skill | When to use |
+| Skill | Use |
 | --- | --- |
-| `/relay-config` | Configure route policy, allowed routes, defaults, and advisory review |
-| `/relay` | Normal full-cycle handoff through review |
-| `/relay-ready` | Clarify broad or ambiguous work before planning |
-| `/relay-plan` | Build or inspect a rubric without dispatching |
-| `/relay-dispatch` | Manually dispatch or re-dispatch an executor run |
-| `/relay-review` | Manually review an existing relay PR |
-| `/relay-merge` | Gate-check, merge, cleanup, and update sprint state |
-| `/relay-fleet` | Fan out prepared independent leaves in parallel |
+| `/relay-config` | Read-only adapter capability check. |
+| `/relay-dispatch` | Create or re-dispatch an immutable executor attempt. |
+| `/relay-review` | Record the independent bound review. |
+| `/relay-merge` | Explicit exact-SHA merge and cleanup. |
+| `relay-recover.js` | Canonical inspect/recover/close surface. |
 
 ## Manual Phase Control
 
-The full cycle is plan -> dispatch -> review -> ready_to_merge -> explicit merge. `/relay` normally drives these steps for you.
-
-### Readiness
-
-`/relay` invokes readiness handling when a request is too broad, ambiguous, or missing a stable review anchor. The readiness artifact is persisted under `~/.relay/requests/<repo-slug>/` and becomes the downstream source of truth.
-
-Use `/relay-ready` directly when you want to split or clarify work before implementation:
-
-```text
-/relay-ready Clarify the auth redirect cleanup into relay-ready leaves
-```
-
-### Plan
-
-Planning turns task evidence and acceptance criteria into a rubric. The rubric travels with the run: the executor self-evaluates against it, and the reviewer re-scores independently.
-
-Use `/relay-plan` directly when you want to inspect or adjust the rubric before dispatch:
-
-```text
-/relay-plan Build a rubric for issue #42
-```
-
-### Dispatch
-
-Dispatch creates an isolated git worktree, writes the relay manifest, runs the executor, and records the run state under `~/.relay/runs/<repo-slug>/`.
-
-Direct dispatch is mostly for advanced recovery, dry runs, or experiments:
-
-```bash
-node skills/relay-dispatch/scripts/dispatch.js . \
-  -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
-
-node skills/relay-dispatch/scripts/dispatch.js . \
-  --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
-```
-
-Useful dispatch flags:
-
-| Flag | Purpose |
-| --- | --- |
-| `--executor` | Select `codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`, or `cline` |
-| `--model` | Pass a model override when the harness supports it; unmanaged harnesses should use an explicit provider/model route |
-| `--network-access enabled` | Enable Codex workspace-write network access for supported runs |
-| `--copy` | Copy extra gitignored files into the worktree |
-| `--register` | Register a Codex app thread or Claude relay-side receipt |
-| `--dry-run` | Validate the plan without executing |
-
-### Review
-
-Review runs in a fresh context and checks spec compliance, rubric results, scope drift, and code quality. It posts a machine-readable PR comment and either marks the run `ready_to_merge`, requests changes, or escalates.
-
-Manual review command:
-
-```bash
-node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> --reviewer codex --json
-```
-
-Non-default reviewers and advisory lanes are advanced paths. Capability gates, model routes, timeouts, and adapter-specific isolation details live in `skills/relay-dispatch/references/agent-adapter-platform.md`; route policy syntax lives in [model-route-policy.md](model-route-policy.md).
-
-Advisory review can run alongside the primary reviewer when route policy allows it. It records supplemental evidence but does not replace the primary verdict under standard assurance:
-
-```bash
-node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
-  --reviewer codex --advisory-reviewer <name> --advisory-profile blindspot --json
-```
+Use the individual commands in the Default Workflow when diagnosing or driving
+one phase manually. Always re-run `inspect` after an external change and follow
+the returned action key.
 
 ## Adapter Readiness Matrix
 
-Implementation status describes the adapter surface shipped in relay. Live status describes dogfood evidence from real CLI runs. Do not treat implementation parity as production readiness: #609 added reviewer-role parity surfaces, #610 recorded live reviewer evidence and blockers, and #611 added healthy dispatch canary mode with live dispatch evidence and blockers.
+All seven built-in adapters support dispatch: Claude, Codex, OpenCode, Pi,
+Antigravity, Cursor, and Cline. Claude, Codex, OpenCode, Pi, Antigravity, and
+Cursor also support primary review. Cline is dispatch-only. The precise
+capability matrix and four-method contract live in
+`skills/relay-dispatch/references/agent-adapter-platform.md`.
 
-| Adapter | Dispatch | Primary review | Advisory review |
-| --- | --- | --- | --- |
-| `claude` | Implementation: `stable`<br>Live: `stable` | Implementation: `stable`<br>Live: `stable` | Implementation: `not-supported`<br>Live: `not-supported` |
-| `codex` | Implementation: `stable`<br>Live: `stable` | Implementation: `stable`<br>Live: `stable` | Implementation: `not-supported`<br>Live: `not-supported` |
-| `opencode` | Implementation: `limited`<br>Live: `limited` after route-specific healthy dispatch evidence; otherwise blocked for that route | Implementation: `limited`<br>Live: `limited` by route policy and live reviewer evidence | Implementation: `limited`<br>Live: `limited` by route policy and advisory evidence |
-| `pi` | Implementation: `stable`<br>Live: `limited` by route-specific healthy dispatch canaries | Implementation: `stable`<br>Live: `limited` by route-specific reviewer canaries | Implementation: `stable`<br>Live: `limited` by route-specific advisory evidence |
-| `antigravity` | Implementation: `limited`<br>Live: `limited` by `google/antigravity-cli` healthy dispatch canary evidence | Implementation: `fail-safe-experimental`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `fail-safe-experimental`<br>Live: `blocked` by current timeout/worktree-mutation blocker |
-| `cursor` | Implementation: `limited`<br>Live: `blocked` until route-specific healthy dispatch canaries exist | Implementation: `limited`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `not-supported`<br>Live: `not-supported` |
-| `cline` | Implementation: `limited`<br>Live: `limited` by route-specific ClinePass smoke evidence | Implementation: `not-supported`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `limited`<br>Live: `limited` by route policy and advisory evidence |
+## Executors
 
-Status meanings:
-
-| Status | Meaning |
-| --- | --- |
-| `stable` | Supported for normal operator use with healthy live evidence in the documented role. |
-| `limited` | Implemented but constrained by route policy, containment limits, or route-specific evidence. Require current dogfood for the exact provider/model route before broad use. |
-| `fail-safe-experimental` | Implemented only with fail-safe expectations; failures or malformed output must stop the run instead of producing reviewable success. |
-| `blocked` | Do not promote the role yet. A known blocker or missing healthy dogfood evidence prevents production readiness. |
-| `not-supported` | The adapter does not implement that role. |
-
-Promotion criteria: fake-bin and unit tests are insufficient and do not prove live readiness. Healthy live dogfood evidence is required before promotion from `blocked`, `limited`, or `fail-safe-experimental` for the exact role, adapter, and route: dispatch must create the requested minimal PR and reach `review_pending`, primary review must return strict verdict JSON and reach the expected review state, and advisory review must return structured advisory output without mutating the reviewed worktree.
-
-Timeouts are inconclusive unless the step is an intentionally bounded fail-safe timeout canary. A normal live timeout is not healthy evidence and should be recorded as a blocker or limitation; the fail-safe timeout canary only proves relay avoids converting a bounded timeout into reviewable false success.
-
-### Antigravity Live Canary
-
-Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli`; primary and advisory review remain fail-safe experimental until healthy reviewer canaries pass. Fake-bin tests alone do not prove live executor or reviewer success.
-
-Use the live dogfood harness documented in `skills/relay-dispatch/references/operator-utilities.md` for repeatable Antigravity evidence; keep detailed adapter semantics in `skills/relay-dispatch/references/agent-adapter-platform.md`.
-
-### ClinePass Live Canary
-
-Cline dispatch and advisory review use `cline --json -P cline-pass --cwd <repo>` and parse the final JSONL `run_result.text`. Relay never passes `cline --worktree`; the relay worktree remains the boundary. Treat Cline primary review as blocked until a live canary returns strict verdict JSON within timeout and leaves the worktree clean.
-
-Primary-review promotion requires a canary that runs the Cline reviewer path against a retained review worktree and validates all of the following:
-
-- `run_result.text` is raw JSON matching `REVIEWER_VERDICT_JSON_SCHEMA` from `skills/relay-review/scripts/review-schema.js`.
-- The invocation returns within `RELAY_CLINE_REVIEW_TIMEOUT`.
-- `git status --porcelain` is unchanged after review.
-- Timeout, malformed JSONL, missing `run_result.text`, schema rejection, or worktree mutation is recorded as a fail-safe limitation, not healthy review evidence.
-- `primary_review.supported=true` is enabled only in the same change that updates descriptor metadata, tests, and operator docs for the promoted route.
-
-Use the live dogfood harness for repeatable Pi, OpenCode, and Antigravity evidence. Full harness semantics and outcome meanings live in `skills/relay-dispatch/references/operator-utilities.md`; adapter status and healthy-path criteria live in `skills/relay-dispatch/references/agent-adapter-platform.md`.
-
-`google/antigravity-cli` is the policy label for Antigravity; it is recorded for audit and not passed to `agy` as a model flag.
+All seven executor descriptors remain supported: Claude, Codex, OpenCode, Pi,
+Antigravity, Cursor, and Cline. Primary review currently supports all except
+Cline. Check an adapter before dispatch:
 
 ```bash
-node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
-  --pi-model '<pi-provider>/<pi-model>' --opencode-model '<opencode-provider>/<opencode-model>' \
-  --json --markdown
-node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
-  --pi-model '<pi-provider>/<pi-model>' --opencode-model '<opencode-provider>/<opencode-model>' \
-  --dispatch-canary --json
+node skills/relay-config/scripts/relay-config.js doctor --json
+node skills/relay-config/scripts/relay-config.js \
+  check --phase dispatch --executor opencode --model provider/model --json
 ```
 
-Interpretation: `failed/escalated` means relay failed safely or hit a live CLI limitation. `ready_to_merge` is healthy only when the dispatch PR contains the minimal requested change and the primary reviewer accepted strict verdict JSON within the configured timeout.
+The release-only adapter canary lives in the test suite; it is
+intentionally not an installed operator command. See the [adapter platform](../skills/relay-dispatch/references/agent-adapter-platform.md).
 
-### Merge
+Release evidence is all-or-nothing across 13 required cells (seven dispatch and
+six declared primary-review cells). Run it only with explicit per-phase
+credential selectors, for example
+`--credential-env codex:dispatch:OPENAI_API_KEY`; repeat the selector for the
+review phase and for every adapter. Missing credentials or CLIs are reported as
+`not_run_*`, exit nonzero, and cannot be treated as a release pass. The runner
+prints only credential environment names/file IDs and cryptographic digests,
+never values or source paths.
 
-Merge is explicit. The gate verifies review evidence, checks that the reviewed SHA matches the current PR head, and then finalizes the run.
+### Prompt and credential limits
+
+Claude, Codex, OpenCode, Pi, and Cursor receive prompts over digest-bound stdin.
+Cline and Antigravity are the two argv-visible exceptions: prompt text may be
+visible in the local process list, and Relay rejects prompts at 256 KiB.
+
+Provider credentials are never selected implicitly. A foreground dispatch may
+opt in an environment value with repeatable `--credential-env NAME` or a
+declared adapter credential file with repeatable
+`--credential-file ID=/absolute/source`, for example:
 
 ```bash
-node skills/relay-merge/scripts/finalize-run.js --run-id <id> --merge-method squash --json
+node skills/relay-dispatch/scripts/dispatch.js . \
+  --executor codex --credential-env OPENAI_API_KEY \
+  --credential-file auth=/absolute/path/to/auth.json \
+  -b issue-42 --prompt-file /tmp/dispatch.md --rubric-file /tmp/rubric.yaml
 ```
 
-For exceptional hotfixes, skip-review requires a recorded reason:
+Credential flags cannot be combined with `--detach`; this keeps source paths
+out of detached argv. Primary review accepts the same repeatable flags and
+adapter file IDs. It copies selected files into a private, short-lived HOME/XDG
+tree and exposes only the named environment values; it never searches the
+operator's HOME. A reviewer without explicit usable credentials stops as
+credentials unavailable.
 
-```bash
-node skills/relay-merge/scripts/finalize-run.js --run-id <id> --skip-review "hotfix: production outage" --json
-```
+### Process containment: `inherited_scope_no_daemon`
 
-## Batch And Advisory Work
+Every supported executor and reviewer CLI runs under the cooperative
+`inherited_scope_no_daemon` contract. The host injects a per-attempt random
+`RELAY_PROCESS_SCOPE` marker; supported CLIs must preserve it in every process
+they start and must not daemonize, `setsid` away, or clear it.
 
-Use `/relay-fleet` when multiple independent leaves are already planned and can run in parallel. Prefer sequential `/relay` when tasks share files, ordering is unclear, or merge conflicts are likely.
+`sandbox-exec` cannot prevent a CLI from calling `setsid` or clearing its
+environment, so containment is enforced by verification rather than by
+prevention. macOS reports process start time only to the second, which cannot
+separate a same-second PID reuse, so the host revalidates the scope marker
+immediately before every signal and signals only verified individual PIDs—never
+an entire process group. This protects against natural PID reuse and unrelated
+members sharing a PGID, not a malicious same-UID process that can inspect peer
+environments. That attacker is outside this cooperative contract. Unverifiable
+survivors are reported, not killed:
 
-Use `/relay-review` advisory review when you need supplemental reviewer evidence for an existing run. Keep comparison implementation work in `/relay-fleet` or independent `/relay` leaves instead of adding a new lifecycle branch.
-For the compact selection recipe, see [Comparison And Secondary Work](comparison-and-secondary-work.md).
+- A dispatch ends `cleanup_incomplete` with a signed obligation listing the
+  exact surviving identities; settle it with
+  `relay-recover recover --run-dir <dir> --reason "<why>"`.
+- A review fails with `independent reviewer cleanup incomplete`; inspect the
+  reported `pgid` before terminating anything by hand.
 
-## Worktree Includes
+A CLI that drops the marker is outside the contract and will produce these
+fail-closed outcomes rather than silent, unbounded process leakage.
 
-Git worktrees do not include gitignored files such as `.env` and local config. Add `.worktreeinclude` to a project root when executors need specific ignored files:
+## Migration status
 
-```text
-# .worktreeinclude
-.env
-.env.local
-config/*.key
-```
-
-Only files matching both `.worktreeinclude` and `.gitignore` are copied. Missing files are skipped.
-
-## Recovery And Cleanup
-
-Merged and explicitly closed runs are cleaned by `/relay-merge`. For stale worktrees or interrupted runs:
-
-```bash
-node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
-node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --older-than 72 --json
-node skills/relay-dispatch/scripts/close-run.js --repo . --run-id <run-id> --reason "stale"
-```
-
-Reliability reports summarize historical run behavior:
-
-```bash
-node skills/relay-dispatch/scripts/reliability-report.js --repo .
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-role --json
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-acting-reviewer --json
-```
-
-## Extending Relay
-
-New executors live under `skills/relay-dispatch/scripts/executors/` and export the 7-field adapter contract documented in `skills/relay-dispatch/references/agent-adapter-platform.md`. Register the harness descriptor in `skills/relay-dispatch/scripts/agent-adapters/index.js`; update `skills/relay-dispatch/scripts/executors/index.js` only when stable compatibility display order needs it.
-
-New reviewers use `skills/relay-review/scripts/invoke-reviewer-<name>.js`. The review runner resolves reviewers by name and expects a JSON verdict matching the local review schema.
-
-Assigned roles are stamped in the run manifest. Acting reviewer overrides are recorded separately in review fields and events so analytics can distinguish assigned policy from actual execution.
+The production bootstrap is sealed to vNext. The migration overlay remains only
+for legacy recovery translation and read observation. It retires after 30 days
+and 30 vNext runs with zero legacy reads; until then the installed package is
+18 JS / 6,985 LOC, with the post-retirement core target 16 JS / 5,836 LOC.

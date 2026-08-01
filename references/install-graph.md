@@ -1,33 +1,39 @@
-# Cross-Skill Install Graph
+# Cross-Skill Install Graph (vNext)
 
-`npx skills add sungjunlee/dev-relay` is the only operator-supported install path because it places every sibling skill in one directory. Every skill currently reaches across sibling directories through either SKILL.md command paths, JS `require()` calls, or both. Per-skill installs are not supported for operators because they can leave those sibling paths missing and cause module resolution failures.
+Install the complete bundle; individual relay skill installs are not supported
+because the small phase commands import the shared vNext core.
 
-SKILL.md command examples use `${RELAY_SKILL_ROOT:-skills}`. The default works from this repository. Installed operators should set `RELAY_SKILL_ROOT` to the installed sibling directory that contains `relay`, `relay-config`, `relay-dispatch`, `relay-review`, and the other relay skill directories, for example `~/.agents/skills` or the equivalent skills install root on their machine.
-
-```
-relay ----------> relay-ready
-relay ----------> relay-dispatch
-
-relay-ready ----> relay-dispatch
-relay-plan -----> relay-dispatch
-relay-dispatch -> relay-plan
-
-relay-review ---> relay-dispatch
-relay-merge ----> relay-dispatch
-relay-merge ----> relay-plan
-relay-merge ----> relay-review
-relay-config ---> relay-dispatch
+```bash
+npx skills add sungjunlee/dev-relay
 ```
 
-The `relay-dispatch` -> `relay-plan` edge is a small JS-level cycle: `skills/relay-dispatch/scripts/reliability-report.js` imports `../../relay-plan/scripts/tdd-flavor`, while relay-plan scripts and SKILL.md commands call back into relay-dispatch.
+Set `RELAY_SKILL_ROOT` to the installed sibling root when invoking commands
+outside this repository. It defaults to `skills` in a clone.
 
-| Skill | Required siblings (SKILL.md + JS) | If installed alone | Supported install path |
-| --- | --- | --- | --- |
-| `relay` | `relay-ready`, `relay-dispatch` | SKILL.md commands reference `${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/probe-readiness.js` and `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`; those sibling paths are missing in a relay-only install. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
-| `relay-ready` | `relay-dispatch` | JS imports fail before request persistence/probing can run: `scripts/persist-request.js` requires `../../relay-dispatch/scripts/cli-args`; `scripts/relay-request.js` requires `../../relay-dispatch/scripts/relay-manifest` and `../../relay-dispatch/scripts/manifest/paths`; `scripts/probe-readiness.js` requires `../../relay-dispatch/scripts/relay-events` and `../../relay-dispatch/scripts/cli-args`. SKILL.md also calls `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
-| `relay-plan` | `relay-dispatch` | JS imports fail for planning helpers: `scripts/match-template.js` requires `../../relay-dispatch/scripts/manifest/rubric`; `scripts/persist-done-criteria.js` requires `../../relay-dispatch/scripts/manifest/paths` and `../../relay-dispatch/scripts/cli-args`; `scripts/probe-executor-env.js` requires `../../relay-dispatch/scripts/cli-args` and `../../relay-dispatch/scripts/executors`. SKILL.md also calls `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js`. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
-| `relay-dispatch` | `relay-plan` | `scripts/reliability-report.js` requires `../../relay-plan/scripts/tdd-flavor`; running reliability reporting from a dispatch-only install fails when relay-plan is absent. This is the closest skill to a root, but it is not fully standalone today. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
-| `relay-review` | `relay-dispatch` | Review entrypoints and helpers import dispatch manifest/event modules: `scripts/review-runner.js` requires `../../relay-dispatch/scripts/manifest/lifecycle`, `manifest/paths`, `manifest/rubric`, `manifest/store`, `relay-events`, and `cli-args`; nested `scripts/review-runner/*` modules require `../../../relay-dispatch/scripts/...`; reviewer adapters require `../../relay-dispatch/scripts/cli-args`; `scripts/reviewer-helpers.js` also requires dispatch modules. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
-| `relay-merge` | `relay-dispatch`, `relay-review` | Merge scripts import dispatch modules throughout: `scripts/finalize-run.js`, `scripts/gate-check.js`, `scripts/relay-reconcile-artifact.js`, and `scripts/review-gate.js` require `../../relay-dispatch/scripts/...`; `scripts/review-gate.js` also imports relay-review schemas and execution evidence. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
-| `relay-config` | `relay-dispatch` | The setup skill wrapper delegates all policy mutations and route decisions to `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/relay-config.js`; installing it alone leaves the policy engine missing. | Use `npx skills add sungjunlee/dev-relay` for the full bundle. Per-skill installs are not operator-supported. |
-Keep this file in sync when adding or removing cross-skill script calls. `CLAUDE.md` points users here instead of duplicating the graph.
+```text
+relay --------> relay-ready, relay-dispatch, relay-review, relay-merge
+relay-ready --> relay-dispatch (immutable Done Criteria handoff)
+relay-plan ---> relay-dispatch (adapter capability probe / frozen criteria)
+relay-review -> relay-dispatch (run-store, facts, host, inspect/recover)
+relay-merge --> relay-dispatch (run-store, facts, host, inspect/recover)
+relay-fleet --> relay-dispatch, relay-review, relay-merge
+relay-config -> relay-dispatch (adapter registry and capability contract)
+```
+
+The shared dispatch core is deliberately the sole lifecycle implementation:
+`run-store.js`, `facts.js`, `inspect.js`, `recover.js`, `host.js`, and
+`runtime-generation.js`, with the seven files in `adapters/`. No skill may
+import a legacy manifest facade, event helper, execution-evidence sidecar,
+executor-specific registration module, or worktree utility.
+
+| Phase | Entry point | Write authority |
+| --- | --- | --- |
+| Dispatch | `relay-dispatch/scripts/dispatch.js` | Create immutable run and append attempt facts only. |
+| Inspect/recover | `relay/scripts/relay-recover.js` | `inspect` reads; `recover` is the sole convergent lifecycle writer. |
+| Review | `relay-review/scripts/review-runner.js` | Append one bound review fact. |
+| Merge | `relay-merge/scripts/finalize-run.js` | Explicit, authorized merge fact and safe cleanup. |
+| Config | `relay-config/scripts/relay-config.js` | Read-only adapter capability validation. |
+
+All public commands use Node.js and Git; GitHub operations require authenticated
+`gh`. Direct local executor/reviewer sandboxing requires macOS `sandbox-exec`.
+Unsupported containment hosts fail closed rather than silently widening access.

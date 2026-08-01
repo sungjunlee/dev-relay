@@ -29,8 +29,8 @@ metadata:
 
 ## Output Contract
 
-Persist artifacts under `~/.relay/requests/<repo-slug>/<request-id>/` (request frontmatter, raw request,
-handoff(s), done-criteria snapshot(s), append-only events.jsonl). Field-by-field schema with input
+Persist one immutable completed bundle under `~/.relay/requests/<repo-slug>/<request-id>/` (request
+frontmatter, raw request, handoff(s), Done Criteria snapshot(s), and a last completion marker). Field-by-field schema with input
 requirements plus persisted request and handoff artifact definitions: see
 [`scripts/request-contract.schema.json`](scripts/request-contract.schema.json). `persist-request.js`
 validates the input contract on every persistence call; `$defs.RequestArtifact` and
@@ -58,14 +58,10 @@ Readiness is optional, but if supplied, all readiness dimensions are required; s
 
 Readiness scripts emit deterministic signals and persist validated handoffs; they do not infer semantic leaf boundaries. When strong decomposition signals appear, use AI proposal-first shaping to decide whether the request is one high-risk leaf or multiple ordered leaves, then persist the accepted shape. Detailed operator contract and oversized product-foundation example: [`references/decomposition-contract.md`](references/decomposition-contract.md).
 
-Preflight shaping stays append-only in `events.jsonl`. Use the portable readiness event types:
-- `proposal_presented`
-- `question_asked`
-- `question_answered`
-- `proposal_accepted`
-- `proposal_edited`
-
-Track the immediate follow-up as `next_action` on the request artifact. Do not create a second state machine for readiness.
+Proposal, clarification, answer, and edit state stays in the conversation. Do not
+persist mutable intake state or a readiness event journal. Call `persist-request.js`
+once the accepted leaf shape is final. A completed bundle is immutable and an
+incomplete bundle fails closed for operator inspection.
 
 ## Downstream Handoff
 
@@ -78,12 +74,10 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
   -b <branch> \
   --prompt-file <dispatch-prompt-path> \
   --rubric-file <rubric-path-from-relay-plan> \
-  --request-id <request-id> \
-  --leaf-id <leaf-id> \
   --done-criteria-file <done-criteria-path>
 ```
 
 3. for multi-leaf requests, dispatch leaves in `decomposition.leaf_order`, respecting `depends_on`
-4. let `relay-review` read the frozen snapshot from the run manifest anchor
+4. let dispatch freeze that file into the new run's immutable Done Criteria contract
 
 Do not create a second lifecycle. The readiness gate stops once the relay-ready contract is persisted.

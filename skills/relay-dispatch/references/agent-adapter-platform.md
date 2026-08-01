@@ -1,110 +1,194 @@
 # Agent Adapter Platform
 
-Relay has one adapter registry for agent harnesses. A harness can support dispatch, primary review, advisory review, or any combination of those phases. Provider/model route policy is separate from adapter capability: the adapter decides whether a phase and containment shape can be represented; route policy decides whether the selected provider/model route is allowed.
+Relay keeps executor and primary-review capabilities explicit. Every supported
+harness can dispatch; only harnesses that can return the strict primary verdict
+contract are registered as reviewers. Adapter capability is the only runtime
+authorization surface.
 
-## Executor Contract
+## Adapter Contract
 
-Every executor file in `skills/relay-dispatch/scripts/executors/<name>.js` exports the same 7-field contract:
+Every native adapter lives directly in `skills/relay-dispatch/scripts/adapters/`
+and exposes the same four-method contract:
 
-| Field | Purpose |
+| Method | Purpose |
 | --- | --- |
-| `cliBinary` | Binary name used for availability and version preflight. |
-| `defaultTimeout` | Default dispatch timeout in seconds. |
-| `validateExecutionMode({sandbox, networkAccess})` | Fail closed or warn before dispatch when the requested containment is not representable. |
-| `buildExecCommand({wtPath, resultFile, prompt, model, sandbox, networkAccess, reasoning, timeoutSeconds})` | Build the non-interactive CLI command. |
-| `finalizeResult({stdoutLog, resultFile})` | Optional result finalization; most stdout CLIs copy stdout into the relay result file. |
-| `register({wtPath, repoPath, branch, title, pin?})` | Optional app/thread registration hook; unsupported adapters return `{threadId: null, raw}`. |
-| `probe({timeout})` | CLI/environment probe used by `probe-executor-env.js`; missing CLIs return `{error: "<name> CLI not found", raw: null}`. |
+| `probe(...)` | Deterministic argv-only CLI availability and version preflight. |
+| `capabilities(...)` | Fail-closed phase and containment negotiation. |
+| `buildInvocation(...)` | Build an argv-only dispatch or review invocation. |
+| `parseOutcome(...)` | Normalize text, JSON, or JSONL transcript output. |
 
-Register the harness descriptor in `skills/relay-dispatch/scripts/agent-adapters/index.js`; update the compatibility order in `skills/relay-dispatch/scripts/executors/index.js` only when stable display order matters.
+`name`, `defaults`, and immutable `metadata` carry static facts such as the CLI
+binary, timeout, output protocol, and provider default; metadata never contains
+functions. Register a new adapter in `adapters/index.js`; executor/model
+selection remains explicit at dispatch time.
 
-Reviewer adapters use `skills/relay-review/scripts/invoke-reviewer-<name>.js`. Primary reviewers return stdout JSON matching `REVIEWER_VERDICT_JSON_SCHEMA`; advisory reviewers return advisory JSON and never replace the primary verdict. All reviewer adapters are invoked as:
+## Primary Reviewer Contract
 
-```bash
-node invoke-reviewer-<name>.js --repo <repoPath> --prompt-file <promptPath> --json [--phase <primary_review|advisory_review>] [--model <route>]
-```
+`review-runner.js` stages an immutable prompt, diff, and verdict schema, then
+calls the same adapter's `buildInvocation({phase: "primary_review", ...})`
+directly. The durable host invokes that argv without a legacy reviewer wrapper;
+the adapter parses its staged output into the strict verdict contract.
 
-## Review Adapter Invocation Notes
+A new run binds its reviewer in immutable `run.json`. An explicit review model
+applies to that invocation; otherwise the adapter default is used. Historical
+`model_hints` data is inert and never participates in selection.
 
-`relay-review` normally invokes reviewers through `review-runner.js`; operators should not call `invoke-reviewer-<name>.js` directly except when debugging an adapter. Review model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Advisory model precedence follows the advisory CLI flags, manifest routing, and adapter defaults documented in `model-routing.md`.
-
-Isolation details by built-in reviewer:
-
-| Reviewer | Invocation and isolation notes |
+| Reviewer | Invocation and isolation |
 | --- | --- |
-| `codex` | `invoke-reviewer-codex.js` passes ephemeral read-only review settings and expects structured verdict JSON. |
-| `claude` | `invoke-reviewer-claude.js` uses bare/no-session-persistence review mode; `ANTHROPIC_API_KEY` or an authenticated Claude CLI session may be required. |
-| `opencode` | `RELAY_OPENCODE_REVIEW_TIMEOUT` sets the primary-review parent timeout as a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Uses prompt-only read-only review plus dirty-worktree checks. Primary and advisory review are route-policy gated. |
-| `pi` | `RELAY_PI_BIN` can override the binary path; `RELAY_PI_REVIEW_TIMEOUT` sets the primary-review parent timeout. Review uses a read/grep/find/ls allowlist plus dirty-worktree checks. |
-| `antigravity` | `RELAY_ANTIGRAVITY_BIN` can override the binary path; `RELAY_ANTIGRAVITY_REVIEW_TIMEOUT` sets the review/canary parent timeout as a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay targets the `agy` command-line interface only; GUI, IDE, Desktop, plugin runtime, and interactive PTY flows are not supported. |
-| `cursor` | `RELAY_CURSOR_AGENT_BIN` can override the binary path; `RELAY_CURSOR_REVIEW_TIMEOUT` sets the primary-review parent timeout. Primary review uses ask mode and parses the wrapper `result` field. |
-| `cline` | `RELAY_CLINE_BIN` can override the binary path; `RELAY_CLINE_REVIEW_TIMEOUT` sets the Cline reviewer-script parent timeout for direct invocations (default `1800s`; internal `--timeout` is env − 60s). In advisory lanes the review-runner exports the lane budget (`--advisory-timeout` or profile default) as `RELAY_CLINE_REVIEW_TIMEOUT`, superseding any inherited value so parent kill and internal timeout share one number. Advisory review invokes `cline --json -P <provider> --cwd <repo> ... '<short workspace-relative @file reference>'`: the complete prompt stays in a temporary file under `--cwd`, matching Cline CLI 3.0.47's workspace-bounded mention parser, and relay removes the file on every exit path. Relay then parses the final JSONL `run_result.text`. Primary review is not supported until a healthy strict-verdict live canary passes. |
+| `codex` | Ephemeral native read-only review with schema output. |
+| `claude` | Bare/no-session-persistence mode with read-only tool access. |
+| `opencode` | Prompt-only review inside the runtime's read-only OS boundary. |
+| `pi` | `read,grep,find,ls` tool allowlist inside the runtime's read-only OS boundary. |
+| `antigravity` | `agy` CLI only, inside the runtime's read-only OS boundary. |
+| `cursor` | Agent ask mode; parses the wrapper `result` field. |
 
-Advisory review can be a multi-lane list selected by CLI or routing. Each lane records reviewer/model/profile/trigger/gating identity in `advisory_review` events; supported profiles include `blindspot` and `adversarial`. Standard non-gating lanes record artifacts and metrics only, while gating lanes can demote an applied pass when successful advisory output contains required findings. Late artifacts are classified as metrics after a passing primary decision or redispatch evidence after changes requested.
+Cline remains a dispatch executor. It is not a primary reviewer because a
+healthy strict-verdict live canary has not established that capability.
+All review timeouts use the closed `review-runner.js --timeout <seconds>` input;
+there are no adapter-specific timeout environment variables.
+Antigravity primary review remains experimental until a healthy live reviewer
+canary returns strict verdict JSON within timeout. Its dispatch canary must make
+a minimal repository change to recoverable/reviewable state; a documented CLI limitation is not healthy success.
+Antigravity transports its prompt as argv and rejects invocations at a
+conservative 256 KiB argv budget before launch. Local process-list access can
+therefore disclose prompt content while `agy` is running.
 
-For `policy.review_assurance=hardened`, the runner fails fast unless the command or manifest routing supplies an advisory reviewer. Advisory failures or required findings block a passing primary verdict, and execution evidence must be strict. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer executor-confirmed command-run records collected from the original sandboxed dispatch and bound to its resulting HEAD; relay must never re-run those commands with orchestrator privileges. Otherwise they fall back to legacy `test_exit_code=0` plus a SHA-bound result hash.
+## Release canary acceptance
+
+The test-only live runner requires an exact 13-cell matrix: dispatch for all
+seven adapters plus primary review for every adapter that declares it (six at
+present). Every cell must pass; a missing CLI, absent explicit credential,
+diagnostic fallback, timeout, sandbox/authentication failure, or unexecuted cell
+keeps the evidence `incomplete_non_release` and makes the command exit nonzero.
+
+Each dispatch cell crosses `host.launchLocalSupervisor` and must create one
+nonce-bound artifact without any other repository, Git, or outside mutation.
+Each review cell crosses `runStore.invokeIndependentReviewer`, must return that
+run's nonce through an exact JSON schema, and must leave the repository
+unchanged. These are the production isolation entry boundaries; the runner does
+not call `dispatch.js` because that would create lifecycle facts and publication
+work unrelated to an adapter canary. Production CLI credential parsing has its
+own contract tests, and the runner independently parses explicit
+`adapter:phase` credential selectors.
+
+Evidence records source-tree and dirty-state digests, runner/runtime hashes,
+platform, executable identity/version, credential environment names and file
+IDs, prompt/invocation/output digests, and boundary/cleanup/process audits. It
+never records credential values or credential source paths. The latest checked
+in run is `docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-02.json`;
+it is intentionally incomplete until operators provision every required cell.
+
+## Prompt and credential transport
+
+Claude, OpenCode, Pi, Cursor, and Codex transport the exact prompt over stdin
+(`codex` uses its stdin-dash form). Prompt bytes and their SHA-256 binding are
+staged as immutable inputs. Cline and Antigravity are the only argv-visible
+exceptions because their installed CLIs expose no safe stdin prompt contract;
+both reject prompts at the conservative 256 KiB limit, and their prompt content
+is visible to local process-list readers for the lifetime of the CLI.
+
+Dispatch does not inherit ambient provider credentials. Operators must opt in
+to each value with repeatable `--credential-env NAME` and to each declared
+adapter file with `--credential-file ID=/absolute/source`. Valid file IDs come
+from adapter metadata: Claude and Codex expose `auth` plus their settings/config
+file, OpenCode exposes `auth`, `config_json`, and `config_jsonc`, and Pi exposes
+`auth`, `settings`, and `models`. Cursor normally uses an explicitly selected
+`CURSOR_API_KEY`; Cline and Antigravity currently declare no credential inputs.
+Sources are validated as exact private regular files and staged into an
+attempt-private HOME/XDG root, then removed after the process tree terminates.
+
+Credential flags are foreground-dispatch only. `--detach` with either flag
+fails closed so credential source paths are never copied into detached process
+argv. Primary review accepts the same repeated flags and catalog, but stages
+selected values only inside its short-lived private HOME/XDG tree. Neither path
+performs discovery or inherits an ambient HOME. A reviewer without the
+explicitly requested credentials must stop as unavailable.
 
 ## Capability Matrix
 
-| Adapter | Dispatch | Primary review | Advisory review | Sandbox | Read-only | Network | Structured output | Transport | App registration |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `codex` | Yes | Yes | No | Native Codex sandbox; dispatch supports `read-only` and `workspace-write`. | Native `read-only` for reviewer and read-only dispatch. | Dispatch can enable workspace-write network; review defaults disabled. | Dispatch result file; primary review JSON schema file. | `codex` CLI. | Yes, Codex App thread registration. |
-| `claude` | Yes | Yes | No | Dispatch uses permission mode; primary review uses tool allowlist, not OS sandboxing. | Primary review via `--allowedTools=Read`. | Ambient/informational; dispatch `network-access=enabled` fails closed. | Dispatch stdout copied to result file; primary review JSON schema argv. | `claude` CLI. | Yes, Claude app session registration. |
-| `opencode` | Yes, limited and route-specific | Yes, route-policy gated | Yes | Informational only; no native relay sandbox. Review uses prompt instructions plus status guards; advisory runs in a detached worktree. | Primary/advisory prompt plus git status guard; dispatch read-only is informational only. | Ambient/informational; no relay network gate. | Dispatch stdout copied to result file; primary verdict JSON text; advisory JSON text. | `opencode` CLI. | No. |
-| `pi` | Yes | Yes | Yes | Dispatch has no native relay sandbox; review uses read/grep/find/ls tool allowlist plus status guard. | Primary/advisory via `--tools read,grep,find,ls` plus dirty-worktree check. | Dispatch ambient/informational; review has no network tool in the relay allowlist. | Dispatch stdout copied to result file; primary verdict JSON text; advisory JSON text. | `pi` CLI. | No. |
-| `antigravity` | Yes, limited with route-specific healthy dispatch canary evidence for `google/antigravity-cli` | Yes, fail-safe experimental until healthy live reviewer canary passes | Yes, fail-safe experimental until healthy live advisory canary passes | `agy --sandbox`; dispatch also adds the git common dir with `--add-dir`. | Dispatch read-only is unsupported; review relies on prompt instruction plus dirty-worktree check. | Ambient/informational; `agy` exposes no relay network gate. | Dispatch stdout copied to result file; primary verdict JSON text; advisory JSON text. | `agy` CLI only. | No. |
-| `cursor` | Yes, optional experimental | Yes, optional experimental | No | Dispatch uses `agent --sandbox enabled` when workspace-write is requested; relay passes `--workspace` only (never `agent --worktree`). | Primary review uses `agent --mode ask`; dispatch read-only is unsupported (fail-closed). | Ambient/informational; no relay network gate. | Dispatch stdout copied to result file; primary review parses JSON wrapper `result` field. | `agent` CLI. | Yes, `agent create-chat` when `--register` is used. |
-| `cline` | Yes, explicit route-policy approval required | No, blocked until live strict-verdict canary promotion | Yes | Informational only; relay passes `--cwd` and never `cline --worktree`. | Advisory prompt plus detached-worktree status guard; dispatch read-only is informational only. | Ambient/informational; no relay network gate. | Dispatch and advisory review parse JSONL `run_result.text`. | `cline` CLI. | No. |
+| Adapter | Dispatch | Primary review |
+| --- | --- | --- |
+| `codex` | Yes | Yes |
+| `claude` | Yes | Yes |
+| `opencode` | Yes | Yes |
+| `pi` | Yes | Yes |
+| `antigravity` | Yes, experimental | Yes, experimental |
+| `cursor` | Yes, experimental | Yes, experimental |
+| `cline` | Yes | No |
 
-Antigravity support targets the Google Antigravity `agy` CLI only. Relay does not support Antigravity GUI, IDE, Desktop, plugin runtime, or interactive PTY state as a dispatch or review surface.
+All commands are built as argv arrays. Adapters that cannot represent requested
+sandbox, read-only, or network behavior must fail closed or surface an explicit
+capability warning. A fake-binary test is contract evidence, not proof that a
+live provider integration is healthy.
 
-Cline support targets the Cline CLI only. Relay does not use Cline TUI, ACP, hub dashboard, GUI state, or `cline --worktree`. Use explicit `cline-pass/*` routes plus policy allow rules for dispatch or advisory review; primary review stays unsupported until a live canary proves `REVIEWER_VERDICT_JSON_SCHEMA` output in `run_result.text`, completion within `RELAY_CLINE_REVIEW_TIMEOUT`, and no worktree mutation. Timeouts, malformed JSONL, missing `run_result.text`, schema failures, and dirty worktrees are fail-safe limitations, not healthy evidence.
+Dispatch containment is independent of adapter-native flags. On macOS the host
+wraps the actual executor process tree with `/usr/bin/sandbox-exec`, permitting
+writes only to the retained worktree (for `workspace-write`), its exact result
+artifact, an attempt-private temp directory selected through
+`TMPDIR`/`TMP`/`TEMP`, plus the exact `/dev/null` endpoint needed for descendant
+stdio. The `osascript` AppleEvent entry point, active checkouts, sibling worktrees,
+home, broad temp, and arbitrary outside paths remain read-only. A platform without that enforceable
+boundary fails with `EXECUTOR_WRITE_ISOLATION_UNAVAILABLE`; Relay does not claim
+that a prompt or cwd check is isolation. All seven adapters remain registered
+under the same host boundary.
 
-## Antigravity Live Support Status
+### `inherited_scope_no_daemon`
 
-Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli` when the dispatch prompt binds work to the relay worktree. Antigravity primary and advisory review remain fail-safe experimental until healthy live reviewer canaries pass. Fake-bin tests alone do not prove live executor or reviewer success, and relay must keep that limitation visible in operator-facing status.
+Every adapter declares `processContainment: "inherited_scope_no_daemon"`, and the
+host refuses any other value. This is a **cooperative CLI contract**, not a
+sandbox guarantee:
 
-The healthy-path criteria are exact:
+- The host injects a per-attempt random `RELAY_PROCESS_SCOPE` marker into the
+  executor environment. Supported CLIs **must preserve that marker in the
+  environment of every process they start** and **must not daemonize, re-exec
+  with a cleared environment, or otherwise drop it**.
+- The random marker is the additional binding between a PID/PGID and the run.
+  The required macOS command-line runtime exposes process start time at
+  one-second resolution only, so identity alone cannot separate a same-second
+  PID reuse. The host therefore revalidates the marker immediately before every
+  signal and signals only individually verified PIDs, never a whole process
+  group. This prevents natural PID reuse and mixed-PGID collateral kills; it is
+  not unforgeable against a malicious same-UID process, which can inspect peer
+  environments. Such a process is outside this cooperative adapter boundary.
+- `sandbox-exec` **cannot prevent** a CLI from calling `setsid`, clearing its
+  environment, or exec'ing a helper with a scrubbed environment. A CLI that does
+  so is outside the contract: the host reports the survivors as
+  `cleanup_incomplete` with their exact identities and fails closed instead of
+  guessing which processes are safe to kill.
+- Apple platform binaries redact their environment from the process table. An
+  executor whose descendants are Apple-signed binaries is therefore not
+  scope-verifiable and must be treated as contract-violating for containment.
 
-- Primary review: strict verdict JSON within timeout.
-- Dispatch: minimal repository change to recoverable/reviewable state.
-- Limitation path: documented CLI limitation, recorded as a limitation rather than success.
+Operators recover a fail-closed cleanup with `relay-recover recover`, which
+settles the signed obligation, or by terminating the reported identities by hand.
 
-Use the operator canaries in `operator-utilities.md`, including `live-dogfood.js --dispatch-canary` for controlled healthy dispatch evidence. A `failed/escalated` result means relay failed safely or encountered a live CLI limitation; keep that role marked experimental or blocked. Healthy dispatch canaries pass only when they produce the minimal PR, and `ready_to_merge` is healthy only after the Antigravity primary reviewer returns strict verdict JSON inside the configured timeout. The Antigravity no-op/fail-safe dispatch canary is separate; a PR from that no-op path is failure, not healthy dispatch success. The fail-safe timeout canary is not healthy success; it verifies that a bounded timeout does not become a reviewable false positive.
+The linked-worktree administration directory, common object store, refs, config,
+and hooks are deliberately outside the executor write set. Executors leave dirty
+worktree content; canonical `relay-recover recover` exclusively owns commit,
+push, and PR publication.
 
 ## New Adapter Checklist
 
-1. Add the executor file exporting the 7-field contract above.
-2. Add or update the descriptor in `agent-adapters/index.js`: phases, sandbox/read-only/network policy, structured output, transport, app registration, and model defaults.
-3. Add reviewer scripts only for phases the descriptor marks supported. Shared primary/advisory scripts must parse the phase explicitly: primary review returns verdict JSON and advisory review returns advisory JSON.
-4. Add tests under `tests/`, not under `skills/`: executor contract/argv/probe behavior, adapter policy audit, reviewer invocation or fail-closed behavior, and docs consistency when a supported adapter is added.
-5. Probe behavior must be deterministic: missing CLI returns `{error, raw: null}`; available CLI records version/help/capability evidence without depending on GUI or desktop state.
-6. Document route-policy expectations. Managed Codex/Claude may have `model: null`; unmanaged harnesses should pass explicit provider/model routes and policy allow rules.
-7. Add concise usage examples to the dispatch and review skills when the adapter is operator-facing.
+1. Add a four-method adapter in `scripts/adapters/` and register it in `adapters/index.js`.
+2. Add `buildReview` and a `primary_review` capability only when strict verdict output is supported.
+3. Add executor argv/probe tests and primary-review tests when applicable.
+4. Keep missing-CLI probes deterministic: `{error, raw: null}`.
+5. Document containment and adapter capability limitations.
+6. Add concise operator examples.
 
 ## Examples
 
 ```bash
-# Pi dispatch and primary review
-node skills/relay-dispatch/scripts/dispatch.js . --executor pi --model openai/gpt-5 -b issue-42 -p "..." --rubric-file rubric.yaml
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer pi --reviewer-model openai/gpt-5 --json
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer pi --advisory-reviewer-model openai/gpt-5 --json
+# Explicit executor and model
+node skills/relay-dispatch/scripts/dispatch.js . \
+  --executor pi --model openai/gpt-5 -b issue-42 -p "..."
 
-# OpenCode dispatch, primary review, or advisory review with an explicit route
-node skills/relay-dispatch/scripts/dispatch.js . --executor opencode --model example/opencode-model-fast -b issue-42 -p "..." --rubric-file rubric.yaml
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer opencode --reviewer-model example/opencode-model-fast --json
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer opencode --advisory-reviewer-model example/opencode-model-fast --json
+# Explicit primary reviewer and model
+node skills/relay-review/scripts/review-runner.js \
+  --repo . --run-id "$RUN_ID" --reviewer pi \
+  --model openai/gpt-5 --json
 
-# Antigravity CLI dispatch and primary review
-node skills/relay-dispatch/scripts/dispatch.js . --executor antigravity --model google/antigravity-cli -b issue-42 -p "..." --rubric-file rubric.yaml
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer antigravity --reviewer-model google/antigravity-cli --json
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer antigravity --advisory-reviewer-model google/antigravity-cli --json
-
-# Cursor Agent CLI dispatch and primary review (optional harness; add cursor to managed_cli for slug-only models)
-node skills/relay-dispatch/scripts/dispatch.js . --executor cursor --model composer-2.5 -b issue-42 -p "..." --rubric-file rubric.yaml
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer cursor --reviewer-model composer-2.5 --json
-
-# ClinePass dispatch and advisory review with an explicit route
-node skills/relay-dispatch/scripts/dispatch.js . --executor cline --model cline-pass/glm-5.2 -b issue-42 -p "..." --rubric-file rubric.yaml
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer cline --advisory-reviewer-model cline-pass/z-ai/glm-5.2 --json
+# Cline is dispatch-only
+node skills/relay-dispatch/scripts/dispatch.js . \
+  --executor cline --model cline-pass/glm-5.2 -b issue-42 -p "..."
 ```

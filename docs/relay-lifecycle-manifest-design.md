@@ -102,7 +102,6 @@ anchor:
 
 review:
   rounds: 1
-  max_rounds: 2              # assurance-derived: compact=1, standard=2, hardened=3
   latest_verdict: changes_requested
   repeated_issue_count: 0
 
