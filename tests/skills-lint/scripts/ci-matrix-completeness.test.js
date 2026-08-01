@@ -28,6 +28,20 @@ function extractSuiteMatrices(content) {
       const trimmed = suiteLine.trim();
       if (trimmed === "" || trimmed.startsWith("#")) continue;
       if (indentation(suiteLine) <= matrixIndent) break;
+      if (trimmed === "include:") {
+        const includeIndent = indentation(suiteLine);
+        const suites = [];
+        for (let entryIndex = suiteIndex + 1; entryIndex < lines.length; entryIndex += 1) {
+          const entryLine = lines[entryIndex];
+          const entry = entryLine.trim();
+          if (entry === "" || entry.startsWith("#")) continue;
+          if (indentation(entryLine) <= includeIndent) break;
+          const match = entry.match(/^-\s+suite:\s+([a-z0-9]+(?:-[a-z0-9]+)*)$/);
+          if (match) suites.push(match[1]);
+        }
+        matrices.push(suites);
+        break;
+      }
       if (trimmed !== "suite:") continue;
 
       const suiteIndent = indentation(suiteLine);
@@ -95,4 +109,7 @@ test("CI suite matrix exactly covers every filesystem test suite", () => {
       `missing from filesystem: ${missingFromFilesystem.join(", ") || "(none)"}`,
     ].join("\n"),
   );
+
+  assert.match(workflow, /- suite: relay-dispatch\s+runner: macos-latest/);
+  assert.match(workflow, /- suite: relay-merge\s+runner: macos-latest/);
 });

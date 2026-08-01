@@ -580,6 +580,12 @@ test("checked-in cutover report separates reproducible preimage from historical 
   assert.equal(preimage.archive.commit, report.archived_source_run_evidence.head_sha);
   assert.match(preimage.decision_observation.provenance, /historical_operator_evidence/);
   assert.match(preimage.verification.not_checked_in.join(" "), /not.*independently.*test-verified/i);
-  assert.equal(execFileSync("git", ["rev-parse", preimage.archive.tag], { cwd: path.resolve(__dirname, "../../.."), encoding: "utf8" }).trim(), preimage.archive.commit);
-  assert.equal(execFileSync("git", ["cat-file", "-t", preimage.archive.tag], { cwd: path.resolve(__dirname, "../../.."), encoding: "utf8" }).trim(), "commit");
+  assert.equal(preimage.verification.requires_archive_ref_fetch, true);
+  assert.deepEqual(preimage.verification.operator_verification_commands, [
+    `git rev-parse ${preimage.archive.tag}`,
+    `git cat-file -t ${preimage.archive.tag}`,
+  ]);
+  assert.match(preimage.verification.not_checked_in.join(" "), /archive ref.*shallow CI clones.*historical operator evidence/i);
+  assert.match(preimage.archive.tag, /^archive\/[a-z0-9][a-z0-9._/-]+$/);
+  assert.match(preimage.archive.commit, /^[0-9a-f]{40}$/);
 });

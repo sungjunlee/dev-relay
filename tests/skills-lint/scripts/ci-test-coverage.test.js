@@ -47,6 +47,19 @@ function extractSuiteMatrix(content) {
     const trimmed = suiteLine.trim();
     if (trimmed === "" || trimmed.startsWith("#")) continue;
     if (indentation(suiteLine) <= matrixIndent) break;
+    if (trimmed === "include:") {
+      const includeIndent = indentation(suiteLine);
+      const suites = [];
+      for (let entryIndex = suiteIndex + 1; entryIndex < lines.length; entryIndex += 1) {
+        const entryLine = lines[entryIndex];
+        const entry = entryLine.trim();
+        if (entry === "" || entry.startsWith("#")) continue;
+        if (indentation(entryLine) <= includeIndent) break;
+        const match = entry.match(/^-\s+suite:\s+([a-z0-9]+(?:-[a-z0-9]+)*)$/);
+        if (match) suites.push(match[1]);
+      }
+      return suites;
+    }
     if (trimmed !== "suite:") continue;
 
     const suiteIndent = indentation(suiteLine);

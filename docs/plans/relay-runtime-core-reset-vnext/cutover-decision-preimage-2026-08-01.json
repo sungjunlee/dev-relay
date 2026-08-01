@@ -24,13 +24,15 @@
     "commit": "7c83ed0620ec25b4e182c10813724dde02fbf9d7"
   },
   "verification": {
-    "reproducible_in_repository": [
+    "operator_verification_commands": [
       "git rev-parse archive/relay-issue-1118-vnext-drain",
       "git cat-file -t archive/relay-issue-1118-vnext-drain"
     ],
+    "requires_archive_ref_fetch": true,
     "not_checked_in": [
       "The historical ~/.relay manifest and events journal bytes were intentionally not copied into this repository.",
-      "The one-run decision inventory, zero-run drain inventory, and their recorded SHA-256 values remain operator evidence and are not independently test-verified repository evidence."
+      "The one-run decision inventory, zero-run drain inventory, and their recorded SHA-256 values remain operator evidence and are not independently test-verified repository evidence.",
+      "The archive ref is not part of a source checkout and can be absent from shallow CI clones; its tag-to-commit association remains historical operator evidence unless an operator explicitly fetches that ref."
     ]
   }
 }
