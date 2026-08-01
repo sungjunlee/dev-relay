@@ -90,6 +90,8 @@ function assertMatrixRunsGuardedSuiteGlob(content) {
     "portable file discovery must recursively resolve the current matrix.suite",
   );
   assert.match(runMatch[0], /while IFS= read -r file; do[\s\S]*files\+=\("\$file"\)/);
+  assert.match(runMatch[0], /count=\$\{#files\[@\]\}/);
+  assert.match(runMatch[0], /if \[ "\$count" -eq 0 \]; then[\s\S]*exit 1[\s\S]*fi/);
   assert.match(
     runMatch[0],
     /node --test --test-concurrency=1 "\$\{files\[@\]\}"/,
@@ -134,6 +136,10 @@ function buildFixture({ wired }) {
     "          while IFS= read -r file; do",
     "            files+=(\"$file\")",
     "          done < <(find \"tests/${{ matrix.suite }}/scripts\" -type f -name '*.test.js' -print | LC_ALL=C sort)",
+    "          count=${#files[@]}",
+    "          if [ \"$count\" -eq 0 ]; then",
+    "            exit 1",
+    "          fi",
     "          node --test --test-concurrency=1 \"${files[@]}\"",
     "",
   ].join("\n");
@@ -178,4 +184,10 @@ test("workflow recursively includes nested test files", () => {
   } finally {
     fs.rmSync(testsDir, { recursive: true, force: true });
   }
+});
+
+test("coverage guard rejects a workflow without the zero-test failure branch", () => {
+  const { workflow } = buildFixture({ wired: true });
+  const unguarded = workflow.replace(/\s+count=\$\{#files\[@\]\}[\s\S]*?\s+fi\n/, "\n");
+  assert.throws(() => assertMatrixRunsGuardedSuiteGlob(unguarded), /count|zero-test|match/i);
 });

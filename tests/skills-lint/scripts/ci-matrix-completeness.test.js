@@ -64,6 +64,35 @@ function extractSuiteMatrices(content) {
   return matrices;
 }
 
+function extractSuiteRunnerEntries(content) {
+  const lines = content.split(/\r\n|\n|\r/);
+  const includeIndex = lines.findIndex((line) => line.trim() === "include:");
+  assert.notEqual(includeIndex, -1, "workflow matrix must use explicit include entries");
+  const includeIndent = indentation(lines[includeIndex]);
+  const entries = [];
+  for (let index = includeIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    if (indentation(line) <= includeIndent) break;
+    const suiteMatch = trimmed.match(/^-\s+suite:\s+([a-z0-9]+(?:-[a-z0-9]+)*)$/);
+    if (!suiteMatch) continue;
+    const entryIndent = indentation(line);
+    const runners = [];
+    for (let fieldIndex = index + 1; fieldIndex < lines.length; fieldIndex += 1) {
+      const fieldLine = lines[fieldIndex];
+      const field = fieldLine.trim();
+      if (field === "" || field.startsWith("#")) continue;
+      if (indentation(fieldLine) <= entryIndent) break;
+      const runnerMatch = field.match(/^runner:\s+([a-z0-9-]+)$/);
+      if (runnerMatch) runners.push(runnerMatch[1]);
+    }
+    assert.equal(runners.length, 1, `${suiteMatch[1]} must declare exactly one runner`);
+    entries.push({ suite: suiteMatch[1], runner: runners[0] });
+  }
+  return entries;
+}
+
 function discoverTestSuites(testsDir = TESTS_DIR) {
   function containsTest(root) {
     if (!fs.existsSync(root)) return false;
@@ -109,6 +138,15 @@ test("CI suite matrix exactly covers every filesystem test suite", () => {
     ].join("\n"),
   );
 
-  assert.match(workflow, /- suite: relay-dispatch\s+runner: macos-latest/);
-  assert.match(workflow, /- suite: relay-merge\s+runner: macos-latest/);
+  assert.deepEqual(extractSuiteRunnerEntries(workflow), [
+    { suite: "relay-ready", runner: "ubuntu-latest" },
+    { suite: "relay-plan", runner: "ubuntu-latest" },
+    { suite: "relay-dispatch", runner: "macos-latest" },
+    { suite: "relay-review", runner: "ubuntu-latest" },
+    { suite: "relay-merge", runner: "macos-latest" },
+    { suite: "relay", runner: "ubuntu-latest" },
+    { suite: "relay-config", runner: "ubuntu-latest" },
+    { suite: "relay-fleet", runner: "ubuntu-latest" },
+    { suite: "skills-lint", runner: "ubuntu-latest" },
+  ]);
 });
