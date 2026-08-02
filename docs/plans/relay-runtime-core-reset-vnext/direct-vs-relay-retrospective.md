@@ -8,7 +8,7 @@
 
 Direct orchestration completed the code reset while retaining all seven native
 executors. The installed dispatch runtime fell from 75 JavaScript files / 29,607
-LOC to 18 files / 8,156 LOC. Excluding the two migration-only shims, the core is
+LOC to 18 files / 8,165 LOC. Excluding the two migration-only shims, the core is
 16 files / 6,049 LOC. The serialized gate on Node v22.22.3 reports 701 tests, 699
 passed, 0 failed, and 2 skipped; both skips are the ledger-approved opt-in live
 canaries that require external credentials.

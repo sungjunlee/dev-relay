@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
   "evidence_status": "incomplete_non_release",
-  "generated_at": "2026-08-02T01:51:51.277Z",
+  "generated_at": "2026-08-02T14:40:16.854Z",
   "timeout_ms": 90000,
   "provenance": {
-    "git_head": "23c08f7d5a4cb9cbb63f86883bf569d86069fb62",
-    "git_tree": "e44413f5cf2311f0031b0860ab0d8b4fed2c89eb",
-    "dirty_digest": "d4923526e7e590ee2860c2b5328b8428c9559d871a0ae0adb3d4c799b9705ece",
+    "git_head": "353f6fc5b954cf8174d8c8db36d4fe3fc28162b7",
+    "git_tree": "38ca905b6ff8a2a127b679edfa602a41d1100533",
+    "dirty_digest": "22a1232727c07608f2918220d4021544ba408c92722293e0fdce583e86a4ad5c",
     "runner_sha256": "ebc656934fbbda5c9cc7dbdc0db0fce2fffec0024b51b36d7beabc8d2a28310b",
     "runtime_sha256": {
       "skills/relay-dispatch/scripts/adapter-contract.js": "dc2fd530e40799944292857ae06871d0b57579a52343280a4cb3b148d4a38a23",
@@ -25,7 +25,7 @@
       "skills/relay-dispatch/scripts/inspect.js": "7b7d5799d2f2b2c0e1a84bde1280ddee4d88493b8b110beee842a30721b3a846",
       "skills/relay-dispatch/scripts/recover.js": "a23450fcfbdabea535d1d44f73ec5468b56ee3b997c252a944f1e08b792eaac6",
       "skills/relay-dispatch/scripts/run-store.js": "bb9778aa6bf30f07f4059c050083468f719f92cc69ef42577c111b8db48b5065",
-      "skills/relay-dispatch/scripts/runtime-generation.js": "c481cc760e67fb4aeaf4bf55ae5fc8fb121528285e1ae204581ac7e340130919",
+      "skills/relay-dispatch/scripts/runtime-generation.js": "b05e338865b9c3e6463a15b9381da51cf9f990e555beba1cac88fd5833ae04c6",
       "skills/relay-review/scripts/review-runner.js": "57b458c90e2edef558b88f451bbcb3457cd7786706adc97732804019ed5cdcfc"
     },
     "platform": "darwin",
@@ -33,9 +33,9 @@
     "node": "v22.22.3"
   },
   "provenance_after": {
-    "git_head": "23c08f7d5a4cb9cbb63f86883bf569d86069fb62",
-    "git_tree": "e44413f5cf2311f0031b0860ab0d8b4fed2c89eb",
-    "dirty_digest": "d4923526e7e590ee2860c2b5328b8428c9559d871a0ae0adb3d4c799b9705ece",
+    "git_head": "353f6fc5b954cf8174d8c8db36d4fe3fc28162b7",
+    "git_tree": "38ca905b6ff8a2a127b679edfa602a41d1100533",
+    "dirty_digest": "22a1232727c07608f2918220d4021544ba408c92722293e0fdce583e86a4ad5c",
     "runner_sha256": "ebc656934fbbda5c9cc7dbdc0db0fce2fffec0024b51b36d7beabc8d2a28310b",
     "runtime_sha256": {
       "skills/relay-dispatch/scripts/adapter-contract.js": "dc2fd530e40799944292857ae06871d0b57579a52343280a4cb3b148d4a38a23",
@@ -54,7 +54,7 @@
       "skills/relay-dispatch/scripts/inspect.js": "7b7d5799d2f2b2c0e1a84bde1280ddee4d88493b8b110beee842a30721b3a846",
       "skills/relay-dispatch/scripts/recover.js": "a23450fcfbdabea535d1d44f73ec5468b56ee3b997c252a944f1e08b792eaac6",
       "skills/relay-dispatch/scripts/run-store.js": "bb9778aa6bf30f07f4059c050083468f719f92cc69ef42577c111b8db48b5065",
-      "skills/relay-dispatch/scripts/runtime-generation.js": "c481cc760e67fb4aeaf4bf55ae5fc8fb121528285e1ae204581ac7e340130919",
+      "skills/relay-dispatch/scripts/runtime-generation.js": "b05e338865b9c3e6463a15b9381da51cf9f990e555beba1cac88fd5833ae04c6",
       "skills/relay-review/scripts/review-runner.js": "57b458c90e2edef558b88f451bbcb3457cd7786706adc97732804019ed5cdcfc"
     },
     "platform": "darwin",
@@ -87,13 +87,13 @@
       "provider": "anthropic",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "9f0c4a803aadbf98bed8619e0178a250a4941c179803512bc89a0eeb78bc9f81",
-      "prompt_sha256": "8a9b379785c6ed0d56efee402f3b6fa451ab6e243ff9ea4f1c368fe46959d79a",
+      "nonce_sha256": "d18b82ac5e6d99800e75d86bf5d9a543ecc3664d16f3c2cd865259f29e72b241",
+      "prompt_sha256": "b2ff1de1ffa5f713d35b3d946e919acd0b8fe7f78f9bd93504c326752654156f",
       "status": "failed",
-      "reason": "credential_source_rejected",
+      "reason": "invocation_failed",
       "failure": {
-        "type": "credential_staging",
-        "code": "UNTRUSTED_CREDENTIAL"
+        "type": "invocation",
+        "code": "INVOCATION_FAILED"
       },
       "probe": {
         "status": "available",
@@ -116,9 +116,9 @@
       "checks": {
         "boundary": "passed",
         "nonce": "failed",
-        "cleanup": "not_started",
-        "process_scope_absent": "not_started",
-        "elapsed_ms": 847
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 3702
       }
     },
     {
@@ -128,13 +128,13 @@
       "provider": "anthropic",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "0353206ee737be23eb66e9239e4f7d081bd1388b98fc9675585ec404efbbdf12",
-      "prompt_sha256": "5d149399d3febf1b6c1de20a31150c58dc3afb881b2a67fc1c3f93cdc1d93b80",
+      "nonce_sha256": "6d6245e4d9783e22b600ce9baec2c93e94f5ecd9257b832c3b4e9636a3299cf3",
+      "prompt_sha256": "3f5df26c3ea084c5d324e1cec5a12d8429b1bfb6da7fc74aabb0c0ec7d8b8734",
       "status": "failed",
-      "reason": "credential_source_rejected",
+      "reason": "invocation_failed",
       "failure": {
-        "type": "credential_staging",
-        "code": "UNTRUSTED_CREDENTIAL"
+        "type": "invocation",
+        "code": "INVOCATION_FAILED"
       },
       "probe": {
         "status": "available",
@@ -157,9 +157,9 @@
       "checks": {
         "boundary": "passed",
         "nonce": "failed",
-        "cleanup": "not_started",
-        "process_scope_absent": "not_started",
-        "elapsed_ms": 1598
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 4949
       }
     },
     {
@@ -169,8 +169,8 @@
       "provider": "openai",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "60755ff3dbd0fc4e2a3538b26830d6997a6a56d00e172c486cbbdd6aa224ccd3",
-      "prompt_sha256": "fcdef0edc2e72fb0b5a3f508f4de3bcad89a0d10738c2c4f66ad36e1e8b9e00c",
+      "nonce_sha256": "2cf64615975c36dbab8e543242df1ce1b0052f14168a0ca7e39f0971e4df1b71",
+      "prompt_sha256": "bf5c0bdbb90ba1bc33c0cc07e9ea8fb6728173c260604e7c2c83d344a2daadc2",
       "status": "passed",
       "reason": "production_path_passed",
       "probe": {
@@ -201,14 +201,14 @@
           "sha256": "3302acbda5f53de1a71ebdb0c0f2aae0d47f9324aa9fb6b4e78a47014fd51c7d"
         }
       },
-      "invocation_sha256": "417031fcddc33025e45895ad3c86c88c07834d5cbebd16e746b035308c2aa186",
-      "output_sha256": "6709c68cc1c099815d3af0a846b76bdc1e781b191d1d2ebfdd5d4a0ff54540b3",
+      "invocation_sha256": "408f4234215e3af32309b4998cdba43057a0a99c5f99cb7d8533e9b6f3b3c438",
+      "output_sha256": "414af9a6a8cf785d59609d597d11bb4f9fecbcc41e4fc5a993d28800f1bceb79",
       "checks": {
         "boundary": "passed",
         "nonce": "passed",
         "cleanup": "passed",
         "process_scope_absent": "passed",
-        "elapsed_ms": 23926
+        "elapsed_ms": 16073
       }
     },
     {
@@ -218,8 +218,8 @@
       "provider": "openai",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "457dad273d223275cc15aaa19019bb57edb4a572431af5dec47569fc3354e09e",
-      "prompt_sha256": "f058e626d71a21338eb80840d3e53b2a4797fbd1485b484c1b4b64f16a24b3ee",
+      "nonce_sha256": "00dded7c389fab3b0c4ff3d58d568bc5061a399e1f2a0558300d2747eb1c9efa",
+      "prompt_sha256": "0cbc14d98108814f7d3f192888d959e4c3a05c24d8c4a417ad99af0fb19281e6",
       "status": "passed",
       "reason": "production_path_passed",
       "probe": {
@@ -250,14 +250,14 @@
           "sha256": "3302acbda5f53de1a71ebdb0c0f2aae0d47f9324aa9fb6b4e78a47014fd51c7d"
         }
       },
-      "invocation_sha256": "fcb61a58f33ba63388a686959d453db47d50e736eb522aca6737476c239362dd",
-      "output_sha256": "b8a9b33250acd90c74be03bf4dda74299c050b7d95a4cbb569d326d5ea1fba80",
+      "invocation_sha256": "21d0eafedbdb842e034a70f1774f7e62860d25d0544c646eed673388a931ae50",
+      "output_sha256": "b1c3df67a175b980deb095a899aa8d550ea2d8aa5fc7e3a8224e91095221e641",
       "checks": {
         "boundary": "passed",
         "nonce": "passed",
         "cleanup": "passed",
         "process_scope_absent": "passed",
-        "elapsed_ms": 13512
+        "elapsed_ms": 9473
       }
     },
     {
@@ -267,23 +267,23 @@
       "provider": "opencode-go",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "450367771fe1373d8f08d5be19a1d585ac8431715f642bda1e4f3c55a5820036",
-      "prompt_sha256": "c1d231ffce990717b441e1f8da9a7e85d0bfa6371364cc530e1f5668e2cfa8d8",
+      "nonce_sha256": "298f2e55cdeebc3c9d8b320f4e0caaa81da19ae748c526ddfead733177331513",
+      "prompt_sha256": "f1f44f1d991ed116b50c9af310639878b749be7b8d39f68adc5b520f08c08fc4",
       "status": "failed",
-      "reason": "credential_source_rejected",
+      "reason": "invocation_failed",
       "failure": {
-        "type": "credential_staging",
-        "code": "UNTRUSTED_CREDENTIAL"
+        "type": "invocation",
+        "code": "INVOCATION_FAILED"
       },
       "probe": {
         "status": "available",
-        "version": "1.18.10",
+        "version": "1.18.11",
         "executable": {
           "name": "opencode",
           "dev": 16777231,
-          "ino": 556129373,
+          "ino": 563120519,
           "mode": 33261,
-          "sha256": "7f488b3f084de90a638785b3116d5e05449a584694aa81c9a757da49139857c1"
+          "sha256": "f554a08dee4c34f4f43df63af72f0a6afbe57f955496853f411767718927bf2c"
         }
       },
       "credential_request": {
@@ -297,9 +297,9 @@
       "checks": {
         "boundary": "passed",
         "nonce": "failed",
-        "cleanup": "not_started",
-        "process_scope_absent": "not_started",
-        "elapsed_ms": 571
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 91857
       }
     },
     {
@@ -309,23 +309,23 @@
       "provider": "opencode-go",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "ee4f2cfea42866553403c8870be85528f216c0c5748edfcb1755cb40df49c5f8",
-      "prompt_sha256": "2edd85ff70b962bad53b32204e7e6c6f9f7f8a14421aab7c1f9cd96a303cdf88",
+      "nonce_sha256": "c75d6f425a6fce9ee571adc3aabac79db9b161d90a49127e27fe78892108330b",
+      "prompt_sha256": "8258a7dd410c39d8614a0ed70d86cec21811fc2434209d8affa57adec2372f48",
       "status": "failed",
-      "reason": "credential_source_rejected",
+      "reason": "invocation_failed",
       "failure": {
-        "type": "credential_staging",
-        "code": "UNTRUSTED_CREDENTIAL"
+        "type": "invocation",
+        "code": "INVOCATION_FAILED"
       },
       "probe": {
         "status": "available",
-        "version": "1.18.10",
+        "version": "1.18.11",
         "executable": {
           "name": "opencode",
           "dev": 16777231,
-          "ino": 556129373,
+          "ino": 563120519,
           "mode": 33261,
-          "sha256": "7f488b3f084de90a638785b3116d5e05449a584694aa81c9a757da49139857c1"
+          "sha256": "f554a08dee4c34f4f43df63af72f0a6afbe57f955496853f411767718927bf2c"
         }
       },
       "credential_request": {
@@ -339,9 +339,9 @@
       "checks": {
         "boundary": "passed",
         "nonce": "failed",
-        "cleanup": "not_started",
-        "process_scope_absent": "not_started",
-        "elapsed_ms": 1235
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 94272
       }
     },
     {
@@ -351,13 +351,13 @@
       "provider": "qwen-token-plan",
       "tool_network_access": "disabled",
       "tool_network_enforcement": "native",
-      "nonce_sha256": "9c5da0f8f95d90a02908e96c3b48bc6f998cca789a2219d0c67452ce045014bd",
-      "prompt_sha256": "556a8e7f1babbee7d4b6a0828ebe7fae15997d65961a4d12c7c31c63b42582ed",
+      "nonce_sha256": "f12e69db9020100880d06d85069c46c5755f89e47898040ba124c615086ac176",
+      "prompt_sha256": "e7ed8037227913a66c2e848fa872af27eef7dd39baffc043b2a0bd84f83f4331",
       "status": "failed",
-      "reason": "credential_source_rejected",
+      "reason": "sandbox_environment_failed",
       "failure": {
-        "type": "credential_staging",
-        "code": "UNTRUSTED_CREDENTIAL"
+        "type": "sandbox",
+        "code": "SANDBOX_DENIED"
       },
       "probe": {
         "status": "available",
@@ -381,9 +381,9 @@
       "checks": {
         "boundary": "passed",
         "nonce": "failed",
-        "cleanup": "not_started",
-        "process_scope_absent": "not_started",
-        "elapsed_ms": 689
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 2736
       }
     },
     {
@@ -393,13 +393,13 @@
       "provider": "qwen-token-plan",
       "tool_network_access": "disabled",
       "tool_network_enforcement": "native",
-      "nonce_sha256": "5f58ebbe6e6b7a93ee6fefd7574d8c10c8643a9e7349adb33fa4ed3dbd589cf9",
-      "prompt_sha256": "ca95f1d5680191fe501b0cbc22be3cab46a53b19820c85ad085c8e554db8f56a",
+      "nonce_sha256": "585cbf6a4ac639019d4eba609e8b8b8278576a129b4b976bce12ad1284d861df",
+      "prompt_sha256": "9e84ea5c86d5107565f239386613c7a3b1d26dcd73332f84907a047b8a8b6679",
       "status": "failed",
-      "reason": "credential_source_rejected",
+      "reason": "sandbox_environment_failed",
       "failure": {
-        "type": "credential_staging",
-        "code": "UNTRUSTED_CREDENTIAL"
+        "type": "sandbox",
+        "code": "EXECUTION_ENVIRONMENT_UNAVAILABLE"
       },
       "probe": {
         "status": "available",
@@ -423,9 +423,9 @@
       "checks": {
         "boundary": "passed",
         "nonce": "failed",
-        "cleanup": "not_started",
-        "process_scope_absent": "not_started",
-        "elapsed_ms": 1250
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 3089
       }
     },
     {
@@ -435,8 +435,8 @@
       "provider": "google",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "24202fc6a33462381c32d36c31d49dd9639f103e720a2aeb4b240a61d9926963",
-      "prompt_sha256": "7aff285cfce5e735ab19d409c3bcdeed4d82e76aa76ec2b23eadea43d9030bfe",
+      "nonce_sha256": "b613375d7505049ac28c7361608ec19af32b4c0f05b49705aeb07ab0ccbf63f5",
+      "prompt_sha256": "64f72afb952fed0c0ea285e79276e8a0792755c05005e87058bb982b9c019c52",
       "status": "failed",
       "reason": "invocation_timeout",
       "failure": {
@@ -466,7 +466,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 63165
+        "elapsed_ms": 62409
       }
     },
     {
@@ -476,8 +476,8 @@
       "provider": "google",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "c47364f4c3d0f62a3d8cd80203ec4efbd81e5d6ee40ee8e4fcbe445927cd47d2",
-      "prompt_sha256": "772883f66540193139caa79a6bc03a6e8553255742710b0ff42a41ce580a89a5",
+      "nonce_sha256": "86d3aef31e2c672505b6f8361c52b36e1d991184d22fe19b1cf37a99bb9cbf1b",
+      "prompt_sha256": "1d6d2cad0fd5d83c4deb454301543172934ec044292bfec0e5f8f0f83cd1f66b",
       "status": "failed",
       "reason": "credential_auth_failed",
       "failure": {
@@ -507,7 +507,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 3311
+        "elapsed_ms": 3026
       }
     },
     {
@@ -517,8 +517,8 @@
       "provider": "cursor",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "f112e81e11f5ffeb70acdff84df55995397a58bcf1343a560ba768a9130f6d63",
-      "prompt_sha256": "bb240c626caa80c70d515b9ee0d753fa20b3c142349fbaa952d287eaa6656d06",
+      "nonce_sha256": "d6e39f1b69a43794d590f6510e5d3cbe18f8b8a3872d9b3dad3ad54a52657a90",
+      "prompt_sha256": "b969f29aa5f290f85c297cf25ed975809cf45ff20dc49165ef493b3cd26d6587",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -547,7 +547,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 3056
+        "elapsed_ms": 2396
       }
     },
     {
@@ -557,8 +557,8 @@
       "provider": "cursor",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "b302870fc4308bf3b2c80dbb4b596b098933a84a6372bd2ce38a3848b79e792a",
-      "prompt_sha256": "625f7b5bebf6064beeefb732d8bcdc0868fa49d324a127cca5df296f0fb52058",
+      "nonce_sha256": "db13458bbde3d475b2697a9a2800ef2eca344080581f9f36c7a901f3e3d90914",
+      "prompt_sha256": "53f40bf3cde43bc328c06c54c5e5e1a5ada4be19208a9f485ffb2036c882bdf1",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -587,7 +587,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 3397
+        "elapsed_ms": 2938
       }
     },
     {
@@ -597,8 +597,8 @@
       "provider": "cline-pass",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "ae5a8a8fe3e72c2585c226b7b92a3d1335db7b6ce857516d7e6d9521d86b6436",
-      "prompt_sha256": "0cd8f575901f3f2a364c3eb470e4a807e79d4f6b64717db9dc50fc7db8547af3",
+      "nonce_sha256": "ae2b3ae16004026316f86683fdbdf28b4063fadd7aa896639c778ff72a404def",
+      "prompt_sha256": "aa671654b041cca7cd94df21f21f54419488069fbbf1a57fe4b2bac9e4cc3716",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -607,11 +607,11 @@
       },
       "probe": {
         "status": "available",
-        "version": "3.0.48",
+        "version": "3.0.49",
         "executable": {
           "name": "cline",
           "dev": 16777231,
-          "ino": 560858396,
+          "ino": 563543383,
           "mode": 33261,
           "sha256": "71d1b27aeeebdaa0b91c4babddd1f635eb7f5783257c2b3324a2cb22924cf60f"
         }
@@ -627,7 +627,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 4355
+        "elapsed_ms": 3725
       }
     }
   ],

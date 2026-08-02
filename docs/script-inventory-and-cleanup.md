@@ -6,13 +6,13 @@ runtime. Historical cleanup rationale remains under [`docs/archive/`](archive/).
 ## Installed dispatch package
 
 The sealed vNext production bootstrap currently installs **18 JavaScript
-files / 8,156 production LOC** under `skills/relay-dispatch/scripts/`.
+files / 8,257 production LOC** under `skills/relay-dispatch/scripts/`.
 
 | Group | Files | LOC | Purpose |
 | --- | ---: | ---: | --- |
 | Core | 8 | 5,691 | `dispatch`, `inspect`, `recover`, `run-store`, `facts`, `host`, `exec`, and `adapter-contract`. |
 | Universal adapters | 8 | 358 | Registry and the seven retained native executor descriptors. |
-| Migration overlay | 2 | 2,107 | `runtime-generation` and `legacy-recovery-shim`; required only for controlled cutover. |
+| Migration overlay | 2 | 2,208 | `runtime-generation` and `legacy-recovery-shim`; required only for controlled cutover. |
 
 After the migration gate, the installed production target is **16 JavaScript
 files / 6,049 production LOC**: the core plus all seven executors. This target
