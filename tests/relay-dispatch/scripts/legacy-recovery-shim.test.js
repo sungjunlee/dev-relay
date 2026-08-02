@@ -92,7 +92,7 @@ test("retired mutation policy flags fail closed instead of being silently ignore
 
 test("every supported compatibility invocation is durably typed in the repository rollout ledger", () => {
   const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-shim-observation-")));
-  execFileSync("git", ["init", "-q", repo]);
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
   translateLegacyRecovery("reconcile-run", ["--repo", repo, "--run-id", "issue-1142-20260802000000000-aaaaaaaa", "--dry-run"]);
   const store = generation.initializeStore({ checkoutRoot: repo, remote: `local/${path.basename(repo)}` });
   const observations = generation.readRolloutObservations(store).observations;
@@ -106,7 +106,7 @@ test("every supported compatibility invocation is durably typed in the repositor
 
 test("manifest-located compatibility records the exact secure legacy artifact read", () => {
   const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-shim-manifest-")));
-  execFileSync("git", ["init", "-q", repo]);
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
   const manifest = path.join(repo, "legacy-run.md"), bytes = Buffer.from(`paths:\n  repo_root: '${repo}'\n`);
   fs.writeFileSync(manifest, bytes);
   translateLegacyRecovery("recover-state", ["--manifest", manifest, "--dry-run"]);
@@ -119,7 +119,9 @@ test("manifest-located compatibility records the exact secure legacy artifact re
 
 test("historical manifest CLI inspects the sibling vNext run directory end to end", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-shim-e2e-"))), repo = path.join(root, "repo"), runs = path.join(root, "runs");
-  fs.mkdirSync(repo); fs.mkdirSync(runs); execFileSync("git", ["init", "-q", repo]);
+  // Pin the branch: the run identity below declares "main", and an ambient init.defaultBranch of
+  // "master" (the CI runner's default) would otherwise fail the worktree-identity check.
+  fs.mkdirSync(repo); fs.mkdirSync(runs); execFileSync("git", ["init", "-q", "-b", "main", repo]);
   execFileSync("git", ["-C", repo, "config", "user.email", "relay@example.test"]); execFileSync("git", ["-C", repo, "config", "user.name", "Relay Test"]);
   fs.writeFileSync(path.join(repo, "README.md"), "shim e2e\n"); execFileSync("git", ["-C", repo, "add", "README.md"]); execFileSync("git", ["-C", repo, "commit", "-qm", "initial"]);
   const runId = "issue-1142-20260802000000000-aaaaaaaa", runDir = path.join(runs, runId), manifest = path.join(runs, `${runId}.md`);
