@@ -105,6 +105,35 @@ function fixture(label) {
   return { root, stateDir: store.stateDir, repository, store };
 }
 
+// A store initialized by an earlier runtime has none of the support directories added since. Admission
+// must treat that as an upgrade state, not corruption, or every existing repository breaks on upgrade:
+// dispatch and recover reach peekStore before anything is allowed to write.
+test("admission accepts a store predating the newer support directories and upgrades it on the next write", () => {
+  const value = fixture("upgrade-support-dirs");
+  const upgradeCreated = ["transitionAborts", "quiescence", "rollout", "rolloutSeals", "terminalReceipts"];
+  for (const key of upgradeCreated) fs.rmSync(value.store.paths[key], { recursive: true, force: true });
+
+  const peeked = generation.peekStore(value.repository);
+  assert.notEqual(peeked, null, "an upgradeable store must remain admissible");
+  for (const key of upgradeCreated) {
+    assert.equal(fs.existsSync(value.store.paths[key]), false, "the read-only peek must create nothing");
+  }
+
+  generation.initializeStore(value.repository);
+  for (const key of upgradeCreated) {
+    assert.equal(fs.existsSync(value.store.paths[key]), true, `${key} must exist after the upgrading write`);
+  }
+});
+
+test("admission still rejects a store missing a directory it has always had", () => {
+  const value = fixture("upgrade-core-missing");
+  fs.rmSync(value.store.paths.events, { recursive: true, force: true });
+  assert.throws(
+    () => generation.peekStore(value.repository),
+    (error) => error.code === "INVALID_GENERATION_STORE" && /missing generation-events/.test(error.message),
+  );
+});
+
 test("read-only generation peek preserves absence and rejects partial stores", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-generation-peek-")));
   execFileSync("git", ["init", "-q", root]);

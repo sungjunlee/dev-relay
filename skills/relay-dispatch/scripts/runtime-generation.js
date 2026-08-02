@@ -343,21 +343,30 @@ function peekStore({ checkoutRoot, remote }) {
   const repositoryBytes = secureRead(storePaths.repository, "repository.json");
   if (!repositoryBytes) fail("INVALID_GENERATION_STORE", "existing generation store is missing repository.json");
   const loaded = validateRepositoryRecord(parseJson(repositoryBytes, "repository.json"), resolved.repository);
-  for (const [label, directoryPath] of Object.entries({
+  // Directories a store has always had. Their absence means the store is genuinely partial.
+  const requiredDirectories = {
     "generation-events": storePaths.events,
     "legacy-recovery-overlays": storePaths.overlays,
     "generation-transitions": storePaths.transitions,
+  };
+  // Support directories introduced after stores were already in use. A store written by an earlier
+  // runtime simply does not have them, which is an upgrade state rather than corruption. Every write
+  // path opens the store through initializeResolvedStore, which creates them idempotently, so this
+  // read-only preflight must not reject them -- and still creates nothing itself.
+  const upgradeCreatedDirectories = {
     "generation-transition-aborts": storePaths.transitionAborts,
     "legacy-quiescence-attestations": storePaths.quiescence,
     "rollout-observations": storePaths.rollout,
     "rollout-observation-seals": storePaths.rolloutSeals,
     "vnext-terminal-receipts": storePaths.terminalReceipts,
-  })) {
+  };
+  for (const [label, directoryPath] of Object.entries({ ...requiredDirectories, ...upgradeCreatedDirectories })) {
     let stat;
     try { stat = fs.lstatSync(directoryPath); }
     catch (error) {
-      if (error.code === "ENOENT") fail("INVALID_GENERATION_STORE", `existing generation store is missing ${label}`);
-      throw error;
+      if (error.code !== "ENOENT") throw error;
+      if (Object.hasOwn(requiredDirectories, label)) fail("INVALID_GENERATION_STORE", `existing generation store is missing ${label}`);
+      continue;
     }
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directoryPath) !== directoryPath) {
       fail("UNTRUSTED_GENERATION_PATH", `${label} must be a canonical real directory`);
