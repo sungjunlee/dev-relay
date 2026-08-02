@@ -23,9 +23,15 @@ const FAKE_CURSOR = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-cu
 const FAKE_CLINE = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-cline.js");
 const CRASH_AFTER_START = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-crash-after-start-preload.js");
 const WRITE_CONTAINMENT_EXECUTOR = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-write-containment-executor.js");
+const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-adapter-runtime-preload.js");
 
 function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+function installNodeFixture(source, target) {
+  const bytes = fs.readFileSync(source, "utf8").replace(/^#![^\n]*/, `#!${process.execPath}`);
+  fs.writeFileSync(target, bytes, { mode: 0o755 });
 }
 
 function fixture(label, { active = true } = {}) {
@@ -49,13 +55,11 @@ function fixture(label, { active = true } = {}) {
   const rubric = path.join(root, "rubric.yaml");
   fs.writeFileSync(prompt, "Implement the requested change.\n");
   fs.writeFileSync(rubric, "done_criteria:\n  - change is reviewable\n");
-  fs.copyFileSync(FAKE_CODEX, path.join(bin, "codex"));
-  fs.chmodSync(path.join(bin, "codex"), 0o755);
-  fs.copyFileSync(FAKE_CURSOR, path.join(bin, "agent"));
-  fs.chmodSync(path.join(bin, "agent"), 0o755);
-  fs.copyFileSync(FAKE_CLINE, path.join(bin, "cline"));
-  fs.chmodSync(path.join(bin, "cline"), 0o755);
-  const env = { ...process.env, RELAY_HOME: relayHome, RELAY_CURSOR_AGENT_BIN: path.join(bin, "agent"), RELAY_CLINE_BIN: path.join(bin, "cline"),
+  installNodeFixture(FAKE_CODEX, path.join(bin, "codex"));
+  installNodeFixture(FAKE_CURSOR, path.join(bin, "agent"));
+  const fakeCline = path.join(bin, "node_modules", "cline", "bin", "cline"); fs.mkdirSync(path.dirname(fakeCline), { recursive: true }); installNodeFixture(FAKE_CLINE, fakeCline);
+  const env = { ...process.env, RELAY_HOME: relayHome, RELAY_CURSOR_AGENT_BIN: path.join(bin, "agent"), RELAY_CLINE_BIN: fakeCline,
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${ADAPTER_RUNTIME_PRELOAD}`].filter(Boolean).join(" "),
     PATH: `${bin}${path.delimiter}${process.env.PATH}` };
   if (active) {
     const identity = dispatch.repositoryIdentity(fs.realpathSync(repo));
@@ -71,7 +75,8 @@ function fixture(label, { active = true } = {}) {
 }
 
 function run(value, args, env = value.env) {
-  return spawnSync(process.execPath, [DISPATCH, value.repo, ...args], { encoding: "utf8", env, timeout: 60_000 });
+  const network = args.includes("--network-access") ? [] : ["--network-access", "enabled"];
+  return spawnSync(process.execPath, [DISPATCH, value.repo, ...args, ...network], { encoding: "utf8", env, timeout: 60_000 });
 }
 
 function json(stdout) { return JSON.parse(stdout); }
@@ -100,7 +105,7 @@ function byteTree(root) {
   return visit(root);
 }
 
-test("cleanup-incomplete does not publish an attempt terminal or release ownership", async () => {
+test("cleanup recovery refuses to release an owner without a signed exact obligation", async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-cleanup-pending-")));
   const runDir = path.join(root, "run"), worktree = path.join(root, "worktree"); fs.mkdirSync(runDir); fs.mkdirSync(worktree);
   fs.writeFileSync(path.join(runDir, "events.jsonl"), "");
@@ -109,7 +114,7 @@ test("cleanup-incomplete does not publish an attempt terminal or release ownersh
   host.waitForTerminalResult = async () => { throw Object.assign(new Error("cleanup remains"), { code: "HOST_CLEANUP_INCOMPLETE" }); };
   try {
     await assert.rejects(dispatch.finishAttempt({ cli: {}, store: null, adapter: null, started: { receipt: {}, lockContext, runDir } }),
-      (error) => error.code === "HOST_CLEANUP_INCOMPLETE");
+      (error) => error.code === "BREAK_EVIDENCE_INSUFFICIENT" && error.cleanup_recovery === "incomplete");
     assert.equal(fs.readFileSync(path.join(runDir, "events.jsonl"), "utf8"), "");
     assert.equal(host.inspectOwnership({ runDir }).status, "live");
   } finally {
@@ -121,11 +126,15 @@ test("dry-run validates the closed vNext surface while writing zero durable byte
   const value = fixture("dry", { active: false });
   const stateDir = path.join(value.repo, ".git", "relay-runtime-vnext");
   const result = run(value, ["--branch", "dry-run", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--dry-run", "--json"]);
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   assert.equal(json(result.stdout).durable_bytes_written, 0);
   assert.equal(json(result.stdout).invocation.validation, "adapter_build_invocation");
+  assert.equal(json(result.stdout).invocation.launch_boundary, "host_sandbox_required_do_not_execute_raw");
   assert.equal(fs.existsSync(stateDir), false);
   assert.equal(fs.existsSync(value.relayHome), false);
+  const cursor = run(value, ["--executor", "cursor", "--branch", "cursor-dry", "--prompt", "x", "--rubric-file", value.rubric, "--dry-run", "--json"]);
+  assert.equal(cursor.status, 0, cursor.stderr); assert.deepEqual(json(cursor.stdout).invocation.private_env_paths,
+    [{ key: "CURSOR_CONFIG_DIR", root: "home", relative: ".cursor" }, { key: "CURSOR_DATA_DIR", root: "scratch", relative: "cursor-data" }]);
 
   const absentSource = path.join(value.root, "never-read-auth.json");
   const credentialDryRun = run(value, ["--branch", "credential-dry", "--prompt", "x", "--rubric-file", value.rubric, "--credential-env", "OPENAI_API_KEY",
@@ -162,6 +171,21 @@ test("dry-run validates the closed vNext surface while writing zero durable byte
   const obsolete = run(value, ["--branch", "old", "--prompt", "x", "--rubric-file", value.rubric, "--auto-recover-commit"]);
   assert.notEqual(obsolete.status, 0);
   assert.match(obsolete.stderr, /Unknown option '--auto-recover-commit'/);
+});
+
+test("tool-network disable fails closed for informational executors and preserves provider transport for native ones", () => {
+  const value = fixture("network-disabled-preflight");
+  const unsupported = run(value, ["--branch", "network-disabled-codex", "--prompt-file", value.prompt, "--rubric-file", value.rubric,
+    "--network-access", "disabled", "--dry-run", "--json"]);
+  assert.notEqual(unsupported.status, 0);
+  assert.match(unsupported.stderr, /tool network disable/i);
+  // pi is the only adapter declaring networkControl "native"; claude is deliberately informational,
+  // because safe mode preserves admin-managed hooks and so cannot prove complete tool egress denial.
+  const result = run(value, ["--executor", "pi", "--branch", "network-disabled-native", "--prompt-file", value.prompt, "--rubric-file", value.rubric,
+    "--network-access", "disabled", "--dry-run", "--json"]);
+  assert.equal(result.status, 0, result.stderr);
+  const output = json(result.stdout); assert.equal(output.invocation.network_access, "enabled"); assert.equal(output.invocation.tool_network_access, "disabled");
+  assert.equal(fs.existsSync(fixtureRunsDir(value)), false);
 });
 
 test("removed readiness identity flags fail closed instead of being silently ignored", () => {
@@ -284,7 +308,7 @@ test("dispatch persists immutable bindings and exact attempt facts but never aut
     "--rubric-file", value.rubric, "--done-criteria-file", value.rubric,
     "--executor", "codex", "--model", "test/model", "--bootstrap-vnext", "--json",
   ]);
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const output = json(result.stdout);
   const record = readRunRecord({ runDir: output.run_dir });
   assert.equal(record.git.start_sha, before);
@@ -308,10 +332,9 @@ test("dispatch persists immutable bindings and exact attempt facts but never aut
   assert.deepEqual(output.inspection.recommended_action, independentlyInspected.recommended_action);
 });
 
-test("the actual executor process tree enforces write, temp, service, and disabled-network boundaries", async () => {
+test("the actual executor process tree enforces filesystem/service boundaries and exposes enabled transport honestly", async () => {
   const value = fixture("write-containment");
-  fs.copyFileSync(WRITE_CONTAINMENT_EXECUTOR, path.join(value.root, "bin", "codex"));
-  fs.chmodSync(path.join(value.root, "bin", "codex"), 0o755);
+  installNodeFixture(WRITE_CONTAINMENT_EXECUTOR, path.join(value.root, "bin", "codex"));
   const activeTarget = path.join(value.repo, "active-checkout-escape.txt");
   const siblingTarget = path.join(value.root, "sibling-escape.txt");
   const outsideTarget = path.join(os.tmpdir(), `relay-outside-escape-${crypto.randomUUID()}.txt`);
@@ -330,7 +353,7 @@ test("the actual executor process tree enforces write, temp, service, and disabl
     const result = run(value, ["--branch", "contained", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--json"], {
       ...value.env,
     });
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
     const output = json(result.stdout);
     const proof = JSON.parse(fs.readFileSync(path.join(output.worktree, "containment-proof.json"), "utf8"));
     assert.equal(proof.worktree, "written");
@@ -338,7 +361,7 @@ test("the actual executor process tree enforces write, temp, service, and disabl
     assert.match(proof.active, /^denied:/);
     assert.match(proof.sibling, /^denied:/);
     assert.match(proof.outside, /^denied:/);
-    assert.match(proof.network, /^denied:(EPERM|EACCES)$/);
+    assert.equal(proof.network, "connected");
     assert.match(proof.apple_event, /^denied:/);
     for (const label of ["git_add", "git_commit", "git_ref", "git_config", "git_hook"]) {
       assert.match(proof[label], /^denied:/, `${label} must stay owned by canonical recovery`);
@@ -356,8 +379,7 @@ test("the actual executor process tree enforces write, temp, service, and disabl
 
 test("read-only dispatch denies worktree writes while retaining only result and private temp writes", () => {
   const value = fixture("read-only-containment");
-  fs.copyFileSync(WRITE_CONTAINMENT_EXECUTOR, path.join(value.root, "bin", "codex"));
-  fs.chmodSync(path.join(value.root, "bin", "codex"), 0o755);
+  installNodeFixture(WRITE_CONTAINMENT_EXECUTOR, path.join(value.root, "bin", "codex"));
   fs.writeFileSync(value.prompt, JSON.stringify({ active: path.join(value.repo, "active.txt"), sibling: path.join(value.root, "sibling.txt"),
     outside: path.join(os.tmpdir(), `relay-readonly-${crypto.randomUUID()}`), proof_in_result: true }));
   const result = run(value, ["--branch", "read-only-contained", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--sandbox", "read-only", "--bootstrap-vnext", "--json"], value.env);
@@ -520,7 +542,7 @@ test("resume revalidates the exact action key under the acquired run lock before
     recommended_action: { kind: "redispatch", key: (calls++ === 0 ? "a" : "b").repeat(64) },
   });
   try {
-    const cli = dispatch.parseCli([value.repo, "--run-id", output.run_id, "--prompt", "retry", "--json"]);
+    const cli = dispatch.parseCli([value.repo, "--run-id", output.run_id, "--prompt", "retry", "--network-access", "enabled", "--json"]);
     await assert.rejects(dispatch.executeForeground(cli, { inspectRun }), (error) => error.code === "RUN_ACTION_CHANGED");
   } finally {
     if (previousHome === undefined) delete process.env.RELAY_HOME; else process.env.RELAY_HOME = previousHome;

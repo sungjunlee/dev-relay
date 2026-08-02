@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { normalizePrivateEnvPaths } = require("./adapter-contract");
 
 const OWNERSHIP = "ownership";
 const OWNER_RE = /^(\d{12})\.owner\.json$/;
@@ -48,6 +49,20 @@ function verifySigned(value, secret, field = "auth_sha256") {
 function safeAttempt(attemptId) {
   if (typeof attemptId !== "string" || !ATTEMPT_RE.test(attemptId)) fail("invalid attempt id", "INVALID_ATTEMPT_ID");
   return attemptId;
+}
+function normalizedPrivatePaths(value, code = "INVALID_INVOCATION") { try { return normalizePrivateEnvPaths(value); } catch (cause) { fail(cause.message, code, { cause }); } }
+function attemptPrivateRoot(runDir, owner, short) {
+  const parent = canonicalDir(short ? fs.realpathSync("/tmp") : runDir, "executor private parent"), name = short ? `relay-${sha256(`${owner.lock_id}:${owner.attempt_id}`).slice(0, 32)}` : `executor-credentials-${owner.attempt_id}`;
+  const target = path.join(parent, name);
+  if (short && Buffer.byteLength(target) > 64) fail("short private root exceeds 64 bytes", "INVALID_INVOCATION"); return target;
+}
+function privatePathEnvironment(declarations, roots, environment, code) {
+  const values = {}; for (const item of normalizedPrivatePaths(declarations, code)) {
+    if (Object.hasOwn(environment, item.key)) fail("private environment path collides with caller environment", code);
+    const root = roots[item.root], target = root && path.resolve(root, item.relative), relative = root && path.relative(root, target);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || (item.root === "scratch" && Buffer.byteLength(target) > 83)) fail("private environment path escapes its root or exceeds the short-path limit", code);
+    fs.mkdirSync(target, { recursive: true, mode: 0o700 }); fs.chmodSync(target, 0o700); values[item.key] = target;
+  } return values;
 }
 function canonicalDir(value, label) {
   if (typeof value !== "string" || !path.isAbsolute(value)) fail(`${label} must be absolute`, "INVALID_PATH");
@@ -126,7 +141,7 @@ function environmentEntries(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${label} must be an object`, "INVALID_INVOCATION");
   const result = {};
   for (const [key, entry] of Object.entries(value)) {
-    const injection = /^(?:NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PHPRC|PHP_INI_SCAN_DIR|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|PERL5DB|RUBYOPT|RUBYLIB|GEM_HOME|GEM_PATH|GCONV_PATH|LOCPATH|NLSPATH)$|^(?:DYLD|LD)_|^LUA_(?:INIT|PATH|CPATH)(?:_.*)?$/.test(key);
+    const injection = /^(?:SSL_CERT_FILE|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PHPRC|PHP_INI_SCAN_DIR|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|PERL5DB|RUBYOPT|RUBYLIB|GEM_HOME|GEM_PATH|GCONV_PATH|LOCPATH|NLSPATH)$|^(?:DYLD|LD)_|^LUA_(?:INIT|PATH|CPATH)(?:_.*)?$/.test(key);
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || injection || typeof entry !== "string" || entry.includes("\0")) {
       fail(`${label} contains an invalid environment entry`, "INVALID_INVOCATION");
     }
@@ -153,6 +168,17 @@ function regularFileBinding(filePath, label, { canonical = true } = {}) {
     const bytes = fs.readFileSync(fd);
     return { path: filePath, size: bytes.length, sha256: sha256(bytes), dev: stat.dev, ino: stat.ino, bytes };
   } finally { fs.closeSync(fd); }
+}
+function trustedSystemCaFile() {
+  const canonical = fs.realpathSync("/etc/ssl/cert.pem"), fd = fs.openSync(canonical, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const stat = fs.fstatSync(fd), pathStat = fs.lstatSync(canonical);
+    if (!stat.isFile() || pathStat.isSymbolicLink() || stat.dev !== pathStat.dev || stat.ino !== pathStat.ino
+      || canonical !== path.resolve(canonical) || fs.realpathSync(canonical) !== canonical || stat.uid !== 0 || (stat.mode & 0o022) !== 0)
+      fail("system CA bundle is not a canonical root-owned regular file", "UNTRUSTED_SYSTEM_CA");
+    const header = Buffer.alloc(4096), count = fs.readSync(fd, header, 0, header.length, 0);
+    if (!header.subarray(0, count).includes(Buffer.from("BEGIN CERTIFICATE"))) fail("system CA bundle has no certificate data", "UNTRUSTED_SYSTEM_CA");
+  } finally { fs.closeSync(fd); } return canonical;
 }
 function verifyFileBinding(binding, label) {
   if (!binding || typeof binding !== "object" || typeof binding.path !== "string") fail(`${label} binding is invalid`, "HOST_CONFIG_MISMATCH");
@@ -264,45 +290,107 @@ function sandboxFile(value, label, mustExist) {
   }
   return resolved;
 }
-function sandboxInvocation({ role, command, args = [], readRoots = [], writeRoots = [], readFiles = [], writeFiles = [], networkAccess = "disabled", env = process.env, ownershipDir = null, platform = process.platform } = {}) {
+function runtimeDependencyRules(executables, declaration = { executableParent: null, interpreterParent: null }, environment = process.env) {
+  if (Object.keys(declaration || {}).sort().join(",") !== "executableParent,interpreterParent") fail("runtime dependency declaration is invalid", "INVALID_INVOCATION");
+  const rootFor = (file, depth) => {
+    if (depth === null) return null; if (!Number.isInteger(depth) || depth < 0 || depth > 2) fail("runtime dependency parent depth is invalid", "INVALID_INVOCATION");
+    let root = path.dirname(file); for (let index = 0; index < depth; index += 1) root = path.dirname(root);
+    if (root === path.parse(root).root) fail("runtime dependency declaration is too broad", "INVALID_INVOCATION");
+    const canonical = canonicalDir(root, "runtime dependency root"), homes = [os.homedir(), environment.HOME]
+      .filter((value) => typeof value === "string" && path.isAbsolute(value)).map((value) => path.resolve(value));
+    if (homes.some((home) => { const relative = path.relative(canonical, home); return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)); })) fail("runtime dependency root cannot include HOME", "INVALID_INVOCATION");
+    return canonical;
+  };
+  const roots = [], commandRoot = rootFor(executables[0], declaration.executableParent);
+  if (commandRoot) roots.push(commandRoot); const interpreter = executables.at(-1);
+  if (interpreter && interpreter !== executables[0] && path.basename(interpreter) !== "env") {
+    const interpreterRoot = rootFor(interpreter, declaration.interpreterParent); if (interpreterRoot) roots.push(interpreterRoot);
+  } return [...new Set(roots)];
+}
+function darwinLinkedLibraryFiles(executables) {
+  if (process.platform !== "darwin") return [];
+  const main = executables[0], queue = [...executables], seen = new Set(executables), libraries = [];
+  const expand = (value, loader) => value.replace(/^@loader_path/, path.dirname(loader)).replace(/^@executable_path/, path.dirname(main));
+  while (queue.length) {
+    const binary = queue.shift(); let linked, loadCommands;
+    try { linked = execFileSync("/usr/bin/otool", ["-L", binary], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 });
+      loadCommands = execFileSync("/usr/bin/otool", ["-l", binary], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 });
+    } catch { continue; }
+    const rpaths = [...loadCommands.matchAll(/\n\s*cmd LC_RPATH\n\s*cmdsize \d+\n\s*path (\S+) \(offset \d+\)/g)].map((match) => expand(match[1], binary));
+    for (const raw of linked.split(/\r?\n/).slice(1).map((line) => line.trim().split(/\s+\(/, 1)[0]).filter(Boolean)) {
+      const candidates = raw.startsWith("@rpath/") ? rpaths.map((root) => path.join(root, raw.slice(7))) : [expand(raw, binary)], candidate = candidates.find((file) => path.isAbsolute(file) && fs.existsSync(file)); if (!candidate) continue;
+      const canonical = fs.realpathSync(candidate), stat = fs.lstatSync(canonical);
+      if (!stat.isFile() || stat.isSymbolicLink()) fail("linked runtime library is unsafe", "INVALID_INVOCATION");
+      if (!seen.has(canonical)) { seen.add(canonical); libraries.push(canonical); queue.push(canonical); }
+    }
+  } return libraries;
+}
+function darwinRuntimeSupportFiles(libraries) {
+  if (process.platform !== "darwin") return []; const files = [];
+  for (const library of libraries) {
+    const match = /^(.*)\/Cellar\/(openssl(?:@[^/]+)?)\//.exec(library); if (!match) continue;
+    for (const name of ["openssl.cnf", "cert.pem"]) {
+      const visible = path.join(match[1], "etc", match[2], name); if (!fs.existsSync(visible)) continue;
+      const canonical = fs.realpathSync(visible), stat = fs.lstatSync(canonical);
+      if (!stat.isFile() || stat.isSymbolicLink()) fail("runtime support file is unsafe", "INVALID_INVOCATION");
+      files.push(visible, canonical);
+    }
+  } return [...new Set(files)];
+}
+function runtimeBindingSet(command, environment, declaration) {
+  const executable = resolveExecutable(command, environment), executables = shebangExecutables(executable, environment);
+  runtimeDependencyRules(executables, declaration, environment); const libraries = darwinLinkedLibraryFiles(executables);
+  const files = [...executables, ...libraries, ...darwinRuntimeSupportFiles(libraries)].map((file) => fs.realpathSync(file));
+  const runtimeFiles = [...new Map(files.map((file) => [file, regularFileBinding(file, "runtime executable dependency")])).values()]
+    .map(({ bytes, ...binding }) => binding);
+  return { command: executable, runtimeFiles };
+}
+function verifyRuntimeFileBindings({ command, runtimeFiles, runtimeDependencies, environment = process.env, reenumerate = true }) {
+  if (!Array.isArray(runtimeFiles) || runtimeFiles.length === 0) fail("runtime file bindings are unavailable", "HOST_CONFIG_MISMATCH");
+  if (reenumerate) {
+    const current = runtimeBindingSet(command, environment, runtimeDependencies);
+    const same = runtimeFiles.length === current.runtimeFiles.length && runtimeFiles.every((binding, index) => binding.path === current.runtimeFiles[index]?.path
+      && ["dev", "ino", "size", "sha256"].every((key) => binding[key] === current.runtimeFiles[index][key]));
+    if (current.command !== command || !same) fail("runtime executable closure changed after launch", "HOST_RUNTIME_CHANGED");
+  } for (const [index, binding] of runtimeFiles.entries()) verifyFileBinding(binding, `runtime executable dependency ${index}`); return command;
+}
+function sandboxInvocation({ role, command, args = [], readRoots = [], writeRoots = [], readFiles = [], writeFiles = [], denyWriteFiles = [],
+  runtimeDependencies = { executableParent: null, interpreterParent: null }, networkAccess = "disabled", env = process.env, ownershipDir = null, platform = process.platform } = {}) {
   if (platform !== "darwin") fail("macOS sandbox-exec is required", "EXECUTOR_WRITE_ISOLATION_UNAVAILABLE", { recommended_action: "inspect" });
   try { fs.accessSync(SANDBOX_EXEC, fs.constants.X_OK); } catch (cause) {
     fail("macOS sandbox-exec is unavailable", "EXECUTOR_WRITE_ISOLATION_UNAVAILABLE", { cause, recommended_action: "inspect" });
   }
   if (!new Set(["executor", "reviewer"]).has(role)) fail("sandbox role is invalid", "INVALID_INVOCATION");
+  if (!new Set(["enabled", "disabled"]).has(networkAccess)) fail("sandbox network policy is invalid", "INVALID_INVOCATION");
+  if (Object.hasOwn(env, "SSL_CERT_FILE")) fail("SSL_CERT_FILE is host-reserved", "INVALID_INVOCATION");
   if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) fail("args must be string argv", "INVALID_INVOCATION");
   const executable = resolveExecutable(command, env);
   const reads = [...new Set(readRoots.map((root) => canonicalDir(root, "sandbox read root")))];
   const writes = [...new Set(writeRoots.map((root) => canonicalDir(root, "sandbox write root")))];
   const readableFiles = [...new Set(readFiles.map((file) => sandboxFile(file, "sandbox read file", true)))];
   const writableFiles = [...new Set(writeFiles.map((file) => sandboxFile(file, "sandbox write file", false)))];
+  const deniedWriteFiles = [...new Set(denyWriteFiles.map((file) => sandboxFile(file, "sandbox denied write file", true)))];
   const readRules = [...reads.map((root) => `(subpath "${quote(root)}")`), ...readableFiles.map((file) => `(literal "${quote(file)}")`)].join(" ");
   const writeRules = [...writes.map((root) => `(subpath "${quote(root)}")`), ...writableFiles.map((file) => `(literal "${quote(file)}")`)].join(" ");
   const denyOwner = ownershipDir ? `(deny file-read* file-write* (subpath "${quote(path.resolve(ownershipDir))}"))` : "";
-  const protectedHomes = [...new Set([os.homedir(), env.HOME].filter((value) => typeof value === "string").map((value) => path.resolve(value)))];
-  const protectedAncestor = (target) => protectedHomes.some((home) => {
-    const relative = path.relative(target, home); return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-  });
   const runtimeExecutables = shebangExecutables(executable, env);
-  const runtimeRules = [...new Set(runtimeExecutables.flatMap((runtimeExecutable) => {
-    const executableDir = path.dirname(runtimeExecutable), applicationIndex = runtimeExecutable.indexOf(".app/");
-    const runtimeRoot = applicationIndex >= 0 ? runtimeExecutable.slice(0, applicationIndex + 4) : path.dirname(executableDir);
-    return [
-      `(literal "${quote(runtimeExecutable)}")`,
-      ...(protectedAncestor(executableDir) ? [] : [`(subpath "${quote(executableDir)}")`]),
-      ...(protectedAncestor(runtimeRoot) ? [] : [`(subpath "${quote(runtimeRoot)}")`]),
-    ];
-  }))].join(" ");
-  const packageRules = runtimeExecutables.some((item) => item.startsWith("/opt/homebrew/"))
-    ? '(subpath "/opt/homebrew/opt") (subpath "/opt/homebrew/Cellar") (subpath "/opt/homebrew/etc/openssl@3")'
+  const linkedLibraries = darwinLinkedLibraryFiles(runtimeExecutables);
+  const runtimeRules = [...runtimeExecutables.map((item) => `(literal "${quote(item)}")`), ...linkedLibraries.map((item) => `(literal "${quote(item)}")`),
+    ...darwinRuntimeSupportFiles(linkedLibraries).map((item) => `(literal "${quote(item)}")`),
+    ...runtimeDependencyRules(runtimeExecutables, runtimeDependencies, env).map((root) => `(subpath "${quote(root)}")`)].join(" ");
+  const deniedWrites = deniedWriteFiles.map((file) => `(deny file-write* (literal "${quote(file)}"))`).join(" ");
+  const transportMach = networkAccess === "enabled"
+    ? '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd") (global-name "com.apple.system.opendirectoryd.libinfo"))'
     : "";
+  const systemCa = networkAccess === "enabled" ? trustedSystemCaFile() : null;
+  const systemCaRule = systemCa ? `(literal "${quote(systemCa)}")` : "";
   const profile = [
     "(version 1)", "(deny default)", "(allow process*)", "(allow process-fork)", "(allow process-exec*)", "(allow signal (target self))", '(deny process-exec (literal "/usr/bin/osascript"))',
-    "(deny appleevent-send)", "(allow sysctl-read)", "(allow file-read-metadata)", ...(networkAccess === "enabled" ? ["(allow network*)"] : []),
-    `(allow file-read* ${readRules} (literal "/") ${runtimeRules} ${packageRules} (subpath "/System") (subpath "/usr") (subpath "/bin") (subpath "/Library") (subpath "/private/etc") (subpath "/private/var/db") (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))`,
-    `(allow file-write* ${writeRules} (literal "/dev/null"))`, denyOwner,
+    "(deny appleevent-send)", "(allow sysctl-read)", "(allow file-read-metadata)", transportMach, ...(networkAccess === "enabled" ? ["(allow network*)"] : []),
+    `(allow file-read* ${readRules} (literal "/") ${runtimeRules} ${systemCaRule} (subpath "/System") (subpath "/usr") (subpath "/bin") (subpath "/Library") (subpath "/private/var/db") (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))`,
+    `(allow file-write* ${writeRules} (literal "/dev/null"))`, deniedWrites, denyOwner,
   ].join("");
-  return Object.freeze({ command: SANDBOX_EXEC, args: ["-p", profile, executable, ...args], env: { ...env } });
+  return Object.freeze({ command: SANDBOX_EXEC, args: ["-p", profile, executable, ...args], env: { ...env, ...(systemCa ? { SSL_CERT_FILE: systemCa } : {}) } });
 }
 // macOS exposes only second-resolution `lstart` (no kern.proc.pid start microseconds through a safe CLI),
 // so a same-second PID reuse is indistinguishable by identity alone. Every signal target is therefore also
@@ -310,7 +398,7 @@ function sandboxInvocation({ role, command, args = [], readRoots = [], writeRoot
 // delivery; an unverifiable target is never signalled. This is PID-reuse safety, not a same-UID adversary boundary.
 function processRows({ environment = false, pid = null } = {}) {
   const output = execFileSync("/bin/ps", [...(environment ? ["eww"] : []), ...(pid === null ? ["-ax"] : ["-p", String(pid)]),
-    "-o", "pid=,ppid=,pgid=,state=,lstart=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 });
+    "-o", "pid=,ppid=,pgid=,state=,lstart=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, maxBuffer: 8 << 20 });
   return output.split(/\r?\n/).map((line) => PS_ROW_RE.exec(line)).filter(Boolean).map((match) => {
     const started = Date.parse(match[5].replace(/\s+/g, " "));
     return { pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), command: match[6], scope: (SCOPE_RE.exec(match[6]) || [])[1] || null,
@@ -425,8 +513,16 @@ function auditProcessScope(capability) {
 }
 sandboxInvocation.beginProcessScope = beginProcessScope;
 sandboxInvocation.auditProcessScope = auditProcessScope;
+sandboxInvocation.privatePathEnvironment = privatePathEnvironment;
 sandboxInvocation.bindRegularFile = (filePath, label) => regularFileBinding(filePath, label, { canonical: false });
+sandboxInvocation.bindRuntimeFiles = ({ command, env = process.env, runtimeDependencies = { executableParent: null, interpreterParent: null } } = {}) => {
+  const prepared = runtimeBindingSet(command, env, runtimeDependencies);
+  return Object.freeze({ command: prepared.command, runtime_files: Object.freeze(prepared.runtimeFiles.map((binding) => Object.freeze({ ...binding }))) });
+};
+sandboxInvocation.verifyRuntimeFiles = ({ command, runtimeFiles, runtimeDependencies = { executableParent: null, interpreterParent: null }, env = process.env, reenumerate = true } = {}) =>
+  verifyRuntimeFileBindings({ command, runtimeFiles, runtimeDependencies, environment: env, reenumerate });
 sandboxInvocation.readOwnerCredential = (filePath, label) => credentialSource(filePath, label).bytes;
+sandboxInvocation.removeBoundDirectory = removeBoundDirectory;
 function waitForProcessGroupAbsence(pgid, timeoutMs) { return Boolean(pollUntil(() => !groupExists(pgid), timeoutMs, 10)); }
 function reapProcessGroup(pgid, seal) {
   if (!Number.isInteger(pgid) || pgid <= 0 || process.platform === "win32" || !groupExists(pgid)) {
@@ -590,12 +686,13 @@ function attemptPaths(runDir, attemptId) {
     settled: child(`host-attempt-${id}.cleanup-settled.json`, "cleanup settled"),
     cancel: child(`host-attempt-${id}.cancel.json`, "cancel") };
 }
-function readBoundArtifact(filePath, label, owner, expected = {}) {
-  const value = secureRead(filePath, label).value;
+function readBoundArtifactEnvelope(filePath, label, owner, expected = {}) {
+  const read = secureRead(filePath, label), value = read.value;
   if (!verifySigned(value, owner.secret) || value.lock_id !== owner.lock_id || value.attempt_id !== owner.attempt_id
     || Object.entries(expected).some(([key, expectedValue]) => value[key] !== expectedValue)) fail(`${label} is unauthenticated`, "HOST_ARTIFACT_INVALID");
-  return value;
+  return { value, sha256: sha256(read.bytes) };
 }
+function readBoundArtifact(filePath, label, owner, expected = {}) { return readBoundArtifactEnvelope(filePath, label, owner, expected).value; }
 function validTerminal(result, owner) {
   return verifySigned(result, owner.secret, "result_auth_sha256") && result.lock_id === owner.lock_id && result.attempt_id === owner.attempt_id
     && result.host_handle === owner.host_handle && result.host_kind === "local_supervisor" && TERMINAL.has(result.status);
@@ -636,20 +733,22 @@ function inspectOwnership({ runDir } = {}) {
   return inspection;
 }
 function cleanupObligation(value, runDir, owner) {
-  const expectedRoot = path.join(runDir, `executor-credentials-${owner.attempt_id}`), obligation = value?.obligation;
-  if (!obligation || !Array.isArray(obligation.processes) || !obligation.credential_root || obligation.credential_root.path !== expectedRoot
+  const obligation = value?.obligation, reviewerRoot = value?.kind === "reviewer" && typeof obligation?.credential_root?.path === "string"
+    && path.dirname(obligation.credential_root.path) === fs.realpathSync("/tmp") && /^relay-review-[A-Za-z0-9_-]+$/.test(path.basename(obligation.credential_root.path));
+  const expectedRoots = reviewerRoot ? [obligation.credential_root.path] : [attemptPrivateRoot(runDir, owner, false), attemptPrivateRoot(runDir, owner, true)];
+  if (!obligation || !Array.isArray(obligation.processes) || !obligation.credential_root || !expectedRoots.includes(obligation.credential_root.path)
     || !((obligation.credential_root.dev === null && obligation.credential_root.ino === null)
       || (Number.isInteger(obligation.credential_root.dev) && Number.isInteger(obligation.credential_root.ino)))) fail("cleanup obligation is invalid", "HOST_ARTIFACT_INVALID");
   const identities = value.identities, terminal = value.terminal;
-  if (!identities || !identities.supervisor || (identities.executor !== null && !identities.executor)) fail("cleanup host identities are invalid", "HOST_ARTIFACT_INVALID");
-  exactIdentity(identities.supervisor, "cleanup supervisor"); if (identities.executor) exactIdentity(identities.executor, "cleanup executor");
+  if (!identities || (value.kind !== "reviewer" && !identities.supervisor) || (identities.executor !== null && !identities.executor)) fail("cleanup host identities are invalid", "HOST_ARTIFACT_INVALID");
+  if (identities.supervisor) exactIdentity(identities.supervisor, "cleanup supervisor"); if (identities.executor) exactIdentity(identities.executor, "cleanup executor");
   const processes = obligation.processes.map((identity, index) => exactIdentity(identity, `cleanup process ${index}`));
   if (new Set(processes.map((identity) => identity.pid)).size !== processes.length) fail("cleanup process identities are duplicated", "HOST_ARTIFACT_INVALID");
   const seal = obligation.scope_seal ?? null;
   if (seal !== null && !/^[0-9a-f]{64}$/.test(seal)) fail("cleanup process scope seal is invalid", "HOST_ARTIFACT_INVALID");
   if (!terminal || !["completed", "failed", "cancelled", "timed_out", "spawn_error"].includes(terminal.status)
     || (terminal.exit_code !== null && !Number.isInteger(terminal.exit_code)) || (terminal.signal !== null && typeof terminal.signal !== "string")) fail("cleanup terminal context is invalid", "HOST_ARTIFACT_INVALID");
-  return { processes, credential_root: { ...obligation.credential_root }, scope_seal: seal, terminal };
+  return { kind: value.kind || "executor", processes, credential_root: { ...obligation.credential_root }, scope_seal: seal, terminal };
 }
 function identityGone(identity, timeoutMs) {
   return Boolean(pollUntil(() => { const row = probeRow(identity.pid); return !sameProcess(row?.identity, identity) || /^Z/.test(row.identity.state); }, timeoutMs));
@@ -665,12 +764,49 @@ function reapExactIdentity(identity, seal) {
   }
   fail("exact cleanup process survived recovery", "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
 }
+function reapSealedScope(seal) {
+  if (!seal) return;
+  const discover = () => processRows({ environment: true }).filter((row) => row.identity && sealed(row.scope, seal)).map((row) => row.identity);
+  for (let round = 0; round < 2; round += 1) {
+    for (const identity of discover()) reapExactIdentity(identity, seal); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  }
+  if (discover().length) fail("sealed cleanup process scope survived recovery", "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
+}
+// Resume a quarantine left behind when a previous removal failed and could not be rolled back. Only a
+// sibling whose lstat still equals the signed dev/ino is provably the bound directory, so identity, not
+// pathname, decides. Returning false means the directory is genuinely gone.
+function quarantineSiblings(target, expected) {
+  const parent = path.dirname(target), prefix = `.${path.basename(target)}.quarantine.`;
+  let entries;
+  try { entries = fs.readdirSync(parent); } catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  return entries.filter((entry) => entry.startsWith(prefix)).map((entry) => path.join(parent, entry)).filter((candidate) => {
+    let stat; try { stat = fs.lstatSync(candidate); } catch { return false; }
+    return stat.isDirectory() && !stat.isSymbolicLink() && stat.dev === expected.dev && stat.ino === expected.ino;
+  });
+}
+function reclaimQuarantined(target, expected, label, { fault } = {}) {
+  const found = quarantineSiblings(target, expected);
+  if (!found.length) return false;
+  if (found.length > 1) fail(`${label} has multiple quarantined candidates; evidence retained`, "HOST_CLEANUP_INCOMPLETE",
+    { recommended_action: "inspect", quarantinePath: found[0] });
+  // Removing the candidate by pathname would be racy: a rename between the identity check above and the
+  // delete would redirect it. Re-enter the swap-safe primitive instead, which renames the tree to a fresh
+  // private quarantine and re-verifies the signed identity on that name before removing anything.
+  // `reclaim: false` bounds the re-entry, so a vanished candidate reports genuine absence.
+  return removeBoundDirectory(found[0], expected, label, { fault, reclaim: false });
+}
 // Swap-safe removal: rename the bound directory to a unique sibling quarantine first, then re-verify the
 // signed dev/ino on the quarantine target. A mismatch means the path was swapped, so the swapped tree is
 // preserved as evidence at its quarantine path and never deleted.
-function removeBoundDirectory(target, expected, label) {
+function removeBoundDirectory(target, expected, label, { fault, reclaim = true } = {}) {
   let stat;
-  try { stat = fs.lstatSync(target); } catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  try { stat = fs.lstatSync(target); } catch (error) {
+    // An absent pathname is only proof of cleanup when no quarantine still holds the signed identity.
+    // A prior attempt may have renamed the bound directory aside and then failed to remove or roll it
+    // back, so resume on the quarantine rather than reading ENOENT as success and orphaning it.
+    if (error.code === "ENOENT") return reclaim && expected ? reclaimQuarantined(target, expected, label, { fault }) : false;
+    throw error;
+  }
   if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} is not a real directory`, "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
   const binding = expected || { dev: stat.dev, ino: stat.ino };
   if (stat.dev !== binding.dev || stat.ino !== binding.ino) fail(`${label} identity changed before cleanup`, "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
@@ -680,35 +816,70 @@ function removeBoundDirectory(target, expected, label) {
   if (!moved.isDirectory() || moved.isSymbolicLink() || moved.dev !== binding.dev || moved.ino !== binding.ino) {
     fail(`${label} was replaced before quarantined removal`, "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect", quarantinePath: quarantine });
   }
-  fs.rmSync(quarantine, { recursive: true, force: true }); syncDir(path.dirname(target)); return true;
+  try { fault?.("after_quarantine"); fs.rmSync(quarantine, { recursive: true, force: true }); }
+  catch (cause) {
+    try {
+      const retained = fs.lstatSync(quarantine);
+      if (!retained.isDirectory() || retained.isSymbolicLink() || retained.dev !== binding.dev || retained.ino !== binding.ino || fs.existsSync(target)) throw new Error("quarantine identity or original pathname changed before rollback");
+      fs.renameSync(quarantine, target);
+      const restored = fs.lstatSync(target);
+      if (!restored.isDirectory() || restored.isSymbolicLink() || restored.dev !== binding.dev || restored.ino !== binding.ino) throw new Error("rolled-back directory identity changed");
+      syncDir(path.dirname(target));
+    } catch (rollbackCause) { fail(`${label} quarantined removal and rollback failed; evidence retained`, "HOST_CLEANUP_INCOMPLETE",
+      { recommended_action: "inspect", quarantinePath: quarantine, cause, rollbackCause }); }
+    fail(`${label} quarantined removal failed and was rolled back`, "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect", cause });
+  }
+  syncDir(path.dirname(target)); return true;
 }
-function removeExactCredentialRoot(root, runDir) {
-  const target = directChild(runDir, root.path, "cleanup credential root", { directory: true });
+function removeExactCredentialRoot(root, runDir, owner, fault) {
+  const target = root.path, reviewerRoot = path.dirname(target) === fs.realpathSync("/tmp") && /^relay-review-[A-Za-z0-9_-]+$/.test(path.basename(target));
+  if (![attemptPrivateRoot(runDir, owner, false), attemptPrivateRoot(runDir, owner, true)].includes(target) && !reviewerRoot) fail("cleanup credential root is outside the attempt boundary", "HOST_ARTIFACT_INVALID");
   if (root.dev === null) {
     if (fs.existsSync(target)) fail("credential root identity changed before recovery", "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
     return;
   }
-  removeBoundDirectory(target, { dev: root.dev, ino: root.ino }, "cleanup credential root");
+  const binding = { dev: root.dev, ino: root.ino };
+  removeBoundDirectory(target, binding, "cleanup credential root",
+    { fault: fault ? (stage) => fault(`credential_${stage}`) : null });
+  // Removal unlinks a pathname, so a rename racing the delete could leave the bound tree alive under a
+  // quarantine name while the delete still reported success. Settling is only honest if nothing carrying
+  // the signed identity survives, so re-scan and fail closed instead of trusting the delete's return.
+  const surviving = quarantineSiblings(target, binding);
+  if (surviving.length) fail("cleanup credential root survived removal under a quarantine name", "HOST_CLEANUP_INCOMPLETE",
+    { recommended_action: "inspect", quarantinePath: surviving[0] });
 }
-function settleCleanup({ state, cleanupPath, fault }) {
+function settleCleanup({ state, cleanupPath, fault, terminalStatus = "failed" }) {
   const read = secureRead(cleanupPath, "cleanup-incomplete status"), owner = state.owner;
   if (!verifySigned(read.value, owner.secret) || read.value.lock_id !== owner.lock_id || read.value.attempt_id !== owner.attempt_id
     || read.value.host_handle !== owner.host_handle) fail("cleanup status is unauthenticated", "HOST_ARTIFACT_INVALID");
   const obligation = cleanupObligation(read.value, state.runDir, owner), paths = attemptPaths(state.runDir, owner.attempt_id);
   for (const identity of obligation.processes) reapExactIdentity(identity, obligation.scope_seal);
-  removeExactCredentialRoot(obligation.credential_root, state.runDir); fault?.("after_cleanup");
+  if (obligation.kind === "reviewer") reapSealedScope(obligation.scope_seal);
+  removeExactCredentialRoot(obligation.credential_root, state.runDir, owner, fault); fault?.("after_cleanup");
   const settledBody = { v: 2, attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_handle: owner.host_handle,
     cleanup_sha256: sha256(read.bytes), settled_at: new Date().toISOString() };
   if (!publishOnce(paths.settled, signed(settledBody, owner.secret))) readBoundArtifact(paths.settled, "cleanup settled", owner, { cleanup_sha256: settledBody.cleanup_sha256 });
   fault?.("after_settled");
   const resultPath = path.join(state.runDir, `attempt-${owner.attempt_id}.result.json`), body = {
     attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_kind: "local_supervisor", host_handle: owner.host_handle,
-    status: "failed", exit_code: obligation.terminal.exit_code, signal: obligation.terminal.signal,
-    error: `cleanup recovered after incomplete host settlement: ${read.value.error}`, completed_at: new Date().toISOString(),
+    status: terminalStatus, exit_code: obligation.terminal.exit_code, signal: obligation.terminal.signal,
+    error: terminalStatus === "completed" ? null : `cleanup recovered after incomplete host settlement: ${read.value.error}`, completed_at: new Date().toISOString(),
   };
   if (!publishOnce(resultPath, signed(body, owner.secret, "result_auth_sha256"))
     && !validTerminal(secureRead(resultPath, "terminal result").value, owner)) fail("terminal result conflicts with cleanup recovery", "HOST_ARTIFACT_INVALID");
   fault?.("after_terminal"); return resultPath;
+}
+function retainReviewerCleanup(capability, { root, binding, scopeSeal } = {}) {
+  const state = stateFor(capability); assertRunLockHeld(capability, state.runDir);
+  const paths = attemptPaths(state.runDir, state.owner.attempt_id), body = { v: 2, kind: "reviewer", attempt_id: state.owner.attempt_id,
+    lock_id: state.owner.lock_id, host_handle: state.owner.host_handle, identities: { supervisor: null, executor: null }, error: "reviewer cleanup pending",
+    terminal: { status: "failed", exit_code: null, signal: null }, obligation: { processes: [],
+      credential_root: { path: root, dev: binding.dev, ino: binding.ino }, scope_seal: scopeSeal }, observed_at: new Date().toISOString() };
+  if (!publishOnce(paths.cleanup, signed(body, state.owner.secret))) readBoundArtifact(paths.cleanup, "cleanup-incomplete status", state.owner);
+  return Object.freeze({ path: paths.cleanup, complete(terminalStatus) {
+    const resultPath = settleCleanup({ state, cleanupPath: paths.cleanup, terminalStatus });
+    releaseRunLock(capability, { outcome: terminalStatus === "completed" ? "review_finished" : "review_failed" }); return resultPath;
+  } });
 }
 async function breakStaleRunLock({ inspection, reason, resultPath, audit, fault } = {}) {
   if (!issuedInspections.has(inspection) || typeof reason !== "string" || !reason.trim()) fail("issued inspection and reason required", "INSPECTION_CAPABILITY_INVALID");
@@ -766,7 +937,7 @@ function waitForStartup({ child, paths, owner, configSha, timeoutMs }) {
 function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedWorktreeRoot, cwd, stdoutPath, stderrPath, resultPath,
   inputFiles = [], stdinPath = null, stdinSha256 = null, executorResultPath = null, executorSandbox = "workspace-write", executorNetworkAccess = "disabled", timeoutMs = 30_000,
   cancelGraceMs = 1_000, supervisorStartupTimeoutMs = 30_000, executorEnv = {}, ephemeralEnv = {}, credentialRequest = null, processContainment = PROCESS_CONTRACT,
-  testCredentialPrepared = null, testCleanupFailurePath = null, testGateBarrierPath = null, lockContext } = {}) {
+  runtimeDependencies = { executableParent: null, interpreterParent: null }, privateEnvPaths = [], testCredentialPrepared = null, testCleanupFailurePath = null, testGateBarrierPath = null, lockContext } = {}) {
   if (lockContext === undefined) fail("production launch requires a lock capability", "HOST_LOCK_REQUIRED");
   const state = stateFor(lockContext), run = canonicalDir(runDir, "runDir"); assertRunLockHeld(lockContext, run);
   if (attemptId !== state.owner.attempt_id) fail("attempt does not match lock", "HOST_LOCK_IDENTITY_MISMATCH"); safeAttempt(attemptId);
@@ -781,6 +952,7 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   const declaredInputs = [...new Set([...inputFiles, ...(stdinPath ? [stdinPath] : [])])];
   const inputSources = declaredInputs.map((file) => directChild(run, file, "executor input", { exists: true }));
   const explicitEnvironment = environmentEntries(executorEnv, "executorEnv"), ephemeralEnvironment = environmentEntries(ephemeralEnv, "ephemeralEnv");
+  const privatePaths = normalizedPrivatePaths(privateEnvPaths);
   if (Object.hasOwn(explicitEnvironment, PROCESS_SCOPE_KEY) || Object.hasOwn(ephemeralEnvironment, PROCESS_SCOPE_KEY)) fail(`${PROCESS_SCOPE_KEY} is host-reserved`, "INVALID_INVOCATION");
   ephemeralEnvironment[PROCESS_SCOPE_KEY] = crypto.randomBytes(32).toString("hex");
   if (Object.keys(ephemeralEnvironment).some((key) => Object.hasOwn(explicitEnvironment, key))) fail("ephemeralEnv keys must be distinct", "INVALID_INVOCATION");
@@ -788,16 +960,17 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   if (testCredentialPrepared !== null && typeof testCredentialPrepared !== "function") fail("test credential seam is invalid", "INVALID_INVOCATION");
   const gateBarrier = testGateBarrierPath ? directChild(run, testGateBarrierPath, "test gate barrier") : null;
   const cleanupFailure = testCleanupFailurePath ? directChild(run, testCleanupFailurePath, "test cleanup failure", { exists: true }) : null;
-  resolveExecutable(command);
+  const runtime = sandboxInvocation.bindRuntimeFiles({ command, env: process.env, runtimeDependencies });
   const paths = attemptPaths(run, attemptId), stdout = directChild(run, stdoutPath || path.join(run, `attempt-${attemptId}.stdout.log`), "stdout"),
     stderr = directChild(run, stderrPath || path.join(run, `attempt-${attemptId}.stderr.log`), "stderr"),
     result = directChild(run, resultPath || path.join(run, `attempt-${attemptId}.result.json`), "result"),
     executorResult = executorResultPath ? directChild(run, executorResultPath, "executor result") : null,
     tmp = directChild(run, path.join(run, `executor-tmp-${attemptId}`), "executor tmp", { directory: true }),
-    credentialRoot = directChild(run, path.join(run, `executor-credentials-${attemptId}`), "executor credential root", { directory: true });
+    credentialRoot = directChild(path.dirname(attemptPrivateRoot(run, state.owner, privatePaths.some((item) => item.root === "scratch"))), attemptPrivateRoot(run, state.owner, privatePaths.some((item) => item.root === "scratch")), "executor private root", { directory: true });
   const preparedCredentials = credentialRequest ? prepareCredentialBundle(credentialRequest) : null;
   if (testCredentialPrepared) testCredentialPrepared();
   const credentials = credentialState(preparedCredentials);
+  if (privatePaths.some((item) => Object.hasOwn(explicitEnvironment, item.key) || Object.hasOwn(ephemeralEnvironment, item.key) || credentials.envNames.includes(item.key))) fail("private environment path collides with caller environment", "INVALID_INVOCATION");
   const inputStages = inputSources.map((unused, index) => directChild(run, path.join(run, `host-input-${attemptId}-${index}.bin`), "staged executor input"));
   for (const target of [paths.config, paths.supervisor, paths.running, paths.cleanup, paths.settled, paths.cancel, stdout, stderr, result, executorResult, credentialRoot, ...inputStages].filter(Boolean)) {
     if (fs.existsSync(target)) fail("attempt artifact already exists", "HOST_ATTEMPT_ALREADY_LAUNCHED", { artifactPath: target, recommended_action: "inspect" });
@@ -826,12 +999,12 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   for (const key of Object.keys(credentials.values)) { credentials.values[key] = ""; delete credentials.values[key]; }
   if (secretPayload.length > 8 * 1024 * 1024) { secretPayload.fill(0); fail("ephemeral credential payload is too large", "INVALID_INVOCATION"); }
   const config = { v: 2, attempt_id: attemptId, lock_id: state.owner.lock_id, host_kind: "local_supervisor", host_handle: state.owner.host_handle,
-    nonce: crypto.randomBytes(32).toString("hex"), command, args: stagedArgs, process_contract: processContainment, input_files: inputBindings,
+    nonce: crypto.randomBytes(32).toString("hex"), command: runtime.command, args: stagedArgs, process_contract: processContainment, input_files: inputBindings,
     stdin_binding: stdinIndex < 0 ? null : { index: stdinIndex, size: inputBindings[stdinIndex].size, sha256: stdinSha256 }, env: executorEnvironment,
-    ephemeral_env_keys: Object.keys(ephemeralEnvironment), credential_env_keys: credentials.envNames, credentials: credentials.publicFiles, credential_root: credentialRoot,
+    ephemeral_env_keys: Object.keys(ephemeralEnvironment), credential_env_keys: credentials.envNames, credentials: credentials.publicFiles, credential_root: credentialRoot, private_env_paths: privatePaths,
     scope_seal: scopeSeal(ephemeralEnvironment[PROCESS_SCOPE_KEY]),
     worktree, cwd: worktree, stdout, stderr, result, executor_result: executorResult,
-    tmp, sandbox: executorSandbox, network: executorNetworkAccess, timeout_ms: timeoutMs, grace_ms: cancelGraceMs,
+    tmp, sandbox: executorSandbox, network: "enabled", tool_network: executorNetworkAccess, runtime_dependencies: runtimeDependencies, runtime_files: runtime.runtime_files, timeout_ms: timeoutMs, grace_ms: cancelGraceMs,
     supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier, test_cleanup_failure: cleanupFailure };
   if (!publishOnce(paths.config, config)) fail("attempt has already been launched", "HOST_ATTEMPT_ALREADY_LAUNCHED");
   const configSha = sha256(fs.readFileSync(paths.config)), stdoutFd = fs.openSync(stdout, "wx", 0o600), stderrFd = fs.openSync(stderr, "wx", 0o600);
@@ -856,7 +1029,8 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
     throw error;
   }
   const receipt = Object.freeze({ attempt_id: attemptId, lock_id: state.owner.lock_id, host_kind: "local_supervisor", host_handle: state.owner.host_handle,
-    started_at: started.started_at, timeout_ms: timeoutMs, stdout_path: stdout, stderr_path: stderr, result_path: result, cancel_path: paths.cancel, run_dir: run });
+    started_at: started.started_at, timeout_ms: timeoutMs, stdout_path: stdout, stderr_path: stderr, result_path: result, cancel_path: paths.cancel, run_dir: run,
+    runtime_files: runtime.runtime_files });
   issuedReceipts.add(receipt); receiptStates.set(receipt, { owner: state.owner, paths }); return receipt;
 }
 function cancelHost(receipt, { reason = "operator_cancelled" } = {}) {
@@ -876,8 +1050,8 @@ async function waitForTerminalResult(receipt, { timeoutMs = receipt.timeout_ms +
     }
     const cleanupPath = receiptStates.get(receipt).paths.cleanup;
     if (fs.existsSync(cleanupPath)) {
-      readBoundArtifact(cleanupPath, "cleanup-incomplete status", owner);
-      fail("executor cleanup is incomplete; no terminal result was published", "HOST_CLEANUP_INCOMPLETE", { artifactPath: cleanupPath, recommended_action: "inspect" });
+      const cleanup = readBoundArtifactEnvelope(cleanupPath, "cleanup-incomplete status", owner);
+      fail("executor cleanup is incomplete; no terminal result was published", "HOST_CLEANUP_INCOMPLETE", { cleanup_sha256: cleanup.sha256, recommended_action: "inspect" });
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -888,9 +1062,9 @@ function stageCredentials(config, secretFiles, state = {}) {
   const root = directChild(path.dirname(config.credential_root), config.credential_root, "executor credential root", { directory: true });
   fs.mkdirSync(root, { mode: 0o700 }); fs.chmodSync(root, 0o700); const rootStat = fs.lstatSync(root);
   Object.assign(state, { root, binding: { dev: rootStat.dev, ino: rootStat.ino } });
-  const roots = { home: path.join(root, "home"), xdg_config: path.join(root, "xdg-config"), xdg_data: path.join(root, "xdg-data") };
+  const roots = { home: path.join(root, "home"), xdg_config: path.join(root, "xdg-config"), xdg_data: path.join(root, "xdg-data"), scratch: path.join(root, "scratch") };
   for (const value of Object.values(roots)) fs.mkdirSync(value, { mode: 0o700 });
-  const readable = [], writable = [], secrets = new Map((secretFiles || []).map((item) => [item.id, item.bytes]));
+  const readable = [], writable = [], readonly = [], secrets = new Map((secretFiles || []).map((item) => [item.id, item.bytes]));
   for (const item of config.credentials || []) {
     if (!/^[a-z][a-z0-9_-]*$/.test(item.id || "") || !Object.hasOwn(roots, item.targetRoot) || !["read", "read_write"].includes(item.access)
       || typeof item.targetRel !== "string" || path.isAbsolute(item.targetRel) || item.targetRel.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) fail("credential target is invalid", "HOST_CONFIG_MISMATCH");
@@ -902,10 +1076,10 @@ function stageCredentials(config, secretFiles, state = {}) {
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
     for (let parent = path.dirname(target); parent.startsWith(root) && parent !== root; parent = path.dirname(parent)) fs.chmodSync(parent, 0o700);
     fs.writeFileSync(target, bytes, { flag: "wx", mode: 0o600 }); fs.chmodSync(target, 0o600); bytes.fill(0); readable.push(target);
-    if (item.access === "read_write") writable.push(target);
+    if (item.access === "read_write") writable.push(target); else readonly.push(target);
   }
   if (secrets.size !== (config.credentials || []).length) fail("credential descriptors do not match payload", "HOST_CONFIG_MISMATCH");
-  return Object.assign(state, { roots, readable, writable });
+  return Object.assign(state, { roots, readable, writable, readonly });
 }
 function credentialRootBinding(root, binding = null) { return { path: path.resolve(root), dev: binding?.dev ?? null, ino: binding?.ino ?? null }; }
 function cleanupCredentialRoot(root, config, binding = null) {
@@ -946,12 +1120,18 @@ function runExecutorGate(configPath, configSha) {
     Object.assign(runtimeEnvironment, credentialEnvironment);
     stagedCredentials = { root: config.credential_root };
     stageCredentials(config, gateSecrets.credential_files, stagedCredentials);
+    Object.assign(runtimeEnvironment, privatePathEnvironment(config.private_env_paths, stagedCredentials.roots, runtimeEnvironment, "HOST_CONFIG_MISMATCH"));
     runtimeEnvironment.HOME = stagedCredentials.roots.home; runtimeEnvironment.XDG_CONFIG_HOME = stagedCredentials.roots.xdg_config; runtimeEnvironment.XDG_DATA_HOME = stagedCredentials.roots.xdg_data;
-    const writes = [config.tmp, ...(config.sandbox === "workspace-write" ? [config.worktree] : [])];
-    const invocation = sandboxInvocation({ role: "executor", command: config.command, args: config.args, readRoots: [config.worktree],
+    const privateRoots = Object.values(stagedCredentials.roots), writes = [config.tmp, ...privateRoots, ...(config.sandbox === "workspace-write" ? [config.worktree] : [])];
+    const invocation = sandboxInvocation({ role: "executor", command: config.command, args: config.args, readRoots: [config.worktree, ...privateRoots],
       readFiles: [...inputPaths, ...stagedCredentials.readable], writeRoots: writes, writeFiles: [...(config.executor_result ? [config.executor_result] : []), ...stagedCredentials.writable],
-      networkAccess: config.network, ownershipDir: config.ownership,
+      denyWriteFiles: stagedCredentials.readonly, runtimeDependencies: config.runtime_dependencies, networkAccess: config.network, ownershipDir: config.ownership,
       env: runtimeEnvironment });
+    // `sandboxInvocation` resolves Mach-O and support paths for its profile.
+    // Verify immediately before pathname spawn, then again after it exits.
+    // The two observations deliberately do not claim an atomic exec/dyld byte
+    // pin; any observed closure mutation makes the terminal non-successful.
+    sandboxInvocation.verifyRuntimeFiles({ command: config.command, runtimeFiles: config.runtime_files, runtimeDependencies: config.runtime_dependencies, env: runtimeEnvironment });
     const baseline = processBaseline(), tracked = new Map(), gateIdentity = fingerprint(process.pid);
     if (!gateIdentity) fail("executor gate identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
     const scopeToken = runtimeEnvironment[PROCESS_SCOPE_KEY];
@@ -988,6 +1168,9 @@ function runExecutorGate(configPath, configSha) {
           obligation: { processes: audit.remaining_identities, credential_root: credentialRoot, scope_seal: config.scope_seal } });
         if (audit.matched) return publish({ status: "failed", exit_code: fields.exit_code, signal: fields.signal,
           error: `escaped process audit failed: matched=${audit.matched} reaped=${audit.reaped} remaining=${audit.remaining}` });
+        try { sandboxInvocation.verifyRuntimeFiles({ command: config.command, runtimeFiles: config.runtime_files, runtimeDependencies: config.runtime_dependencies, env: runtimeEnvironment, reenumerate: false }); }
+        catch (error) { return publish({ status: "failed", exit_code: fields.exit_code, signal: fields.signal,
+          error: `runtime executable closure changed during execution: ${error.message}` }); }
         return publish(fields);
       } catch (error) {
         const processes = [...tracked.values()].filter((identity) => sameProcess(fingerprint(identity.pid), identity)).map((identity) => exactIdentity(identity));
@@ -1109,5 +1292,6 @@ module.exports = {
   cancelHost,
   inspectOwnership,
   breakStaleRunLock,
+  retainReviewerCleanup,
   sandboxInvocation,
 };

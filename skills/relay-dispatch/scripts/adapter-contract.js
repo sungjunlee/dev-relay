@@ -4,7 +4,6 @@ const { spawnSync } = require("child_process");
 
 const PHASES = Object.freeze(["dispatch", "primary_review"]);
 const OUTPUT_PROTOCOLS = Object.freeze(["text_stdout", "json_result", "jsonl_run_result"]);
-const CONTROL_BOUND_INVOCATIONS = new WeakSet();
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const CREDENTIAL_ROOTS = new Set(["home", "xdg_config", "xdg_data"]);
 const CREDENTIAL_ACCESS = new Set(["read", "read_write"]);
@@ -12,17 +11,18 @@ const CREDENTIAL_ACCESS = new Set(["read", "read_write"]);
 // scope marker and must not daemonize or clear it from descendants.
 const PROCESS_CONTAINMENT = "inherited_scope_no_daemon";
 const CREDENTIAL_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RESERVED_CREDENTIAL_ENV = /^(?:HOME|PATH|TMPDIR|TMP|TEMP|XDG_CONFIG_HOME|XDG_DATA_HOME|RELAY_PROCESS_SCOPE)$|^RELAY_/;
+const RESERVED_CREDENTIAL_ENV = /^(?:HOME|PATH|TMPDIR|TMP|TEMP|XDG_CONFIG_HOME|XDG_DATA_HOME|RELAY_PROCESS_SCOPE|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PHPRC|PHP_INI_SCAN_DIR|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|PERL5DB|RUBYOPT|RUBYLIB|GEM_HOME|GEM_PATH|GCONV_PATH|LOCPATH|NLSPATH)$|^(?:DYLD|LD)_|^LUA_(?:INIT|PATH|CPATH)(?:_.*)?$|^RELAY_/;
+const RUNTIME_PARENT_KEYS = ["executableParent", "interpreterParent"];
+const PRIVATE_ENV_ROOTS = new Set([...CREDENTIAL_ROOTS, "scratch"]);
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value)) deepFreeze(child);
-  return Object.freeze(value);
+  for (const child of Object.values(value)) deepFreeze(child); return Object.freeze(value);
 }
 
 function normalizeCredentialMetadata(credentials = {}) {
   const files = credentials.files || [], envHints = credentials.envHints || [];
-  if (!Array.isArray(files) || !Array.isArray(envHints) || envHints.some((name) => typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) {
+  if (!Array.isArray(files) || !Array.isArray(envHints) || envHints.some((name) => typeof name !== "string" || !CREDENTIAL_ENV_RE.test(name) || RESERVED_CREDENTIAL_ENV.test(name))) {
     throw new Error("adapter credential metadata must contain files and environment-name hints");
   }
   const ids = new Set(), targets = new Set();
@@ -41,6 +41,22 @@ function normalizeCredentialMetadata(credentials = {}) {
   return deepFreeze({ files: files.map((file) => ({ ...file })), envHints: [...envHints] });
 }
 
+function normalizeRuntimeDependencies(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== RUNTIME_PARENT_KEYS.slice().sort().join(",")) throw new Error("adapter runtime dependency declaration is invalid");
+  const normalized = {};
+  for (const key of RUNTIME_PARENT_KEYS) {
+    const depth = value[key]; if (depth !== null && (!Number.isInteger(depth) || depth < 0 || depth > 2)) throw new Error("adapter runtime dependency parent depth is invalid"); normalized[key] = depth;
+  } return Object.freeze(normalized);
+}
+function normalizePrivateEnvPaths(value = []) {
+  if (!Array.isArray(value)) throw new Error("adapter private environment paths must be an array");
+  const keys = new Set(); return deepFreeze(value.map((item) => {
+    if (!item || Object.keys(item).sort().join(",") !== "key,relative,root" || !CREDENTIAL_ENV_RE.test(item.key || "") || RESERVED_CREDENTIAL_ENV.test(item.key)
+      || keys.has(item.key) || !PRIVATE_ENV_ROOTS.has(item.root) || typeof item.relative !== "string" || path.isAbsolute(item.relative)
+      || !item.relative || item.relative.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) throw new Error("adapter private environment path is invalid");
+    keys.add(item.key); return { ...item };
+  }));
+}
 // This is deliberately value-free: callers use it before a dry run or before
 // opening any credential source.  The host/reviewer own the later byte trust
 // boundary, while both phases share one catalog and argv grammar.
@@ -71,98 +87,49 @@ function credentialRequest(metadata = {}, { envNames = [], fileSpecs = [] } = {}
 
 class AdapterCapabilityError extends Error {
   constructor(adapter, phase, reason) {
-    super(`adapter '${adapter}' cannot run ${phase}: ${reason}`);
-    this.name = "AdapterCapabilityError";
-    this.adapter = adapter;
-    this.phase = phase;
-    this.reason = reason;
+    super(`adapter '${adapter}' cannot run ${phase}: ${reason}`); this.name = "AdapterCapabilityError";
+    this.adapter = adapter; this.phase = phase; this.reason = reason;
   }
 }
 
 function requireAbsolutePath(value, name) {
-  if (typeof value !== "string" || !path.isAbsolute(value)) {
-    throw new Error(`${name} must be an absolute path`);
-  }
-  return value;
+  if (typeof value !== "string" || !path.isAbsolute(value)) throw new Error(`${name} must be an absolute path`); return value;
 }
 
 function requireSafeOptionalValue(value, name) {
   if (value === null || value === undefined || value === "") return null;
-  if (typeof value !== "string" || value.startsWith("-")) {
-    throw new Error(`${name} must be a non-flag string when supplied`);
-  }
-  return value;
+  if (typeof value !== "string" || value.startsWith("-")) throw new Error(`${name} must be a non-flag string when supplied`); return value;
 }
 
 function decodeTrustedPrompt(promptBytes) {
   if (!Buffer.isBuffer(promptBytes)) throw new Error("promptBytes must be a Buffer");
   const prompt = promptBytes.toString("utf8");
-  if (!Buffer.from(prompt, "utf8").equals(promptBytes)) {
-    throw new Error("promptBytes must contain valid canonical UTF-8");
-  }
-  return Object.freeze({
-    prompt,
-    sha256: require("crypto").createHash("sha256").update(promptBytes).digest("hex"),
-  });
+  if (!Buffer.from(prompt, "utf8").equals(promptBytes)) throw new Error("promptBytes must contain valid canonical UTF-8");
+  return Object.freeze({ prompt, sha256: require("crypto").createHash("sha256").update(promptBytes).digest("hex") });
 }
 
-function normalizeInvocationShape(invocation, { nested = false, allowControlInvocation = false } = {}) {
+function normalizeInvocationShape(invocation) {
   if (!invocation || typeof invocation !== "object") throw new Error("adapter invocation must be an object");
-  if (typeof invocation.command !== "string" || !invocation.command || invocation.command.includes("\n")) {
-    throw new Error("adapter invocation command must be one executable argv value");
-  }
-  if (!Array.isArray(invocation.args) || invocation.args.some((value) => typeof value !== "string" || value.includes("\0"))) {
-    throw new Error("adapter invocation args must be an array of string argv values");
-  }
+  if (Object.keys(invocation).some((key) => !["command", "args", "cwd", "stdinPath", "stdinSha256", "privateEnvPaths"].includes(key))) throw new Error("adapter invocation contains unsupported metadata");
+  if (typeof invocation.command !== "string" || !invocation.command || invocation.command.includes("\n")) throw new Error("adapter invocation command must be one executable argv value");
+  if (!Array.isArray(invocation.args) || invocation.args.some((value) => typeof value !== "string" || value.includes("\0"))) throw new Error("adapter invocation args must be an array of string argv values");
   requireAbsolutePath(invocation.cwd, "adapter invocation cwd");
-  if (Boolean(invocation.stdinPath) !== Boolean(invocation.stdinSha256)) {
-    throw new Error("adapter invocation stdinPath and stdinSha256 must be supplied together");
-  }
-  const controlInvocation = invocation.controlInvocation;
-  if (controlInvocation && !allowControlInvocation) {
-    throw new Error("adapter control invocation metadata must be bound by the adapter contract");
-  }
-  if (nested && controlInvocation) {
-    throw new Error("adapter control invocation cannot contain another control invocation");
-  }
-  const normalizedControl = controlInvocation
-    ? normalizeInvocationShape(controlInvocation, { nested: true })
-    : null;
-  if (normalizedControl && normalizedControl.cwd !== invocation.cwd) {
-    throw new Error("adapter control invocation cwd must match wrapper invocation cwd");
-  }
-  const normalized = Object.freeze({
+  if (Boolean(invocation.stdinPath) !== Boolean(invocation.stdinSha256)) throw new Error("adapter invocation stdinPath and stdinSha256 must be supplied together");
+  return Object.freeze({
     command: invocation.command,
     args: Object.freeze([...invocation.args]),
     cwd: invocation.cwd,
+    privateEnvPaths: normalizePrivateEnvPaths(invocation.privateEnvPaths),
     ...(invocation.stdinPath ? {
       stdinPath: requireAbsolutePath(invocation.stdinPath, "adapter invocation stdinPath"),
       stdinSha256: SHA256_RE.test(invocation.stdinSha256 || "")
         ? invocation.stdinSha256
         : (() => { throw new Error("adapter invocation stdinSha256 must bind stdinPath bytes"); })(),
     } : {}),
-    ...(normalizedControl ? { controlInvocation: normalizedControl } : {}),
   });
-  if (normalizedControl && allowControlInvocation) CONTROL_BOUND_INVOCATIONS.add(normalized);
-  return normalized;
 }
 
-function assertInvocationShape(invocation) {
-  return normalizeInvocationShape(invocation);
-}
-
-function getInvocationAuditTarget(invocation) {
-  if (!invocation?.controlInvocation) return invocation;
-  if (!CONTROL_BOUND_INVOCATIONS.has(invocation)) {
-    throw new Error("adapter control invocation metadata is not contract-bound");
-  }
-  return invocation.controlInvocation;
-}
-
-function readOutput(outputPath) {
-  if (!outputPath || !fs.existsSync(outputPath)) return "";
-  return fs.readFileSync(outputPath, "utf8");
-}
+function readOutput(outputPath) { return !outputPath || !fs.existsSync(outputPath) ? "" : fs.readFileSync(outputPath, "utf8"); }
 
 function parseJsonlRunResult(text) {
   let result = null;
@@ -243,8 +210,8 @@ function validateCapabilities(adapter, phase, request = {}) {
   if (request.readOnly === true && !capability.readOnly) {
     throw new AdapterCapabilityError(adapter.name, phase, "read-only execution is unsupported");
   }
-  if (request.networkAccess === "enabled" && capability.networkControl === "unsupported") {
-    throw new AdapterCapabilityError(adapter.name, phase, "network control is unsupported");
+  if (request.networkAccess === "disabled" && capability.networkControl !== "native") {
+    throw new AdapterCapabilityError(adapter.name, phase, "model/tool network disable is not natively enforceable");
   }
   return capability;
 }
@@ -312,76 +279,51 @@ function createNativeAdapter({
   const phaseMetadata = Object.freeze({ ...phases });
   const parseOutcomeForProtocol = makeParseOutcome(outputProtocol);
   const cliBinary = metadata.cliBinary;
-  if (!name || typeof buildDispatch !== "function" || typeof cliBinary !== "string") {
-    throw new Error("native adapter requires name, metadata.cliBinary, and buildDispatch");
-  }
+  if (!name || typeof buildDispatch !== "function" || typeof cliBinary !== "string") throw new Error("native adapter requires name, metadata.cliBinary, and buildDispatch");
   if (metadata.processContainment !== PROCESS_CONTAINMENT) throw new Error(`native adapter must declare ${PROCESS_CONTAINMENT} process containment`);
+  if (metadata.providerTransport !== "remote_required") throw new Error("native adapter must declare remote_required provider transport");
+  if (!new Set(["explicit_bundle", "unrepresentable"]).has(metadata.credentialTransport)) throw new Error("native adapter credential transport declaration is invalid");
+  const runtimeDependencies = normalizeRuntimeDependencies(metadata.runtimeDependencies);
+  const bindInvocationPolicy = (invocation, toolNetworkAccess) => Object.freeze({ ...invocation, networkAccess: "enabled", toolNetworkAccess, runtimeDependencies });
   return Object.freeze({
     name,
     defaults: Object.freeze({ timeoutMs }),
-    metadata: deepFreeze({ ...metadata, credentials: normalizeCredentialMetadata(metadata.credentials) }),
+    metadata: deepFreeze({ ...metadata, runtimeDependencies, credentials: normalizeCredentialMetadata(metadata.credentials) }),
     probe({ env = process.env, timeoutMs: probeTimeoutMs = 5000, spawn = spawnSync } = {}) {
-      const binary = metadata.cliBinaryEnv && env[metadata.cliBinaryEnv]
-        ? env[metadata.cliBinaryEnv]
-        : cliBinary;
+      const binary = env[metadata.cliBinaryEnv] || cliBinary;
       return probeBinary(binary, { env, timeoutMs: probeTimeoutMs, spawn });
     },
     capabilities({ phase, request = null }) {
       const value = phaseMetadata[phase];
-      if (!value) return Object.freeze({ supported: false, reason: "unknown phase" });
+      if (!value) return Object.freeze({ supported: false, reason: "unknown phase", credentialTransport: metadata.credentialTransport });
+      let capability = { ...value, credentialTransport: metadata.credentialTransport };
       if (value.supported && phase === "dispatch" && request && validateDispatch) {
         const validation = validateDispatch({
           sandbox: request.sandbox || (request.readOnly ? "read-only" : "workspace-write"),
           networkAccess: request.networkAccess || "disabled",
         });
-        if (!validation.ok) return Object.freeze({ ...value, supported: false, reason: validation.error, warnings: validation.warnings || [] });
-        return Object.freeze({ ...value, warnings: validation.warnings || [] });
+        capability = { ...capability, supported: validation.ok, ...(validation.ok ? {} : { reason: validation.error }), warnings: validation.warnings || [] };
       }
-      return Object.freeze({ ...value });
+      return Object.freeze(capability);
     },
     buildInvocation({ phase, cwd, promptPath, promptBytes, resultPath, schemaPath = null, model = null, timeoutMs: requestedTimeoutMs, sandbox = "workspace-write", networkAccess = "disabled", reasoning = null }) {
       validateCapabilities(this, phase, { readOnly: sandbox === "read-only", sandbox, networkAccess });
-      requireAbsolutePath(cwd, "cwd");
-      requireAbsolutePath(promptPath, "promptPath");
-      requireAbsolutePath(resultPath, "resultPath");
-      if (schemaPath) requireAbsolutePath(schemaPath, "schemaPath");
+      for (const [value, label] of [[cwd, "cwd"], [promptPath, "promptPath"], [resultPath, "resultPath"], ...(schemaPath ? [[schemaPath, "schemaPath"]] : [])]) requireAbsolutePath(value, label);
       requireSafeOptionalValue(model, "model");
       const trustedPrompt = decodeTrustedPrompt(promptBytes);
-      const prompt = trustedPrompt.prompt;
-      if (phase !== "dispatch") {
-        if (!buildReview) throw new AdapterCapabilityError(name, phase, "no direct review invocation is registered");
-        return assertInvocationShape(buildReview({
-          cwd,
-          prompt,
-          promptPath,
-          promptSha256: trustedPrompt.sha256,
-          resultPath,
-          schemaPath,
-          model,
-          timeoutSeconds: Math.max(1, Math.floor((requestedTimeoutMs || timeoutMs) / 1000)),
-        }));
-      }
-      const invocation = buildDispatch({
-        cwd,
-        prompt,
-        promptPath,
-        promptSha256: trustedPrompt.sha256,
-        resultPath,
-        model,
-        sandbox,
-        networkAccess,
-        reasoning,
+      const builder = phase === "dispatch" ? buildDispatch : buildReview;
+      if (!builder) throw new AdapterCapabilityError(name, phase, "no direct review invocation is registered");
+      const common = {
+        cwd, prompt: trustedPrompt.prompt, promptPath, promptSha256: trustedPrompt.sha256, resultPath, model,
         timeoutSeconds: Math.max(1, Math.floor((requestedTimeoutMs || timeoutMs) / 1000)),
-      });
-      return assertInvocationShape(invocation);
+      };
+      const phaseOptions = phase === "dispatch" ? { sandbox, networkAccess, reasoning } : { schemaPath };
+      return bindInvocationPolicy(normalizeInvocationShape(builder({ ...common, ...phaseOptions })), networkAccess);
     },
     parseOutcome(input) {
       const outcome = parseOutcomeForProtocol(input);
       if (outcome.status === "failed" && metadata.resultErrorLabel && outcome.summary.startsWith("jsonl_run_result line ")) {
-        return Object.freeze({
-          ...outcome,
-          summary: outcome.summary.replace("jsonl_run_result line ", `${metadata.resultErrorLabel} line `),
-        });
+        return Object.freeze({ ...outcome, summary: outcome.summary.replace("jsonl_run_result line ", `${metadata.resultErrorLabel} line `) });
       }
       return outcome;
     },
@@ -393,13 +335,13 @@ module.exports = {
   OUTPUT_PROTOCOLS,
   PROCESS_CONTAINMENT,
   PHASES,
-  assertInvocationShape,
-  getInvocationAuditTarget,
+  assertInvocationShape: normalizeInvocationShape,
   createNativeAdapter,
   credentialRequest,
   decodeTrustedPrompt,
   formatAdapterPhase,
   makeParseOutcome,
+  normalizePrivateEnvPaths,
   parseOutput,
   parseJsonObject,
   probeBinary,

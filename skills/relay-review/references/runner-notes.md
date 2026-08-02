@@ -35,7 +35,7 @@ staged-input mutation therefore writes no review fact.
 
 ## Concurrency
 
-The expensive reviewer call runs without holding repository or run locks. Persistence then acquires repository vNext write admission and the per-run lock, re-runs inspection, and refuses any changed action, PR, or head. Concurrent review attempts therefore converge to at most one fact: after the first append, the second fresh inspection no longer derives `review`.
+The expensive reviewer call holds a dedicated per-run execution lock, but not repository generation admission. This gives any uncertain process cleanup a signed recovery authority before credential staging can be removed. Persistence later acquires repository vNext write admission and a new per-run lock generation, re-runs inspection, and refuses any changed action, PR, or head. Concurrent review attempts therefore converge to at most one fact.
 
 ## Direct adapter invocation
 

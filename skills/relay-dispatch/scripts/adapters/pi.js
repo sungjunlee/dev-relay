@@ -8,7 +8,7 @@ function normalizeThinking(reasoning) {
 function validateDispatch({ sandbox, networkAccess }) {
   const warnings = [];
   if (sandbox !== "workspace-write") warnings.push(`pi executor: --sandbox '${sandbox}' is not enforced by pi; proceeding with workspace-write semantics.`);
-  if (networkAccess === "enabled") warnings.push("pi executor: --network-access 'enabled' is informational only; pi does not gate network access at the executor level.");
+  void networkAccess;
   return { ok: true, warnings };
 }
 
@@ -16,19 +16,19 @@ module.exports = createNativeAdapter({
   name: "pi",
   timeoutMs: 1800000,
   outputProtocol: (phase) => phase === "primary_review" ? "json_result" : "text_stdout",
-  metadata: { cliBinary: "pi", cliBinaryEnv: "RELAY_PI_BIN", outputProtocol: "phase-specific", providerDefault: "pi", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon",
+  metadata: { cliBinary: "pi", cliBinaryEnv: "RELAY_PI_BIN", outputProtocol: "phase-specific", providerDefault: "pi", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", credentialTransport: "explicit_bundle", runtimeDependencies: { executableParent: 1, interpreterParent: null },
     credentials: { files: [
       { id: "auth", targetRoot: "home", targetRel: ".pi/agent/auth.json", access: "read_write", recommendedSource: "~/.pi/agent/auth.json" },
       { id: "settings", targetRoot: "home", targetRel: ".pi/agent/settings.json", access: "read_write", recommendedSource: "~/.pi/agent/settings.json" },
       { id: "models", targetRoot: "home", targetRel: ".pi/agent/models.json", access: "read", recommendedSource: "~/.pi/agent/models.json" },
-    ], envHints: [] } },
+    ], envHints: ["QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_CN_API_KEY"] } },
   phases: {
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "native", cancellation: "process", structuredOutput: "text" },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "native", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, model, reasoning }) {
-    const args = ["--no-session", ...(model ? ["--model", model] : [])];
+    const args = ["--no-session", "--no-context-files", "--no-extensions", "--no-skills", "--tools", "read,grep,find,ls,write,edit", ...(model ? ["--model", model] : [])];
     const thinking = normalizeThinking(reasoning);
     if (thinking) args.push("--thinking", thinking);
     args.push("--print");

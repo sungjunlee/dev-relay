@@ -30,7 +30,11 @@ Invocations are argv arrays only. Shell command strings are forbidden.
 - [ ] No adapter or core path invokes a shell through an interpolated command string.
 - [ ] Adding a future executor requires one descriptor file, fixtures, and registration only.
 - [ ] Unsupported capabilities fail before worktree mutation with a precise error.
-- [ ] Live canaries pass the exact 13-cell matrix (all seven dispatch phases and all six declared primary-review phases). Missing CLIs or explicit credentials are `not_run_*` and keep evidence non-release; skip and fallback never satisfy a cell. The 2026-08-02 evidence is honestly incomplete (0/13) until operators provision every phase.
+- [ ] Live canaries pass the exact 13-cell matrix (all seven dispatch phases and all six declared primary-review phases). Missing CLIs or explicit credentials are `not_run_*` and keep evidence non-release; skip and fallback never satisfy a cell. The 2026-08-02 evidence is honestly incomplete (2/13) until operators provision every phase. Both Codex cells pass the real production path. The remaining eleven are typed external blockers at current head:
+
+  - `claude`, `opencode`, `pi` (6 cells) — `credential_source_rejected` / `UNTRUSTED_CREDENTIAL`. Their declared source files include group/world-readable config (`~/.claude/settings.json`, `~/.config/opencode/opencode.json{,c}`, `~/.pi/agent/settings.json`, `~/.pi/agent/models.json`). `host.js` requires every credential source to be a current-user owner-only regular file (`mode & 0o077 === 0`). Codex passes because both of its sources are already `0600`. Resolution is an operator decision to tighten those files; the canary must not launder the mode by staging a relaxed copy.
+  - `antigravity:dispatch` — `invocation_timeout` at 90s; `antigravity:primary_review` — `credential_auth_failed`. Antigravity authentication is bound to the system keyring, which is deliberately outside the staged credential root.
+  - `cursor` (2 cells) and `cline:dispatch` — `invocation_failed`. Both CLIs probe available and version-identified, so this is account/subscription or route state, not a missing binary.
 
 ## Verification
 

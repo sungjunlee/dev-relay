@@ -32,16 +32,17 @@ test("registry fails closed for unknown adapters and phases", () => {
   assert.equal(getAdapter("codex").capabilities({ phase: "advisory_review" }).supported, false);
 });
 
-test("registry loads native adapters lazily", () => {
+// The registry requires all seven descriptors literally and eagerly. That is deliberate: canary release
+// provenance enumerates a complete static production entry-point closure, which a lazy or dynamic loader
+// would defeat. Loading the registry must therefore load every native adapter, not just the one asked for.
+test("registry statically loads every native adapter for a complete source closure", () => {
   const registryPath = require.resolve("../../../skills/relay-dispatch/scripts/adapters");
   const nativePaths = NAMES.map((name) => require.resolve(`../../../skills/relay-dispatch/scripts/adapters/${name}`));
   delete require.cache[registryPath];
   nativePaths.forEach((modulePath) => delete require.cache[modulePath]);
   const registry = require(registryPath);
-  assert.equal(nativePaths.some((modulePath) => require.cache[modulePath]), false);
-  registry.getAdapter("codex");
-  assert.equal(Boolean(require.cache[require.resolve("../../../skills/relay-dispatch/scripts/adapters/codex")]), true);
-  for (const modulePath of nativePaths.filter((value) => !value.endsWith("/codex.js"))) {
-    assert.equal(Boolean(require.cache[modulePath]), false, modulePath);
+  for (const modulePath of nativePaths) {
+    assert.equal(Boolean(require.cache[modulePath]), true, modulePath);
   }
+  assert.deepEqual(registry.listAdapters().slice().sort(), NAMES.slice().sort());
 });

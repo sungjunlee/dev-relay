@@ -297,11 +297,7 @@ process.stdin.on("end", () => process.stdout.write(JSON.stringify({
   assert.equal(verdict.output.executor_session_token, null);
   assert.equal(verdict.output.executor_worktree, null);
   assert.equal(verdict.output.cwd.startsWith(runDir), false);
-  assert.equal(
-    verdict.output.home === path.join(verdict.output.cwd, "output")
-      || `/private${verdict.output.home}` === path.join(verdict.output.cwd, "output"),
-    true,
-  );
+  assert.equal(verdict.output.home, path.join(path.dirname(verdict.output.cwd), "reviewer-credentials", "home"));
   fs.writeFileSync(promptPath, "mutated executor-side prompt\n");
   request.prompt_sha256 = shaFile(promptPath);
   assert.throws(() => runtime.invokeIndependentReviewer({
@@ -412,7 +408,7 @@ printf '%s\\n' '{"verdict":"pass","summary":"direct","issues":[]}' > "$out"
         },
         buildInvocation: ({ cwd, promptPath: stagedPrompt, promptBytes, resultPath, schemaPath }) => adapter.buildInvocation({
           phase: "primary_review", cwd, promptPath: stagedPrompt, promptBytes, resultPath, schemaPath,
-          sandbox: "read-only", networkAccess: "disabled",
+          sandbox: "read-only", networkAccess: "enabled",
         }),
         parseOutcome: (input) => adapter.parseOutcome(input),
       });

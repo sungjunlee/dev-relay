@@ -26,9 +26,13 @@ skills/relay-dispatch/scripts/
   adapters/                registry + seven retained native executors
 ```
 
-Installed while migration is active: 18 JS / 6,985 LOC. After the honest
-30-days-and-30-vNext-runs zero-legacy-read gate: 16 JS / 5,836 LOC. Do not
-claim the latter before the generated generation evidence proves it.
+Installed while migration is active: 18 JS / 8,156 LOC. Removing the two
+migration-overlay files leaves a 16 JS / 6,049 LOC core, which is what the honest
+30-days-and-30-vNext-runs zero-legacy-read gate would retire to. The installed
+figure is generated into `tests/ledger/vnext-baseline.generated.json`; refresh it
+with the ledger generator rather than editing it by hand, and treat the core
+figure as arithmetic on that measurement, not as an achieved state. Do not claim
+the retirement before the generated generation evidence proves it.
 
 The seven executors are Claude, Codex, OpenCode, Pi, Antigravity, Cursor, and
 Cline. Add an executor as one `adapters/<name>.js` four-method descriptor,

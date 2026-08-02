@@ -1,17 +1,61 @@
 {
   "schema_version": 2,
   "evidence_status": "incomplete_non_release",
-  "generated_at": "2026-08-01T17:45:18.778Z",
-  "timeout_ms": 5000,
+  "generated_at": "2026-08-02T01:51:51.277Z",
+  "timeout_ms": 90000,
   "provenance": {
-    "git_head": "6565b3e868a28ae880a635ac985b18916b7be98e",
-    "git_tree": "11230dff2792b275d66bbaf8d82c31358ff707b3",
-    "dirty_digest": "a68533260bc79e01ab8c63ee488a5243018dddce2767ac5673830954542e6ba4",
-    "runner_sha256": "e19c91064ddbe670e4cad7f2a05fc5d9a871ae7dde358b681886d75908a5c4b1",
+    "git_head": "23c08f7d5a4cb9cbb63f86883bf569d86069fb62",
+    "git_tree": "e44413f5cf2311f0031b0860ab0d8b4fed2c89eb",
+    "dirty_digest": "d4923526e7e590ee2860c2b5328b8428c9559d871a0ae0adb3d4c799b9705ece",
+    "runner_sha256": "ebc656934fbbda5c9cc7dbdc0db0fce2fffec0024b51b36d7beabc8d2a28310b",
     "runtime_sha256": {
-      "host.js": "61c26673fad8f3f4072ad7ea1aac37fe0f33d60d918c893c7d78d03aed251751",
-      "run-store.js": "f6b4cb7998e4437e0fb7597e14b4ea58deb64bd70369166b1e1b5eb00abbd75b",
-      "adapter-contract.js": "603114b913c74904ebc1938c4b39bc8f27fb7b7c7cc89f8550efbdb45526c886"
+      "skills/relay-dispatch/scripts/adapter-contract.js": "dc2fd530e40799944292857ae06871d0b57579a52343280a4cb3b148d4a38a23",
+      "skills/relay-dispatch/scripts/adapters/antigravity.js": "75001d28eda46d3e2522a06341c4e3be537fc629b8e44dd61775f6f6ecf09800",
+      "skills/relay-dispatch/scripts/adapters/claude.js": "f978adfb702684b1c06ae126b680bedee5fa262efe0848daa5cb1fe9286110d8",
+      "skills/relay-dispatch/scripts/adapters/cline.js": "9e716d63b26e58a8db42276a616784317e94dabc5989b3f917782f0fa8d8709c",
+      "skills/relay-dispatch/scripts/adapters/codex.js": "c3a1830f611bb07d48d6de308fe61c9f865908ff62df57a623a7a8b729b4e0e7",
+      "skills/relay-dispatch/scripts/adapters/cursor.js": "62b05a1019eb735741e974c92ddea0c6614858d1615e9cfb63ac52d6ef32a1e7",
+      "skills/relay-dispatch/scripts/adapters/index.js": "a4165613d3b30dc5d9509ad318c155302c1eaebbc75662be462a0aa1a282dbea",
+      "skills/relay-dispatch/scripts/adapters/opencode.js": "b7b7e76f2f8d50a6ca078ccfa7951a8758bece37ae2543c60d22ed47e6bf8c57",
+      "skills/relay-dispatch/scripts/adapters/pi.js": "7c13493742838bc26392592cd858130ad43b3444665099ac08777cd9c4e5b273",
+      "skills/relay-dispatch/scripts/dispatch.js": "8cee1d20bff82ae37f4ae7adbb50b9a748d583a231593f686d49217d489de375",
+      "skills/relay-dispatch/scripts/exec.js": "4b417fe959534b294f48ebd6e418605d4f0328af5095034064d405f5788448c0",
+      "skills/relay-dispatch/scripts/facts.js": "605e1df2007d740c7f8c571054016fa4f303dbeb6c035523a00c83196474a845",
+      "skills/relay-dispatch/scripts/host.js": "fecfa096081197cf2edf1c573392df94962d5d5fcf124a837cf7cbb2ae79a45e",
+      "skills/relay-dispatch/scripts/inspect.js": "7b7d5799d2f2b2c0e1a84bde1280ddee4d88493b8b110beee842a30721b3a846",
+      "skills/relay-dispatch/scripts/recover.js": "a23450fcfbdabea535d1d44f73ec5468b56ee3b997c252a944f1e08b792eaac6",
+      "skills/relay-dispatch/scripts/run-store.js": "bb9778aa6bf30f07f4059c050083468f719f92cc69ef42577c111b8db48b5065",
+      "skills/relay-dispatch/scripts/runtime-generation.js": "c481cc760e67fb4aeaf4bf55ae5fc8fb121528285e1ae204581ac7e340130919",
+      "skills/relay-review/scripts/review-runner.js": "57b458c90e2edef558b88f451bbcb3457cd7786706adc97732804019ed5cdcfc"
+    },
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.22.3"
+  },
+  "provenance_after": {
+    "git_head": "23c08f7d5a4cb9cbb63f86883bf569d86069fb62",
+    "git_tree": "e44413f5cf2311f0031b0860ab0d8b4fed2c89eb",
+    "dirty_digest": "d4923526e7e590ee2860c2b5328b8428c9559d871a0ae0adb3d4c799b9705ece",
+    "runner_sha256": "ebc656934fbbda5c9cc7dbdc0db0fce2fffec0024b51b36d7beabc8d2a28310b",
+    "runtime_sha256": {
+      "skills/relay-dispatch/scripts/adapter-contract.js": "dc2fd530e40799944292857ae06871d0b57579a52343280a4cb3b148d4a38a23",
+      "skills/relay-dispatch/scripts/adapters/antigravity.js": "75001d28eda46d3e2522a06341c4e3be537fc629b8e44dd61775f6f6ecf09800",
+      "skills/relay-dispatch/scripts/adapters/claude.js": "f978adfb702684b1c06ae126b680bedee5fa262efe0848daa5cb1fe9286110d8",
+      "skills/relay-dispatch/scripts/adapters/cline.js": "9e716d63b26e58a8db42276a616784317e94dabc5989b3f917782f0fa8d8709c",
+      "skills/relay-dispatch/scripts/adapters/codex.js": "c3a1830f611bb07d48d6de308fe61c9f865908ff62df57a623a7a8b729b4e0e7",
+      "skills/relay-dispatch/scripts/adapters/cursor.js": "62b05a1019eb735741e974c92ddea0c6614858d1615e9cfb63ac52d6ef32a1e7",
+      "skills/relay-dispatch/scripts/adapters/index.js": "a4165613d3b30dc5d9509ad318c155302c1eaebbc75662be462a0aa1a282dbea",
+      "skills/relay-dispatch/scripts/adapters/opencode.js": "b7b7e76f2f8d50a6ca078ccfa7951a8758bece37ae2543c60d22ed47e6bf8c57",
+      "skills/relay-dispatch/scripts/adapters/pi.js": "7c13493742838bc26392592cd858130ad43b3444665099ac08777cd9c4e5b273",
+      "skills/relay-dispatch/scripts/dispatch.js": "8cee1d20bff82ae37f4ae7adbb50b9a748d583a231593f686d49217d489de375",
+      "skills/relay-dispatch/scripts/exec.js": "4b417fe959534b294f48ebd6e418605d4f0328af5095034064d405f5788448c0",
+      "skills/relay-dispatch/scripts/facts.js": "605e1df2007d740c7f8c571054016fa4f303dbeb6c035523a00c83196474a845",
+      "skills/relay-dispatch/scripts/host.js": "fecfa096081197cf2edf1c573392df94962d5d5fcf124a837cf7cbb2ae79a45e",
+      "skills/relay-dispatch/scripts/inspect.js": "7b7d5799d2f2b2c0e1a84bde1280ddee4d88493b8b110beee842a30721b3a846",
+      "skills/relay-dispatch/scripts/recover.js": "a23450fcfbdabea535d1d44f73ec5468b56ee3b997c252a944f1e08b792eaac6",
+      "skills/relay-dispatch/scripts/run-store.js": "bb9778aa6bf30f07f4059c050083468f719f92cc69ef42577c111b8db48b5065",
+      "skills/relay-dispatch/scripts/runtime-generation.js": "c481cc760e67fb4aeaf4bf55ae5fc8fb121528285e1ae204581ac7e340130919",
+      "skills/relay-review/scripts/review-runner.js": "57b458c90e2edef558b88f451bbcb3457cd7786706adc97732804019ed5cdcfc"
     },
     "platform": "darwin",
     "arch": "arm64",
@@ -41,10 +85,16 @@
       "phase": "dispatch",
       "model": "default",
       "provider": "anthropic",
-      "nonce_sha256": "ab587cd6f1b2558e47ac52fa0506977b682a9e75173be6e184b78a3fea884a32",
-      "prompt_sha256": "3ac190e6cbe2fb512034b9970bb9bbb5c2bf058b1cab12e1325234ea027a8b8a",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "9f0c4a803aadbf98bed8619e0178a250a4941c179803512bc89a0eeb78bc9f81",
+      "prompt_sha256": "8a9b379785c6ed0d56efee402f3b6fa451ab6e243ff9ea4f1c368fe46959d79a",
+      "status": "failed",
+      "reason": "credential_source_rejected",
+      "failure": {
+        "type": "credential_staging",
+        "code": "UNTRUSTED_CREDENTIAL"
+      },
       "probe": {
         "status": "available",
         "version": "2.1.220 (Claude Code)",
@@ -58,19 +108,34 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "auth",
+          "settings"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "not_started",
+        "process_scope_absent": "not_started",
+        "elapsed_ms": 847
+      }
     },
     {
       "adapter": "claude",
       "phase": "primary_review",
       "model": "default",
       "provider": "anthropic",
-      "nonce_sha256": "4bce45f921635e9ded18ff7f62dadec8258c91de9008b7a0fc2fd06b938203ad",
-      "prompt_sha256": "2fca8d260070cf03ff99d132d598ce19566ee545c193969b85bd686d1cedb9e1",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "0353206ee737be23eb66e9239e4f7d081bd1388b98fc9675585ec404efbbdf12",
+      "prompt_sha256": "5d149399d3febf1b6c1de20a31150c58dc3afb881b2a67fc1c3f93cdc1d93b80",
+      "status": "failed",
+      "reason": "credential_source_rejected",
+      "failure": {
+        "type": "credential_staging",
+        "code": "UNTRUSTED_CREDENTIAL"
+      },
       "probe": {
         "status": "available",
         "version": "2.1.220 (Claude Code)",
@@ -84,71 +149,132 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "auth",
+          "settings"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "not_started",
+        "process_scope_absent": "not_started",
+        "elapsed_ms": 1598
+      }
     },
     {
       "adapter": "codex",
       "phase": "dispatch",
       "model": "default",
       "provider": "openai",
-      "nonce_sha256": "8228b16fff6d7c00f027cbbaf1a358fc7d7d3a4cc9412561f43886a9b2a23d75",
-      "prompt_sha256": "ffdc5b2c463d0908757f09ea0f6e3fd74b19cccf6f81a4752b2851482ac50c26",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "60755ff3dbd0fc4e2a3538b26830d6997a6a56d00e172c486cbbdd6aa224ccd3",
+      "prompt_sha256": "fcdef0edc2e72fb0b5a3f508f4de3bcad89a0d10738c2c4f66ad36e1e8b9e00c",
+      "status": "passed",
+      "reason": "production_path_passed",
       "probe": {
         "status": "available",
-        "version": "codex-cli 0.146.0",
+        "version": "codex-cli 0.144.4",
         "executable": {
           "name": "codex",
           "dev": 16777231,
-          "ino": 554030196,
+          "ino": 517784727,
           "mode": 33261,
-          "sha256": "ae1d3ffe6d48aec6a4dc3f50e7eb8e0d11962485a6a9406c5a7012139383da02"
+          "sha256": "3302acbda5f53de1a71ebdb0c0f2aae0d47f9324aa9fb6b4e78a47014fd51c7d"
         }
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "auth",
+          "config"
+        ]
       },
-      "checks": {}
+      "executed_runtime": {
+        "digest": "16da9db22d61c8a9ef9788a9a426f139618f17a3d78aac283a64b1e62e7d451a",
+        "executable": {
+          "path": "/Users/sjlee/Library/Application Support/orca/codex-runtime-home/home/packages/standalone/releases/0.144.4-aarch64-apple-darwin/bin/codex",
+          "dev": 16777231,
+          "ino": 517784727,
+          "size": 260406464,
+          "sha256": "3302acbda5f53de1a71ebdb0c0f2aae0d47f9324aa9fb6b4e78a47014fd51c7d"
+        }
+      },
+      "invocation_sha256": "417031fcddc33025e45895ad3c86c88c07834d5cbebd16e746b035308c2aa186",
+      "output_sha256": "6709c68cc1c099815d3af0a846b76bdc1e781b191d1d2ebfdd5d4a0ff54540b3",
+      "checks": {
+        "boundary": "passed",
+        "nonce": "passed",
+        "cleanup": "passed",
+        "process_scope_absent": "passed",
+        "elapsed_ms": 23926
+      }
     },
     {
       "adapter": "codex",
       "phase": "primary_review",
       "model": "default",
       "provider": "openai",
-      "nonce_sha256": "5e14db01e95695795917ce7d517d4a3f42d15e570c1d8abde2daa30817c275cf",
-      "prompt_sha256": "914afda06f1c64505f22177268b3985be5e73e57b5823e7572ee2ed83d142d26",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "457dad273d223275cc15aaa19019bb57edb4a572431af5dec47569fc3354e09e",
+      "prompt_sha256": "f058e626d71a21338eb80840d3e53b2a4797fbd1485b484c1b4b64f16a24b3ee",
+      "status": "passed",
+      "reason": "production_path_passed",
       "probe": {
         "status": "available",
-        "version": "codex-cli 0.146.0",
+        "version": "codex-cli 0.144.4",
         "executable": {
           "name": "codex",
           "dev": 16777231,
-          "ino": 554030196,
+          "ino": 517784727,
           "mode": 33261,
-          "sha256": "ae1d3ffe6d48aec6a4dc3f50e7eb8e0d11962485a6a9406c5a7012139383da02"
+          "sha256": "3302acbda5f53de1a71ebdb0c0f2aae0d47f9324aa9fb6b4e78a47014fd51c7d"
         }
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "auth",
+          "config"
+        ]
       },
-      "checks": {}
+      "executed_runtime": {
+        "digest": "16da9db22d61c8a9ef9788a9a426f139618f17a3d78aac283a64b1e62e7d451a",
+        "executable": {
+          "path": "/Users/sjlee/Library/Application Support/orca/codex-runtime-home/home/packages/standalone/releases/0.144.4-aarch64-apple-darwin/bin/codex",
+          "dev": 16777231,
+          "ino": 517784727,
+          "size": 260406464,
+          "sha256": "3302acbda5f53de1a71ebdb0c0f2aae0d47f9324aa9fb6b4e78a47014fd51c7d"
+        }
+      },
+      "invocation_sha256": "fcb61a58f33ba63388a686959d453db47d50e736eb522aca6737476c239362dd",
+      "output_sha256": "b8a9b33250acd90c74be03bf4dda74299c050b7d95a4cbb569d326d5ea1fba80",
+      "checks": {
+        "boundary": "passed",
+        "nonce": "passed",
+        "cleanup": "passed",
+        "process_scope_absent": "passed",
+        "elapsed_ms": 13512
+      }
     },
     {
       "adapter": "opencode",
       "phase": "dispatch",
       "model": "opencode-go/glm-5.2",
       "provider": "opencode-go",
-      "nonce_sha256": "25d4eb84acf4feef475353b8032bb451afad38162afa0e0d219a1b7df3fe6f0f",
-      "prompt_sha256": "e9ee8e34b99fa95b957ec2d3b4192c29d574bd4715a1f0e0a248f5d8b0e055ea",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "450367771fe1373d8f08d5be19a1d585ac8431715f642bda1e4f3c55a5820036",
+      "prompt_sha256": "c1d231ffce990717b441e1f8da9a7e85d0bfa6371364cc530e1f5668e2cfa8d8",
+      "status": "failed",
+      "reason": "credential_source_rejected",
+      "failure": {
+        "type": "credential_staging",
+        "code": "UNTRUSTED_CREDENTIAL"
+      },
       "probe": {
         "status": "available",
         "version": "1.18.10",
@@ -162,19 +288,35 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "auth",
+          "config_json",
+          "config_jsonc"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "not_started",
+        "process_scope_absent": "not_started",
+        "elapsed_ms": 571
+      }
     },
     {
       "adapter": "opencode",
       "phase": "primary_review",
       "model": "opencode-go/glm-5.2",
       "provider": "opencode-go",
-      "nonce_sha256": "dfe9b4883897f1292bd86623061c6b46f3f4171339cc11e31d735c5683b6b155",
-      "prompt_sha256": "3310cac03fe181dc3296f528d02dab31833f83816c9e6f50ca5049951efe285a",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "ee4f2cfea42866553403c8870be85528f216c0c5748edfcb1755cb40df49c5f8",
+      "prompt_sha256": "2edd85ff70b962bad53b32204e7e6c6f9f7f8a14421aab7c1f9cd96a303cdf88",
+      "status": "failed",
+      "reason": "credential_source_rejected",
+      "failure": {
+        "type": "credential_staging",
+        "code": "UNTRUSTED_CREDENTIAL"
+      },
       "probe": {
         "status": "available",
         "version": "1.18.10",
@@ -188,19 +330,35 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "auth",
+          "config_json",
+          "config_jsonc"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "not_started",
+        "process_scope_absent": "not_started",
+        "elapsed_ms": 1235
+      }
     },
     {
       "adapter": "pi",
       "phase": "dispatch",
-      "model": "default",
-      "provider": "pi",
-      "nonce_sha256": "f63756987caacdd0f07e4880be11fe905d784da8bd0b47b493ee36f34156e7d4",
-      "prompt_sha256": "86e19fce085c5a7d8e614c47308379eb883a324a4d0f950fd36dda7492fa6af8",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "model": "qwen-token-plan/qwen3.8-max-preview",
+      "provider": "qwen-token-plan",
+      "tool_network_access": "disabled",
+      "tool_network_enforcement": "native",
+      "nonce_sha256": "9c5da0f8f95d90a02908e96c3b48bc6f998cca789a2219d0c67452ce045014bd",
+      "prompt_sha256": "556a8e7f1babbee7d4b6a0828ebe7fae15997d65961a4d12c7c31c63b42582ed",
+      "status": "failed",
+      "reason": "credential_source_rejected",
+      "failure": {
+        "type": "credential_staging",
+        "code": "UNTRUSTED_CREDENTIAL"
+      },
       "probe": {
         "status": "available",
         "version": "0.83.0",
@@ -214,19 +372,35 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "auth",
+          "settings",
+          "models"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "not_started",
+        "process_scope_absent": "not_started",
+        "elapsed_ms": 689
+      }
     },
     {
       "adapter": "pi",
       "phase": "primary_review",
-      "model": "default",
-      "provider": "pi",
-      "nonce_sha256": "371ffec192af871802ae2ebecc477d2d5030cfe68f12eb8b60b5384ce3c80424",
-      "prompt_sha256": "22374c99400e61ef1fee7573a5e0a1540484eea8b3316802a7af75e6f3f3d005",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "model": "qwen-token-plan/qwen3.8-max-preview",
+      "provider": "qwen-token-plan",
+      "tool_network_access": "disabled",
+      "tool_network_enforcement": "native",
+      "nonce_sha256": "5f58ebbe6e6b7a93ee6fefd7574d8c10c8643a9e7349adb33fa4ed3dbd589cf9",
+      "prompt_sha256": "ca95f1d5680191fe501b0cbc22be3cab46a53b19820c85ad085c8e554db8f56a",
+      "status": "failed",
+      "reason": "credential_source_rejected",
+      "failure": {
+        "type": "credential_staging",
+        "code": "UNTRUSTED_CREDENTIAL"
+      },
       "probe": {
         "status": "available",
         "version": "0.83.0",
@@ -240,19 +414,35 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "auth",
+          "settings",
+          "models"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "not_started",
+        "process_scope_absent": "not_started",
+        "elapsed_ms": 1250
+      }
     },
     {
       "adapter": "antigravity",
       "phase": "dispatch",
       "model": "default",
       "provider": "google",
-      "nonce_sha256": "1f5d167378cf03074d479a0a4946e041cc06a670761fe88ec67de0875c89793d",
-      "prompt_sha256": "a02cbdf586bd6c797760b4be93dd4d3fa1a351c2a0222fc24cba1ab8bff50f00",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "24202fc6a33462381c32d36c31d49dd9639f103e720a2aeb4b240a61d9926963",
+      "prompt_sha256": "7aff285cfce5e735ab19d409c3bcdeed4d82e76aa76ec2b23eadea43d9030bfe",
+      "status": "failed",
+      "reason": "invocation_timeout",
+      "failure": {
+        "type": "timeout",
+        "code": "INVOCATION_TIMEOUT"
+      },
       "probe": {
         "status": "available",
         "version": "1.1.9",
@@ -266,19 +456,34 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "oauth",
+          "config"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 63165
+      }
     },
     {
       "adapter": "antigravity",
       "phase": "primary_review",
       "model": "default",
       "provider": "google",
-      "nonce_sha256": "13ccd8579d455ef64f143ff9736c44955a74f89e3a4a1963479d307b308ced0d",
-      "prompt_sha256": "5ce010ce937fcf0a0b54709b7a672df2cbcef8e0d6107be2c066429c06b6f67e",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "c47364f4c3d0f62a3d8cd80203ec4efbd81e5d6ee40ee8e4fcbe445927cd47d2",
+      "prompt_sha256": "772883f66540193139caa79a6bc03a6e8553255742710b0ff42a41ce580a89a5",
+      "status": "failed",
+      "reason": "credential_auth_failed",
+      "failure": {
+        "type": "authentication",
+        "code": "AUTHENTICATION_FAILED"
+      },
       "probe": {
         "status": "available",
         "version": "1.1.9",
@@ -292,19 +497,34 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "oauth",
+          "config"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 3311
+      }
     },
     {
       "adapter": "cursor",
       "phase": "dispatch",
       "model": "default",
       "provider": "cursor",
-      "nonce_sha256": "19776d9eeaa5e1ea1ad13b4d069be1621c4d8b4c0c84913b770a461eabd3c7ce",
-      "prompt_sha256": "ba0c2703eb4979c68b6a7e889d7942f5d1f8394aef613fa7d9124fb6a1c20822",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "f112e81e11f5ffeb70acdff84df55995397a58bcf1343a560ba768a9130f6d63",
+      "prompt_sha256": "bb240c626caa80c70d515b9ee0d753fa20b3c142349fbaa952d287eaa6656d06",
+      "status": "failed",
+      "reason": "invocation_failed",
+      "failure": {
+        "type": "invocation",
+        "code": "INVOCATION_FAILED"
+      },
       "probe": {
         "status": "available",
         "version": "2026.07.23-e383d2b",
@@ -318,19 +538,33 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "cli_config"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 3056
+      }
     },
     {
       "adapter": "cursor",
       "phase": "primary_review",
       "model": "default",
       "provider": "cursor",
-      "nonce_sha256": "2f6bdbd01f5b2af17064ddf15420304c186d54b8b3300f203d90f6bbc594415e",
-      "prompt_sha256": "407b1f227580a83d5159c3d4c29ac9d64ff99ca95b04e775762defc211e7f10d",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "b302870fc4308bf3b2c80dbb4b596b098933a84a6372bd2ce38a3848b79e792a",
+      "prompt_sha256": "625f7b5bebf6064beeefb732d8bcdc0868fa49d324a127cca5df296f0fb52058",
+      "status": "failed",
+      "reason": "invocation_failed",
+      "failure": {
+        "type": "invocation",
+        "code": "INVOCATION_FAILED"
+      },
       "probe": {
         "status": "available",
         "version": "2026.07.23-e383d2b",
@@ -344,47 +578,67 @@
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "cli_config"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 3397
+      }
     },
     {
       "adapter": "cline",
       "phase": "dispatch",
       "model": "default",
       "provider": "cline-pass",
-      "nonce_sha256": "b136c8a5126e525791aaf3a2f2ba62b69bf1ff9811d5c360b3b60839754cfa32",
-      "prompt_sha256": "b04a837c955feccb1de34e354820c6283a5290287678975b74eb3fbd276312dd",
-      "status": "not_run",
-      "reason": "not_run_credentials_unavailable",
+      "tool_network_access": "enabled",
+      "tool_network_enforcement": "unsupported_explicit_enabled",
+      "nonce_sha256": "ae5a8a8fe3e72c2585c226b7b92a3d1335db7b6ce857516d7e6d9521d86b6436",
+      "prompt_sha256": "0cd8f575901f3f2a364c3eb470e4a807e79d4f6b64717db9dc50fc7db8547af3",
+      "status": "failed",
+      "reason": "invocation_failed",
+      "failure": {
+        "type": "invocation",
+        "code": "INVOCATION_FAILED"
+      },
       "probe": {
         "status": "available",
-        "version": "3.0.47",
+        "version": "3.0.48",
         "executable": {
           "name": "cline",
           "dev": 16777231,
-          "ino": 546531812,
+          "ino": 560858396,
           "mode": 33261,
           "sha256": "71d1b27aeeebdaa0b91c4babddd1f635eb7f5783257c2b3324a2cb22924cf60f"
         }
       },
       "credential_request": {
         "env_names": [],
-        "file_ids": []
+        "file_ids": [
+          "providers"
+        ]
       },
-      "checks": {}
+      "checks": {
+        "boundary": "passed",
+        "nonce": "failed",
+        "cleanup": "unknown",
+        "process_scope_absent": "unknown",
+        "elapsed_ms": 4355
+      }
     }
   ],
   "summary": {
     "required": 13,
-    "passed": 0,
-    "not_run": 13,
-    "failed": 0,
+    "passed": 2,
+    "not_run": 0,
+    "failed": 11,
     "missing": [
       "claude:dispatch",
       "claude:primary_review",
-      "codex:dispatch",
-      "codex:primary_review",
       "opencode:dispatch",
       "opencode:primary_review",
       "pi:dispatch",

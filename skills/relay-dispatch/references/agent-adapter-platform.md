@@ -22,6 +22,11 @@ binary, timeout, output protocol, and provider default; metadata never contains
 functions. Register a new adapter in `adapters/index.js`; executor/model
 selection remains explicit at dispatch time.
 
+`runtimeDependencies` is a narrow read declaration, not path discovery. Native
+single binaries receive literal executable access only; Pi and Cline declare
+their Node package roots, while Cursor declares only its version
+directory. The host never infers and opens an executable's HOME parent.
+
 ## Primary Reviewer Contract
 
 `review-runner.js` stages an immutable prompt, diff, and verdict schema, then
@@ -36,7 +41,7 @@ applies to that invocation; otherwise the adapter default is used. Historical
 | Reviewer | Invocation and isolation |
 | --- | --- |
 | `codex` | Ephemeral native read-only review with schema output. |
-| `claude` | Bare/no-session-persistence mode with read-only tool access. |
+| `claude` | Safe/no-session-persistence mode with read-only tool access. |
 | `opencode` | Prompt-only review inside the runtime's read-only OS boundary. |
 | `pi` | `read,grep,find,ls` tool allowlist inside the runtime's read-only OS boundary. |
 | `antigravity` | `agy` CLI only, inside the runtime's read-only OS boundary. |
@@ -78,6 +83,24 @@ never records credential values or credential source paths. The latest checked
 in run is `docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-02.json`;
 it is intentionally incomplete until operators provision every required cell.
 
+The outer host boundary permits the trusted CLI's remote provider control-plane
+transport. `networkAccess` separately describes model/tool networking and must
+be enforced by native adapter policy. Pi exposes a native constrained tool set;
+Claude, Codex, Cursor, Antigravity, OpenCode, and Cline are informational
+only because their installed CLI flags do not prove that every internal or
+server-side or managed-policy tool is network-disabled. A phase without a native deny fails
+closed when tool networking is disabled. Enabling tool networking is an
+explicit authorization, not a claim that sandbox-exec can distinguish provider
+sockets from arbitrary child-process sockets.
+
+The host/run-store `sandbox-exec` profile is also the authoritative filesystem
+boundary. Codex runs its nested CLI sandbox as `danger-full-access`, and Cursor
+runs its nested sandbox as `disabled`, because either nested sandbox rejects
+paths already constrained by the outer profile. The requested Relay
+`workspace-write` or `read-only` policy remains enforced by that outer profile.
+These argv descriptors are unsafe to launch by themselves; dry-run exposes
+them only as diagnostics and marks the required host boundary explicitly.
+
 ## Prompt and credential transport
 
 Claude, OpenCode, Pi, Cursor, and Codex transport the exact prompt over stdin
@@ -91,11 +114,20 @@ Dispatch does not inherit ambient provider credentials. Operators must opt in
 to each value with repeatable `--credential-env NAME` and to each declared
 adapter file with `--credential-file ID=/absolute/source`. Valid file IDs come
 from adapter metadata: Claude and Codex expose `auth` plus their settings/config
-file, OpenCode exposes `auth`, `config_json`, and `config_jsonc`, and Pi exposes
-`auth`, `settings`, and `models`. Cursor normally uses an explicitly selected
-`CURSOR_API_KEY`; Cline and Antigravity currently declare no credential inputs.
+file, OpenCode exposes `auth`, `config_json`, and `config_jsonc`, Pi exposes
+`auth`, `settings`, and `models`, Cursor exposes `cli_config`, Cline exposes
+`providers`, and Antigravity exposes `oauth` plus `config`. Cursor may instead
+use an explicitly selected `CURSOR_API_KEY`. Missing or structurally unsafe
+session files remain typed `credentials_unavailable` evidence.
 Sources are validated as exact private regular files and staged into an
 attempt-private HOME/XDG root, then removed after the process tree terminates.
+
+Claude runs both phases with `--safe-mode`: customizations are disabled while
+authentication, model selection, built-in tools, and permissions remain
+available. An unattended Claude Max canary requires the operator to generate a
+long-lived token with `claude setup-token` and explicitly select
+`CLAUDE_CODE_OAUTH_TOKEN` for both phase cells. Relay never extracts the macOS
+Keychain login, and `--bare` is not used because it rejects subscription OAuth.
 
 Credential flags are foreground-dispatch only. `--detach` with either flag
 fails closed so credential source paths are never copied into detached process

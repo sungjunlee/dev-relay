@@ -22,7 +22,7 @@ function worktreePrompt(cwd, prompt) {
 function validateDispatch({ sandbox, networkAccess }) {
   const warnings = [];
   if (sandbox !== "workspace-write") warnings.push(`cline executor: --sandbox '${sandbox}' is not enforced by cline; proceeding with workspace-write semantics.`);
-  if (networkAccess === "enabled") warnings.push("cline executor: --network-access 'enabled' is informational only; cline does not expose relay network gating.");
+  void networkAccess;
   warnings.push("cline executor has no native relay sandbox; relay uses its own worktree boundary and never cline --worktree.");
   return { ok: true, warnings };
 }
@@ -31,7 +31,9 @@ module.exports = createNativeAdapter({
   name: "cline",
   timeoutMs: 1800000,
   outputProtocol: "jsonl_run_result",
-  metadata: { cliBinary: "cline", cliBinaryEnv: "RELAY_CLINE_BIN", outputProtocol: "jsonl_run_result", providerDefault: "cline-pass", providerFromModel: true, resultErrorLabel: "Cline JSONL", reviewScript: null, promptTransport: "argv_visible", processContainment: "inherited_scope_no_daemon", promptTransportWarning: "installed CLI help declares only a positional prompt; prompt content is visible in the local process list and bounded to less than 256 KiB", credentials: { files: [], envHints: [] } },
+  metadata: { cliBinary: "cline", cliBinaryEnv: "RELAY_CLINE_BIN", outputProtocol: "jsonl_run_result", providerDefault: "cline-pass", providerFromModel: true, resultErrorLabel: "Cline JSONL", reviewScript: null, promptTransport: "argv_visible", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", credentialTransport: "explicit_bundle", runtimeDependencies: { executableParent: 1, interpreterParent: null }, promptTransportWarning: "installed CLI help declares only a positional prompt; prompt content is visible in the local process list and bounded to less than 256 KiB", credentials: { files: [
+    { id: "providers", targetRoot: "home", targetRel: ".cline/data/settings/providers.json", access: "read_write", recommendedSource: "~/.cline/data/settings/providers.json" },
+  ], envHints: [] } },
   phases: {
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "jsonl" },
     primary_review: { supported: false, reason: "Cline primary review remains blocked pending a strict live canary" },
@@ -40,7 +42,7 @@ module.exports = createNativeAdapter({
   buildDispatch({ cwd, prompt, model, timeoutSeconds }) {
     const args = ["--json", "-P", providerForModel(model)];
     if (model) args.push("-m", model);
-    args.push("--cwd", cwd, "--timeout", String(timeoutSeconds), worktreePrompt(cwd, prompt));
+    args.push("--cwd", cwd, "--auto-approve", "true", "--timeout", String(timeoutSeconds), worktreePrompt(cwd, prompt));
     return { command: binary(), args: boundedArgv(args), cwd };
   },
 });

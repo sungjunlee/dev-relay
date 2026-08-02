@@ -68,7 +68,7 @@ function finish() {
   }
   const gitMetadataWrite = ["git_add", "git_commit", "git_ref", "git_config", "git_hook"]
     .some((label) => proof[label] === "allowed");
-  if (badWrite || gitMetadataWrite || proof.network === "connected" || proof.apple_event === "allowed") process.exitCode = 90;
+  if (badWrite || gitMetadataWrite || proof.apple_event === "allowed") process.exitCode = 90;
 }
 
 if (controls.port) {

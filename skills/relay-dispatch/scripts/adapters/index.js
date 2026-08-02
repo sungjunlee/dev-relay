@@ -1,11 +1,11 @@
-const loaders = Object.freeze({
-  claude: () => require("./claude"),
-  codex: () => require("./codex"),
-  opencode: () => require("./opencode"),
-  pi: () => require("./pi"),
-  antigravity: () => require("./antigravity"),
-  cursor: () => require("./cursor"),
-  cline: () => require("./cline"),
+const adapters = Object.freeze({
+  claude: require("./claude"),
+  codex: require("./codex"),
+  opencode: require("./opencode"),
+  pi: require("./pi"),
+  antigravity: require("./antigravity"),
+  cursor: require("./cursor"),
+  cline: require("./cline"),
 });
 
 const ADAPTER_PHASES = Object.freeze({
@@ -13,15 +13,13 @@ const ADAPTER_PHASES = Object.freeze({
   PRIMARY_REVIEW: "primary_review",
 });
 
-function listAdapters() {
-  return Object.keys(loaders);
-}
+const listAdapters = () => Object.keys(adapters);
 
 function getAdapter(name) {
-  if (!Object.prototype.hasOwnProperty.call(loaders, name)) {
+  if (!Object.hasOwn(adapters, name)) {
     throw new Error(`unknown adapter '${name}'. Supported: ${listAdapters().join(", ")}`);
   }
-  return loaders[name]();
+  return adapters[name];
 }
 
 module.exports = {

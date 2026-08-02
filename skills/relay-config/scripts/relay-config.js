@@ -46,7 +46,7 @@ function run(argv = process.argv.slice(2)) {
   const capability = validateCapabilities(getAdapter(actor), selectedPhase, {
     readOnly: selectedPhase === ADAPTER_PHASES.PRIMARY_REVIEW,
     sandbox: selectedPhase === ADAPTER_PHASES.PRIMARY_REVIEW ? "read-only" : "workspace-write",
-    networkAccess: "disabled",
+    networkAccess: "enabled",
   });
   const model = args.getArg("--model") || null;
   const result = { ok: true, phase: selectedPhase, adapter: actor, model, model_source: model ? "explicit" : "adapter_default", capability };

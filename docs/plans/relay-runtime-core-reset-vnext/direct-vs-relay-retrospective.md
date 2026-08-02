@@ -8,13 +8,19 @@
 
 Direct orchestration completed the code reset while retaining all seven native
 executors. The installed dispatch runtime fell from 75 JavaScript files / 29,607
-LOC to 18 files / 6,985 LOC. Excluding the two migration-only shims, the core is
-16 files / 5,836 LOC. The final serialized gate passed 638 tests with no failures
-and two conditional skips.
+LOC to 18 files / 8,156 LOC. Excluding the two migration-only shims, the core is
+16 files / 6,049 LOC. The serialized gate on Node v22.22.3 reports 701 tests, 699
+passed, 0 failed, and 2 skipped; both skips are the ledger-approved opt-in live
+canaries that require external credentials.
 
-The rollout itself is not complete: the live adapter matrix is honestly 0/13
-without explicitly provisioned credentials, and shim retirement still requires
-30 days plus 30 vNext terminal runs with zero legacy reads.
+The runtime is larger than the figure published at the reset because production
+CLI isolation (#1141) added credential staging, the signed two-phase cleanup
+lifecycle, and runtime-identity binding after that measurement was taken.
+
+The rollout itself is not complete: the live adapter matrix is honestly 2/13 at
+current head, and shim retirement still requires 30 days plus 30 vNext terminal
+runs with zero legacy reads. Both Codex cells pass the real production path; the
+remaining eleven carry typed external blockers, not weakened isolation.
 
 ## What Direct Orchestration Did Better
 

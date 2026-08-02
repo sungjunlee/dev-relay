@@ -14,6 +14,7 @@ const test = require("node:test");
 const facts = require("../../../skills/relay-dispatch/scripts/facts");
 const host = require("../../../skills/relay-dispatch/scripts/host");
 const recovery = require("../../../skills/relay-dispatch/scripts/recover");
+const generation = require("../../../skills/relay-dispatch/scripts/runtime-generation");
 const runtime = { inspectRun: recovery.inspectProductionRun, recoverRun: recovery.recoverProductionRun };
 const { createRunRecord } = require("../../../skills/relay-dispatch/scripts/run-store");
 
@@ -53,6 +54,10 @@ function fixture(label) {
   requireGit(repo, ["checkout", "-b", "issue-1135-stale-owner"]);
   requireGit(repo, ["push", "-u", "origin", "issue-1135-stale-owner"]);
   const head = requireGit(repo, ["rev-parse", "HEAD"]);
+  const generationStore = generation.initializeStore({ checkoutRoot: repo, remote: fs.realpathSync(remote) });
+  generation.decideMigration({ store: generationStore, observation: { observed_at: "2026-07-31T23:59:57.000Z", active_legacy_run_count: 0, oldest_active_legacy_age_hours: null } });
+  const drained = generation.recordDrainCompleted({ store: generationStore, inventory: { observed_at: "2026-07-31T23:59:58.000Z", active_legacy_run_count: 0, oldest_active_legacy_age_hours: null }, actor: "test", operationId: "recover-test-drain" });
+  generation.switchGeneration({ store: generationStore, generation: "vnext", actor: "test", operationId: "recover-test-switch", switchedAt: "2026-07-31T23:59:59.000Z", drainInventoryDigest: drained.inventory.inventory_digest });
   const donePath = path.join(runDir, "done-criteria.md");
   const done = "# Done\n\nRecover stale ownership safely.\n";
   fs.writeFileSync(donePath, done);

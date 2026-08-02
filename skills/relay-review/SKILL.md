@@ -64,6 +64,7 @@ The reviewer returns only:
   adapter `--credential-file ID=/absolute/source`. Sources must be canonical,
   owner-only regular files. They are copied into a private staged HOME/XDG tree
   and removed after invocation; GitHub tokens are never inherited.
+- Current remote reviewers use `--network-access enabled` (the default); selecting `disabled` fails before invocation. Enabled transport is unrestricted reviewer-process network and does not claim provider-only or tool-network separation.
 - macOS uses `sandbox-exec` around the actual reviewer CLI and exposes only staged inputs plus required system/executable paths.
 - Linux does not claim direct CLI isolation through Node's permission model; unsupported hosts fail closed.
 - A stale PR head, missing verification, changed action, inactive vNext writer generation, unsupported adapter, or reviewer-binding mismatch writes no review fact.
