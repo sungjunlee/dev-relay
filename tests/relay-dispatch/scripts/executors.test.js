@@ -11,6 +11,6 @@ test("adapter capability warnings preserve executor containment semantics", () =
   assert.equal(opencode.supported, true);
   assert.match(opencode.warnings.join("\n"), /not enforced/);
   const cursor = getAdapter("cursor").capabilities({ phase: "dispatch", request: { sandbox: "read-only", networkAccess: "disabled" } });
-  assert.equal(cursor.supported, false);
-  assert.match(cursor.reason, /read-only dispatch mode/);
+  assert.equal(cursor.supported, true);
+  assert.match(cursor.warnings.join("\n"), /host enforces the filesystem boundary.*disables Cursor's nested sandbox/);
 });

@@ -392,20 +392,25 @@ function isolatedFailureSignals(result, outcome) {
   if (/schema|json|output/i.test(stderr) || outcome?.status === "failed") signals.push("output_protocol");
   return [...new Set(signals)];
 }
-function runIsolated({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, parseOutcome, envAllowlist = REVIEW_ENV, stdinBinding = null, credentials = null }) {
+function runIsolated({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, parseOutcome, envAllowlist = REVIEW_ENV, stdinBinding = null, credentials = null, processScope = null }) {
   if (!Array.isArray(invocation?.args) || invocation.args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) throw new Error("isolated invocation requires string argv values");
   const childEnv = isolatedEnvironment(env, envAllowlist); childEnv.HOME = credentials?.roots.home || writeRoot; childEnv.XDG_CONFIG_HOME = credentials?.roots.xdg_config || writeRoot;
   childEnv.XDG_DATA_HOME = credentials?.roots.xdg_data || writeRoot; childEnv.TMPDIR = writeRoot;
   Object.assign(childEnv, credentials?.environment || {});
-  const processScope = host.sandboxInvocation.beginProcessScope(); Object.assign(childEnv, processScope.env);
+  Object.assign(childEnv, host.sandboxInvocation.privatePathEnvironment(invocation.privateEnvPaths, credentials?.roots || {}, childEnv, "INVALID_INVOCATION"));
+  processScope ||= host.sandboxInvocation.beginProcessScope(); Object.assign(childEnv, processScope.env);
+  const runtime = host.sandboxInvocation.bindRuntimeFiles({ command: invocation.command, env: childEnv, runtimeDependencies: invocation.runtimeDependencies });
+  const runtimeError = (error) => { error.executed_runtime = runtime.runtime_files; return error; };
   const isolated = host.sandboxInvocation({
     role: "reviewer",
-    command: invocation.command,
+    command: runtime.command,
     args: invocation.args,
-    readRoots: [readRoot], readFiles: credentials?.readable || [],
-    writeRoots: [writeRoot],
+    readRoots: [readRoot, ...Object.values(credentials?.roots || {})], readFiles: credentials?.readable || [],
+    writeRoots: [writeRoot, ...Object.values(credentials?.roots || {})],
     writeFiles: credentials?.writable || [],
-    networkAccess: "enabled",
+    denyWriteFiles: credentials?.readonly || [],
+    runtimeDependencies: invocation.runtimeDependencies,
+    networkAccess: invocation.networkAccess || "disabled",
     env: childEnv,
   });
   let input;
@@ -417,7 +422,13 @@ function runIsolated({ invocation, readRoot, writeRoot, timeoutMs = 120000, env,
     }
     input = verifyRegularFileBinding(stdinBinding, "independent reviewer stdin").bytes;
   }
+  host.sandboxInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
+    runtimeDependencies: invocation.runtimeDependencies, env: childEnv });
   const result = spawnSync(isolated.command, isolated.args, { cwd: readRoot, env: isolated.env, input, encoding: "utf8", timeout: timeoutMs, maxBuffer: 8 << 20, detached: process.platform !== "win32" });
+  let runtimeIntegrityError = null;
+  try { host.sandboxInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
+    runtimeDependencies: invocation.runtimeDependencies, env: childEnv, reenumerate: false }); }
+  catch (error) { runtimeIntegrityError = error; }
   // The process-group reap must run even when the scope audit throws or times out, or a credential-holding
   // descendant would outlive the reviewer. Both audit failures are aggregated and reported together.
   const auditErrors = [];
@@ -432,38 +443,41 @@ function runIsolated({ invocation, readRoot, writeRoot, timeoutMs = 120000, env,
     const error = new Error(`independent reviewer runtime audit failed: ${auditErrors.map((entry) => entry.message).join("; ")}`);
     error.runtime_audit = { pgid: result.pid || null, process_group_absent: processGroupAudit?.absent === true,
       process_scope_matched: scopedAudit?.matched ?? null, process_scope_reaped: scopedAudit?.reaped ?? null,
-      process_scope_remaining: scopedAudit?.remaining ?? null, audit_errors: auditErrors.map((entry) => entry.code || entry.message), quiet_window_ms: 250 };
-    throw error;
+      process_scope_remaining: scopedAudit?.remaining ?? null, remaining_identities: scopedAudit?.remaining_identities || [], scope_seal: processScope.seal,
+      audit_errors: auditErrors.map((entry) => entry.code || entry.message), quiet_window_ms: 250 };
+    throw runtimeError(error);
   }
+  if (runtimeIntegrityError) throw runtimeError(runtimeIntegrityError);
   const stdoutPath = path.join(readRoot, "reviewer.stdout"), stderrPath = path.join(readRoot, "reviewer.stderr");
   fs.writeFileSync(stdoutPath, result.stdout || "", { mode: 0o600 }); fs.writeFileSync(stderrPath, result.stderr || "", { mode: 0o600 });
   let resultPath = invocation.resultPath || null;
   if (resultPath && !contained(writeRoot, path.resolve(resultPath))) throw new Error("independent reviewer result must be inside the writable staging child");
-  const outcome = parseOutcome({ phase: "primary_review", exitCode: Number.isInteger(result.status) ? result.status : 1, signal: result.signal || null,
-    timedOut: result.error?.code === "ETIMEDOUT", cancelled: false, stdoutPath, stderrPath, resultPath });
+  let outcome; try { outcome = parseOutcome({ phase: "primary_review", exitCode: Number.isInteger(result.status) ? result.status : 1, signal: result.signal || null,
+    timedOut: result.error?.code === "ETIMEDOUT", cancelled: false, stdoutPath, stderrPath, resultPath }); } catch (error) { throw runtimeError(error); }
   if (processGroupAudit.survived_terminal || !processGroupAudit.absent || scopedAudit.matched > 0) {
     const error = new Error(scopedAudit.remaining > 0 || processGroupAudit.unverified
       ? "independent reviewer cleanup incomplete"
       : "independent reviewer process scope survived terminal result");
     error.runtime_audit = { pgid: result.pid || null, process_group_absent: processGroupAudit.absent && scopedAudit.remaining === 0,
       process_scope_matched: scopedAudit.matched, process_scope_reaped: scopedAudit.reaped, process_scope_remaining: scopedAudit.remaining,
+      remaining_identities: scopedAudit.remaining_identities || [], scope_seal: processScope.seal,
       process_group_unverified: processGroupAudit.unverified, quiet_window_ms: 250 };
-    throw error;
+    throw runtimeError(error);
   }
   if (!outcome || outcome.status !== "succeeded") {
     const reason = isolatedFailureReason(result, outcome), error = new Error(`independent reviewer failed (${reason})`);
-    error.failure_reason = reason; error.failure_signals = isolatedFailureSignals(result, outcome); throw error;
+    error.failure_reason = reason; error.failure_signals = isolatedFailureSignals(result, outcome); throw runtimeError(error);
   }
-  return Object.freeze({ ...outcome, runtime_audit: Object.freeze({ pgid: result.pid || null, process_group_absent: true, quiet_window_ms: 250 }) });
+  return Object.freeze({ ...outcome, executed_runtime: runtime.runtime_files,
+    runtime_audit: Object.freeze({ pgid: result.pid || null, process_group_absent: true, process_scope_remaining: 0, scope_seal: processScope.seal, quiet_window_ms: 250 }) });
 }
 
 function stageReviewerCredentials(stage, request) {
-  if (!request) return null;
-  const normalized = normalizeCredentialRequest(request.metadata, request);
-  const root = path.join(stage, "reviewer-credentials"), roots = { home: path.join(root, "home"), xdg_config: path.join(root, "xdg-config"), xdg_data: path.join(root, "xdg-data") };
+  request ||= { metadata: {}, envNames: [], fileSpecs: [], env: {} }; const normalized = normalizeCredentialRequest(request.metadata, request);
+  const root = path.join(stage, "reviewer-credentials"), roots = { home: path.join(root, "home"), xdg_config: path.join(root, "xdg-config"), xdg_data: path.join(root, "xdg-data"), scratch: path.join(root, "scratch") };
   fs.mkdirSync(root, { mode: 0o700 }); for (const value of Object.values(roots)) fs.mkdirSync(value, { mode: 0o700 });
   const sources = new Map(normalized.fileSpecs.map((spec) => [spec.slice(0, spec.indexOf("=")), spec.slice(spec.indexOf("=") + 1)]));
-  const readable = [], writable = [], environment = {};
+  const readable = [], writable = [], readonly = [], environment = {};
   try {
     for (const name of normalized.envNames) {
       if (typeof request.env?.[name] !== "string") throw new Error(`credential environment value is missing: ${name}`);
@@ -475,9 +489,9 @@ function stageReviewerCredentials(stage, request) {
       if (!contained(roots[item.targetRoot], target)) { bytes.fill(0); throw new Error("credential target escapes its private root"); }
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 }); fs.chmodSync(path.dirname(target), 0o700);
       try { fs.writeFileSync(target, bytes, { flag: "wx", mode: 0o600 }); } finally { bytes.fill(0); }
-      readable.push(target); if (item.access === "read_write") writable.push(target);
+      readable.push(target); if (item.access === "read_write") writable.push(target); else readonly.push(target);
     }
-    return { root, roots, readable, writable, environment };
+    return { root, roots, readable, writable, readonly, environment };
   } catch (error) { for (const key of Object.keys(environment)) delete environment[key]; throw error; }
 }
 function invokeExternalObserver({ observer, request, timeoutMs = 120000 }) {
@@ -494,7 +508,8 @@ function invokeExternalObserver({ observer, request, timeoutMs = 120000 }) {
       writeExclusiveAtomic(target, bytes, "OBSERVER_INPUT_CONFLICT"); return target;
     });
     args.push("--request-file", requestPath);
-    return runIsolated({ invocation: { command: observer.command, args }, readRoot: stage, writeRoot: stage,
+    return runIsolated({ invocation: { command: observer.command, args, runtimeDependencies: observer.runtimeDependencies,
+      networkAccess: observer.networkAccess }, readRoot: stage, writeRoot: stage,
       timeoutMs, env: observer.env, envAllowlist: new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "GH_TOKEN", "GITHUB_TOKEN"]),
       parseOutcome: ({ exitCode, stdoutPath, stderrPath }) => {
         if (exitCode !== 0) throw new Error(readRegularFile(stderrPath, "observer stderr").toString("utf8"));
@@ -507,10 +522,17 @@ function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutc
   const diff = readRegularFile(request.diff_path, "review diff"), prompt = readRegularFile(request.prompt_path, "review prompt");
   if (!diff || !prompt || request.reviewed_sha !== request.current_sha || request.diff_sha256 !== digest(diff) || request.prompt_sha256 !== digest(prompt)
     || fs.realpathSync(request.done_criteria_path) !== record.contract.done_criteria_path) throw new Error("review request is not bound to the immutable run, current SHA, and initial input digests");
-  const stage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-stage-")));
-  const inputs = path.join(stage, "inputs"), output = path.join(inputs, "output"); fs.mkdirSync(inputs, { mode: 0o700 }); fs.mkdirSync(output, { mode: 0o700 });
   const criteria = readRegularFile(record.contract.done_criteria_path, "frozen Done Criteria");
   if (digest(criteria) !== record.contract.done_criteria_sha256) throw new Error("frozen Done Criteria bytes do not match the immutable run contract");
+  const stage = fs.realpathSync(fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "relay-review-"))), stageStat = fs.lstatSync(stage), stageBinding = { dev: stageStat.dev, ino: stageStat.ino };
+  let lockContext;
+  try { lockContext = host.acquireRunLock({ runDir, attemptId: `review-${crypto.randomUUID()}`, operation: "review-execution",
+    hostKind: "local_supervisor", hostHandle: `review:${process.pid}`, worktreeDir: runDir }); }
+  catch (error) { host.sandboxInvocation.removeBoundDirectory(stage, stageBinding, "unowned review stage"); throw error; }
+  const processScope = host.sandboxInvocation.beginProcessScope(), cleanup = host.retainReviewerCleanup(lockContext,
+    { root: stage, binding: stageBinding, scopeSeal: processScope.seal });
+  let binding = null, preserveStage = false, outcome, failure; try {
+  const inputs = path.join(stage, "inputs"), output = path.join(inputs, "output"); fs.mkdirSync(inputs, { mode: 0o700 }); fs.mkdirSync(output, { mode: 0o700 });
   const paths = { diffPath: path.join(inputs, `review-diff-${digest(diff)}.patch`), promptPath: path.join(inputs, `review-prompt-${digest(prompt)}.md`),
     doneCriteriaPath: path.join(inputs, `done-criteria-${digest(criteria)}.md`) };
   writeExclusiveAtomic(paths.diffPath, diff, "REVIEW_INPUT_CONFLICT"); writeExclusiveAtomic(paths.promptPath, prompt, "REVIEW_INPUT_CONFLICT"); writeExclusiveAtomic(paths.doneCriteriaPath, criteria, "REVIEW_INPUT_CONFLICT");
@@ -523,20 +545,27 @@ function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutc
     criteria: bindRegularFile(paths.doneCriteriaPath, "staged Done Criteria"),
     ...(schemaPath ? { schema: bindRegularFile(schemaPath, "staged review schema") } : {}),
   });
-  const binding = Object.freeze({ diff_sha256: digest(diff), prompt_sha256: digest(prompt), staged_diff_sha256: digest(diff), staged_prompt_sha256: digest(prompt),
+  binding = Object.freeze({ diff_sha256: digest(diff), prompt_sha256: digest(prompt), staged_diff_sha256: digest(diff), staged_prompt_sha256: digest(prompt),
     staged_done_criteria_sha256: digest(criteria), staged_schema_sha256: schemaBytes ? digest(schemaBytes) : null,
     executed_prompt_sha256: stagedBindings.prompt.sha256,
     request_sha256: digest(Buffer.from(JSON.stringify({ run_id: record.run_id, reviewed_sha: request.reviewed_sha, ...paths }))) });
-  try {
     const resultPath = path.join(output, "reviewer-result.json");
     const credentials = stageReviewerCredentials(stage, credentialRequest);
     const invocation = buildInvocation(Object.freeze({ cwd: inputs, ...paths, promptBytes: Buffer.from(stagedBindings.prompt.bytes), requestPath: null, resultPath, schemaPath }));
     for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
-    const outcome = runIsolated({ invocation: { ...invocation, resultPath }, readRoot: inputs, writeRoot: output, timeoutMs, env, parseOutcome, stdinBinding: stagedBindings.prompt, credentials });
+    outcome = runIsolated({ invocation: { ...invocation, resultPath }, readRoot: inputs, writeRoot: output, timeoutMs, env, parseOutcome, stdinBinding: stagedBindings.prompt, credentials, processScope });
     for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
-    return Object.freeze({ ...outcome, review_binding: binding });
-  } catch (error) { error.review_binding = binding; throw error; }
-  finally { fs.rmSync(stage, { recursive: true, force: true }); }
+  } catch (error) { if (binding) error.review_binding = binding; failure = error; const audit = error.runtime_audit;
+    preserveStage = Boolean(audit && !(audit.process_group_absent === true && audit.process_scope_remaining === 0));
+  }
+  if (!preserveStage) try { cleanup.complete(outcome ? "completed" : "failed"); }
+  catch (error) { failure = error; if (binding) error.review_binding = binding; preserveStage = true; }
+  if (preserveStage) {
+    failure.review_cleanup_path = cleanup.path;
+    failure.review_evidence_preserved = true; failure.review_evidence_path = stage;
+  } else host.releaseRunLock(lockContext, { outcome: "review_finished" });
+  if (failure) throw failure;
+  return Object.freeze({ ...outcome, review_binding: binding });
 }
 
 module.exports = {

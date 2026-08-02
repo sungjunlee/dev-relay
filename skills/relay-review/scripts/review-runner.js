@@ -30,6 +30,7 @@ const OPTIONS = Object.freeze({
   timeout: { type: "string" },
   "credential-env": { type: "string", multiple: true, default: [] },
   "credential-file": { type: "string", multiple: true, default: [] },
+  "network-access": { type: "string", default: "enabled" },
   json: { type: "boolean", default: false },
   help: { type: "boolean", short: "h", default: false },
 });
@@ -75,6 +76,7 @@ function usage() {
     "  --timeout <sec>    Reviewer timeout in seconds.",
     "  --credential-env <name>       Explicit credential environment name (repeatable).",
     "  --credential-file <id=path>   Declared private credential-file mapping (repeatable).",
+    "  --network-access <enabled|disabled>  Model/tool network policy; provider transport remains enabled (default: enabled).",
     "  --json             Emit one JSON object.",
   ].join("\n");
 }
@@ -126,6 +128,7 @@ function parseCli(argv) {
     fail("supply exactly one of --run-dir or --run-id", "REVIEW_USAGE");
   }
   if (parsed.values["run-id"] && !RUN_ID_RE.test(parsed.values["run-id"])) fail("--run-id is invalid", "REVIEW_USAGE");
+  if (!new Set(["enabled", "disabled"]).has(parsed.values["network-access"])) fail("--network-access must be enabled or disabled", "REVIEW_USAGE");
   const timeoutSeconds = parsed.values.timeout === undefined ? null : Number(parsed.values.timeout);
   if (timeoutSeconds !== null && (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0)) fail("--timeout must be a positive integer", "REVIEW_USAGE");
   return { help: false, values: parsed.values, repo, timeoutSeconds };
@@ -298,6 +301,13 @@ function normalizeVerdict(output) {
   if (value.verdict === "changes_requested" && !issues.length) fail("changes_requested requires at least one issue", "REVIEW_RESULT_INVALID");
   return { verdict: value.verdict, summary: value.summary.trim(), issues };
 }
+function normalizeExecutedRuntime(files) {
+  if (!Array.isArray(files) || !files.length) fail("reviewer executed runtime binding is unavailable", "REVIEW_RUNTIME_BINDING_MISSING");
+  const executable = files[0], keys = ["path", "dev", "ino", "size", "sha256"];
+  if (keys.some((key) => !Object.hasOwn(executable, key)) || typeof executable.path !== "string" || !/^[0-9a-f]{64}$/.test(executable.sha256)
+    || [executable.dev, executable.ino, executable.size].some((value) => !Number.isInteger(value) || value < 0)) fail("reviewer executed runtime binding is invalid", "REVIEW_RUNTIME_BINDING_INVALID");
+  return { digest: crypto.createHash("sha256").update(JSON.stringify(files)).digest("hex"), executable: Object.fromEntries(keys.map((key) => [key, executable[key]])) };
+}
 
 function productionServices() {
   function withRunLock(runDir, callback) {
@@ -307,7 +317,7 @@ function productionServices() {
   }
   return {
     inspectRun: (input) => inspectProductionRun(input),
-    invokeReviewer({ runDir, request, adapter, model, timeoutMs, credentialRequest: requestedCredentials }) {
+    invokeReviewer({ runDir, request, adapter, model, timeoutMs, networkAccess, credentialRequest: requestedCredentials }) {
       return runStore.invokeIndependentReviewer({
         runDir,
         request,
@@ -315,7 +325,7 @@ function productionServices() {
         credentialRequest: requestedCredentials,
         buildInvocation: ({ cwd, promptPath, promptBytes, resultPath, schemaPath }) => adapter.buildInvocation({
           phase: "primary_review", cwd, promptPath, promptBytes, resultPath, schemaPath, model,
-          timeoutMs, sandbox: "read-only", networkAccess: "disabled",
+          timeoutMs, sandbox: "read-only", networkAccess,
         }),
         parseOutcome: (input) => adapter.parseOutcome(input),
       });
@@ -335,7 +345,7 @@ async function runReview(cli, overrides = {}) {
     fail(`reviewer override is not part of the vNext contract; immutable binding is '${record.roles.reviewer}'`, "REVIEWER_BINDING_MISMATCH");
   }
   const adapter = getAdapter(reviewer);
-  validateCapabilities(adapter, "primary_review", { readOnly: true, networkAccess: "disabled" });
+  validateCapabilities(adapter, "primary_review", { readOnly: true, networkAccess: cli.values["network-access"] });
   let requestedCredentials;
   try { requestedCredentials = credentialRequest(adapter.metadata.credentials, { envNames: cli.values["credential-env"], fileSpecs: cli.values["credential-file"] }); }
   catch (error) { fail(error.message, "INVALID_CREDENTIAL"); }
@@ -357,14 +367,14 @@ async function runReview(cli, overrides = {}) {
   const promptDigest = crypto.createHash("sha256").update(promptBytes).digest("hex");
   const promptPath = immutableBytes(path.join(inputDir, `prompt-${binding.head}-${promptDigest}.md`), promptBytes);
   const timeoutMs = (cli.timeoutSeconds || Math.ceil(adapter.defaults.timeoutMs / 1000)) * 1000;
-  let verdict;
-  let stagedBinding;
+  let verdict, stagedBinding, executedRuntime;
   try {
     const outcome = await services.invokeReviewer({
       runDir,
       adapter,
       model: cli.values.model || null,
       timeoutMs,
+      networkAccess: cli.values["network-access"],
       credentialRequest: { ...requestedCredentials, env: credentialEnv },
       request: {
         diff_path: diffPath,
@@ -378,9 +388,12 @@ async function runReview(cli, overrides = {}) {
       },
     });
     stagedBinding = outcome.review_binding;
+    executedRuntime = normalizeExecutedRuntime(outcome.executed_runtime);
     verdict = normalizeVerdict(outcome.output);
   } catch (error) {
+    if (error.review_evidence_preserved) throw error;
     stagedBinding = error.review_binding || null;
+    executedRuntime = normalizeExecutedRuntime(error.executed_runtime);
     verdict = { verdict: "escalated", summary: `Reviewer invocation failed: ${error.message}`, issues: [] };
   }
   const written = await services.withGenerationAdmission({ store, generation: "vnext", mode: "write" }, async (admission) => {
@@ -412,7 +425,7 @@ async function runReview(cli, overrides = {}) {
       }
       const round = Math.max(0, ...fresh.facts.filter((fact) => fact.type === "review_recorded").map((fact) => fact.payload.round)) + 1;
       const artifact = {
-        schema_version: 1,
+        schema_version: 2,
         run_id: record.run_id,
         round,
         reviewer,
@@ -421,6 +434,7 @@ async function runReview(cli, overrides = {}) {
         diff_sha256: diffDigest,
         prompt_sha256: promptDigest,
         staging_request_sha256: stagedBinding.request_sha256,
+        executed_runtime: executedRuntime,
         verdict,
       };
       const artifactBytes = Buffer.from(`${JSON.stringify(artifact, null, 2)}\n`, "utf8");
@@ -439,6 +453,7 @@ async function runReview(cli, overrides = {}) {
           done_criteria_sha256: record.contract.done_criteria_sha256,
           reviewer,
           review_artifact: artifactPath,
+          executed_runtime: executedRuntime,
           override: null,
         },
       };

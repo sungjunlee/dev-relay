@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("crypto");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -16,6 +16,7 @@ const runner = require("../../../skills/relay-review/scripts/review-runner");
 const runtime = { withRunLock(runDir, callback) { const canonical = fs.realpathSync(runDir);
   return host.withRunLock({ runDir: canonical, attemptId: `test-${crypto.randomUUID()}`, operation: "review",
     hostKind: "local_supervisor", hostHandle: `test:${process.pid}`, worktreeDir: canonical }, callback); } };
+const EXECUTED_RUNTIME = Object.freeze([{ path: process.execPath, dev: 1, ino: 2, size: 3, sha256: "e".repeat(64) }]);
 
 function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -38,7 +39,7 @@ function reviewBinding(input) {
 }
 
 function reviewerSuccess(input, output) {
-  return { status: "succeeded", output, review_binding: reviewBinding(input) };
+  return { status: "succeeded", output, review_binding: reviewBinding(input), executed_runtime: EXECUTED_RUNTIME };
 }
 
 async function fixture(label) {
@@ -153,7 +154,10 @@ test("vNext runner records one exact-SHA pass and the derived action advances to
   assert.equal(reviews.length, 1);
   assert.equal(reviews[0].payload.round, 1);
   assert.equal(reviews[0].payload.override, null);
+  assert.match(reviews[0].payload.executed_runtime.digest, /^[0-9a-f]{64}$/);
   assert.equal(fs.existsSync(reviews[0].payload.review_artifact), true);
+  const artifact = JSON.parse(fs.readFileSync(reviews[0].payload.review_artifact, "utf8"));
+  assert.equal(artifact.schema_version, 2); assert.deepEqual(artifact.executed_runtime, reviews[0].payload.executed_runtime);
   await assert.rejects(runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer: async () => { throw new Error("must not run"); } }), /not 'review'/);
   assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 1);
 });
@@ -173,6 +177,7 @@ test("changes_requested and invocation error are durable blocking review facts",
     invokeReviewer: async (input) => {
       const error = new Error("adapter crashed");
       error.review_binding = reviewBinding(input);
+      error.executed_runtime = EXECUTED_RUNTIME;
       throw error;
     },
   });
@@ -180,6 +185,17 @@ test("changes_requested and invocation error are durable blocking review facts",
   assert.equal(errorResult.recommended_action.kind, "none");
   const artifact = JSON.parse(fs.readFileSync(errorResult.review_artifact, "utf8"));
   assert.match(artifact.verdict.summary, /adapter crashed/);
+});
+
+test("review persistence rejects missing or malformed executed runtime evidence", async () => {
+  for (const mode of ["missing", "malformed"]) {
+    const value = await fixture(`runtime-${mode}`);
+    await assert.rejects(runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer: async (input) => {
+      const outcome = reviewerSuccess(input, { verdict: "pass", summary: "ok", issues: [] });
+      if (mode === "missing") delete outcome.executed_runtime; else outcome.executed_runtime = [{ ...EXECUTED_RUNTIME[0], sha256: "bad" }]; return outcome;
+    } }), /runtime binding/);
+    assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
+  }
 });
 
 test("immutable reviewer binding and closed CLI reject legacy policy surfaces", async () => {
@@ -195,6 +211,14 @@ test("immutable reviewer binding and closed CLI reject legacy policy surfaces", 
   assert.throws(() => runner.normalizeVerdict({ verdict: "pass", summary: "ok", issues: [], score: 10 }), /unknown or missing/);
   assert.throws(() => runner.normalizeVerdict({ verdict: "changes_requested", summary: "bug", issues: [] }), /requires at least one issue/);
   assert.throws(() => runner.normalizeVerdict({ verdict: "pass", summary: "ok", issues: [{ title: "bug", body: "bad", file: null, line: null, severity: "high" }] }), /cannot contain issues/);
+});
+
+test("review help distinguishes model/tool policy from enabled provider transport", () => {
+  const cli = require.resolve("../../../skills/relay-review/scripts/review-runner");
+  const result = spawnSync(process.execPath, [cli, "--help"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Model\/tool network policy/);
+  assert.match(result.stdout, /provider transport remains enabled/);
 });
 
 test("Done Criteria bytes are hash-checked before review and again under the append lock", async () => {

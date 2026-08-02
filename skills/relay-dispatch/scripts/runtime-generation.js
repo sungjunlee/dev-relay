@@ -5,6 +5,7 @@
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const SCHEMA_VERSION = 1;
@@ -26,6 +27,10 @@ const LOCK_WAIT_MS = 5;
 const LOCK_TIMEOUT_MS = 10_000;
 const INCOMPLETE_LOCK_GRACE_MS = 2_000;
 const STATE_DIRECTORY_NAME = "relay-runtime-vnext";
+const ROLLOUT_TYPES = new Set([
+  "legacy_inventory_observed", "legacy_artifact_read", "legacy_surface_invoked",
+  "vnext_terminal_observed", "daily_checkpoint",
+]);
 
 const issuedAdmissions = new WeakSet();
 const admissionStates = new WeakMap();
@@ -143,7 +148,7 @@ function fsyncDirectory(directory) {
   }
 }
 
-function secureRead(filePath, label) {
+function secureRead(filePath, label, expectedIdentity = null) {
   let fd;
   try {
     fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
@@ -155,6 +160,7 @@ function secureRead(filePath, label) {
   try {
     const before = fs.fstatSync(fd);
     if (!before.isFile()) fail("UNTRUSTED_GENERATION_ARTIFACT", `${label} must be a regular file`);
+    if (expectedIdentity && (before.dev !== expectedIdentity.dev || before.ino !== expectedIdentity.ino)) fail("UNTRUSTED_GENERATION_ARTIFACT", `${label} path identity changed before read`);
     const bytes = fs.readFileSync(fd);
     const after = fs.fstatSync(fd);
     if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size) {
@@ -250,6 +256,12 @@ function pathsFor(stateDir) {
     events: path.join(stateDir, "generation-events"),
     overlays: path.join(stateDir, "legacy-recovery-overlays"),
     transitions: path.join(stateDir, "generation-transitions"),
+    transitionAborts: path.join(stateDir, "generation-transition-aborts"),
+    quiescence: path.join(stateDir, "legacy-quiescence-attestations"),
+    rollout: path.join(stateDir, "rollout-observations"),
+    rolloutSeals: path.join(stateDir, "rollout-observation-seals"),
+    rolloutHead: path.join(stateDir, "rollout-observation-head.json"),
+    terminalReceipts: path.join(stateDir, "vnext-terminal-receipts"),
     lock: path.join(stateDir, "generation-transaction.lock"),
   });
 }
@@ -280,7 +292,7 @@ function initializeResolvedStore({ stateDir, repository, fault = null }) {
   const canonical = canonicalRepository(repository);
   const directory = assertStateDirectory(stateDir, canonical, { create: true });
   const paths = pathsFor(directory);
-  for (const [label, directoryPath] of Object.entries({ "generation-events": paths.events, "legacy-recovery-overlays": paths.overlays, "generation-transitions": paths.transitions })) {
+  for (const [label, directoryPath] of Object.entries({ "generation-events": paths.events, "legacy-recovery-overlays": paths.overlays, "generation-transitions": paths.transitions, "generation-transition-aborts": paths.transitionAborts, "legacy-quiescence-attestations": paths.quiescence, "rollout-observations": paths.rollout, "rollout-observation-seals": paths.rolloutSeals, "vnext-terminal-receipts": paths.terminalReceipts })) {
     if (!fs.existsSync(directoryPath)) {
       try {
         fs.mkdirSync(directoryPath, { mode: 0o700 });
@@ -335,6 +347,11 @@ function peekStore({ checkoutRoot, remote }) {
     "generation-events": storePaths.events,
     "legacy-recovery-overlays": storePaths.overlays,
     "generation-transitions": storePaths.transitions,
+    "generation-transition-aborts": storePaths.transitionAborts,
+    "legacy-quiescence-attestations": storePaths.quiescence,
+    "rollout-observations": storePaths.rollout,
+    "rollout-observation-seals": storePaths.rolloutSeals,
+    "vnext-terminal-receipts": storePaths.terminalReceipts,
   })) {
     let stat;
     try { stat = fs.lstatSync(directoryPath); }
@@ -373,13 +390,57 @@ function processLive(pid) {
   }
 }
 
-function removeStaleLock(lockPath) {
+function lockSnapshot(lockPath) {
+  let stat;
+  try {
+    stat = fs.lstatSync(lockPath, { bigint: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) fail("UNTRUSTED_GENERATION_LOCK", "generation lock must be a real directory");
+  const ownerBytes = secureRead(path.join(lockPath, "owner.json"), "generation lock owner");
+  return Object.freeze({
+    device: String(stat.dev),
+    inode: String(stat.ino),
+    owner_digest: ownerBytes ? crypto.createHash("sha256").update(ownerBytes).digest("hex") : null,
+  });
+}
+
+function sameLockSnapshot(left, right) {
+  return Boolean(left && right && left.device === right.device && left.inode === right.inode && left.owner_digest === right.owner_digest);
+}
+
+function readLockOwner(lockPath) {
+  const owner = parseJson(secureRead(path.join(lockPath, "owner.json"), "generation lock owner"), "generation lock owner");
+  if (!owner) return null;
+  if (!plainObject(owner) || Object.keys(owner).length !== 3 || owner.schema_version !== 1
+    || !Number.isInteger(owner.pid) || owner.pid <= 0 || typeof owner.token !== "string" || !/^[a-f0-9]{48}$/.test(owner.token)) {
+    fail("UNTRUSTED_GENERATION_LOCK", "generation lock owner is malformed");
+  }
+  return owner;
+}
+
+function removeStaleLock(lockPath, observed) {
+  // A path can be replaced between observing a dead owner and renaming its lock.
+  // Re-read the directory identity immediately before quarantine, and restore the
+  // replacement if the filesystem still races after that read.
+  if (!sameLockSnapshot(observed, lockSnapshot(lockPath))) return false;
   const quarantine = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(6).toString("hex")}`;
   try {
     fs.renameSync(lockPath, quarantine);
   } catch (error) {
     if (["ENOENT", "ENOTEMPTY"].includes(error.code)) return false;
     throw error;
+  }
+  const quarantined = lockSnapshot(quarantine);
+  if (!sameLockSnapshot(observed, quarantined)) {
+    try {
+      if (!fs.existsSync(lockPath)) fs.renameSync(quarantine, lockPath);
+    } catch (error) {
+      fail("GENERATION_LOCK_REPLACED", `generation lock changed during stale-lock quarantine and could not be restored: ${error.message}`);
+    }
+    fail("GENERATION_LOCK_REPLACED", "generation lock changed during stale-lock quarantine");
   }
   try { fs.unlinkSync(path.join(quarantine, "owner.json")); } catch (error) {
     if (error.code !== "ENOENT") throw error;
@@ -402,18 +463,20 @@ function acquireRepositoryLock(store, { timeoutMs = LOCK_TIMEOUT_MS } = {}) {
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
     }
+    const lockSnapshotBeforeOwner = lockSnapshot(store.paths.lock);
+    if (!lockSnapshotBeforeOwner) continue;
+    let owner;
     let lockStat;
     try {
+      owner = readLockOwner(store.paths.lock);
       lockStat = fs.lstatSync(store.paths.lock);
     } catch (error) {
       if (error.code === "ENOENT") continue;
       throw error;
     }
-    if (!lockStat.isDirectory() || lockStat.isSymbolicLink()) fail("UNTRUSTED_GENERATION_LOCK", "generation lock must be a real directory");
-    const owner = parseJson(secureRead(path.join(store.paths.lock, "owner.json"), "generation lock owner"), "generation lock owner");
     const incomplete = !owner;
     if ((!incomplete && !processLive(owner.pid)) || (incomplete && Date.now() - lockStat.mtimeMs >= INCOMPLETE_LOCK_GRACE_MS)) {
-      removeStaleLock(store.paths.lock);
+      removeStaleLock(store.paths.lock, lockSnapshotBeforeOwner);
       continue;
     }
     if (Date.now() - started >= timeoutMs) fail("GENERATION_ADMISSION_TIMEOUT", "timed out waiting for repository generation transaction");
@@ -422,7 +485,7 @@ function acquireRepositoryLock(store, { timeoutMs = LOCK_TIMEOUT_MS } = {}) {
 }
 
 function releaseRepositoryLock(store, lease) {
-  const owner = parseJson(secureRead(path.join(store.paths.lock, "owner.json"), "generation lock owner"), "generation lock owner");
+  const owner = readLockOwner(store.paths.lock);
   if (!owner || owner.token !== lease.token || owner.pid !== process.pid) fail("GENERATION_LOCK_LOST", "generation transaction ownership changed");
   fs.unlinkSync(path.join(store.paths.lock, "owner.json"));
   fs.rmdirSync(store.paths.lock);
@@ -494,14 +557,14 @@ function readDecision(store) {
 
 function validateMarker(value, store) {
   if (plainObject(value) && value.schema_version !== SCHEMA_VERSION) fail("UNSUPPORTED_GENERATION_SCHEMA", "generation marker schema is unsupported");
-  exactKeys(value, ["schema_version", "repository_digest", "epoch", "writer_generation", "legacy_read_allowed", "switched_at", "decision_digest", "transition_operation_id", "transition_actor", "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest", "marker_digest"], "runtime generation marker");
+  exactKeys(value, ["schema_version", "repository_digest", "epoch", "writer_generation", "legacy_read_allowed", "switched_at", "decision_digest", "transition_operation_id", "transition_actor", "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest", "quiescence_attestation_digest", "marker_digest"], "runtime generation marker");
   if (value.repository_digest !== store.repositoryDigest) fail("REPOSITORY_IDENTITY_MISMATCH", "generation marker belongs to another repository");
   integer(value.epoch, "runtime generation marker.epoch", { minimum: 1 });
   if (!GENERATIONS.has(value.writer_generation) || typeof value.legacy_read_allowed !== "boolean") fail("INVALID_GENERATION_ARTIFACT", "generation marker admission fields are invalid");
   if (value.writer_generation === "legacy" && !value.legacy_read_allowed) fail("INVALID_GENERATION_ARTIFACT", "legacy writer requires legacy reads");
   timestamp(value.switched_at, "runtime generation marker.switched_at");
   string(value.decision_digest, "runtime generation marker.decision_digest", SHA256_RE);
-  for (const key of ["transition_operation_id", "transition_actor", "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest"]) {
+  for (const key of ["transition_operation_id", "transition_actor", "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest", "quiescence_attestation_digest"]) {
     if (value[key] !== null && typeof value[key] !== "string") fail("INVALID_GENERATION_ARTIFACT", `runtime generation marker.${key} is invalid`);
   }
   if ((value.transition_operation_id === null) !== (value.transition_actor === null)
@@ -516,6 +579,7 @@ function validateMarker(value, store) {
     string(value.transition_event_digest, "runtime generation marker.transition_event_digest", SHA256_RE);
   }
   if (value.rollback_overlay_digest !== null) string(value.rollback_overlay_digest, "runtime generation marker.rollback_overlay_digest", SHA256_RE);
+  if (value.quiescence_attestation_digest !== null) string(value.quiescence_attestation_digest, "runtime generation marker.quiescence_attestation_digest", SHA256_RE);
   const { marker_digest: markerDigest, ...unsigned } = value;
   if (!SHA256_RE.test(markerDigest || "") || markerDigest !== digest(unsigned)) fail("INVALID_GENERATION_ARTIFACT", "runtime generation marker digest is invalid");
   return value;
@@ -568,8 +632,10 @@ function validateEvent(event, store) {
     string(event.payload.operation_id, "legacy_drain_completed.operation_id", TOKEN_RE);
     string(event.payload.decision_digest, "legacy_drain_completed.decision_digest", SHA256_RE);
   } else if (event.type === "generation_switched") {
-    exactKeys(event.payload, ["from_generation", "to_generation", "epoch", "actor", "operation_id", "decision_digest", "legacy_read_allowed", "transition_receipt_digest", "rollback_overlay_digest"], "generation_switched payload");
-    if (!GENERATIONS.has(event.payload.from_generation) || !GENERATIONS.has(event.payload.to_generation) || event.payload.from_generation === event.payload.to_generation) fail("INVALID_GENERATION_ARTIFACT", "generation switch is invalid");
+    exactKeys(event.payload, ["from_generation", "to_generation", "epoch", "actor", "operation_id", "decision_digest", "legacy_read_allowed", "transition_receipt_digest", "rollback_overlay_digest", "quiescence_attestation_digest"], "generation_switched payload");
+    if (!GENERATIONS.has(event.payload.from_generation) || !GENERATIONS.has(event.payload.to_generation)
+      || (event.payload.from_generation === event.payload.to_generation
+        && !(event.payload.to_generation === "vnext" && event.payload.legacy_read_allowed === false))) fail("INVALID_GENERATION_ARTIFACT", "generation switch is invalid");
     integer(event.payload.epoch, "generation_switched.epoch", { minimum: 2 });
     string(event.payload.actor, "generation_switched.actor", TOKEN_RE);
     string(event.payload.operation_id, "generation_switched.operation_id", TOKEN_RE);
@@ -577,6 +643,7 @@ function validateEvent(event, store) {
     if (typeof event.payload.legacy_read_allowed !== "boolean") fail("INVALID_GENERATION_ARTIFACT", "generation_switched.legacy_read_allowed must be boolean");
     string(event.payload.transition_receipt_digest, "generation_switched.transition_receipt_digest", SHA256_RE);
     if (event.payload.rollback_overlay_digest !== null) string(event.payload.rollback_overlay_digest, "generation_switched.rollback_overlay_digest", SHA256_RE);
+    if (event.payload.quiescence_attestation_digest !== null) string(event.payload.quiescence_attestation_digest, "generation_switched.quiescence_attestation_digest", SHA256_RE);
   } else if (event.type === "legacy_read_observed") {
     exactKeys(event.payload, ["observation_id", "reader_version", "surface", "epoch"], "legacy_read_observed payload");
     string(event.payload.observation_id, "legacy_read_observed.observation_id", TOKEN_RE);
@@ -614,8 +681,7 @@ function readEvents(store) {
   }).sort((left, right) => left.occurred_at.localeCompare(right.occurred_at) || left.event_id.localeCompare(right.event_id));
 }
 
-function decideMigration({ store, observation, fault = null }) {
-  const opened = openStore(store);
+function decideMigrationLocked(opened, observation, fault = null) {
   exactKeys(observation, ["observed_at", "active_legacy_run_count", "oldest_active_legacy_age_hours"], "migration observation");
   const unsigned = {
     schema_version: SCHEMA_VERSION,
@@ -626,33 +692,47 @@ function decideMigration({ store, observation, fault = null }) {
     strategy: observation.active_legacy_run_count <= 5 && (observation.oldest_active_legacy_age_hours === null || observation.oldest_active_legacy_age_hours < 72) ? "drain_and_cutover" : "dual_read_vnext_write",
   };
   const decision = assertDecision({ ...unsigned, decision_digest: digest(unsigned) }, opened);
-  return withRepositoryLockSync(opened, () => {
-    const written = writeImmutable(opened.paths.decision, Buffer.from(canonicalJson(decision)), { conflictCode: "MIGRATION_DECISION_CONFLICT", fault });
-    const persisted = readDecision(opened);
-    if (!readGeneration(opened)) {
-      const initial = { schema_version: 1, repository_digest: opened.repositoryDigest, epoch: 1, writer_generation: "legacy", legacy_read_allowed: true, switched_at: decision.observed_at, decision_digest: decision.decision_digest, transition_operation_id: null, transition_actor: null, transition_receipt_digest: null, transition_event_digest: null, rollback_overlay_digest: null };
-      const marker = validateMarker({ ...initial, marker_digest: digest(initial) }, opened);
-      replaceAtomic(opened.paths.generation, Buffer.from(canonicalJson(marker)), { fault });
-    }
-    const event = appendEvent(opened, { type: "migration_decided", payload: { decision_digest: decision.decision_digest }, occurredAt: decision.observed_at, fault });
-    return { decision: persisted, event, created: written.created };
-  });
+  const written = writeImmutable(opened.paths.decision, Buffer.from(canonicalJson(decision)), { conflictCode: "MIGRATION_DECISION_CONFLICT", fault });
+  const persisted = readDecision(opened);
+  const repaired = ensureDecisionArtifactsLocked(opened, persisted, fault);
+  return { decision: persisted, event: repaired.event, created: written.created };
+}
+
+function ensureDecisionArtifactsLocked(opened, decision, fault = null) {
+  if (!readGeneration(opened)) {
+    const initial = { schema_version: 1, repository_digest: opened.repositoryDigest, epoch: 1, writer_generation: "legacy", legacy_read_allowed: true, switched_at: decision.observed_at, decision_digest: decision.decision_digest, transition_operation_id: null, transition_actor: null, transition_receipt_digest: null, transition_event_digest: null, rollback_overlay_digest: null, quiescence_attestation_digest: null };
+    const marker = validateMarker({ ...initial, marker_digest: digest(initial) }, opened);
+    replaceAtomic(opened.paths.generation, Buffer.from(canonicalJson(marker)), { fault });
+  }
+  const event = appendEvent(opened, { type: "migration_decided", payload: { decision_digest: decision.decision_digest }, occurredAt: decision.observed_at, fault });
+  return { marker: readGeneration(opened), event };
+}
+
+function decideMigration({ store, observation, fault = null }) {
+  const opened = openStore(store);
+  return withRepositoryLockSync(opened, () => decideMigrationLocked(opened, observation, fault));
+}
+
+function recordDrainCompletedLocked(opened, inventory, actor, operationId, fault = null) {
+  string(actor, "drain completion actor", TOKEN_RE);
+  string(operationId, "drain completion operation id", TOKEN_RE);
+  exactKeys(inventory, ["observed_at", "active_legacy_run_count", "oldest_active_legacy_age_hours"], "drain completion inventory");
+  const decision = readDecision(opened);
+  if (!decision || decision.strategy !== "drain_and_cutover") fail("LEGACY_DRAIN_NOT_REQUIRED", "the migration decision does not require a drain completion fact");
+  const unsigned = { schema_version: 1, repository_digest: opened.repositoryDigest, decision_digest: decision.decision_digest, ...inventory, inventory_digest: inventoryDigest(inventory), actor, operation_id: operationId };
+  const completed = assertDrainInventory(unsigned, opened, decision);
+  const written = writeImmutable(opened.paths.drain, Buffer.from(canonicalJson(completed)), { conflictCode: "LEGACY_DRAIN_COMPLETION_CONFLICT", fault });
+  const event = ensureDrainEventLocked(opened, completed, fault);
+  return { inventory: readDrainCompleted(opened), event, created: written.created };
+}
+
+function ensureDrainEventLocked(opened, completed, fault = null) {
+  return appendEvent(opened, { type: "legacy_drain_completed", payload: { inventory_digest: completed.inventory_digest, actor: completed.actor, operation_id: completed.operation_id, decision_digest: completed.decision_digest }, occurredAt: completed.observed_at, fault });
 }
 
 function recordDrainCompleted({ store, inventory, actor, operationId, fault = null }) {
   const opened = openStore(store);
-  string(actor, "drain completion actor", TOKEN_RE);
-  string(operationId, "drain completion operation id", TOKEN_RE);
-  exactKeys(inventory, ["observed_at", "active_legacy_run_count", "oldest_active_legacy_age_hours"], "drain completion inventory");
-  return withRepositoryLockSync(opened, () => {
-    const decision = readDecision(opened);
-    if (!decision || decision.strategy !== "drain_and_cutover") fail("LEGACY_DRAIN_NOT_REQUIRED", "the migration decision does not require a drain completion fact");
-    const unsigned = { schema_version: 1, repository_digest: opened.repositoryDigest, decision_digest: decision.decision_digest, ...inventory, inventory_digest: inventoryDigest(inventory), actor, operation_id: operationId };
-    const completed = assertDrainInventory(unsigned, opened, decision);
-    const written = writeImmutable(opened.paths.drain, Buffer.from(canonicalJson(completed)), { conflictCode: "LEGACY_DRAIN_COMPLETION_CONFLICT", fault });
-    const event = appendEvent(opened, { type: "legacy_drain_completed", payload: { inventory_digest: completed.inventory_digest, actor, operation_id: operationId, decision_digest: decision.decision_digest }, occurredAt: completed.observed_at, fault });
-    return { inventory: readDrainCompleted(opened), event, created: written.created };
-  });
+  return withRepositoryLockSync(opened, () => recordDrainCompletedLocked(opened, inventory, actor, operationId, fault));
 }
 
 function assertAdmission(capability, store, allowedModes) {
@@ -702,7 +782,10 @@ function recordLegacyRead({ store, admission, observationId, readerVersion, surf
   const opened = openStore(store);
   const state = assertAdmission(admission, opened, ["write", "legacy_read"]);
   if (state.generation !== "legacy") fail("GENERATION_NOT_ACTIVE", "legacy read requires a legacy admission");
-  return appendEvent(opened, { type: "legacy_read_observed", payload: { observation_id: observationId, reader_version: readerVersion, surface, epoch: state.epoch }, occurredAt: observedAt, fault });
+  const event = appendEvent(opened, { type: "legacy_read_observed", payload: { observation_id: observationId, reader_version: readerVersion, surface, epoch: state.epoch }, occurredAt: observedAt, fault });
+  const existing = readRolloutObservations(opened, { now: observedAt }).observations.some((item) => item.type === "legacy_artifact_read" && item.payload.artifact_sha256 === event.event_id);
+  if (!existing) appendRolloutLocked(opened, { type: "legacy_artifact_read", occurredAt: observedAt, payload: { surface, artifact_name: `generation-event:${event.event_id}`, artifact_sha256: event.event_id, marker_digest: readGeneration(opened).marker_digest } });
+  return event;
 }
 
 function observeLegacyRead({ store, observationId, readerVersion, surface, observedAt, fault = null }) {
@@ -726,15 +809,18 @@ function transitionReceiptPath(store, operationId) {
 }
 
 function validateTransitionReceipt(value, store) {
-  exactKeys(value, ["schema_version", "repository_digest", "operation_id", "actor", "from_generation", "to_generation", "epoch", "switched_at", "decision_digest", "legacy_read_allowed", "rollback_overlay_digest", "receipt_digest"], "generation transition receipt");
+  exactKeys(value, ["schema_version", "repository_digest", "operation_id", "actor", "from_generation", "to_generation", "epoch", "switched_at", "decision_digest", "legacy_read_allowed", "rollback_overlay_digest", "quiescence_attestation_digest", "receipt_digest"], "generation transition receipt");
   if (value.schema_version !== SCHEMA_VERSION || value.repository_digest !== store.repositoryDigest) fail("REPOSITORY_IDENTITY_MISMATCH", "transition receipt belongs to another repository");
   for (const key of ["operation_id", "actor"]) string(value[key], `transition receipt.${key}`, TOKEN_RE);
-  if (!GENERATIONS.has(value.from_generation) || !GENERATIONS.has(value.to_generation) || value.from_generation === value.to_generation) fail("INVALID_GENERATION_ARTIFACT", "transition receipt generation is invalid");
+  if (!GENERATIONS.has(value.from_generation) || !GENERATIONS.has(value.to_generation)
+    || (value.from_generation === value.to_generation
+      && !(value.to_generation === "vnext" && value.legacy_read_allowed === false))) fail("INVALID_GENERATION_ARTIFACT", "transition receipt generation is invalid");
   integer(value.epoch, "transition receipt.epoch", { minimum: 2 });
   timestamp(value.switched_at, "transition receipt.switched_at");
   string(value.decision_digest, "transition receipt.decision_digest", SHA256_RE);
   if (typeof value.legacy_read_allowed !== "boolean") fail("INVALID_GENERATION_ARTIFACT", "transition receipt legacy_read_allowed is invalid");
   if (value.rollback_overlay_digest !== null) string(value.rollback_overlay_digest, "transition receipt.rollback_overlay_digest", SHA256_RE);
+  if (value.quiescence_attestation_digest !== null) string(value.quiescence_attestation_digest, "transition receipt.quiescence_attestation_digest", SHA256_RE);
   const { receipt_digest: receiptDigest, ...unsigned } = value;
   if (!SHA256_RE.test(receiptDigest || "") || receiptDigest !== digest(unsigned)) fail("INVALID_GENERATION_ARTIFACT", "transition receipt digest is invalid");
   return value;
@@ -749,6 +835,39 @@ function readTransitionReceipts(store) {
   });
 }
 
+function transitionAbortPath(store, operationId) {
+  return path.join(store.paths.transitionAborts, `${operationId}.json`);
+}
+
+function validateTransitionAbort(value, store) {
+  exactKeys(value, ["schema_version", "repository_digest", "operation_id", "receipt_digest", "aborted_at", "reason", "superseded_by_operation_id", "superseding_quiescence_attestation_digest", "abort_digest"], "generation transition abort");
+  const { abort_digest: abortDigest, ...unsigned } = value;
+  if (value.schema_version !== SCHEMA_VERSION || value.repository_digest !== store.repositoryDigest) fail("REPOSITORY_IDENTITY_MISMATCH", "transition abort belongs to another repository");
+  string(value.operation_id, "transition abort.operation_id", TOKEN_RE);
+  string(value.receipt_digest, "transition abort.receipt_digest", SHA256_RE);
+  timestamp(value.aborted_at, "transition abort.aborted_at");
+  if (!new Set(["post_marker_validation_failed", "superseded_by_fresh_attestation"]).has(value.reason)) fail("INVALID_GENERATION_ARTIFACT", "transition abort reason is invalid");
+  if (value.superseded_by_operation_id !== null) string(value.superseded_by_operation_id, "transition abort.superseded_by_operation_id", TOKEN_RE);
+  if (value.superseding_quiescence_attestation_digest !== null) string(value.superseding_quiescence_attestation_digest, "transition abort.superseding_quiescence_attestation_digest", SHA256_RE);
+  if (abortDigest !== digest(unsigned)) fail("INVALID_GENERATION_ARTIFACT", "transition abort digest is invalid");
+  return value;
+}
+
+function readTransitionAbort(store, receipt) {
+  const bytes = secureRead(transitionAbortPath(store, receipt.operation_id), `transition abort ${receipt.operation_id}`);
+  if (!bytes) return null;
+  const abort = validateTransitionAbort(parseJson(bytes, `transition abort ${receipt.operation_id}`), store);
+  if (abort.operation_id !== receipt.operation_id || abort.receipt_digest !== receipt.receipt_digest) fail("GENERATION_TRANSITION_CONFLICT", "transition abort does not bind its immutable receipt");
+  return abort;
+}
+
+function abortTransition(store, receipt, { abortedAt, reason, supersededByOperationId = null, supersedingQuiescenceAttestationDigest = null }) {
+  const base = { schema_version: SCHEMA_VERSION, repository_digest: store.repositoryDigest, operation_id: receipt.operation_id, receipt_digest: receipt.receipt_digest, aborted_at: abortedAt, reason, superseded_by_operation_id: supersededByOperationId, superseding_quiescence_attestation_digest: supersedingQuiescenceAttestationDigest };
+  const abort = validateTransitionAbort({ ...base, abort_digest: digest(base) }, store);
+  writeImmutable(transitionAbortPath(store, receipt.operation_id), Buffer.from(canonicalJson(abort)), { conflictCode: "GENERATION_TRANSITION_CONFLICT" });
+  return abort;
+}
+
 function switchEventFor(receipt) {
   return {
     from_generation: receipt.from_generation,
@@ -760,6 +879,7 @@ function switchEventFor(receipt) {
     legacy_read_allowed: receipt.legacy_read_allowed,
     transition_receipt_digest: receipt.receipt_digest,
     rollback_overlay_digest: receipt.rollback_overlay_digest,
+    quiescence_attestation_digest: receipt.quiescence_attestation_digest,
   };
 }
 
@@ -769,6 +889,7 @@ function receiptEventId(store, receipt) {
 
 function pendingTransition(store, marker) {
   for (const receipt of readTransitionReceipts(store)) {
+    if (readTransitionAbort(store, receipt)) continue;
     const expectedEvent = receiptEventId(store, receipt);
     const eventExists = Boolean(secureRead(path.join(store.paths.events, `${expectedEvent}.json`), `${expectedEvent}.json`));
     const recordedByMarker = marker?.transition_receipt_digest === receipt.receipt_digest;
@@ -792,51 +913,105 @@ function buildMarker(store, receipt) {
     transition_receipt_digest: receipt.receipt_digest,
     transition_event_digest: eventDigest,
     rollback_overlay_digest: receipt.rollback_overlay_digest,
+    quiescence_attestation_digest: receipt.quiescence_attestation_digest,
   };
   return validateMarker({ ...unsigned, marker_digest: digest(unsigned) }, store);
 }
 
-function commitTransition({ store, current, actor, operationId, switchedAt, toGeneration, legacyReadAllowed, rollbackOverlayDigest = null, beforeMarker = null, fault = null }) {
+function ensureMarkerEventLocked(store, marker, fault = null) {
+  if (!marker?.transition_operation_id) return null;
+  const receipt = validateTransitionReceipt(parseJson(secureRead(transitionReceiptPath(store, marker.transition_operation_id), `transition receipt ${marker.transition_operation_id}`), `transition receipt ${marker.transition_operation_id}`), store);
+  const rebuilt = buildMarker(store, receipt);
+  if (rebuilt.marker_digest !== marker.marker_digest || marker.transition_receipt_digest !== receipt.receipt_digest) fail("GENERATION_TRANSITION_CONFLICT", "active marker does not match its durable transition receipt");
+  return appendEvent(store, { type: "generation_switched", payload: switchEventFor(receipt), occurredAt: receipt.switched_at, fault });
+}
+
+function commitTransition({ store, current, actor, operationId, switchedAt, toGeneration, legacyReadAllowed, rollbackOverlayDigest = null, quiescenceAttestationDigest = null, beforeMarker = null, afterMarker = null, fault = null }) {
   string(actor, "generation transition actor", TOKEN_RE);
   string(operationId, "generation transition operation id", TOKEN_RE);
   timestamp(switchedAt, "generation transition timestamp");
-  if (current.writer_generation === toGeneration && current.transition_operation_id !== null
-    && (current.transition_operation_id !== operationId || current.transition_actor !== actor)) {
-    fail("GENERATION_TRANSITION_CONFLICT", "generation is active under another actor or operation identity");
+  if (current.writer_generation === toGeneration && current.transition_operation_id === operationId && current.transition_actor === actor
+    && current.legacy_read_allowed === legacyReadAllowed && current.rollback_overlay_digest === rollbackOverlayDigest
+    && current.quiescence_attestation_digest === quiescenceAttestationDigest) {
+    const receipt = validateTransitionReceipt(parseJson(secureRead(transitionReceiptPath(store, operationId), `transition receipt ${operationId}`), `transition receipt ${operationId}`), store);
+    const marker = buildMarker(store, receipt);
+    if (current.transition_receipt_digest !== receipt.receipt_digest || current.marker_digest !== marker.marker_digest) fail("GENERATION_TRANSITION_CONFLICT", "active marker does not match its transition receipt");
+    const event = appendEvent(store, { type: "generation_switched", payload: switchEventFor(receipt), occurredAt: receipt.switched_at, fault });
+    return { marker: readGeneration(store), event, receipt, prepared: null, changed: false };
   }
-  const pending = pendingTransition(store, current);
-  if (pending && (pending.operation_id !== operationId || pending.actor !== actor)) fail("GENERATION_TRANSITION_PENDING", "another transition has a durable pending receipt");
-  const targetEpoch = current.writer_generation === toGeneration ? current.epoch : current.epoch + 1;
-  const base = { schema_version: 1, repository_digest: store.repositoryDigest, operation_id: operationId, actor, from_generation: current.writer_generation === toGeneration ? (toGeneration === "vnext" ? "legacy" : "vnext") : current.writer_generation, to_generation: toGeneration, epoch: targetEpoch, switched_at: switchedAt, decision_digest: current.decision_digest, legacy_read_allowed: legacyReadAllowed, rollback_overlay_digest: rollbackOverlayDigest };
-  const receipt = validateTransitionReceipt({ ...base, receipt_digest: digest(base) }, store);
-  const receiptWrite = writeImmutable(transitionReceiptPath(store, operationId), Buffer.from(canonicalJson(receipt)), { conflictCode: "GENERATION_TRANSITION_CONFLICT", fault });
-  const prepared = beforeMarker ? beforeMarker(receipt) : null;
-  const marker = buildMarker(store, receipt);
-  if (current.writer_generation === toGeneration) {
-    if (current.transition_operation_id !== operationId || current.transition_actor !== actor || current.transition_receipt_digest !== receipt.receipt_digest || current.transition_event_digest !== marker.transition_event_digest || current.rollback_overlay_digest !== rollbackOverlayDigest) fail("GENERATION_TRANSITION_CONFLICT", "generation is active under another transition contract");
+  const tighteningLegacyReads = current.writer_generation === "vnext" && toGeneration === "vnext"
+    && current.legacy_read_allowed === true && legacyReadAllowed === false;
+  if (current.writer_generation === toGeneration && !tighteningLegacyReads) {
+    fail("GENERATION_TRANSITION_CONFLICT", "generation is active under another transition contract");
+  }
+  let pending = pendingTransition(store, current);
+  if (pending && (pending.operation_id !== operationId || pending.actor !== actor)) {
+    const freshSignedCutover = current.writer_generation === "legacy" && pending.to_generation === "vnext"
+      && pending.legacy_read_allowed === false && pending.quiescence_attestation_digest
+      && toGeneration === "vnext" && legacyReadAllowed === false && quiescenceAttestationDigest
+      && pending.quiescence_attestation_digest !== quiescenceAttestationDigest;
+    if (!freshSignedCutover) fail("GENERATION_TRANSITION_PENDING", "another transition has a durable pending receipt");
+    abortTransition(store, pending, { abortedAt: switchedAt, reason: "superseded_by_fresh_attestation", supersededByOperationId: operationId, supersedingQuiescenceAttestationDigest: quiescenceAttestationDigest });
+    pending = null;
+  }
+  // Only signed vNext-only cutover uses beforeMarker as a volatile validator.
+  // Rollback uses the callback to durably publish its overlay and therefore
+  // keeps the receipt-first ordering that binds retry identity.
+  const validateBeforeReceipt = Boolean(beforeMarker && quiescenceAttestationDigest && toGeneration === "vnext" && legacyReadAllowed === false);
+  let prepared = validateBeforeReceipt ? beforeMarker(pending) : null;
+  let receipt;
+  if (pending) {
+    if (pending.from_generation !== current.writer_generation || pending.to_generation !== toGeneration
+      || pending.decision_digest !== current.decision_digest || pending.legacy_read_allowed !== legacyReadAllowed
+      || pending.rollback_overlay_digest !== rollbackOverlayDigest || pending.quiescence_attestation_digest !== quiescenceAttestationDigest) {
+      fail("GENERATION_TRANSITION_CONFLICT", "pending generation receipt does not match the requested transition contract");
+    }
+    receipt = pending;
   } else {
-    replaceAtomic(store.paths.generation, Buffer.from(canonicalJson(marker)), { fault });
+    const targetEpoch = current.epoch + 1;
+    const base = { schema_version: 1, repository_digest: store.repositoryDigest, operation_id: operationId, actor, from_generation: current.writer_generation, to_generation: toGeneration, epoch: targetEpoch, switched_at: switchedAt, decision_digest: current.decision_digest, legacy_read_allowed: legacyReadAllowed, rollback_overlay_digest: rollbackOverlayDigest, quiescence_attestation_digest: quiescenceAttestationDigest };
+    receipt = validateTransitionReceipt({ ...base, receipt_digest: digest(base) }, store);
+    writeImmutable(transitionReceiptPath(store, operationId), Buffer.from(canonicalJson(receipt)), { conflictCode: "GENERATION_TRANSITION_CONFLICT", fault });
   }
-  const event = appendEvent(store, { type: "generation_switched", payload: switchEventFor(receipt), occurredAt: switchedAt, fault });
-  return { marker: readGeneration(store), event, receipt, prepared, changed: receiptWrite.created && current.writer_generation !== toGeneration };
+  if (beforeMarker && !validateBeforeReceipt) prepared = beforeMarker(receipt);
+  const marker = buildMarker(store, receipt);
+  const markerChanged = current.marker_digest !== marker.marker_digest;
+  replaceAtomic(store.paths.generation, Buffer.from(canonicalJson(marker)), { fault });
+  if (afterMarker) {
+    try {
+      afterMarker(receipt, marker);
+    } catch (error) {
+      // No generation admission can proceed while this repository lock is held.
+      // Restore the prior marker before releasing it; the durable receipt is a
+      // retry intent and will be revalidated on the next operation.
+      replaceAtomic(store.paths.generation, Buffer.from(canonicalJson(current)));
+      abortTransition(store, receipt, { abortedAt: switchedAt, reason: "post_marker_validation_failed" });
+      throw error;
+    }
+  }
+  const event = appendEvent(store, { type: "generation_switched", payload: switchEventFor(receipt), occurredAt: receipt.switched_at, fault });
+  return { marker: readGeneration(store), event, receipt, prepared, changed: markerChanged };
+}
+
+function switchGenerationLocked(opened, { generation, actor, operationId, switchedAt, drainInventoryDigest = null, legacyReadAllowed = null, quiescenceAttestationDigest = null, beforeMarker = null, afterMarker = null, fault = null }) {
+  if (generation !== "vnext") fail("ROLLBACK_REQUIRES_OVERLAY", "use rollbackToLegacy to activate legacy writes");
+  const decision = readDecision(opened);
+  const current = readGeneration(opened);
+  if (!decision || !current) fail("GENERATION_DECISION_MISSING", "migration decision and initial marker are required");
+  const targetLegacyReadAllowed = legacyReadAllowed === null ? decision.strategy === "dual_read_vnext_write" : legacyReadAllowed;
+  if (decision.strategy === "drain_and_cutover") {
+    string(drainInventoryDigest, "drain inventory digest", SHA256_RE);
+    const drain = readDrainCompleted(opened);
+    if (!drain || drain.inventory_digest !== drainInventoryDigest || drain.active_legacy_run_count !== 0 || drain.observed_at <= decision.observed_at) fail("LEGACY_DRAIN_INCOMPLETE", "vNext switch requires the exact fresh zero drain inventory digest");
+  } else if (drainInventoryDigest !== null) {
+    fail("INVALID_GENERATION_ARTIFACT", "dual-read transition must not supply a drain inventory digest");
+  }
+  return commitTransition({ store: opened, current, actor, operationId, switchedAt, toGeneration: "vnext", legacyReadAllowed: targetLegacyReadAllowed, quiescenceAttestationDigest, beforeMarker, afterMarker, fault });
 }
 
 function switchGeneration({ store, generation, actor, operationId, switchedAt, drainInventoryDigest = null, fault = null }) {
   const opened = openStore(store);
-  if (generation !== "vnext") fail("ROLLBACK_REQUIRES_OVERLAY", "use rollbackToLegacy to activate legacy writes");
-  return withRepositoryLockSync(opened, () => {
-    const decision = readDecision(opened);
-    const current = readGeneration(opened);
-    if (!decision || !current) fail("GENERATION_DECISION_MISSING", "migration decision and initial marker are required");
-    if (decision.strategy === "drain_and_cutover") {
-      string(drainInventoryDigest, "drain inventory digest", SHA256_RE);
-      const drain = readDrainCompleted(opened);
-      if (!drain || drain.inventory_digest !== drainInventoryDigest || drain.active_legacy_run_count !== 0 || drain.observed_at <= decision.observed_at) fail("LEGACY_DRAIN_INCOMPLETE", "vNext switch requires the exact fresh zero drain inventory digest");
-    } else if (drainInventoryDigest !== null) {
-      fail("INVALID_GENERATION_ARTIFACT", "dual-read transition must not supply a drain inventory digest");
-    }
-    return commitTransition({ store: opened, current, actor, operationId, switchedAt, toGeneration: "vnext", legacyReadAllowed: decision.strategy === "dual_read_vnext_write", fault });
-  });
+  return withRepositoryLockSync(opened, () => switchGenerationLocked(opened, { generation, actor, operationId, switchedAt, drainInventoryDigest, fault }));
 }
 
 function projectLegacyRecovery(facts) {
@@ -993,12 +1168,746 @@ function rollbackToLegacy({ store, legacyReaderVersion = LEGACY_OVERLAY_READER_V
   });
 }
 
+function rolloutUnsigned(value) {
+  const { observation_digest: ignored, ...unsigned } = value;
+  return unsigned;
+}
+
+function validateRolloutObservation(value, store, { now = new Date().toISOString() } = {}) {
+  exactKeys(value, ["schema_version", "sequence", "repository_digest", "previous_digest", "type", "occurred_at", "payload", "observation_digest"], "rollout observation");
+  if (value.schema_version !== SCHEMA_VERSION || value.repository_digest !== store.repositoryDigest) fail("REPOSITORY_IDENTITY_MISMATCH", "rollout observation belongs to another repository");
+  integer(value.sequence, "rollout observation.sequence", { minimum: 1 });
+  if (value.previous_digest !== null) string(value.previous_digest, "rollout observation.previous_digest", SHA256_RE);
+  if (!ROLLOUT_TYPES.has(value.type) || !plainObject(value.payload)) fail("INVALID_ROLLOUT_LEDGER", "rollout observation type or payload is invalid");
+  const payloadKeys = {
+    legacy_inventory_observed: ["inventory_digest", "identity_digest", "active_legacy_run_count", "oldest_active_legacy_age_hours", "items"],
+    legacy_artifact_read: ["surface", "artifact_name", "artifact_sha256", "marker_digest"],
+    legacy_surface_invoked: ["invocation_id", "command", "mode", "marker_digest"],
+    vnext_terminal_observed: ["receipt_digest", "run_id", "terminal_event_id"],
+    daily_checkpoint: ["date", "marker_digest", "inventory_identity_digest", "inventory_content_digest", "active_legacy_run_count", "terminal_receipts_digest", "terminal_run_count", "legacy_activity_count", "observation_prefix_digest"],
+  };
+  exactKeys(value.payload, payloadKeys[value.type], `${value.type} payload`, "INVALID_ROLLOUT_LEDGER");
+  timestamp(value.occurred_at, "rollout observation.occurred_at");
+  timestamp(now, "rollout verifier now");
+  if (value.occurred_at > now) fail("ROLLOUT_FUTURE_TIMESTAMP", "rollout observation is in the future");
+  if (value.observation_digest !== digest(rolloutUnsigned(value))) fail("INVALID_ROLLOUT_LEDGER", "rollout observation digest is invalid");
+  return value;
+}
+
+function rolloutSealUnsigned(value) {
+  const { seal_digest: ignored, ...unsigned } = value;
+  return unsigned;
+}
+
+function validateRolloutSeal(value, store) {
+  exactKeys(value, ["schema_version", "repository_digest", "sequence", "previous_seal_digest", "observation_digest", "seal_digest"], "rollout observation seal", "INVALID_ROLLOUT_ROOT");
+  if (value.schema_version !== 1 || value.repository_digest !== store.repositoryDigest) fail("REPOSITORY_IDENTITY_MISMATCH", "rollout observation seal belongs to another repository");
+  integer(value.sequence, "rollout observation seal.sequence", { minimum: 1 });
+  if (value.previous_seal_digest !== null) string(value.previous_seal_digest, "rollout observation seal.previous_seal_digest", SHA256_RE);
+  string(value.observation_digest, "rollout observation seal.observation_digest", SHA256_RE);
+  if (value.seal_digest !== digest(rolloutSealUnsigned(value))) fail("INVALID_ROLLOUT_ROOT", "rollout observation seal digest is invalid");
+  return value;
+}
+
+function readRolloutState(store, { now = new Date().toISOString(), allowUnsealedTail = false } = {}) {
+  const opened = peekStore({ checkoutRoot: path.dirname(store.repository.git_common_dir), remote: store.repository.remote });
+  if (!opened) fail("ROLLOUT_UNAVAILABLE", "generation store is absent");
+  for (const [label, target] of [["rollout observations", opened.paths.rollout], ["rollout observation seals", opened.paths.rolloutSeals], ["terminal receipts", opened.paths.terminalReceipts]]) {
+    let stat;
+    try { stat = fs.lstatSync(target); } catch (error) { if (error.code === "ENOENT") fail("ROLLOUT_UNAVAILABLE", `${label} are not initialized`); throw error; }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(target) !== target) fail("UNTRUSTED_GENERATION_PATH", `${label} must be a canonical real directory`);
+  }
+  const names = fs.readdirSync(opened.paths.rollout).sort();
+  let previous = null, lastOccurredAt = null;
+  const observations = names.map((name, index) => {
+    const expected = `${String(index + 1).padStart(12, "0")}.json`;
+    if (name !== expected) fail("ROLLOUT_SEQUENCE_GAP", `expected ${expected}, found ${name}`);
+    const value = validateRolloutObservation(parseJson(secureRead(path.join(opened.paths.rollout, name), name), name), opened, { now });
+    if (value.sequence !== index + 1 || value.previous_digest !== previous) fail("ROLLOUT_SEQUENCE_BROKEN", `rollout observation ${name} breaks the digest chain`);
+    if (lastOccurredAt && value.occurred_at < lastOccurredAt) fail("ROLLOUT_EVENT_REORDERED", "rollout observation timestamps are not monotonic");
+    previous = value.observation_digest; lastOccurredAt = value.occurred_at;
+    return value;
+  });
+  const sealNames = fs.readdirSync(opened.paths.rolloutSeals).sort();
+  let previousSeal = null;
+  const seals = sealNames.map((name, index) => {
+    const expected = `${String(index + 1).padStart(12, "0")}.json`;
+    if (name !== expected) fail("ROLLOUT_ROOT_GAP", `expected seal ${expected}, found ${name}`);
+    const seal = validateRolloutSeal(parseJson(secureRead(path.join(opened.paths.rolloutSeals, name), `seal ${name}`), `seal ${name}`), opened);
+    const observation = observations[index];
+    if (!observation || seal.sequence !== index + 1 || seal.previous_seal_digest !== previousSeal || seal.observation_digest !== observation.observation_digest) fail("ROLLOUT_ROOT_MISMATCH", `rollout seal ${name} does not bind its observation prefix`);
+    previousSeal = seal.seal_digest;
+    return seal;
+  });
+  if (observations.length !== seals.length) {
+    const recoverableTail = allowUnsealedTail && observations.length === seals.length + 1;
+    if (!recoverableTail) fail("ROLLOUT_ROOT_MISMATCH", "rollout observation set is not exactly bound by immutable monotonic seals");
+  }
+  const head = parseJson(secureRead(opened.paths.rolloutHead, "rollout-observation-head.json"), "rollout-observation-head.json");
+  if (seals.length === 0) {
+    if (head) fail("ROLLOUT_HEAD_MISMATCH", "empty rollout ledger has a head");
+  } else if (head) {
+    exactKeys(head, ["schema_version", "repository_digest", "sequence", "observation_digest", "seal_digest"], "rollout head");
+    integer(head.sequence, "rollout head.sequence", { minimum: 1 });
+    const sealed = seals[head.sequence - 1], observation = observations[head.sequence - 1];
+    if (head.schema_version !== 1 || head.repository_digest !== opened.repositoryDigest || !sealed || !observation
+      || head.observation_digest !== observation.observation_digest || head.seal_digest !== sealed.seal_digest) fail("ROLLOUT_HEAD_MISMATCH", "rollout head does not reference a valid immutable seal");
+  }
+  return { store: opened, observations, seals, unsealed: observations.length === seals.length + 1 ? observations.at(-1) : null };
+}
+
+function readRolloutObservations(store, { now = new Date().toISOString() } = {}) {
+  const state = readRolloutState(store, { now });
+  return { store: state.store, observations: state.observations };
+}
+
+function sealRolloutObservation(store, observation, priorSeal, fault = null) {
+  const base = { schema_version: 1, repository_digest: store.repositoryDigest, sequence: observation.sequence, previous_seal_digest: priorSeal?.seal_digest || null, observation_digest: observation.observation_digest };
+  const seal = validateRolloutSeal({ ...base, seal_digest: digest(base) }, store);
+  writeImmutable(path.join(store.paths.rolloutSeals, `${String(seal.sequence).padStart(12, "0")}.json`), Buffer.from(canonicalJson(seal)), { conflictCode: "ROLLOUT_ROOT_CONFLICT", fault });
+  replaceAtomic(store.paths.rolloutHead, Buffer.from(canonicalJson({ schema_version: 1, repository_digest: store.repositoryDigest, sequence: observation.sequence, observation_digest: observation.observation_digest, seal_digest: seal.seal_digest })), { fault });
+  return seal;
+}
+
+function appendRolloutLocked(store, { type, occurredAt, payload, fault = null }) {
+  const state = readRolloutState(store, { now: occurredAt, allowUnsealedTail: true }), { observations, seals } = state;
+  const prior = observations.at(-1) || null;
+  if (state.unsealed) {
+    const retryBase = { schema_version: 1, sequence: state.unsealed.sequence, repository_digest: store.repositoryDigest, previous_digest: observations.at(-2)?.observation_digest || null, type, occurred_at: occurredAt, payload };
+    const retry = validateRolloutObservation({ ...retryBase, observation_digest: digest(retryBase) }, store, { now: occurredAt });
+    sealRolloutObservation(store, state.unsealed, seals.at(-1) || null, fault);
+    if (retry.observation_digest === state.unsealed.observation_digest) return state.unsealed;
+    return appendRolloutLocked(store, { type, occurredAt, payload, fault });
+  }
+  if (prior && occurredAt < prior.occurred_at) fail("ROLLOUT_EVENT_REORDERED", "new rollout observation predates the durable head");
+  const base = { schema_version: 1, sequence: observations.length + 1, repository_digest: store.repositoryDigest, previous_digest: prior?.observation_digest || null, type, occurred_at: occurredAt, payload };
+  const observation = validateRolloutObservation({ ...base, observation_digest: digest(base) }, store, { now: occurredAt });
+  writeImmutable(path.join(store.paths.rollout, `${String(observation.sequence).padStart(12, "0")}.json`), Buffer.from(canonicalJson(observation)), { conflictCode: "ROLLOUT_OBSERVATION_CONFLICT", fault });
+  sealRolloutObservation(store, observation, seals.at(-1) || null, fault);
+  return observation;
+}
+
+function repositoryRunsDirectory(store, runsRoot = process.env.RELAY_RUNS_BASE || path.join(process.env.RELAY_HOME || path.join(os.homedir(), ".relay"), "runs")) {
+  if (!path.isAbsolute(runsRoot)) fail("INVALID_RELAY_PATH", "canonical runs root must be absolute");
+  const root = fs.realpathSync(path.resolve(runsRoot));
+  if (!fs.lstatSync(root).isDirectory()) fail("INVALID_RELAY_PATH", "canonical runs root must be a real directory");
+  const repoRoot = fs.realpathSync(path.dirname(store.repository.git_common_dir));
+  const base = path.basename(repoRoot).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+  const directory = path.join(root, `${base}-${crypto.createHash("sha256").update(repoRoot).digest("hex").slice(0, 8)}`);
+  let stat;
+  try { stat = fs.lstatSync(directory); } catch (error) { if (error.code === "ENOENT") fail("ACTIVE_LEGACY_AMBIGUITY", "canonical repository run directory is absent"); throw error; }
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) fail("ACTIVE_LEGACY_AMBIGUITY", "canonical repository run directory is untrusted");
+  return directory;
+}
+
+function manifestTimestamp(runId, bytes) {
+  const field = /^\s{2}created_at:\s*['"]?([^'"\n]+)['"]?\s*$/m.exec(bytes.toString("utf8"))?.[1];
+  if (field && !Number.isNaN(Date.parse(field))) return new Date(field).toISOString();
+  const compact = /-(\d{17})(?:-|$)/.exec(runId)?.[1];
+  if (!compact) return null;
+  const iso = `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T${compact.slice(8, 10)}:${compact.slice(10, 12)}:${compact.slice(12, 14)}.${compact.slice(14)}Z`;
+  return Number.isNaN(Date.parse(iso)) ? null : iso;
+}
+
+function observeLegacyInventoryLocked(store, { runsRoot, observedAt, record = true }) {
+  const runs = repositoryRunsDirectory(store, runsRoot), entries = fs.readdirSync(runs, { withFileTypes: true });
+  const manifests = new Map(entries.filter((entry) => entry.isFile() && entry.name.endsWith(".md")).map((entry) => [entry.name.slice(0, -3), entry.name]));
+  if (manifests.size === 0) fail("ACTIVE_LEGACY_AMBIGUITY", "canonical legacy inventory is empty");
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) fail("ACTIVE_LEGACY_AMBIGUITY", `symlinked run entry ${entry.name}`);
+    if (entry.isFile() && !entry.name.endsWith(".md")) fail("ACTIVE_LEGACY_AMBIGUITY", `unknown run file ${entry.name}`);
+    if (entry.isDirectory() && !manifests.has(entry.name) && !fs.existsSync(path.join(runs, entry.name, "run.json"))) fail("ACTIVE_LEGACY_AMBIGUITY", `orphan legacy run directory ${entry.name}`);
+  }
+  const items = [];
+  for (const [runId, name] of [...manifests].sort()) {
+    const filePath = path.join(runs, name), bytes = secureRead(filePath, `legacy manifest ${name}`);
+    if (!bytes || bytes.length > 2 * 1024 * 1024) fail("ACTIVE_LEGACY_AMBIGUITY", `legacy manifest ${name} is missing or oversized`);
+    const text = bytes.toString("utf8"), seenId = /^run_id:\s*['"]?([^'"\n]+)['"]?\s*$/m.exec(text)?.[1], state = /^state:\s*['"]?([^'"\n]+)['"]?\s*$/m.exec(text)?.[1];
+    if (seenId !== runId || !state) fail("ACTIVE_LEGACY_AMBIGUITY", `legacy manifest ${name} cannot be identified`);
+    const createdAt = manifestTimestamp(runId, bytes), stat = fs.lstatSync(filePath, { bigint: true });
+    if (createdAt && createdAt > observedAt) fail("ACTIVE_LEGACY_AMBIGUITY", `legacy manifest ${name} has a future creation time`);
+    if (!new Set(["merged", "closed"]).has(state) && !createdAt) fail("ACTIVE_LEGACY_AMBIGUITY", `active legacy manifest ${name} has no trustworthy creation time`);
+    const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+    items.push({ name, run_id: runId, state, created_at: createdAt, size: Number(stat.size), mtime_ns: String(stat.mtimeNs), sha256 });
+    if (record) appendRolloutLocked(store, { type: "legacy_artifact_read", occurredAt: observedAt, payload: { surface: "canonical_inventory", artifact_name: name, artifact_sha256: sha256, marker_digest: peekGeneration(store)?.marker_digest || null } });
+  }
+  const active = items.filter((item) => !new Set(["merged", "closed"]).has(item.state));
+  const oldest = active.length ? Math.max(...active.map((item) => Math.floor((Date.parse(observedAt) - Date.parse(item.created_at)) / 3_600_000))) : null;
+  const identity = items.map(({ name, size, mtime_ns }) => ({ name, size, mtime_ns }));
+  const payload = { inventory_digest: digest(items), identity_digest: digest(identity), active_legacy_run_count: active.length, oldest_active_legacy_age_hours: oldest, items };
+  if (record) appendRolloutLocked(store, { type: "legacy_inventory_observed", occurredAt: observedAt, payload });
+  return payload;
+}
+
+function previewMigrationFromCanonicalInventory({ checkoutRoot, remote, runsRoot, actor = null, operationId = null, quiescenceReason = null, observedAt = new Date().toISOString() }) {
+  const resolved = resolveRepositoryState({ checkoutRoot, remote });
+  const store = Object.freeze({ stateDir: resolved.stateDir, repository: resolved.repository, repositoryDigest: digest(resolved.repository), paths: pathsFor(resolved.stateDir) });
+  const inventory = observeLegacyInventoryLocked(store, { runsRoot, observedAt, record: false });
+  const selectedStrategy = inventory.active_legacy_run_count <= 5 && (inventory.oldest_active_legacy_age_hours === null || inventory.oldest_active_legacy_age_hours < 72) ? "drain_and_cutover" : "dual_read_vnext_write";
+  const existingStore = peekStore({ checkoutRoot, remote }), marker = existingStore ? peekGeneration(existingStore) : null;
+  let quiescenceRequest = null;
+  if (inventory.active_legacy_run_count === 0 && actor && operationId && quiescenceReason) {
+    string(actor, "migration preview actor", TOKEN_RE); string(operationId, "migration preview operation id", TOKEN_RE);
+    if (typeof quiescenceReason !== "string" || !quiescenceReason.trim() || quiescenceReason.length > 1024) fail("INVALID_QUIESCENCE_ATTESTATION", "migration preview quiescence reason is invalid");
+    quiescenceRequest = { schema_version: 1, repository_digest: store.repositoryDigest, operation_id: `${operationId}-${marker?.writer_generation === "vnext" && marker.legacy_read_allowed ? "vnext-only" : "switch"}`, actor, reason: quiescenceReason.trim(), target_generation: "vnext", legacy_read_allowed: false, inventory_digest: inventory.inventory_digest, identity_digest: inventory.identity_digest, active_legacy_run_count: 0, oldest_active_legacy_age_hours: null, previous_anchor_digest: null };
+  }
+  return { schema_version: 1, operation: "start", dry_run: true, repository_digest: store.repositoryDigest, inventory, selected_strategy: selectedStrategy, can_start: true, can_cutover_vnext_only: inventory.active_legacy_run_count === 0, quiescence_request: quiescenceRequest, blockers: selectedStrategy === "drain_and_cutover" && inventory.active_legacy_run_count > 0 ? ["legacy_drain_pending"] : [] };
+}
+
+function currentLegacyIdentity(store, runsRoot) {
+  const runs = repositoryRunsDirectory(store, runsRoot), observations = readRolloutObservations(store).observations;
+  const baseline = observations.filter((item) => item.type === "legacy_inventory_observed").at(-1)?.payload;
+  if (!baseline || baseline.active_legacy_run_count !== 0) fail("ACTIVE_LEGACY_AMBIGUITY", "no canonical zero-active legacy inventory is sealed");
+  const entries = fs.readdirSync(runs, { withFileTypes: true }), names = new Set(baseline.items.map((item) => item.name));
+  for (const entry of entries) {
+    if (entry.isSymbolicLink() || (entry.isFile() && !entry.name.endsWith(".md")) || (entry.isFile() && entry.name.endsWith(".md") && !names.has(entry.name))) fail("ACTIVE_LEGACY_AMBIGUITY", `legacy inventory drift at ${entry.name}`);
+    if (entry.isDirectory() && !names.has(`${entry.name}.md`) && !fs.existsSync(path.join(runs, entry.name, "run.json"))) fail("ACTIVE_LEGACY_AMBIGUITY", `orphan legacy run directory ${entry.name}`);
+  }
+  const content = [], identity = baseline.items.map((item) => {
+    const target = path.join(runs, item.name); let stat;
+    try { stat = fs.lstatSync(target, { bigint: true }); } catch { fail("ACTIVE_LEGACY_AMBIGUITY", `legacy manifest ${item.name} disappeared`); }
+    if (!stat.isFile() || stat.isSymbolicLink()) fail("ACTIVE_LEGACY_AMBIGUITY", `legacy manifest ${item.name} is untrusted`);
+    const bytes = secureRead(target, `legacy inventory audit ${item.name}`), sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+    if (sha256 !== item.sha256) fail("ACTIVE_LEGACY_AMBIGUITY", `sealed legacy manifest ${item.name} content drifted`);
+    content.push({ name: item.name, sha256 });
+    return { name: item.name, size: Number(stat.size), mtime_ns: String(stat.mtimeNs) };
+  });
+  const identityDigest = digest(identity);
+  if (identityDigest !== baseline.identity_digest) fail("ACTIVE_LEGACY_AMBIGUITY", "sealed legacy inventory metadata drifted");
+  return { baseline, identityDigest, contentDigest: digest(content) };
+}
+
+function quiescenceAttestationPath(store, operationId) {
+  return path.join(store.paths.quiescence, `${operationId}.json`);
+}
+
+function validateQuiescenceAttestation(value, store) {
+  exactKeys(value, ["schema_version", "repository_digest", "operation_id", "actor", "reason", "target_generation", "legacy_read_allowed", "inventory_digest", "identity_digest", "active_legacy_run_count", "oldest_active_legacy_age_hours", "issued_at", "expires_at", "previous_anchor_digest", "key_id", "signature", "attestation_digest"], "legacy quiescence attestation", "INVALID_QUIESCENCE_ATTESTATION");
+  const { attestation_digest: attestationDigest, signature, ...unsigned } = value;
+  if (value.schema_version !== 1 || value.repository_digest !== store.repositoryDigest || attestationDigest !== digest({ ...unsigned, signature })) fail("INVALID_QUIESCENCE_ATTESTATION", "legacy quiescence attestation digest is invalid");
+  for (const key of ["operation_id", "actor"]) string(value[key], `legacy quiescence attestation.${key}`, TOKEN_RE);
+  if (typeof value.reason !== "string" || !value.reason.trim() || value.reason.length > 1024) fail("INVALID_QUIESCENCE_ATTESTATION", "legacy quiescence attestation reason is invalid");
+  if (value.target_generation !== "vnext" || value.legacy_read_allowed !== false || value.active_legacy_run_count !== 0 || value.oldest_active_legacy_age_hours !== null || value.previous_anchor_digest !== null) fail("INVALID_QUIESCENCE_ATTESTATION", "legacy quiescence attestation does not authorize a zero-active vNext-only genesis");
+  timestamp(value.issued_at, "legacy quiescence attestation.issued_at"); timestamp(value.expires_at, "legacy quiescence attestation.expires_at");
+  for (const key of ["inventory_digest", "identity_digest", "key_id", "attestation_digest"]) string(value[key], `legacy quiescence attestation.${key}`, SHA256_RE);
+  if (typeof signature !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(signature)) fail("INVALID_QUIESCENCE_ATTESTATION", "legacy quiescence attestation signature is invalid");
+  return value;
+}
+
+function verifyQuiescenceAttestation(attestation, publicKeyBytes, store, { operationId, actor, reason, observedAt, inventory }) {
+  const validated = validateQuiescenceAttestation(attestation, store), { publicKey, keyId } = rolloutPublicKey(publicKeyBytes);
+  const { attestation_digest: ignoredDigest, signature: ignoredSignature, ...unsigned } = validated;
+  if (validated.key_id !== keyId || !crypto.verify(null, Buffer.from(canonicalJson(unsigned)), publicKey, Buffer.from(validated.signature, "base64"))) fail("INVALID_QUIESCENCE_ATTESTATION", "legacy quiescence authority signature does not verify");
+  if (validated.operation_id !== operationId || validated.actor !== actor || validated.reason !== reason.trim()
+    || validated.inventory_digest !== inventory.inventory_digest || validated.identity_digest !== inventory.identity_digest
+    || validated.issued_at > observedAt || validated.expires_at < observedAt) fail("QUIESCENCE_ATTESTATION_STALE", "legacy quiescence attestation does not bind the exact current operator intent and inventory");
+  return validated;
+}
+
+function writeQuiescenceAttestationLocked(store, attestation) {
+  const proposed = validateQuiescenceAttestation(attestation, store), operationId = proposed.operation_id;
+  const target = quiescenceAttestationPath(store, operationId);
+  const existing = parseJson(secureRead(target, `legacy quiescence attestation ${operationId}`), `legacy quiescence attestation ${operationId}`);
+  if (existing) {
+    const validated = validateQuiescenceAttestation(existing, store);
+    if (canonicalJson(validated) !== canonicalJson(proposed)) {
+      fail("QUIESCENCE_ATTESTATION_CONFLICT", "durable legacy quiescence attestation conflicts with the current operator assertion or inventory");
+    }
+    return validated;
+  }
+  writeImmutable(target, Buffer.from(canonicalJson(proposed)), { conflictCode: "QUIESCENCE_ATTESTATION_CONFLICT" });
+  return validateQuiescenceAttestation(parseJson(secureRead(target, `legacy quiescence attestation ${operationId}`), `legacy quiescence attestation ${operationId}`), store);
+}
+
+function configuredQuiescenceAttestation(store) {
+  const attestationPath = process.env.RELAY_QUIESCENCE_ATTESTATION_FILE, keyPath = process.env.RELAY_ROLLOUT_ANCHOR_PUBLIC_KEY_FILE;
+  if (!attestationPath || !keyPath) fail("QUIESCENCE_ATTESTATION_REQUIRED", "RELAY_QUIESCENCE_ATTESTATION_FILE and RELAY_ROLLOUT_ANCHOR_PUBLIC_KEY_FILE are required for vNext-only cutover");
+  return {
+    attestation: parseJson(externallyControlledBytes(attestationPath, store, "external legacy quiescence attestation"), "external legacy quiescence attestation"),
+    publicKeyBytes: externallyControlledBytes(keyPath, store, "external rollout public key"),
+  };
+}
+
+function startMigrationFromCanonicalInventory({ store, runsRoot, actor, operationId, quiescenceReason, now = () => new Date().toISOString(), fault = null }) {
+  const opened = openStore(store); string(actor, "migration actor", TOKEN_RE); string(operationId, "migration operation id", TOKEN_RE);
+  if (typeof quiescenceReason !== "string" || !quiescenceReason.trim() || quiescenceReason.length > 1024) fail("QUIESCENCE_ATTESTATION_REQUIRED", "migration start requires a non-empty legacy-writer quiescence reason");
+  const observationForDecision = (inventory, observedAt) => ({ observed_at: observedAt, active_legacy_run_count: inventory.active_legacy_run_count, oldest_active_legacy_age_hours: inventory.oldest_active_legacy_age_hours });
+  const nextAfter = (minimum) => {
+    let value = now();
+    for (let attempt = 0; value <= minimum && attempt < 1000; attempt += 1) { sleep(1); value = now(); }
+    if (value <= minimum) fail("ROLLOUT_CLOCK_STALLED", "clock did not advance for a fresh canonical observation");
+    return value;
+  };
+  const sameInventory = (left, right) => left.inventory_digest === right.inventory_digest && left.identity_digest === right.identity_digest;
+  return withRepositoryLockSync(opened, () => {
+    let marker = readGeneration(opened), decision = readDecision(opened);
+    if (marker?.writer_generation === "vnext") ensureMarkerEventLocked(opened, marker, fault);
+    if (marker?.writer_generation === "vnext" && marker.legacy_read_allowed === false) {
+      const observedAt = now(), inventory = observeLegacyInventoryLocked(opened, { runsRoot, observedAt, record: false });
+      return { inventory, decision, marker, changed: false, phase: "vnext_only" };
+    }
+    const firstAt = now();
+    let inventory = observeLegacyInventoryLocked(opened, { runsRoot, observedAt: firstAt });
+    if (!decision) decision = decideMigrationLocked(opened, observationForDecision(inventory, firstAt), fault).decision;
+    else ensureDecisionArtifactsLocked(opened, decision, fault);
+    marker = readGeneration(opened);
+    if (decision.strategy === "drain_and_cutover" && inventory.active_legacy_run_count > 0) {
+      return { inventory, decision, marker, changed: false, phase: "draining" };
+    }
+    if (decision.strategy === "dual_read_vnext_write" && marker.writer_generation === "vnext" && inventory.active_legacy_run_count > 0) {
+      return { inventory, decision, marker, changed: false, phase: "dual_read_vnext_write" };
+    }
+    const transitionAt = nextAfter(firstAt > decision.observed_at ? firstAt : decision.observed_at);
+    inventory = observeLegacyInventoryLocked(opened, { runsRoot, observedAt: transitionAt });
+    if ((decision.strategy === "drain_and_cutover" || marker.writer_generation === "vnext") && inventory.active_legacy_run_count !== 0) {
+      fail("ACTIVE_LEGACY_RUNS_PRESENT", "vNext-only cutover requires a final zero-active legacy inventory");
+    }
+    fault?.("after_final_inventory", opened.paths.rollout);
+    const validated = observeLegacyInventoryLocked(opened, { runsRoot, observedAt: transitionAt, record: false });
+    if (!sameInventory(inventory, validated)) fail("ACTIVE_LEGACY_AMBIGUITY", "canonical legacy inventory changed during the cutover transaction");
+    let completed = null;
+    if (decision.strategy === "drain_and_cutover") {
+      completed = readDrainCompleted(opened);
+      if (completed) ensureDrainEventLocked(opened, completed, fault);
+      else completed = recordDrainCompletedLocked(opened, observationForDecision(inventory, transitionAt), actor, `${operationId}-drain`, fault).inventory;
+    }
+    const tightening = marker.writer_generation === "vnext" && marker.legacy_read_allowed === true;
+    const targetLegacyReadAllowed = tightening ? false : decision.strategy === "dual_read_vnext_write";
+    const requireVnextOnlySnapshot = targetLegacyReadAllowed === false;
+    const transitionOperationId = `${operationId}-${tightening ? "vnext-only" : "switch"}`;
+    let attestation = null;
+    if (requireVnextOnlySnapshot) {
+      const authority = configuredQuiescenceAttestation(opened);
+      attestation = verifyQuiescenceAttestation(authority.attestation, authority.publicKeyBytes, opened, {
+        operationId: transitionOperationId,
+        actor,
+        reason: quiescenceReason,
+        observedAt: transitionAt,
+        inventory,
+      });
+      writeQuiescenceAttestationLocked(opened, attestation);
+    }
+    const assertAttestedInventory = () => {
+      const finalInventory = observeLegacyInventoryLocked(opened, { runsRoot, observedAt: transitionAt, record: false });
+      if (finalInventory.active_legacy_run_count !== 0 || !sameInventory(inventory, finalInventory)
+        || (attestation && (attestation.inventory_digest !== finalInventory.inventory_digest || attestation.identity_digest !== finalInventory.identity_digest))) {
+        fail("ACTIVE_LEGACY_AMBIGUITY", "canonical legacy inventory changed across attested cutover marker publication");
+      }
+    };
+    const switched = switchGenerationLocked(opened, {
+      generation: "vnext",
+      actor,
+      operationId: transitionOperationId,
+      switchedAt: transitionAt,
+      drainInventoryDigest: completed?.inventory_digest || null,
+      legacyReadAllowed: targetLegacyReadAllowed,
+      quiescenceAttestationDigest: attestation?.attestation_digest || null,
+      beforeMarker: requireVnextOnlySnapshot ? () => {
+        // The receipt is deliberately durable before the marker.  A retry may
+        // reuse it, but it can never publish a vNext-only marker without a
+        // snapshot equal to the final zero-active canonical inventory.
+        fault?.("before_cutover_marker", opened.paths.generation);
+        assertAttestedInventory();
+      } : null,
+      afterMarker: requireVnextOnlySnapshot ? () => {
+        fault?.("after_cutover_marker", opened.paths.generation);
+        assertAttestedInventory();
+      } : null,
+      fault,
+    });
+    return { inventory, decision, marker: switched.marker, changed: switched.changed, phase: switched.marker.legacy_read_allowed ? "dual_read_vnext_write" : "vnext_only" };
+  });
+}
+
+function recordLegacySurfaceInvocation({ store, command, mode, invocationId = crypto.randomUUID(), observedAt = new Date().toISOString() }) {
+  const opened = openStore(store);
+  return withRepositoryLockSync(opened, () => appendRolloutLocked(opened, { type: "legacy_surface_invoked", occurredAt: observedAt, payload: { invocation_id: invocationId, command, mode, marker_digest: peekGeneration(opened)?.marker_digest || null } }));
+}
+
+function recordLegacyArtifactRead({ store, surface, artifactName, artifactSha256, observedAt = new Date().toISOString() }) {
+  const opened = openStore(store);
+  return withRepositoryLockSync(opened, () => appendRolloutLocked(opened, { type: "legacy_artifact_read", occurredAt: observedAt, payload: { surface, artifact_name: artifactName, artifact_sha256: artifactSha256, marker_digest: peekGeneration(opened)?.marker_digest || null } }));
+}
+
+function terminalDescriptor(runDir, store) {
+  const runStore = require("./run-store"), facts = require("./facts"), inspect = require("./inspect");
+  const record = runStore.readRunRecord({ runDir }), journal = facts.readFacts({ eventsPath: path.join(runDir, "events.jsonl") });
+  if (record.repo.root !== fs.realpathSync(path.dirname(store.repository.git_common_dir)) || record.repo.remote !== store.repository.remote || journal.tailIncomplete) fail("VNEXT_TERMINAL_AMBIGUITY", `run ${record.run_id} is not a canonical complete vNext run`);
+  const derived = inspect.foldRunFacts({ runRecord: record, facts: journal.facts, gitFacts: {}, githubFacts: {}, hostFacts: {} });
+  if (!derived.terminal) return null;
+  if (derived.diagnostics?.length) fail("VNEXT_TERMINAL_AMBIGUITY", `run ${record.run_id} has conflicting terminal history`);
+  const terminals = journal.facts.filter((fact) => new Set(["merge_recorded", "run_closed"]).has(fact.type));
+  if (terminals.length !== 1) fail("VNEXT_TERMINAL_AMBIGUITY", `run ${record.run_id} must have exactly one terminal fact`);
+  return { record, terminal: terminals[0], run_digest: digest(record), terminal_fact_digest: digest(terminals[0]) };
+}
+
+function validateTerminalReceipt(receipt, store, marker) {
+  exactKeys(receipt, ["schema_version", "repository_digest", "marker_digest", "epoch", "run_id", "run_digest", "terminal_event_id", "terminal_type", "terminal_at", "terminal_fact_digest", "observed_at", "receipt_digest"], "vNext terminal receipt", "INVALID_TERMINAL_RECEIPT");
+  const { receipt_digest: receiptDigest, ...unsigned } = receipt;
+  if (receipt.schema_version !== 1 || receipt.repository_digest !== store.repositoryDigest || receipt.marker_digest !== marker.marker_digest || receipt.epoch !== marker.epoch || receiptDigest !== digest(unsigned)) fail("INVALID_TERMINAL_RECEIPT", "terminal receipt is not bound to the active generation");
+  if (typeof receipt.run_id !== "string" || !TOKEN_RE.test(receipt.run_id)
+    || typeof receipt.terminal_event_id !== "string" || !receipt.terminal_event_id.trim()
+    || !new Set(["merge_recorded", "run_closed"]).has(receipt.terminal_type)) fail("INVALID_TERMINAL_RECEIPT", "terminal receipt identity fields are invalid");
+  for (const key of ["run_digest", "terminal_fact_digest", "receipt_digest"]) string(receipt[key], `terminal receipt.${key}`, SHA256_RE);
+  timestamp(receipt.terminal_at, "terminal receipt.terminal_at"); timestamp(receipt.observed_at, "terminal receipt.observed_at");
+  return receipt;
+}
+
+function canonicalTerminalReceiptDigest(values) {
+  const canonical = values.map((item) => ({ run_id: item.run_id, receipt_digest: item.receipt_digest }))
+    .sort((left, right) => left.run_id.localeCompare(right.run_id));
+  if (new Set(canonical.map((item) => item.run_id)).size !== canonical.length) fail("TERMINAL_RECEIPT_CONFLICT", "terminal receipt run ids must be unique");
+  return digest(canonical);
+}
+
+function rolloutAnchorUnsigned(value) {
+  const { anchor_digest: ignoredDigest, signature: ignoredSignature, ...unsigned } = value;
+  return unsigned;
+}
+
+function rolloutAnchorDigest(value) {
+  const { anchor_digest: ignored, ...content } = value;
+  return digest(content);
+}
+
+function rolloutLineageUnsigned(value) {
+  const { lineage_digest: ignored, ...unsigned } = value;
+  return unsigned;
+}
+
+function rolloutAnchorRequest(store, latest, marker, previousAnchorDigest = null) {
+  if (!latest) return null;
+  return {
+    schema_version: 1,
+    repository_digest: store.repositoryDigest,
+    marker_digest: marker.marker_digest,
+    sequence: latest.observation.sequence,
+    observation_digest: latest.observation.observation_digest,
+    seal_digest: latest.seal.seal_digest,
+    checkpoint_date: latest.observation.payload.date,
+    previous_anchor_digest: previousAnchorDigest,
+  };
+}
+
+function rolloutPublicKey(publicKeyBytes) {
+  let publicKey;
+  try { publicKey = crypto.createPublicKey(publicKeyBytes); } catch (error) { fail("INVALID_ROLLOUT_ANCHOR", `external rollout public key is invalid: ${error.message}`); }
+  if (publicKey.asymmetricKeyType !== "ed25519") fail("INVALID_ROLLOUT_ANCHOR", "external rollout public key must be Ed25519");
+  const keyId = crypto.createHash("sha256").update(publicKey.export({ type: "spki", format: "der" })).digest("hex");
+  return { publicKey, keyId };
+}
+
+function verifyRolloutAnchor(lineage, publicKeyBytes, store, context, now) {
+  exactKeys(lineage, ["schema_version", "repository_digest", "marker_digest", "anchors", "lineage_digest"], "external rollout anchor lineage", "INVALID_ROLLOUT_ANCHOR");
+  if (lineage.schema_version !== 1 || lineage.repository_digest !== store.repositoryDigest) fail("REPOSITORY_IDENTITY_MISMATCH", "external rollout anchor lineage belongs to another repository");
+  if (!context?.marker || lineage.marker_digest !== context.marker.marker_digest || !Array.isArray(lineage.anchors) || lineage.anchors.length === 0
+    || lineage.lineage_digest !== digest(rolloutLineageUnsigned(lineage))) fail("INVALID_ROLLOUT_ANCHOR", "external rollout anchor lineage is invalid");
+  const { publicKey, keyId } = rolloutPublicKey(publicKeyBytes);
+  const eligible = context.checkpoints.filter((checkpoint) => checkpoint.occurred_at > context.zeroLegacySince);
+  if (lineage.anchors.length > eligible.length) fail("ROLLOUT_ANCHOR_GAP", "external rollout anchor lineage extends beyond the canonical clean checkpoints");
+  if (eligible.length - lineage.anchors.length > 1) fail("ROLLOUT_ANCHOR_GAP", "external rollout anchor lineage has more than one unsigned checkpoint tail");
+  if (!context.marker.quiescence_attestation_digest) fail("INVALID_ROLLOUT_ANCHOR", "active marker has no external quiescence genesis");
+  const genesis = validateQuiescenceAttestation(parseJson(secureRead(quiescenceAttestationPath(store, context.marker.transition_operation_id), "rollout quiescence genesis"), "rollout quiescence genesis"), store);
+  if (genesis.attestation_digest !== context.marker.quiescence_attestation_digest || genesis.key_id !== keyId) fail("INVALID_ROLLOUT_ANCHOR", "rollout lineage authority does not match its signed quiescence genesis");
+  let prior = null;
+  for (let index = 0; index < lineage.anchors.length; index += 1) {
+    const anchor = lineage.anchors[index], checkpoint = eligible[index];
+    exactKeys(anchor, ["schema_version", "repository_digest", "marker_digest", "sequence", "observation_digest", "seal_digest", "checkpoint_date", "issued_at", "previous_anchor_digest", "key_id", "signature", "anchor_digest"], "external rollout anchor", "INVALID_ROLLOUT_ANCHOR");
+    if (anchor.schema_version !== 1 || anchor.repository_digest !== store.repositoryDigest || anchor.marker_digest !== context.marker.marker_digest || anchor.key_id !== keyId) fail("REPOSITORY_IDENTITY_MISMATCH", "external rollout anchor identity is invalid");
+    integer(anchor.sequence, "external rollout anchor.sequence", { minimum: 1 });
+    for (const key of ["observation_digest", "seal_digest", "key_id", "anchor_digest"]) string(anchor[key], `external rollout anchor.${key}`, SHA256_RE);
+    if (anchor.previous_anchor_digest !== null) string(anchor.previous_anchor_digest, "external rollout anchor.previous_anchor_digest", SHA256_RE);
+    timestamp(anchor.issued_at, "external rollout anchor.issued_at");
+    if (typeof anchor.checkpoint_date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(anchor.checkpoint_date)
+      || typeof anchor.signature !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(anchor.signature)
+      || anchor.anchor_digest !== rolloutAnchorDigest(anchor)
+      || !crypto.verify(null, Buffer.from(canonicalJson(rolloutAnchorUnsigned(anchor))), publicKey, Buffer.from(anchor.signature, "base64"))) fail("INVALID_ROLLOUT_ANCHOR", "external rollout anchor signature or digest is invalid");
+    const observation = context.observations[anchor.sequence - 1], seal = context.seals[anchor.sequence - 1];
+    if (!checkpoint || observation !== checkpoint || observation?.type !== "daily_checkpoint" || anchor.sequence !== checkpoint.sequence
+      || anchor.observation_digest !== checkpoint.observation_digest || anchor.seal_digest !== seal?.seal_digest
+      || anchor.checkpoint_date !== checkpoint.payload.date
+      || anchor.previous_anchor_digest !== (prior?.anchor_digest || context.marker.quiescence_attestation_digest)) fail("ROLLOUT_ANCHOR_GAP", "external rollout anchor lineage is missing, reordered, or does not bind canonical checkpoint roots");
+    if (anchor.issued_at < checkpoint.occurred_at || anchor.issued_at > now || (prior && anchor.issued_at <= prior.issued_at)) fail("ROLLOUT_ANCHOR_TIME_INVALID", "external rollout anchor issuance is not monotonic after its checkpoint");
+    prior = anchor;
+  }
+  const latest = context.observations.at(-1), latestSeal = context.seals.at(-1), first = lineage.anchors[0], last = lineage.anchors.at(-1);
+  const complete = lineage.anchors.length === eligible.length && last.sequence === latest?.sequence
+    && last.observation_digest === latest?.observation_digest && last.seal_digest === latestSeal?.seal_digest;
+  const issuanceSpanSatisfied = Date.parse(last.issued_at) - Date.parse(first.issued_at) >= 30 * 24 * 60 * 60 * 1000;
+  if (!complete || !issuanceSpanSatisfied) {
+    const next = eligible[lineage.anchors.length];
+    return {
+      status: "pending", required: true, key_id: keyId, sequence: last.sequence, issued_at: last.issued_at,
+      witnessed_checkpoints: lineage.anchors.length, first_issued_at: first.issued_at,
+      anchor_request: next ? rolloutAnchorRequest(store, { observation: next, seal: context.seals[next.sequence - 1] }, context.marker, last.anchor_digest) : null,
+      pending_reason: !complete ? "unsigned_checkpoint_tail" : "signed_lineage_below_30_days",
+    };
+  }
+  return { status: "verified", required: true, key_id: keyId, sequence: last.sequence, issued_at: last.issued_at, witnessed_checkpoints: lineage.anchors.length, first_issued_at: first.issued_at };
+}
+
+function externallyControlledBytes(filePath, store, label) {
+  if (typeof process.geteuid !== "function") fail("ROLLOUT_ANCHOR_UNAVAILABLE", `${label} cannot establish the relay OS identity`);
+  if (typeof filePath !== "string" || !path.isAbsolute(filePath)) fail("ROLLOUT_ANCHOR_UNAVAILABLE", `${label} path must be absolute`);
+  const resolved = path.resolve(filePath), canonical = fs.realpathSync(resolved), stat = fs.lstatSync(resolved), parent = fs.realpathSync(path.dirname(resolved));
+  if (canonical !== resolved || !stat.isFile() || stat.isSymbolicLink() || isInside(store.stateDir, canonical) || isInside(path.dirname(store.repository.git_common_dir), canonical)) fail("ROLLOUT_ANCHOR_UNAVAILABLE", `${label} must be a canonical external regular file`);
+  const authorityPath = [canonical];
+  for (let current = parent; ; current = path.dirname(current)) {
+    authorityPath.push(current);
+    if (current === path.dirname(current)) break;
+  }
+  for (const target of authorityPath) {
+    const targetStat = fs.lstatSync(target);
+    if (targetStat.isSymbolicLink() || fs.realpathSync(target) !== target || targetStat.uid === process.geteuid()) {
+      fail("ROLLOUT_ANCHOR_UNAVAILABLE", `${label} authority path must be owned by a different OS identity and contain no symlink components`);
+    }
+    try { fs.accessSync(target, fs.constants.W_OK); fail("ROLLOUT_ANCHOR_UNAVAILABLE", `${label} authority must not be writable by the relay process`); }
+    catch (error) { if (!new Set(["EACCES", "EPERM"]).has(error.code)) throw error; }
+  }
+  const bytes = secureRead(canonical, label, { dev: stat.dev, ino: stat.ino });
+  const after = fs.lstatSync(canonical);
+  if (after.dev !== stat.dev || after.ino !== stat.ino) fail("ROLLOUT_ANCHOR_UNAVAILABLE", `${label} path identity changed during authority read`);
+  return bytes;
+}
+
+function configuredRolloutAnchor(store) {
+  const anchorPath = process.env.RELAY_ROLLOUT_ANCHOR_FILE, keyPath = process.env.RELAY_ROLLOUT_ANCHOR_PUBLIC_KEY_FILE;
+  if (!anchorPath && !keyPath) return null;
+  if (!anchorPath || !keyPath) fail("ROLLOUT_ANCHOR_UNAVAILABLE", "both RELAY_ROLLOUT_ANCHOR_FILE and RELAY_ROLLOUT_ANCHOR_PUBLIC_KEY_FILE are required");
+  return {
+    lineage: parseJson(externallyControlledBytes(anchorPath, store, "external rollout anchor lineage"), "external rollout anchor lineage"),
+    publicKeyBytes: externallyControlledBytes(keyPath, store, "external rollout public key"),
+  };
+}
+
+function committedVnextMarkers(store, activeMarker) {
+  const markers = new Map(), committedEventIds = new Set(readEvents(store).filter((event) => event.type === "generation_switched").map((event) => event.event_id));
+  for (const receipt of readTransitionReceipts(store)) {
+    if (receipt.to_generation !== "vnext" || receipt.legacy_read_allowed || readTransitionAbort(store, receipt)) continue;
+    if (!committedEventIds.has(receiptEventId(store, receipt)) && activeMarker?.transition_receipt_digest !== receipt.receipt_digest) continue;
+    const marker = buildMarker(store, receipt);
+    markers.set(marker.marker_digest, marker);
+  }
+  if (activeMarker?.writer_generation === "vnext" && activeMarker.legacy_read_allowed === false) markers.set(activeMarker.marker_digest, activeMarker);
+  return markers;
+}
+
+function terminalReceiptSet(store, runsRoot, { write = false, observedAt = new Date().toISOString(), knownRunIds = new Set() } = {}) {
+  const marker = write ? readGeneration(store) : peekGeneration(store);
+  if (!marker || marker.writer_generation !== "vnext" || marker.legacy_read_allowed) fail("ROLLOUT_UNAVAILABLE", "retirement observation requires vNext-only generation");
+  const runs = repositoryRunsDirectory(store, runsRoot), markerHistory = committedVnextMarkers(store, marker), receiptByDigest = new Map(), persistedCurrentRunIds = new Set();
+  for (const name of fs.readdirSync(store.paths.terminalReceipts)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\.json$/.test(name)) fail("TERMINAL_RECEIPT_SET_MISMATCH", `unexpected terminal receipt ${name}`);
+    const bytes = secureRead(path.join(store.paths.terminalReceipts, name), `terminal receipt ${name}`), persisted = parseJson(bytes, `terminal receipt ${name}`);
+    const receiptMarker = markerHistory.get(persisted?.marker_digest);
+    if (!receiptMarker) fail("INVALID_TERMINAL_RECEIPT", `terminal receipt ${name} does not bind a committed vNext-only epoch`);
+    validateTerminalReceipt(persisted, store, receiptMarker);
+    if (!bytes.equals(Buffer.from(canonicalJson(persisted))) || `${persisted.run_id}.json` !== name) fail("INVALID_TERMINAL_RECEIPT", `terminal receipt ${name} is not canonical JSON or filename-bound`);
+    let historical;
+    try { historical = terminalDescriptor(path.join(runs, persisted.run_id), store); }
+    catch (error) { if (error.code === "ENOENT") fail("INVALID_TERMINAL_RECEIPT", `terminal receipt ${name} lost its historical run bytes`); throw error; }
+    if (!historical || historical.run_digest !== persisted.run_digest || historical.terminal.event_id !== persisted.terminal_event_id
+      || historical.terminal.type !== persisted.terminal_type || new Date(historical.terminal.at).toISOString() !== persisted.terminal_at
+      || historical.terminal_fact_digest !== persisted.terminal_fact_digest) fail("INVALID_TERMINAL_RECEIPT", `terminal receipt ${name} no longer binds its canonical historical run and fact bytes`);
+    if (receiptByDigest.has(persisted.receipt_digest)) fail("TERMINAL_RECEIPT_CONFLICT", `terminal receipt ${name} is duplicated`);
+    receiptByDigest.set(persisted.receipt_digest, persisted);
+    if (persisted.marker_digest === marker.marker_digest) persistedCurrentRunIds.add(persisted.run_id);
+  }
+  const observations = readRolloutObservations(store, { now: observedAt }).observations.filter((item) => item.type === "vnext_terminal_observed");
+  const observedByRun = new Map();
+  for (const observation of observations) {
+    const boundReceipt = receiptByDigest.get(observation.payload.receipt_digest);
+    if (!boundReceipt) fail("TERMINAL_RECEIPT_MISSING", `terminal observation for ${observation.payload.run_id} has no persisted receipt`);
+    if (boundReceipt.run_id !== observation.payload.run_id || boundReceipt.terminal_event_id !== observation.payload.terminal_event_id) fail("TERMINAL_RECEIPT_CONFLICT", `terminal observation for ${observation.payload.run_id} does not match its persisted receipt`);
+    if (boundReceipt.marker_digest !== marker.marker_digest) continue;
+    const prior = observedByRun.get(observation.payload.run_id);
+    if (prior && prior.payload.receipt_digest !== observation.payload.receipt_digest) fail("TERMINAL_RECEIPT_CONFLICT", `terminal observation for ${observation.payload.run_id} conflicts`);
+    if (prior) fail("TERMINAL_RECEIPT_CONFLICT", `terminal observation for ${observation.payload.run_id} is duplicated`);
+    observedByRun.set(observation.payload.run_id, observation);
+  }
+  const receipts = [], pending = [];
+  for (const entry of fs.readdirSync(runs, { withFileTypes: true }).filter((item) => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+    const runDir = path.join(runs, entry.name);
+    if (!fs.existsSync(path.join(runDir, "run.json"))) continue;
+    const descriptor = terminalDescriptor(runDir, store);
+    if (!descriptor) continue;
+    const createdAt = new Date(descriptor.record.created_at).toISOString();
+    if (createdAt < marker.switched_at) continue;
+    if (createdAt > observedAt || new Date(descriptor.terminal.at).toISOString() > observedAt) fail("ROLLOUT_FUTURE_TIMESTAMP", `terminal run ${descriptor.record.run_id} is in the future`);
+    const target = path.join(store.paths.terminalReceipts, `${descriptor.record.run_id}.json`), persistedBytes = secureRead(target, `terminal receipt ${descriptor.record.run_id}`);
+    const persisted = parseJson(persistedBytes, `terminal receipt ${descriptor.record.run_id}`);
+    if (!persisted && observedByRun.has(descriptor.record.run_id)) fail("TERMINAL_RECEIPT_MISSING", `previously observed terminal receipt for ${descriptor.record.run_id} was deleted`);
+    if (persisted) {
+      validateTerminalReceipt(persisted, store, marker);
+      if (!persistedBytes.equals(Buffer.from(canonicalJson(persisted)))) fail("INVALID_TERMINAL_RECEIPT", `terminal receipt for ${descriptor.record.run_id} is not canonical JSON`);
+    }
+    const base = { schema_version: 1, repository_digest: store.repositoryDigest, marker_digest: marker.marker_digest, epoch: marker.epoch, run_id: descriptor.record.run_id, run_digest: descriptor.run_digest, terminal_event_id: descriptor.terminal.event_id, terminal_type: descriptor.terminal.type, terminal_at: new Date(descriptor.terminal.at).toISOString(), terminal_fact_digest: descriptor.terminal_fact_digest, observed_at: persisted?.observed_at || observedAt };
+    const receipt = validateTerminalReceipt({ ...base, receipt_digest: digest(base) }, store, marker);
+    if (receipt.observed_at > observedAt) fail("ROLLOUT_FUTURE_TIMESTAMP", `terminal receipt for ${receipt.run_id} is in the future`);
+    if (persisted && canonicalJson(persisted) !== canonicalJson(receipt)) fail("TERMINAL_RECEIPT_CONFLICT", `terminal receipt for ${receipt.run_id} conflicts with canonical facts`);
+    const observed = observedByRun.get(receipt.run_id);
+    if (observed && (observed.payload.receipt_digest !== receipt.receipt_digest || observed.payload.terminal_event_id !== receipt.terminal_event_id)) fail("TERMINAL_RECEIPT_CONFLICT", `terminal observation for ${receipt.run_id} conflicts with its receipt`);
+    if (write) {
+      writeImmutable(target, Buffer.from(canonicalJson(receipt)), { conflictCode: "TERMINAL_RECEIPT_CONFLICT" });
+      persistedCurrentRunIds.add(receipt.run_id);
+      if (!observed) appendRolloutLocked(store, { type: "vnext_terminal_observed", occurredAt: observedAt, payload: { receipt_digest: receipt.receipt_digest, run_id: receipt.run_id, terminal_event_id: receipt.terminal_event_id } });
+    } else {
+      if (!persisted) {
+        if (knownRunIds.has(receipt.run_id)) fail("TERMINAL_RECEIPT_MISSING", `previously observed terminal receipt for ${receipt.run_id} was deleted`);
+        pending.push(receipt.run_id); continue;
+      }
+      if (!observed) { pending.push(receipt.run_id); continue; }
+    }
+    receipts.push(receipt);
+  }
+  if ([...persistedCurrentRunIds].some((runId) => !receipts.some((receipt) => receipt.run_id === runId))) fail("TERMINAL_RECEIPT_SET_MISMATCH", "current-epoch terminal receipt set contains an unknown or deleted run binding");
+  return { receipts: receipts.sort((a, b) => a.run_id.localeCompare(b.run_id)), pending };
+}
+
+function recordRolloutCheckpoint({ store, runsRoot, observedAt = new Date().toISOString() }) {
+  const opened = openStore(store); timestamp(observedAt, "checkpoint observedAt");
+  return withRepositoryLockSync(opened, () => {
+    const recoverable = readRolloutState(opened, { now: observedAt, allowUnsealedTail: true });
+    if (recoverable.unsealed) sealRolloutObservation(opened, recoverable.unsealed, recoverable.seals.at(-1) || null);
+    const marker = readGeneration(opened), initial = readRolloutObservations(opened, { now: observedAt }).observations;
+    const prior = initial.filter((item) => item.type === "daily_checkpoint" && item.payload.marker_digest === marker.marker_digest).at(-1);
+    const date = observedAt.slice(0, 10);
+    if (prior) {
+      const next = new Date(`${prior.payload.date}T00:00:00.000Z`); next.setUTCDate(next.getUTCDate() + 1);
+      if (date !== prior.payload.date && date !== next.toISOString().slice(0, 10)) fail("ROLLOUT_CHECKPOINT_GAP", "daily checkpoints must be consecutive");
+      if (date === prior.payload.date) fail("ROLLOUT_CHECKPOINT_CONFLICT", "today already has a checkpoint");
+    }
+    const identity = currentLegacyIdentity(opened, runsRoot), { receipts } = terminalReceiptSet(opened, runsRoot, { write: true, observedAt });
+    const observations = readRolloutObservations(opened, { now: observedAt }).observations;
+    const boundary = observations.filter((item) => item.type === "legacy_inventory_observed" && item.payload.active_legacy_run_count === 0 && item.occurred_at <= marker.switched_at).at(-1);
+    if (!boundary) fail("ACTIVE_LEGACY_AMBIGUITY", "active marker has no zero-inventory cutover boundary");
+    const after = prior?.sequence || boundary.sequence, activity = observations.filter((item) => item.sequence > after && item.occurred_at > marker.switched_at && new Set(["legacy_artifact_read", "legacy_surface_invoked"]).has(item.type));
+    const payload = { date, marker_digest: marker.marker_digest, inventory_identity_digest: identity.identityDigest, inventory_content_digest: identity.contentDigest, active_legacy_run_count: 0, terminal_receipts_digest: canonicalTerminalReceiptDigest(receipts), terminal_run_count: receipts.length, legacy_activity_count: activity.length, observation_prefix_digest: observations.at(-1)?.observation_digest || null };
+    return appendRolloutLocked(opened, { type: "daily_checkpoint", occurredAt: observedAt, payload });
+  });
+}
+
+function retirementStatus(request) {
+  if (!plainObject(request)) fail("INVALID_ROLLOUT_REQUEST", "retirement status request is required");
+  if (Object.hasOwn(request, "externalAnchor") || Object.hasOwn(request, "anchorPublicKey")) {
+    fail("ROLLOUT_ANCHOR_UNAVAILABLE", "direct rollout anchor injection is not a production API; use the configured external authority files");
+  }
+  const { store, runsRoot, now = new Date().toISOString() } = request;
+  timestamp(now, "retirement status now");
+  const rollout = readRolloutState(store, { now }), { store: opened, observations, seals } = rollout, marker = peekGeneration(opened);
+  if (!marker || marker.writer_generation !== "vnext" || marker.legacy_read_allowed) fail("ROLLOUT_UNAVAILABLE", "vNext-only marker is required");
+  const identity = currentLegacyIdentity(opened, runsRoot), markerHistory = committedVnextMarkers(opened, marker);
+  for (const checkpoint of observations.filter((item) => item.type === "daily_checkpoint")) {
+    if (!markerHistory.has(checkpoint.payload.marker_digest) || checkpoint.payload.observation_prefix_digest !== checkpoint.previous_digest || checkpoint.payload.active_legacy_run_count !== 0) fail("ROLLOUT_MARKER_DRIFT", "historical checkpoint does not bind a committed vNext-only marker and immutable prefix");
+  }
+  const currentReceiptDigests = new Set(fs.readdirSync(opened.paths.terminalReceipts).map((name) => parseJson(secureRead(path.join(opened.paths.terminalReceipts, name), name), name)).filter((receipt) => receipt.marker_digest === marker.marker_digest).map((receipt) => receipt.receipt_digest));
+  const knownRunIds = new Set(observations.filter((item) => item.type === "vnext_terminal_observed" && currentReceiptDigests.has(item.payload.receipt_digest)).map((item) => item.payload.run_id));
+  const { receipts, pending } = terminalReceiptSet(opened, runsRoot, { observedAt: now, knownRunIds }), checkpoints = observations.filter((item) => item.type === "daily_checkpoint" && item.payload.marker_digest === marker.marker_digest);
+  const boundary = observations.filter((item) => item.type === "legacy_inventory_observed" && item.payload.active_legacy_run_count === 0 && item.occurred_at <= marker.switched_at).at(-1);
+  if (!boundary) fail("ACTIVE_LEGACY_AMBIGUITY", "active marker has no zero-inventory cutover boundary");
+  let priorSequence = boundary.sequence, priorDate = null, consecutive = 0;
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.payload.marker_digest !== marker.marker_digest || checkpoint.payload.inventory_identity_digest !== identity.identityDigest || checkpoint.payload.inventory_content_digest !== identity.contentDigest || checkpoint.payload.active_legacy_run_count !== 0) fail("ROLLOUT_MARKER_DRIFT", "checkpoint is not bound to the active marker and zero legacy inventory");
+    if (priorDate) { const next = new Date(`${priorDate}T00:00:00.000Z`); next.setUTCDate(next.getUTCDate() + 1); if (checkpoint.payload.date !== next.toISOString().slice(0, 10)) fail("ROLLOUT_CHECKPOINT_GAP", "checkpoint dates are discontinuous"); }
+    const prefix = observations.filter((item) => item.sequence < checkpoint.sequence), activity = prefix.filter((item) => item.sequence > priorSequence && item.occurred_at > marker.switched_at && new Set(["legacy_artifact_read", "legacy_surface_invoked"]).has(item.type));
+    const terminals = prefix.filter((item) => item.type === "vnext_terminal_observed" && currentReceiptDigests.has(item.payload.receipt_digest)).map((item) => item.payload);
+    if (checkpoint.payload.observation_prefix_digest !== checkpoint.previous_digest || checkpoint.payload.legacy_activity_count !== activity.length || checkpoint.payload.terminal_run_count !== terminals.length || checkpoint.payload.terminal_receipts_digest !== canonicalTerminalReceiptDigest(terminals)) fail("INVALID_ROLLOUT_CHECKPOINT", "checkpoint does not match its canonical observation prefix");
+    consecutive = activity.length === 0 ? consecutive + 1 : 0; priorSequence = checkpoint.sequence; priorDate = checkpoint.payload.date;
+  }
+  const latest = checkpoints.at(-1), current = pending.length === 0 && latest && latest.sequence === observations.at(-1).sequence && latest.payload.date === now.slice(0, 10) && latest.payload.terminal_run_count === receipts.length && latest.payload.terminal_receipts_digest === canonicalTerminalReceiptDigest(receipts);
+  const lastLegacyActivity = observations.filter((item) => new Set(["legacy_artifact_read", "legacy_surface_invoked"]).has(item.type) && item.occurred_at > marker.switched_at).at(-1);
+  const zeroLegacySince = lastLegacyActivity?.occurred_at || marker.switched_at;
+  const zeroLegacyElapsedMs = latest ? Date.parse(latest.occurred_at) - Date.parse(zeroLegacySince) : 0;
+  const elapsedGateSatisfied = zeroLegacyElapsedMs >= 30 * 24 * 60 * 60 * 1000;
+  const localGateSatisfied = Boolean(current && consecutive >= 30 && elapsedGateSatisfied && receipts.length >= 30);
+  const configured = configuredRolloutAnchor(opened);
+  if (configured && (!configured.lineage || !configured.publicKeyBytes)) fail("ROLLOUT_ANCHOR_UNAVAILABLE", "external rollout anchor lineage and public key must be supplied together");
+  const latestRoot = latest ? { observation: observations[latest.sequence - 1], seal: seals[latest.sequence - 1] } : null;
+  const previousAnchorDigest = configured?.lineage?.anchors?.at(-1)?.anchor_digest || marker.quiescence_attestation_digest;
+  const anchorRequest = rolloutAnchorRequest(opened, latestRoot, marker, previousAnchorDigest);
+  const cleanCheckpoints = consecutive > 0 ? checkpoints.slice(-consecutive) : [];
+  const externalAttestation = configured
+    ? verifyRolloutAnchor(configured.lineage, configured.publicKeyBytes, opened, { observations, seals, checkpoints: cleanCheckpoints, marker, zeroLegacySince }, now)
+    : cleanCheckpoints.length <= 1
+      ? { status: "missing", required: true, anchor_request: anchorRequest }
+      : { status: "missing", required: true, anchor_request: null, pending_reason: "daily_signature_prefix_missing" };
+  const retireReady = localGateSatisfied && externalAttestation.status === "verified";
+  return { schema_version: 1, repository_digest: opened.repositoryDigest, marker_digest: marker.marker_digest, consecutive_zero_legacy_days: consecutive, zero_legacy_since: zeroLegacySince, zero_legacy_elapsed_hours: Math.floor(Math.max(0, zeroLegacyElapsedMs) / 3_600_000), vnext_terminal_run_count: receipts.length, pending_terminal_runs: pending, checkpoint_current: Boolean(current), local_gate_satisfied: localGateSatisfied, external_attestation: externalAttestation, retire_ready: retireReady, blockers: [...(pending.length ? ["terminal_receipt_pending"] : !current ? ["checkpoint_not_current"] : []), ...(consecutive < 30 ? ["zero_legacy_days_below_30"] : []), ...(!elapsedGateSatisfied ? ["zero_legacy_elapsed_below_30_days"] : []), ...(receipts.length < 30 ? ["vnext_terminal_runs_below_30"] : []), ...(externalAttestation.status !== "verified" ? ["external_anchor_missing"] : [])] };
+}
+
+function operatorIdentity(repoArg) {
+  const checkout = fs.realpathSync(path.resolve(repoArg || "."));
+  const root = fs.realpathSync(execFileSync("git", ["-C", checkout, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim());
+  let remote;
+  try { remote = execFileSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+  catch { remote = `local/${path.basename(root)}`; }
+  const github = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remote);
+  return { checkoutRoot: root, remote: github ? `${github[1]}/${github[2]}` : remote };
+}
+
+function runtimeGenerationUsage() {
+  return [
+    "Usage:",
+    "  runtime-generation.js start [--repo <path>] --dry-run --actor <token> --operation-id <token> --quiescence-reason <text> --json",
+    "  runtime-generation.js start [--repo <path>] --actor <token> --operation-id <token> --quiescence-reason <text> [--json]",
+    "  runtime-generation.js checkpoint [--repo <path>] [--json]",
+    "  runtime-generation.js status [--repo <path>] --json",
+    "",
+    "Inventory and counts are derived only from the canonical RELAY_RUNS_BASE repository directory.",
+    "vNext-only cutover requires RELAY_QUIESCENCE_ATTESTATION_FILE: an externally signed exact quiescence envelope from a different-UID, non-writable authority path.",
+    "Retirement requires a daily signed lineage in RELAY_ROLLOUT_ANCHOR_FILE plus RELAY_ROLLOUT_ANCHOR_PUBLIC_KEY_FILE from that external authority.",
+  ].join("\n");
+}
+
+function runtimeGenerationMain(argv = process.argv.slice(2)) {
+  const command = argv.shift(), values = new Map(), booleans = new Set();
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index];
+    if (new Set(["--json", "--dry-run", "--help", "-h"]).has(flag)) { booleans.add(flag); continue; }
+    if (!new Set(["--repo", "--actor", "--operation-id", "--quiescence-reason"]).has(flag) || argv[index + 1] === undefined) fail("INVALID_GENERATION_CLI", `unknown or incomplete flag ${flag}`);
+    if (values.has(flag)) fail("INVALID_GENERATION_CLI", `duplicate flag ${flag}`);
+    values.set(flag, argv[++index]);
+  }
+  if (!command || command === "--help" || booleans.has("--help") || booleans.has("-h")) { console.log(runtimeGenerationUsage()); return command ? 0 : 1; }
+  if (!new Set(["start", "checkpoint", "status"]).has(command)) fail("INVALID_GENERATION_CLI", `unknown command ${command}`);
+  if (command !== "start" && (values.has("--actor") || values.has("--operation-id") || values.has("--quiescence-reason"))) fail("INVALID_GENERATION_CLI", "actor, operation-id, and quiescence-reason are valid only for start");
+  if (command !== "start" && booleans.has("--dry-run")) fail("INVALID_GENERATION_CLI", "dry-run is valid only for start");
+  const startIdentityFlags = ["--actor", "--operation-id", "--quiescence-reason"];
+  const suppliedIdentityFlags = startIdentityFlags.filter((flag) => values.has(flag));
+  if (command === "start" && suppliedIdentityFlags.length > 0 && suppliedIdentityFlags.length !== startIdentityFlags.length) fail("INVALID_GENERATION_CLI", "start identity flags must include --actor, --operation-id, and --quiescence-reason together");
+  const identity = operatorIdentity(values.get("--repo") || ".");
+  if (command === "start" && booleans.has("--dry-run")) {
+    const result = previewMigrationFromCanonicalInventory({
+      ...identity,
+      actor: values.get("--actor") || null,
+      operationId: values.get("--operation-id") || null,
+      quiescenceReason: values.get("--quiescence-reason") || null,
+    });
+    console.log(booleans.has("--json") ? JSON.stringify(result, null, 2) : `start dry-run: ${result.can_start ? "ready" : "blocked"}`);
+    return result.can_start ? 0 : 2;
+  }
+  if (command === "start" && (!values.has("--actor") || !values.has("--operation-id") || !values.has("--quiescence-reason"))) fail("INVALID_GENERATION_CLI", "start requires explicit --actor, --operation-id, and --quiescence-reason after dry-run");
+  const store = command === "start" ? initializeStore(identity) : peekStore(identity);
+  if (!store) fail("ROLLOUT_UNAVAILABLE", "generation store is absent; run start after resolving legacy ambiguity");
+  const result = command === "start"
+    ? startMigrationFromCanonicalInventory({ store, actor: values.get("--actor"), operationId: values.get("--operation-id"), quiescenceReason: values.get("--quiescence-reason") })
+    : command === "checkpoint" ? recordRolloutCheckpoint({ store }) : retirementStatus({ store });
+  console.log(booleans.has("--json") ? JSON.stringify(result, null, 2) : `${command}: ${result.retire_ready === undefined ? "recorded" : result.retire_ready ? "ready" : "not ready"}`);
+  return 0;
+}
+
+if (require.main === module) {
+  try { process.exitCode = runtimeGenerationMain(); }
+  catch (error) { console.error(`runtime-generation: ${error.code ? `${error.code}: ` : ""}${error.message}`); process.exitCode = 1; }
+}
+
 module.exports = {
   EVENT_TYPES,
   GENERATIONS,
   LEGACY_OVERLAY_READER_VERSION,
   SCHEMA_VERSION,
   STRATEGIES,
+  ROLLOUT_TYPES,
   decideMigration,
   assertGenerationWrite,
   initializeStore,
@@ -1012,6 +1921,16 @@ module.exports = {
   readLegacyRecoveryOverlay,
   recordLegacyRead,
   recordDrainCompleted,
+  previewMigrationFromCanonicalInventory,
+  readRolloutObservations,
+  recordLegacyArtifactRead,
+  recordLegacySurfaceInvocation,
+  recordRolloutCheckpoint,
+  repositoryRunsDirectory,
+  retirementStatus,
+  verifyRolloutAnchor,
+  runtimeGenerationMain,
+  startMigrationFromCanonicalInventory,
   resolveRepositoryState,
   rollbackToLegacy,
   switchGeneration,

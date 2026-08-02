@@ -53,7 +53,7 @@ function invocationFor(adapter, phase = "dispatch") {
     model: "provider/model; literally-not-a-shell-command",
     timeoutMs: 123456,
     sandbox: adapter.name === "codex" ? "read-only" : "workspace-write",
-    networkAccess: "disabled",
+    networkAccess: "enabled",
     reasoning: "high",
   });
 }
@@ -71,7 +71,42 @@ test("new adapter registry preserves exactly the seven supported executors", () 
     );
     assert.ok(adapter.metadata.cliBinary);
     assert.equal(adapter.metadata.processContainment, contract.PROCESS_CONTAINMENT);
+    assert.equal(adapter.metadata.providerTransport, "remote_required");
+    assert.equal(adapter.metadata.credentialTransport, "explicit_bundle");
+    assert.ok(adapter.metadata.runtimeDependencies);
     assert.ok(Number.isInteger(adapter.defaults.timeoutMs));
+  }
+});
+
+test("session-backed adapters expose owner-only credential bundles without secret argv", () => {
+  for (const name of ["antigravity", "cline", "cursor"]) {
+    const adapter = getAdapter(name), capability = adapter.capabilities({ phase: "dispatch", request: { sandbox: "workspace-write", networkAccess: "enabled" } });
+    assert.equal(capability.credentialTransport, "explicit_bundle", name);
+    assert.ok(adapter.metadata.credentials.files.length > 0, name);
+    const invocation = invocationFor(adapter); assert.equal(invocation.args.includes("-k"), false, name);
+  }
+});
+
+test("provider transport is outer-enabled while only verified adapters may force-disable tool networking", () => {
+  for (const name of listAdapters()) {
+    const adapter = getAdapter(name), invocation = invocationFor(adapter);
+    assert.equal(invocation.networkAccess, "enabled", name);
+    assert.equal(invocation.toolNetworkAccess, "enabled", name);
+    assert.ok(Object.isFrozen(invocation.runtimeDependencies), name);
+  }
+  for (const name of ["claude", "codex", "cursor", "antigravity", "opencode", "cline"]) assert.throws(() => getAdapter(name).buildInvocation({
+    phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath, sandbox: "workspace-write", networkAccess: "disabled",
+  }), (error) => error instanceof contract.AdapterCapabilityError && /tool network disable/.test(error.message), name);
+  for (const name of ["pi"]) {
+    const invocation = getAdapter(name).buildInvocation({ phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath,
+      sandbox: "workspace-write", networkAccess: "disabled", timeoutSeconds: 123 });
+    assert.equal(invocation.networkAccess, "enabled", name);
+    assert.equal(invocation.toolNetworkAccess, "disabled", name);
+  }
+  for (const name of ["pi", "cline"]) assert.deepEqual(getAdapter(name).metadata.runtimeDependencies, { executableParent: 1, interpreterParent: null }, name);
+  assert.deepEqual(getAdapter("cursor").metadata.runtimeDependencies, { executableParent: 0, interpreterParent: null });
+  for (const name of listAdapters().filter((value) => !["pi", "cline", "cursor"].includes(value))) {
+    assert.deepEqual(getAdapter(name).metadata.runtimeDependencies, { executableParent: null, interpreterParent: null }, name);
   }
 });
 
@@ -105,8 +140,8 @@ test("Codex omits the reasoning override when the operator did not select one", 
     resultPath,
     model: null,
     timeoutMs: 123456,
-    sandbox: "read-only",
-    networkAccess: "disabled",
+    sandbox: "workspace-write",
+    networkAccess: "enabled",
   });
   assert.equal(invocation.args.includes("model_reasoning_effort=xhigh"), false);
   assert.equal(invocation.args.some((value, index) => (
@@ -120,13 +155,10 @@ test("phase matrix is fail-closed before an invocation is built", () => {
     () => invocationFor(getAdapter("cline"), "primary_review"),
     (error) => error instanceof contract.AdapterCapabilityError && /strict live canary/.test(error.message)
   );
-  assert.throws(
-    () => contract.validateCapabilities(getAdapter("cursor"), "dispatch", { readOnly: true }),
-    /read-only dispatch mode|read-only execution is unsupported/
-  );
+  assert.equal(contract.validateCapabilities(getAdapter("cursor"), "dispatch", { readOnly: true, sandbox: "read-only", networkAccess: "enabled" }).supported, true);
   assert.equal(contract.validateCapabilities(getAdapter("codex"), "primary_review", { readOnly: true }).supported, true);
-  assert.throws(
-    () => getAdapter("codex").buildInvocation({
+  assert.equal(
+    getAdapter("codex").buildInvocation({
       phase: "dispatch",
       cwd,
       promptPath,
@@ -134,8 +166,8 @@ test("phase matrix is fail-closed before an invocation is built", () => {
       resultPath,
       sandbox: "read-only",
       networkAccess: "enabled",
-    }),
-    /network-access enabled requires --sandbox workspace-write/
+    }).networkAccess,
+    "enabled",
   );
 });
 
@@ -162,8 +194,8 @@ test("native invocation requires trusted prompt bytes and rejects invalid UTF-8 
     cwd,
     promptPath,
     resultPath,
-    sandbox: "read-only",
-    networkAccess: "disabled",
+    sandbox: "workspace-write",
+    networkAccess: "enabled",
   };
   assert.throws(() => adapter.buildInvocation(input), /promptBytes must be a Buffer/);
   assert.throws(
@@ -251,13 +283,13 @@ test("all seven native adapters preserve full dispatch argv order and policy inp
   const antigravityPrompt = ["[RELAY WORKTREE BOUNDARY]", `Repository worktree: ${cwd}`, `Before doing anything, run: cd ${cwd}`, "Create and edit source files only in that repository worktree. You may inspect git status, but do not run git add, git commit, git push, or create a PR; canonical relay recovery owns Git metadata and publication.", "Do not create, edit, or report source files under ~/.gemini, scratch directories, or any path outside the repository worktree.", "If a tool starts elsewhere, first change directory to the repository worktree before touching files.", "", prompt].join("\n");
   const clinePrompt = ["[RELAY WORKTREE BOUNDARY]", `Repository worktree: ${cwd}`, "Run every shell command from that repository worktree.", "Do not read, write, git add, git commit, or create files outside that repository worktree.", "Do not use cline --worktree; relay already created and owns this worktree.", "", prompt].join("\n");
   const golden = {
-    codex: { command: "codex", args: ["exec", "-C", cwd, "--color", "never", "-o", resultPath, "-c", "model_reasoning_effort=high", "-m", model, "--sandbox", "read-only", "-"] },
-    claude: { command: "claude", args: ["-p", "--dangerously-skip-permissions", "--output-format", "text", "--model", model] },
-    cursor: { command: "agent", args: ["--print", "--trust", "--force", "--workspace", cwd, "--output-format", "text", "--sandbox", "enabled", "--model", model] },
-    opencode: { command: "opencode", args: ["run", "--dir", cwd, "-m", model] },
-    pi: { command: "pi", args: ["--no-session", "--model", model, "--thinking", "high", "--print"] },
-    antigravity: { command: "agy", args: ["--prompt", antigravityPrompt, "--print-timeout", "123s", "--sandbox"] },
-    cline: { command: "cline", args: ["--json", "-P", "provider", "-m", model, "--cwd", cwd, "--timeout", "123", clinePrompt] },
+    codex: { command: "codex", args: ["exec", "-C", cwd, "--color", "never", "-o", resultPath, "-c", "model_reasoning_effort=high", "-m", model, "--sandbox", "danger-full-access", "-"] },
+    claude: { command: "claude", args: ["-p", "--safe-mode", "--output-format", "text", "--allowedTools", "Read,Write,Edit,Glob,Grep", "--disallowedTools", "Bash,WebFetch,WebSearch,Agent", "--model", model] },
+    cursor: { command: "agent", args: ["--print", "--trust", "--auto-review", "--workspace", cwd, "--output-format", "text", "--sandbox", "disabled", "--model", model] },
+    opencode: { command: "opencode", args: ["run", "--pure", "--dir", cwd, "-m", model] },
+    pi: { command: "pi", args: ["--no-session", "--no-context-files", "--no-extensions", "--no-skills", "--tools", "read,grep,find,ls,write,edit", "--model", model, "--thinking", "high", "--print"] },
+    antigravity: { command: "agy", args: ["--prompt", antigravityPrompt, "--print-timeout", "123s", "--mode", "accept-edits", "--disable-slash-commands", "--sandbox"] },
+    cline: { command: "cline", args: ["--json", "-P", "provider", "-m", model, "--cwd", cwd, "--auto-approve", "true", "--timeout", "123", clinePrompt] },
   };
   for (const [name, expected] of Object.entries(golden)) {
     const invocation = invocationFor(getAdapter(name));
@@ -287,7 +319,7 @@ test("dry-run uses the same real adapter builder and argv as launch for all seve
       model: "provider/model; literally-not-a-shell-command",
       reasoning: "high",
       sandbox: name === "codex" ? "read-only" : "workspace-write",
-      "network-access": "disabled",
+      "network-access": "enabled",
     };
     const cli = { creating: false, runId: `dry-${name}`, timeoutSeconds: 123, values };
     const actual = dispatch.dryRunInvocation({
@@ -312,7 +344,20 @@ test("dry-run uses the same real adapter builder and argv as launch for all seve
     assert.equal(actual.cwd, launched.cwd, name);
     assert.deepEqual(normalize(actual.args), normalize(launched.args), name);
     assert.equal(actual.validation, "adapter_build_invocation", name);
+    assert.equal(actual.launch_boundary, "host_sandbox_required_do_not_execute_raw", name);
   }
+});
+
+test("Codex and Cursor disable only their nested sandbox under the required host boundary", () => {
+  for (const phase of ["dispatch", "primary_review"]) {
+    const codex = invocationFor(getAdapter("codex"), phase), cursor = invocationFor(getAdapter("cursor"), phase);
+    assert.deepEqual(codex.args.slice(codex.args.indexOf("--sandbox"), codex.args.indexOf("--sandbox") + 2), ["--sandbox", "danger-full-access"]);
+    assert.equal(codex.args.includes("--skip-git-repo-check"), phase === "primary_review");
+    assert.equal(codex.args.includes("--add-dir"), false);
+    assert.deepEqual(cursor.args.slice(cursor.args.indexOf("--sandbox"), cursor.args.indexOf("--sandbox") + 2), ["--sandbox", "disabled"]);
+    assert.deepEqual(cursor.privateEnvPaths, [{ key: "CURSOR_CONFIG_DIR", root: "home", relative: ".cursor" }, { key: "CURSOR_DATA_DIR", root: "scratch", relative: "cursor-data" }]);
+  }
+  assert.equal(getAdapter("cursor").capabilities({ phase: "dispatch", request: { sandbox: "read-only", networkAccess: "enabled" } }).supported, true);
 });
 
 test("adapter metadata is static and carries no integration side channel", () => {
@@ -326,6 +371,31 @@ test("adapter metadata is static and carries no integration side channel", () =>
       assert.deepEqual(Object.keys(file).sort(), ["access", "id", "recommendedSource", "targetRel", "targetRoot"], name);
     }
   }
+  assert.deepEqual(getAdapter("pi").metadata.credentials.envHints, ["QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_CN_API_KEY"]);
+  assert.deepEqual(getAdapter("claude").metadata.credentials.envHints, ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
+});
+
+test("Claude disables customizations without disabling explicit OAuth in either phase", () => {
+  for (const phase of ["dispatch", "primary_review"]) {
+    const invocation = invocationFor(getAdapter("claude"), phase);
+    assert.equal(invocation.args.includes("--safe-mode"), true, phase);
+    assert.equal(invocation.args.includes("--bare"), false, phase);
+  }
+  assert.equal(invocationFor(getAdapter("claude"), "primary_review").args.includes("--no-session-persistence"), true);
+  assert.equal(getAdapter("claude").capabilities({ phase: "dispatch" }).networkControl, "informational");
+  assert.throws(() => getAdapter("claude").buildInvocation({ phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath,
+    sandbox: "workspace-write", networkAccess: "disabled" }), /tool network disable/);
+});
+
+test("private environment paths are closed, relative, rooted, and collision-free", () => {
+  const shape = (privateEnvPaths) => ({ command: process.execPath, args: [], cwd, privateEnvPaths });
+  assert.deepEqual(contract.assertInvocationShape(shape([{ key: "TOOL_DIR", root: "scratch", relative: "tool-data" }])).privateEnvPaths,
+    [{ key: "TOOL_DIR", root: "scratch", relative: "tool-data" }]);
+  for (const value of [[{ key: "TOOL_DIR", root: "scratch", relative: "/tmp/escape" }], [{ key: "TOOL_DIR", root: "home", relative: "../escape" }],
+    [{ key: "HOME", root: "home", relative: ".tool" }], [{ key: "TOOL_DIR", root: "outside", relative: ".tool" }],
+    [{ key: "TOOL_DIR", root: "home", relative: ".tool" }, { key: "TOOL_DIR", root: "scratch", relative: "tool" }]]) {
+    assert.throws(() => contract.assertInvocationShape(shape(value)), /private environment path is invalid/);
+  }
 });
 
 test("credential requests are value-free, catalog-bound, and reject reserved or ambiguous inputs", () => {
@@ -336,7 +406,9 @@ test("credential requests are value-free, catalog-bound, and reject reserved or 
   });
   assert.deepEqual(request.summary, { env_names: ["OPENAI_API_KEY"], file_ids: ["auth"] });
   assert.equal(fs.existsSync(missingSource), false, "normalization must not open a credential source");
-  assert.throws(() => contract.credentialRequest(metadata, { envNames: ["HOME"] }), /unsafe, reserved/);
+  for (const name of ["HOME", "NODE_OPTIONS", "NODE_PATH", "BASH_ENV", "PYTHONPATH", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD"])
+    assert.throws(() => contract.credentialRequest(metadata, { envNames: [name] }), /unsafe, reserved/, name);
+  assert.throws(() => contract.credentialRequest({ files: [], envHints: ["NODE_OPTIONS"] }), /metadata/);
   assert.throws(() => contract.credentialRequest(metadata, { envNames: ["TOKEN", "TOKEN"] }), /duplicated/);
   assert.throws(() => contract.credentialRequest(metadata, { fileSpecs: [`unknown=${missingSource}`] }), /declared/);
   assert.throws(() => contract.credentialRequest(metadata, { fileSpecs: ["auth=relative"] }), /absolute/);
@@ -348,12 +420,8 @@ test("review invocation is an immutable direct descriptor without hidden lifecyc
     command: process.execPath,
     args: ["wrapper.js"],
     cwd,
-    controlInvocation: {
-      command: "agent",
-      args: ["--sandbox", "read-only"],
-      cwd: repo,
-    },
-  }), /must be bound by the adapter contract/);
+    controlInvocation: { command: "agent", args: ["--sandbox", "read-only"], cwd: repo },
+  }), /unsupported metadata/);
   const piInvocation = invocationFor(getAdapter("pi"), "primary_review");
   assert.equal(piInvocation.command, "pi");
   assert.equal(piInvocation.stdinPath, promptPath);
@@ -361,6 +429,15 @@ test("review invocation is an immutable direct descriptor without hidden lifecyc
   assert.ok(Object.isFrozen(piInvocation));
   assert.ok(Object.isFrozen(piInvocation.args));
   assert.throws(() => piInvocation.args.push("--write"), TypeError);
+});
+
+test("Pi dispatch retains locate/read/edit tools while review removes only mutation", () => {
+  const dispatch = invocationFor(getAdapter("pi"), "dispatch"), review = invocationFor(getAdapter("pi"), "primary_review");
+  const dispatchTools = dispatch.args[dispatch.args.indexOf("--tools") + 1].split(","), reviewTools = review.args[review.args.indexOf("--tools") + 1].split(",");
+  assert.deepEqual(dispatchTools, ["read", "grep", "find", "ls", "write", "edit"]);
+  assert.deepEqual(reviewTools, ["read", "grep", "find", "ls"]);
+  assert.deepEqual(dispatchTools.filter((tool) => !["write", "edit"].includes(tool)), reviewTools);
+  assert.ok(!dispatchTools.includes("bash")); assert.ok(!reviewTools.includes("bash"));
 });
 
 test("Antigravity review transports exact staged prompt bytes as one argv value", () => {
@@ -383,7 +460,7 @@ test("Antigravity rejects prompts above its conservative argv budget before proc
     schemaPath,
     timeoutMs: 123_000,
     sandbox: "read-only",
-    networkAccess: "disabled",
+    networkAccess: "enabled",
   }), /argv.*256 KiB.*process list/i);
   assert.equal(getAdapter("antigravity").metadata.promptTransport, "argv_visible");
   assert.match(getAdapter("antigravity").metadata.promptTransportWarning, /process list.*256 KiB/i);
@@ -406,7 +483,7 @@ test("all supported primary review adapters pass capability negotiation", () => 
     const capability = contract.validateCapabilities(adapter, "primary_review", {
       readOnly: true,
       sandbox: "read-only",
-      networkAccess: "disabled",
+      networkAccess: "enabled",
     });
     assert.equal(capability.supported, true, name);
   }

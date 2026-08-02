@@ -141,15 +141,51 @@
       "expires": "2027-08-02"
     },
     {
-      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::5",
+      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::6",
       "owner": "executor-adapters",
       "reason": "Provisioned authentication classification crosses the production macOS sandbox boundary.",
       "expires": "2027-08-02"
     },
     {
-      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::6",
+      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::9",
+      "owner": "executor-adapters",
+      "reason": "Settled two-phase dispatch cleanup is observed through the production macOS host boundary before fixture removal.",
+      "expires": "2027-08-02"
+    },
+    {
+      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::10",
+      "owner": "executor-adapters",
+      "reason": "Unsettleable cleanup must preserve real macOS host ownership artifacts and signed evidence rather than simulated ones.",
+      "expires": "2027-08-02"
+    },
+    {
+      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::11",
+      "owner": "executor-adapters",
+      "reason": "Post-receipt timeout cancellation drives the production macOS host supervisor before fixture deletion.",
+      "expires": "2027-08-02"
+    },
+    {
+      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::12",
+      "owner": "executor-adapters",
+      "reason": "Invalid post-receipt terminal handling drives the production macOS host supervisor and its real fixture evidence.",
+      "expires": "2027-08-02"
+    },
+    {
+      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::13",
+      "owner": "executor-adapters",
+      "reason": "Phase-pristine dispatch and review fixtures cross the production macOS sandbox boundary.",
+      "expires": "2027-08-02"
+    },
+    {
+      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::14",
       "owner": "executor-adapters",
       "reason": "Nonce and boundary negative controls cross the production macOS sandbox boundary.",
+      "expires": "2027-08-02"
+    },
+    {
+      "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::15",
+      "owner": "executor-adapters",
+      "reason": "Dispatch nonce-artifact validation crosses the production macOS sandbox boundary.",
       "expires": "2027-08-02"
     },
     {

@@ -1,6 +1,10 @@
 "use strict";
 
+const crypto = require("crypto");
+const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
+const generation = require("./runtime-generation");
 
 const COMMON_VALUE_FLAGS = ["--repo", "--run-id", "--manifest", "--reason"];
 const COMMON_BOOLEAN_FLAGS = ["--dry-run", "--json", "--help", "-h"];
@@ -92,7 +96,9 @@ function canonicalLocator(cli) {
   const runId = registeredArg(cli, "--run-id");
   if (manifest) {
     if (repo || runId) throw new Error("--manifest is mutually exclusive with --repo/--run-id");
-    return ["--run-dir", path.dirname(path.resolve(manifest))];
+    const resolved = path.resolve(manifest);
+    if (path.extname(resolved) !== ".md") throw new Error("--manifest must name a legacy .md manifest");
+    return ["--run-dir", path.join(path.dirname(resolved), path.basename(resolved, ".md"))];
   }
   if (!runId) throw new Error("--run-id is required with --repo");
   return ["--repo", repo || ".", "--run-id", runId];
@@ -104,7 +110,35 @@ function recoveryReason(commandName, cli, spec) {
   return reason;
 }
 
-function translateLegacyRecovery(commandName, argv) {
+function secureManifest(filePath) {
+  const resolved = path.resolve(filePath), fd = fs.openSync(resolved, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+  try {
+    const before = fs.fstatSync(fd);
+    if (!before.isFile() || before.size > 2 * 1024 * 1024) throw new Error("legacy manifest must be a bounded regular file");
+    const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size) throw new Error("legacy manifest changed while being observed");
+    return { path: resolved, bytes };
+  } finally { fs.closeSync(fd); }
+}
+
+function observationRepository(cli) {
+  let candidate = registeredArg(cli, "--repo");
+  let artifact = null;
+  if (!candidate) {
+    artifact = secureManifest(registeredArg(cli, "--manifest"));
+    candidate = /^\s{2}repo_root:\s*['"]?([^'"\n]+)['"]?\s*$/m.exec(artifact.bytes.toString("utf8"))?.[1];
+    if (!candidate) throw new Error("legacy manifest has no canonical repo_root for rollout observation");
+  }
+  const checkout = fs.realpathSync(path.resolve(candidate));
+  const root = fs.realpathSync(execFileSync("git", ["-C", checkout, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim());
+  let remote;
+  try { remote = execFileSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+  catch { remote = `local/${path.basename(root)}`; }
+  const github = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remote);
+  return { identity: { checkoutRoot: root, remote: github ? `${github[1]}/${github[2]}` : remote }, artifact };
+}
+
+function translateLegacyRecovery(commandName, argv, { observe = true } = {}) {
   const spec = COMMANDS[commandName];
   if (!spec) throw new Error(`unknown legacy recovery command: ${commandName}`);
   const options = cliOptions(spec);
@@ -120,6 +154,11 @@ function translateLegacyRecovery(commandName, argv) {
     if (verificationFile) canonicalArgv.push("--verification-file", verificationFile);
   }
   if (cli.hasFlag("--json")) canonicalArgv.push("--json");
+  if (observe) {
+    const observedAt = new Date().toISOString(), observation = observationRepository(cli), store = generation.initializeStore(observation.identity);
+    if (observation.artifact) generation.recordLegacyArtifactRead({ store, surface: commandName, artifactName: path.basename(observation.artifact.path), artifactSha256: crypto.createHash("sha256").update(observation.artifact.bytes).digest("hex"), observedAt });
+    generation.recordLegacySurfaceInvocation({ store, command: commandName, mode: dryRun ? "inspect" : "recover", observedAt });
+  }
   return { help: false, argv: canonicalArgv };
 }
 

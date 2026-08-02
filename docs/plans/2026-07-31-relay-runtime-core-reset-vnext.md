@@ -78,16 +78,17 @@ implementations are removed.
 
 ## Implementation Snapshot (2026-08-02)
 
-- Installed dispatch runtime: 18 JavaScript files / 6,985 LOC.
-- Retained core after excluding the two migration-only shims: 16 files / 5,836 LOC.
+- Installed dispatch runtime: 18 JavaScript files / 8,156 LOC.
+- Retained core after excluding the two migration-only shims: 16 files / 6,049 LOC.
 - All seven native executors remain registered; the unused generic argv-template
   framework was removed so native descriptors are the only extension path.
-- The final serialized repository gate passed 638 tests with zero failures and
-  two platform/fixture-conditional skips.
+- The serialized repository gate on Node v22.22.3 reports 701 tests, 699 passed,
+  0 failed, 2 skipped. Both skips are the ledger-approved opt-in live canaries
+  (`opencode-live`, `pi-live`) that require external credentials to run.
 - Independent lifecycle re-review is LGTM after PID-reuse, zombie, quarantine,
   signed-close, and reviewer-cleanup regressions were closed.
 - The exact live-canary release matrix remains intentionally incomplete at
-  0/13. Missing credentials, CLIs, skips, and fallbacks do not satisfy a cell.
+  2/13. Missing credentials, CLIs, skips, and fallbacks do not satisfy a cell.
 - Migration shims remain installed until both 30 days and 30 vNext terminal
   runs show zero legacy reads. This calendar/operational gate is not a code
   defect and is not self-attested by `--bootstrap-vnext`.

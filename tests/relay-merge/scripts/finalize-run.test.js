@@ -191,6 +191,11 @@ async function appendReadyFacts(value) {
         done_criteria_sha256: value.criteriaHash,
         reviewer: "codex",
         review_artifact: path.join(value.runDir, "review.json"),
+        // Every verdict this runtime appends carries the runtime that produced it.
+        executed_runtime: {
+          digest: "c".repeat(64),
+          executable: { path: "/usr/local/bin/codex", dev: 1, ino: 2, size: 3, sha256: "d".repeat(64) },
+        },
         override: null,
       },
     } });

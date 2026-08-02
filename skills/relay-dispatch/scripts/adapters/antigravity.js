@@ -11,7 +11,7 @@ function boundedArgv(args) {
 
 function validateDispatch({ sandbox, networkAccess }) {
   if (sandbox !== "workspace-write") return { ok: false, error: "antigravity executor supports only --sandbox workspace-write semantics; read-only dispatch is not safely representable" };
-  const warnings = networkAccess === "enabled" ? ["antigravity executor: --network-access 'enabled' is informational only; agy does not expose relay network gating."] : [];
+  void networkAccess; const warnings = [];
   return { ok: true, warnings };
 }
 
@@ -23,14 +23,18 @@ module.exports = createNativeAdapter({
   name: "antigravity",
   timeoutMs: 1800000,
   outputProtocol: (phase) => phase === "primary_review" ? "json_result" : "text_stdout",
-  metadata: { cliBinary: "agy", cliBinaryEnv: "RELAY_ANTIGRAVITY_BIN", outputProtocol: "phase-specific", providerDefault: "google", providerFromModel: true, promptTransport: "argv_visible", processContainment: "inherited_scope_no_daemon", promptTransportWarning: "prompt content is visible in the local process list; bounded to less than 256 KiB", credentials: { files: [], envHints: [] } },
+  metadata: { cliBinary: "agy", cliBinaryEnv: "RELAY_ANTIGRAVITY_BIN", outputProtocol: "phase-specific", providerDefault: "google", providerFromModel: true, promptTransport: "argv_visible", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", credentialTransport: "explicit_bundle", runtimeDependencies: { executableParent: null, interpreterParent: null }, promptTransportWarning: "prompt content is visible in the local process list; bounded to less than 256 KiB", credentials: { files: [
+    { id: "oauth", targetRoot: "home", targetRel: ".gemini/oauth_creds.json", access: "read_write", recommendedSource: "~/.gemini/oauth_creds.json" },
+    { id: "config", targetRoot: "home", targetRel: ".gemini/config/config.json", access: "read_write", recommendedSource: "~/.gemini/config/config.json" },
+  ], envHints: [] } },
   phases: {
+    // `agy --sandbox` does not provide a verifiable tool-network block.
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" },
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, prompt, sandbox, timeoutSeconds }) {
-    const args = ["--prompt", worktreePrompt(cwd, prompt), "--print-timeout", `${timeoutSeconds}s`];
+    const args = ["--prompt", worktreePrompt(cwd, prompt), "--print-timeout", `${timeoutSeconds}s`, "--mode", "accept-edits", "--disable-slash-commands"];
     if (sandbox === "workspace-write") args.push("--sandbox");
     return { command: process.env.RELAY_ANTIGRAVITY_BIN || "agy", args: boundedArgv(args), cwd };
   },

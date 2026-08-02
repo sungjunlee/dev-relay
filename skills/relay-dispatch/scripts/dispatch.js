@@ -311,7 +311,9 @@ function dryRunInvocation({ cli, identity, adapter, inputs }) {
       networkAccess: cli.values["network-access"],
       reasoning: cli.values.reasoning || null,
     });
-    return { command: invocation.command, args: [...invocation.args], cwd: invocation.cwd, validation: "adapter_build_invocation", prompt_transport: adapter.metadata.promptTransport };
+    return { command: invocation.command, args: [...invocation.args], cwd: invocation.cwd, validation: "adapter_build_invocation",
+      launch_boundary: "host_sandbox_required_do_not_execute_raw",
+      prompt_transport: adapter.metadata.promptTransport, network_access: invocation.networkAccess, tool_network_access: invocation.toolNetworkAccess, private_env_paths: invocation.privateEnvPaths };
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
@@ -428,6 +430,8 @@ async function startAttempt({ cli, identity, store, adapter, prompt, rubric, res
         executorResultPath: outputPath,
         executorSandbox: cli.values.sandbox,
         executorNetworkAccess: cli.values["network-access"],
+        runtimeDependencies: invocation.runtimeDependencies,
+        privateEnvPaths: invocation.privateEnvPaths,
         timeoutMs,
         credentialRequest: { metadata: requestedCredentials.metadata, envNames: requestedCredentials.envNames, fileSpecs: requestedCredentials.fileSpecs, env: process.env },
         processContainment: adapter.metadata.processContainment,
@@ -450,25 +454,47 @@ async function startAttempt({ cli, identity, store, adapter, prompt, rubric, res
   });
 }
 
+async function recoverIncompleteHostCleanup(started, hostError) {
+  // A signed cleanup obligation is the only authority to reap a scoped
+  // executor and remove its staged credentials. Never release this owner by
+  // hand: breakStaleRunLock verifies and settles that exact obligation first.
+  const inspection = host.inspectOwnership({ runDir: started.runDir });
+  try {
+    await host.breakStaleRunLock({ inspection, reason: "dispatch observed an incomplete host cleanup", audit: started.audit });
+  } catch (recoveryError) {
+    recoveryError.cleanup_sha256 ||= hostError.cleanup_sha256;
+    recoveryError.cleanup_recovery = "incomplete";
+    throw recoveryError;
+  }
+  const terminal = await host.waitForTerminalResult(started.receipt);
+  const lockContext = host.acquireRunLock({ runDir: started.runDir, attemptId: started.attemptId,
+    operation: "dispatch-cleanup-finalize", worktreeDir: started.record.git.worktree });
+  return { terminal, lockContext };
+}
+
 async function finishAttempt({ cli, store, adapter, started }) {
-  let terminal;
+  let terminal, finalizerLock = started.lockContext;
   try { terminal = await host.waitForTerminalResult(started.receipt); }
   catch (error) {
-    if (new Set(["HOST_CLEANUP_INCOMPLETE", "HOST_RESULT_TIMEOUT", "HOST_RESULT_MISMATCH"]).has(error.code)) {
-      // The issued owner remains the cleanup/recovery capability. An ambiguous host
-      // outcome is not an attempt terminal and must not release that capability.
+    if (error.code === "HOST_CLEANUP_INCOMPLETE") {
+      const settled = await recoverIncompleteHostCleanup(started, error);
+      terminal = settled.terminal; finalizerLock = settled.lockContext;
+    } else if (new Set(["HOST_RESULT_TIMEOUT", "HOST_RESULT_MISMATCH"]).has(error.code)) {
+      // These have no signed cleanup obligation. Retain the owner and evidence
+      // for canonical recovery rather than guessing that credentials are gone.
       throw error;
+    } else {
+      return generation.withGenerationAdmission({ store, generation: "vnext", mode: "write" }, async (admission) => {
+        generation.assertGenerationWrite({ store, admission, generation: "vnext" });
+        const observed = observeAttemptWorktree(started.record.git.worktree);
+        facts.appendFact({ eventsPath: path.join(started.runDir, "events.jsonl"), lockContext: started.lockContext, fact: attemptFact({
+          runId: cli.runId, attemptId: started.attemptId, type: "attempt_interrupted", actor: started.actor,
+          payload: { last_known_sha: observed.head_sha, reason: error.message, host_liveness: "unknown", reviewable_work: observed.reviewable_work },
+        }) });
+        host.releaseRunLock(started.lockContext, { outcome: "failed", audit: started.audit });
+        throw error;
+      });
     }
-    return generation.withGenerationAdmission({ store, generation: "vnext", mode: "write" }, async (admission) => {
-      generation.assertGenerationWrite({ store, admission, generation: "vnext" });
-      const observed = observeAttemptWorktree(started.record.git.worktree);
-      facts.appendFact({ eventsPath: path.join(started.runDir, "events.jsonl"), lockContext: started.lockContext, fact: attemptFact({
-        runId: cli.runId, attemptId: started.attemptId, type: "attempt_interrupted", actor: started.actor,
-        payload: { last_known_sha: observed.head_sha, reason: error.message, host_liveness: "unknown", reviewable_work: observed.reviewable_work },
-      }) });
-      host.releaseRunLock(started.lockContext, { outcome: "failed", audit: started.audit });
-      throw error;
-    });
   }
   if (!TERMINAL_STATUSES.has(terminal.status)) fail(`unknown terminal host status: ${terminal.status}`);
   return generation.withGenerationAdmission({ store, generation: "vnext", mode: "write" }, async (admission) => {
@@ -482,11 +508,11 @@ async function finishAttempt({ cli, store, adapter, started }) {
     });
     const status = terminal.status === "completed" && terminal.exit_code === 0 && parsed.status === "succeeded" ? "completed"
       : new Set(["cancelled", "timed_out"]).has(terminal.status) ? "cancelled" : "failed";
-    facts.appendFact({ eventsPath: path.join(started.runDir, "events.jsonl"), lockContext: started.lockContext, fact: attemptFact({
+    facts.appendFact({ eventsPath: path.join(started.runDir, "events.jsonl"), lockContext: finalizerLock, fact: attemptFact({
       runId: cli.runId, attemptId: started.attemptId, type: "attempt_finished", actor: started.actor,
       payload: { status, start_sha: started.startSha, final_sha: observed.head_sha, tree_sha: committedTreeSha, result_path: started.receipt.result_path, exit_code: terminal.exit_code ?? 1, verification_status: "not_declared" },
     }) });
-    host.releaseRunLock(started.lockContext, { outcome: status, audit: started.audit });
+    host.releaseRunLock(finalizerLock, { outcome: status, audit: started.audit });
     return { terminal, parsed, status };
   });
 }

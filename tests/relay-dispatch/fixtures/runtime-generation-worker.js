@@ -23,6 +23,8 @@ try {
   let result;
   if (command === "observe") {
     result = generation.observeLegacyRead({ store, ...payload });
+  } else if (command === "start") {
+    result = generation.startMigrationFromCanonicalInventory({ store, quiescenceReason: "worker test confirms historical writers are quiesced", ...payload });
   } else if (command === "switch") {
     result = generation.switchGeneration({ store, ...payload });
   } else if (command === "crash-switch") {
@@ -51,6 +53,14 @@ try {
         if (command === "crash-rollback-before-marker" && stage === "fsync" && target.includes("legacy-recovery-overlays")) process.exit(75);
         if (command === "crash-rollback" && stage === "rename" && target.endsWith("runtime-generation.json")) process.exit(76);
       },
+    });
+  } else if (command === "status-direct-anchor") {
+    result = generation.retirementStatus({
+      store,
+      runsRoot: payload.runsRoot,
+      now: "2026-07-03T00:00:00.002Z",
+      externalAnchor: {},
+      anchorPublicKey: "spoofed",
     });
   } else {
     throw new Error(`unknown runtime generation worker command: ${command}`);

@@ -51,8 +51,9 @@ const PAYLOAD_SCHEMAS = Object.freeze({
     required: [
       "round", "verdict", "reviewed_sha", "done_criteria_sha256",
       "reviewer", "review_artifact", "override",
-    ],
+    ], optional: ["executed_runtime"],
   },
+  // Optional above so historical journals stay readable; required below on every append this runtime makes.
   recovery_applied: {
     required: [
       "rule", "observed_event_id", "before_sha", "after_sha",
@@ -69,6 +70,12 @@ const PAYLOAD_SCHEMAS = Object.freeze({
   run_closed: {
     required: ["reason", "operator", "last_sha", "pr_number"],
   },
+});
+
+// Fields that are schema-optional so historical journals keep parsing, but that this runtime must
+// never append without. Enforced on the append path only; readers stay tolerant of older facts.
+const APPEND_REQUIRED_EVIDENCE = Object.freeze({
+  review_recorded: Object.freeze(["executed_runtime"]),
 });
 
 const ATTEMPT_TYPES = new Set([
@@ -90,9 +97,9 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function exactKeys(value, keys, label, { allowFutureFields = false } = {}) {
+function exactKeys(value, keys, label, { allowFutureFields = false, optional = [] } = {}) {
   if (!isPlainObject(value)) fail("INVALID_FACT", `${label} must be an object`);
-  const expected = new Set(keys);
+  const expected = new Set([...keys, ...optional]);
   if (!allowFutureFields) {
     for (const key of Object.keys(value)) {
       if (!expected.has(key)) fail("INVALID_FACT", `${label}.${key} is not allowed`);
@@ -139,9 +146,16 @@ function validateOverride(value, label, { allowFutureFields = false } = {}) {
   string(value.operator, `${label}.operator`);
 }
 
-function validatePayload(type, payload, { allowFutureFields = false } = {}) {
+function validatePayload(type, payload, { allowFutureFields = false, appending = false } = {}) {
   const schema = PAYLOAD_SCHEMAS[type];
-  exactKeys(payload, schema.required, `fact.payload(${type})`, { allowFutureFields });
+  exactKeys(payload, schema.required, `fact.payload(${type})`, { allowFutureFields, optional: schema.optional });
+  // Evidence fields stay optional when reading history written before they existed, but a fact this
+  // runtime appends must carry them, so a verdict can never be recorded without its runtime binding.
+  if (appending) {
+    for (const field of APPEND_REQUIRED_EVIDENCE[type] || []) {
+      if (payload[field] === undefined) fail("INVALID_FACT", `payload.${field} is required when appending ${type}`);
+    }
+  }
   switch (type) {
     case "attempt_started":
       string(payload.executor, "payload.executor");
@@ -239,6 +253,14 @@ function validatePayload(type, payload, { allowFutureFields = false } = {}) {
       sha(payload.done_criteria_sha256, "payload.done_criteria_sha256", { sha256: true });
       string(payload.reviewer, "payload.reviewer");
       string(payload.review_artifact, "payload.review_artifact");
+      if (payload.executed_runtime !== undefined) {
+        exactKeys(payload.executed_runtime, ["digest", "executable"], "payload.executed_runtime");
+        sha(payload.executed_runtime.digest, "payload.executed_runtime.digest", { sha256: true });
+        exactKeys(payload.executed_runtime.executable, ["path", "dev", "ino", "size", "sha256"], "payload.executed_runtime.executable");
+        string(payload.executed_runtime.executable.path, "payload.executed_runtime.executable.path");
+        for (const key of ["dev", "ino", "size"]) integer(payload.executed_runtime.executable[key], `payload.executed_runtime.executable.${key}`, { minimum: 0 });
+        sha(payload.executed_runtime.executable.sha256, "payload.executed_runtime.executable.sha256", { sha256: true });
+      }
       validateOverride(payload.override, "payload.override", { allowFutureFields });
       break;
     case "recovery_applied":
@@ -277,7 +299,7 @@ function validatePayload(type, payload, { allowFutureFields = false } = {}) {
   }
 }
 
-function validateFact(fact, { allowUnknown = false, allowFutureFields = false } = {}) {
+function validateFact(fact, { allowUnknown = false, allowFutureFields = false, appending = false } = {}) {
   if (!isPlainObject(fact)) fail("INVALID_FACT", "fact must be an object");
   const type = fact.type;
   if (!Object.prototype.hasOwnProperty.call(PAYLOAD_SCHEMAS, type)) {
@@ -295,7 +317,7 @@ function validateFact(fact, { allowUnknown = false, allowFutureFields = false } 
   if (typeof fact.at !== "string" || Number.isNaN(Date.parse(fact.at))) {
     fail("INVALID_FACT", "fact.at must be an ISO-8601 timestamp");
   }
-  validatePayload(type, fact.payload, { allowFutureFields });
+  validatePayload(type, fact.payload, { allowFutureFields, appending });
   if (type === "verification_recorded" && fact.actor !== fact.payload.operator) {
     fail("INVALID_FACT", "verification_recorded actor must equal payload.operator");
   }
@@ -303,7 +325,7 @@ function validateFact(fact, { allowUnknown = false, allowFutureFields = false } 
 }
 
 function canonicalFactLine(fact) {
-  validateFact(fact);
+  validateFact(fact, { appending: true });
   const line = `${JSON.stringify(fact)}\n`;
   if (Buffer.byteLength(line) > MAX_FACT_BYTES) {
     fail("FACT_TOO_LARGE", `fact exceeds ${MAX_FACT_BYTES} bytes`);

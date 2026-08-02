@@ -400,6 +400,34 @@ test("historical reads preserve additive fields on known facts but writes remain
   assert.throws(() => validateFact(future), /future_envelope is not allowed/);
 });
 
+test("review executed runtime evidence is optional for history but closed when present", () => {
+  const base = fact("review_recorded"), executed_runtime = { digest: HASH, executable: { path: "/bin/reviewer", dev: 1, ino: 2, size: 3, sha256: HASH } };
+  assert.equal(validateFact({ ...base, payload: { ...base.payload, executed_runtime } }).known, true);
+  assert.throws(() => validateFact({ ...base, payload: { ...base.payload, executed_runtime: { ...executed_runtime, extra: true } } }), /extra is not allowed/);
+  assert.throws(() => validateFact({ ...base, payload: { ...base.payload, executed_runtime: { ...executed_runtime, executable: { ...executed_runtime.executable, sha256: "bad" } } } }), /sha256/);
+});
+
+// The schema keeps executed_runtime optional so journals written before it existed still parse. The
+// append path must not inherit that tolerance: a verdict this runtime records without its runtime
+// binding would be a review fact that no longer says which executable produced it.
+test("appending a review verdict without executed runtime evidence fails closed", () => {
+  const eventsPath = tempEvents("review-runtime-required");
+  const lock = acquireFactLock(eventsPath);
+  const executed_runtime = { digest: HASH, executable: { path: "/bin/reviewer", dev: 1, ino: 2, size: 3, sha256: HASH } };
+  try {
+    assert.throws(
+      () => appendFact({ eventsPath, fact: fact("review_recorded"), lockContext: lock }),
+      (error) => error.code === "INVALID_FACT" && /executed_runtime is required when appending review_recorded/.test(error.message),
+    );
+    assert.equal(readFacts({ eventsPath }).facts.length, 0, "the rejected verdict must not reach the journal");
+    const bound = fact("review_recorded");
+    appendFact({ eventsPath, fact: { ...bound, payload: { ...bound.payload, executed_runtime } }, lockContext: lock });
+    assert.equal(readFacts({ eventsPath }).facts.at(-1).payload.executed_runtime.executable.ino, 2);
+  } finally {
+    releaseRunLock(lock);
+  }
+});
+
 test("journal path and fact run identity are bound to immutable run.json", () => {
   const eventsPath = tempEvents("identity");
   const lock = acquireFactLock(eventsPath);

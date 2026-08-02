@@ -800,7 +800,9 @@
         {
           "path": "skills/relay-dispatch/scripts/runtime-generation.js",
           "roles": {
-            "detected": [],
+            "detected": [
+              "cli-entry"
+            ],
             "reviewedSemantic": []
           }
         }
