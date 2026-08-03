@@ -26,7 +26,7 @@ skills/relay-dispatch/scripts/
   adapters/                registry + seven retained native executors
 ```
 
-Installed while migration is active: 18 JS / 8,156 LOC. Removing the two
+Installed while migration is active: 18 JS / 8,262 LOC. Removing the two
 migration-overlay files leaves a 16 JS / 6,049 LOC core, which is what the honest
 30-days-and-30-vNext-runs zero-legacy-read gate would retire to. The installed
 figure is generated into `tests/ledger/vnext-baseline.generated.json`; refresh it

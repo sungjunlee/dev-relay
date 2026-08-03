@@ -31,6 +31,32 @@ const ROLLOUT_TYPES = new Set([
   "legacy_inventory_observed", "legacy_artifact_read", "legacy_surface_invoked",
   "vnext_terminal_observed", "daily_checkpoint",
 ]);
+// The ordered unsigned field list the current runtime signs. `digest` serializes in key
+// order, so both membership and order are part of the signature.
+const MARKER_UNSIGNED_KEYS = Object.freeze([
+  "schema_version", "repository_digest", "epoch", "writer_generation", "legacy_read_allowed",
+  "switched_at", "decision_digest", "transition_operation_id", "transition_actor",
+  "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest",
+  "quiescence_attestation_digest",
+]);
+const MARKER_KEYS = Object.freeze([...MARKER_UNSIGNED_KEYS, "marker_digest"]);
+// Marker shapes earlier runtimes signed, oldest first. A stored marker in one of these shapes is
+// admitted only after its digest verifies over its own ordered field list, then re-signed in the
+// current shape. Adding a mandatory marker field without an entry here strands every marker an
+// earlier runtime wrote, with no backfill: the digest spans the whole unsigned field set, so a
+// default alone cannot repair it. Each `absentFieldValues` entry must be the ONLY value that field
+// can legally hold for an untransitioned marker -- never a guess. A field whose value would come
+// from a transition receipt has no legal entry here; see upgradeMarkerShape.
+const MARKER_SHAPE_HISTORY = Object.freeze([
+  Object.freeze({
+    unsignedKeys: Object.freeze([
+      "schema_version", "repository_digest", "epoch", "writer_generation", "legacy_read_allowed",
+      "switched_at", "decision_digest", "transition_operation_id", "transition_actor",
+      "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest",
+    ]),
+    absentFieldValues: Object.freeze({ quiescence_attestation_digest: null }),
+  }),
+]);
 
 const issuedAdmissions = new WeakSet();
 const admissionStates = new WeakMap();
@@ -564,9 +590,59 @@ function readDecision(store) {
   return value ? assertDecision(value, opened) : null;
 }
 
-function validateMarker(value, store) {
-  if (plainObject(value) && value.schema_version !== SCHEMA_VERSION) fail("UNSUPPORTED_GENERATION_SCHEMA", "generation marker schema is unsupported");
-  exactKeys(value, ["schema_version", "repository_digest", "epoch", "writer_generation", "legacy_read_allowed", "switched_at", "decision_digest", "transition_operation_id", "transition_actor", "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest", "quiescence_attestation_digest", "marker_digest"], "runtime generation marker");
+function orderedKeysMatch(value, keys) {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key, index) => actual[index] === key);
+}
+
+/**
+ * Admit a marker an earlier runtime signed in a narrower field shape and re-sign it in the
+ * current one.  The historical digest is verified over the historical field order first, so
+ * the upgrade can never launder a forged, truncated, or reordered marker into admission.
+ *
+ * Only the genesis marker is upgradable -- the exact untransitioned marker
+ * ensureDecisionArtifactsLocked writes.  Its absent fields are null in every shape, so the
+ * projection below is forced rather than guessed, and no terminal receipt, checkpoint, or rollout
+ * anchor can bind it yet because all three require a vNext-only marker.  Every other marker is
+ * reached through a transition and carries values that live in its durable transition receipt and
+ * switch event -- above all `quiescence_attestation_digest`, which an earlier runtime also wrote
+ * into those two artifacts in their own narrower shapes.  Re-signing such a marker alone would
+ * publish one that contradicts `buildMarker`'s reconstruction of its own receipt, so it fails
+ * closed: the whole artifact set has to migrate together.  An unrecognized shape is returned
+ * untouched for exactKeys to reject.
+ */
+function upgradeMarkerShape(value) {
+  if (!plainObject(value) || orderedKeysMatch(value, MARKER_KEYS)) return value;
+  const shape = MARKER_SHAPE_HISTORY.find((candidate) => orderedKeysMatch(value, [...candidate.unsignedKeys, "marker_digest"]));
+  if (!shape) return value;
+  const { marker_digest: signed, ...unsigned } = value;
+  if (!SHA256_RE.test(signed || "") || signed !== digest(unsigned)) fail("INVALID_GENERATION_ARTIFACT", "runtime generation marker digest is invalid");
+  const genesis = unsigned.transition_operation_id === null && unsigned.epoch === 1
+    && unsigned.writer_generation === "legacy" && unsigned.legacy_read_allowed === true
+    && unsigned.rollback_overlay_digest === null;
+  if (!genesis) fail("UNSUPPORTED_GENERATION_SCHEMA", "only a genesis generation marker upgrades by field shape; any other marker must migrate with its transition receipt and switch event");
+  const upgraded = {};
+  for (const key of MARKER_UNSIGNED_KEYS) {
+    if (!Object.hasOwn(unsigned, key) && !Object.hasOwn(shape.absentFieldValues, key)) fail("INVALID_GENERATION_ARTIFACT", `runtime generation marker upgrade has no forced value for ${key}`);
+    upgraded[key] = Object.hasOwn(unsigned, key) ? unsigned[key] : shape.absentFieldValues[key];
+  }
+  return { ...upgraded, marker_digest: digest(upgraded) };
+}
+
+/** Rewrite a marker admitted through a shape upgrade so the stored bytes carry the signature
+ *  every artifact bound to it now uses.  Callers must already hold the repository lock, and pass
+ *  `fault` so this durable write sits on the same crash boundary as every other marker write. */
+function persistMarkerUpgradeLocked(store, marker, fault = null) {
+  const bytes = Buffer.from(canonicalJson(marker));
+  if (secureRead(store.paths.generation, "runtime-generation.json")?.equals(bytes)) return false;
+  replaceAtomic(store.paths.generation, bytes, { fault });
+  return true;
+}
+
+function validateMarker(input, store) {
+  if (plainObject(input) && input.schema_version !== SCHEMA_VERSION) fail("UNSUPPORTED_GENERATION_SCHEMA", "generation marker schema is unsupported");
+  const value = upgradeMarkerShape(input);
+  exactKeys(value, MARKER_KEYS, "runtime generation marker");
   if (value.repository_digest !== store.repositoryDigest) fail("REPOSITORY_IDENTITY_MISMATCH", "generation marker belongs to another repository");
   integer(value.epoch, "runtime generation marker.epoch", { minimum: 1 });
   if (!GENERATIONS.has(value.writer_generation) || typeof value.legacy_read_allowed !== "boolean") fail("INVALID_GENERATION_ARTIFACT", "generation marker admission fields are invalid");
@@ -596,9 +672,9 @@ function validateMarker(value, store) {
 
 function readGeneration(store) {
   const opened = openStore(store);
-  const marker = parseJson(secureRead(opened.paths.generation, "runtime-generation.json"), "runtime-generation.json");
-  if (!marker) return null;
-  validateMarker(marker, opened);
+  const stored = parseJson(secureRead(opened.paths.generation, "runtime-generation.json"), "runtime-generation.json");
+  if (!stored) return null;
+  const marker = validateMarker(stored, opened);
   const decision = readDecision(opened);
   if (!decision || decision.decision_digest !== marker.decision_digest) fail("GENERATION_DECISION_MISSING", "generation marker has no matching decision");
   return marker;
@@ -606,9 +682,9 @@ function readGeneration(store) {
 
 function peekGeneration(store) {
   if (!store || typeof store !== "object") fail("INVALID_GENERATION_STORE", "store is required");
-  const marker = parseJson(secureRead(store.paths.generation, "runtime-generation.json"), "runtime-generation.json");
-  if (!marker) return null;
-  validateMarker(marker, store);
+  const stored = parseJson(secureRead(store.paths.generation, "runtime-generation.json"), "runtime-generation.json");
+  if (!stored) return null;
+  const marker = validateMarker(stored, store);
   const decision = parseJson(secureRead(store.paths.decision, "migration-decision.json"), "migration-decision.json");
   if (!decision) fail("GENERATION_DECISION_MISSING", "generation marker has no matching decision");
   assertDecision(decision, store);
@@ -708,7 +784,9 @@ function decideMigrationLocked(opened, observation, fault = null) {
 }
 
 function ensureDecisionArtifactsLocked(opened, decision, fault = null) {
-  if (!readGeneration(opened)) {
+  const existing = readGeneration(opened);
+  if (existing) persistMarkerUpgradeLocked(opened, existing, fault);
+  if (!existing) {
     const initial = { schema_version: 1, repository_digest: opened.repositoryDigest, epoch: 1, writer_generation: "legacy", legacy_read_allowed: true, switched_at: decision.observed_at, decision_digest: decision.decision_digest, transition_operation_id: null, transition_actor: null, transition_receipt_digest: null, transition_event_digest: null, rollback_overlay_digest: null, quiescence_attestation_digest: null };
     const marker = validateMarker({ ...initial, marker_digest: digest(initial) }, opened);
     replaceAtomic(opened.paths.generation, Buffer.from(canonicalJson(marker)), { fault });
@@ -1773,6 +1851,25 @@ function terminalReceiptSet(store, runsRoot, { write = false, observedAt = new D
   return { receipts: receipts.sort((a, b) => a.run_id.localeCompare(b.run_id)), pending };
 }
 
+const LEGACY_ACTIVITY_TYPES = new Set(["legacy_artifact_read", "legacy_surface_invoked"]);
+
+/**
+ * Legacy activity the cutover cannot disown: at or after switched_at, not strictly after.
+ * Millisecond timestamps cannot order events inside the switch millisecond, and callers already
+ * exclude everything before the zero-inventory boundary by sequence.  Counting the ambiguous
+ * millisecond can only overstate legacy activity; excluding it lets post-boundary legacy reads
+ * vanish from the retirement evidence permanently.  recordRolloutCheckpoint and retirementStatus
+ * must apply the identical boundary or a checkpoint fails its own canonical recount.
+ *
+ * The `zero_legacy_since` caller shares this predicate for one rule rather than for a behaviour
+ * change: ROLLOUT_EVENT_REORDERED keeps `occurred_at` non-decreasing in sequence, so `.at(-1)`
+ * selects the same observation under either boundary and no test can distinguish that use.  It is
+ * shared so the boundary cannot drift; relaxing that ordering guard would make it live again.
+ */
+function postCutoverLegacyActivity(item, marker) {
+  return LEGACY_ACTIVITY_TYPES.has(item.type) && item.occurred_at >= marker.switched_at;
+}
+
 function recordRolloutCheckpoint({ store, runsRoot, observedAt = new Date().toISOString() }) {
   const opened = openStore(store); timestamp(observedAt, "checkpoint observedAt");
   return withRepositoryLockSync(opened, () => {
@@ -1790,7 +1887,7 @@ function recordRolloutCheckpoint({ store, runsRoot, observedAt = new Date().toIS
     const observations = readRolloutObservations(opened, { now: observedAt }).observations;
     const boundary = observations.filter((item) => item.type === "legacy_inventory_observed" && item.payload.active_legacy_run_count === 0 && item.occurred_at <= marker.switched_at).at(-1);
     if (!boundary) fail("ACTIVE_LEGACY_AMBIGUITY", "active marker has no zero-inventory cutover boundary");
-    const after = prior?.sequence || boundary.sequence, activity = observations.filter((item) => item.sequence > after && item.occurred_at > marker.switched_at && new Set(["legacy_artifact_read", "legacy_surface_invoked"]).has(item.type));
+    const after = prior?.sequence || boundary.sequence, activity = observations.filter((item) => item.sequence > after && postCutoverLegacyActivity(item, marker));
     const payload = { date, marker_digest: marker.marker_digest, inventory_identity_digest: identity.identityDigest, inventory_content_digest: identity.contentDigest, active_legacy_run_count: 0, terminal_receipts_digest: canonicalTerminalReceiptDigest(receipts), terminal_run_count: receipts.length, legacy_activity_count: activity.length, observation_prefix_digest: observations.at(-1)?.observation_digest || null };
     return appendRolloutLocked(opened, { type: "daily_checkpoint", occurredAt: observedAt, payload });
   });
@@ -1818,13 +1915,13 @@ function retirementStatus(request) {
   for (const checkpoint of checkpoints) {
     if (checkpoint.payload.marker_digest !== marker.marker_digest || checkpoint.payload.inventory_identity_digest !== identity.identityDigest || checkpoint.payload.inventory_content_digest !== identity.contentDigest || checkpoint.payload.active_legacy_run_count !== 0) fail("ROLLOUT_MARKER_DRIFT", "checkpoint is not bound to the active marker and zero legacy inventory");
     if (priorDate) { const next = new Date(`${priorDate}T00:00:00.000Z`); next.setUTCDate(next.getUTCDate() + 1); if (checkpoint.payload.date !== next.toISOString().slice(0, 10)) fail("ROLLOUT_CHECKPOINT_GAP", "checkpoint dates are discontinuous"); }
-    const prefix = observations.filter((item) => item.sequence < checkpoint.sequence), activity = prefix.filter((item) => item.sequence > priorSequence && item.occurred_at > marker.switched_at && new Set(["legacy_artifact_read", "legacy_surface_invoked"]).has(item.type));
+    const prefix = observations.filter((item) => item.sequence < checkpoint.sequence), activity = prefix.filter((item) => item.sequence > priorSequence && postCutoverLegacyActivity(item, marker));
     const terminals = prefix.filter((item) => item.type === "vnext_terminal_observed" && currentReceiptDigests.has(item.payload.receipt_digest)).map((item) => item.payload);
     if (checkpoint.payload.observation_prefix_digest !== checkpoint.previous_digest || checkpoint.payload.legacy_activity_count !== activity.length || checkpoint.payload.terminal_run_count !== terminals.length || checkpoint.payload.terminal_receipts_digest !== canonicalTerminalReceiptDigest(terminals)) fail("INVALID_ROLLOUT_CHECKPOINT", "checkpoint does not match its canonical observation prefix");
     consecutive = activity.length === 0 ? consecutive + 1 : 0; priorSequence = checkpoint.sequence; priorDate = checkpoint.payload.date;
   }
   const latest = checkpoints.at(-1), current = pending.length === 0 && latest && latest.sequence === observations.at(-1).sequence && latest.payload.date === now.slice(0, 10) && latest.payload.terminal_run_count === receipts.length && latest.payload.terminal_receipts_digest === canonicalTerminalReceiptDigest(receipts);
-  const lastLegacyActivity = observations.filter((item) => new Set(["legacy_artifact_read", "legacy_surface_invoked"]).has(item.type) && item.occurred_at > marker.switched_at).at(-1);
+  const lastLegacyActivity = observations.filter((item) => postCutoverLegacyActivity(item, marker)).at(-1);
   const zeroLegacySince = lastLegacyActivity?.occurred_at || marker.switched_at;
   const zeroLegacyElapsedMs = latest ? Date.parse(latest.occurred_at) - Date.parse(zeroLegacySince) : 0;
   const elapsedGateSatisfied = zeroLegacyElapsedMs >= 30 * 24 * 60 * 60 * 1000;

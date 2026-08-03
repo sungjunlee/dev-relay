@@ -6,13 +6,13 @@ runtime. Historical cleanup rationale remains under [`docs/archive/`](archive/).
 ## Installed dispatch package
 
 The sealed vNext production bootstrap currently installs **18 JavaScript
-files / 8,156 production LOC** under `skills/relay-dispatch/scripts/`.
+files / 8,262 production LOC** under `skills/relay-dispatch/scripts/`.
 
 | Group | Files | LOC | Purpose |
 | --- | ---: | ---: | --- |
 | Core | 8 | 5,691 | `dispatch`, `inspect`, `recover`, `run-store`, `facts`, `host`, `exec`, and `adapter-contract`. |
 | Universal adapters | 8 | 358 | Registry and the seven retained native executor descriptors. |
-| Migration overlay | 2 | 2,107 | `runtime-generation` and `legacy-recovery-shim`; required only for controlled cutover. |
+| Migration overlay | 2 | 2,213 | `runtime-generation` and `legacy-recovery-shim`; required only for controlled cutover. |
 
 After the migration gate, the installed production target is **16 JavaScript
 files / 6,049 production LOC**: the core plus all seven executors. This target
@@ -24,7 +24,8 @@ generator; the per-group and post-gate rows are arithmetic on those same
 per-file counts. Refresh them by regenerating, never by editing the numbers.
 The current totals are larger than the figures published at the vNext reset
 because production CLI isolation (#1141) added credential staging, the signed
-two-phase cleanup lifecycle, and runtime-identity binding to `host` and `facts`.
+two-phase cleanup lifecycle, and runtime-identity binding to `host` and `facts`,
+and #1144 added the generation-marker shape history to `runtime-generation`.
 
 The inventory checker is authoritative for all relay skill scripts, including
 cross-skill imports and dynamic entry-point edges:

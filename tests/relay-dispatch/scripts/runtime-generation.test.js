@@ -134,6 +134,117 @@ test("admission still rejects a store missing a directory it has always had", ()
   );
 });
 
+// A marker written before quiescence_attestation_digest became mandatory is signed over its own
+// narrower field set, so no default can repair it: the digest spans every unsigned field. Admission
+// must verify it in its own shape and re-sign it in the current one, or the first field a rollout
+// adds strands every marker already on disk with no recovery path.
+test("a generation marker signed in an earlier field shape is admitted and re-signed in the current shape", async () => {
+  const value = fixture("marker-shape-upgrade");
+  generation.decideMigration({ store: value.store, observation: ZERO });
+  const current = generation.readGeneration(value.store);
+  const canonical = (input) => `${JSON.stringify(input, null, 2)}\n`;
+  const sign = (input) => crypto.createHash("sha256").update(canonical(input)).digest("hex");
+  const { marker_digest: _signature, quiescence_attestation_digest: _added, ...priorShape } = current;
+  const priorMarker = { ...priorShape, marker_digest: sign(priorShape) };
+  assert.equal(Object.hasOwn(priorMarker, "quiescence_attestation_digest"), false, "the prior shape must not carry the field being added");
+  fs.writeFileSync(value.store.paths.generation, canonical(priorMarker), { mode: 0o600 });
+
+  const admitted = generation.readGeneration(value.store);
+  assert.equal(admitted.quiescence_attestation_digest, null);
+  assert.equal(admitted.marker_digest, current.marker_digest, "the upgrade must re-sign to exactly the digest this runtime writes");
+  assert.deepEqual(generation.peekGeneration(value.store), current);
+  assert.equal(fs.readFileSync(value.store.paths.generation, "utf8"), canonical(priorMarker), "admission alone must not write");
+
+  // Tamper a field the genesis guard does NOT constrain, so only the historical digest check can
+  // reject it. switched_at is the field the whole post-cutover activity boundary reads, and the
+  // upgrade re-signs whatever it admits -- laundering one here would mint a valid signature over a
+  // moved cutover instant.
+  const movedCutover = { ...priorShape, switched_at: "2020-01-01T00:00:00.000Z" };
+  fs.writeFileSync(value.store.paths.generation, canonical({ ...movedCutover, marker_digest: priorMarker.marker_digest }), { mode: 0o600 });
+  assert.throws(
+    () => generation.readGeneration(value.store),
+    (error) => error.code === "INVALID_GENERATION_ARTIFACT" && /digest is invalid/.test(error.message),
+    "the upgrade must not launder a genesis-shaped marker with a tampered switched_at",
+  );
+
+  const forged = { ...priorShape, epoch: priorShape.epoch + 1 };
+  fs.writeFileSync(value.store.paths.generation, canonical({ ...forged, marker_digest: priorMarker.marker_digest }), { mode: 0o600 });
+  assert.throws(
+    () => generation.readGeneration(value.store),
+    (error) => error.code === "INVALID_GENERATION_ARTIFACT" && /digest is invalid/.test(error.message),
+    "the upgrade must not launder a tampered prior-shape marker into admission",
+  );
+
+
+  fs.writeFileSync(value.store.paths.generation, canonical({ ...priorShape, unexpected: 1, marker_digest: priorMarker.marker_digest }), { mode: 0o600 });
+  assert.throws(
+    () => generation.readGeneration(value.store),
+    (error) => error.code === "INVALID_GENERATION_ARTIFACT" && /is not allowed/.test(error.message),
+    "an unrecognized shape stays a hard rejection rather than a silent upgrade",
+  );
+
+  // Only a marker with no transition upgrades. A prior-shape marker claiming a vNext epoch it could
+  // only have reached through a transition is refused rather than re-signed onto a digest the
+  // terminal receipts and checkpoints bound to that epoch would not recognize.
+  const untransitionedVnext = { ...priorShape, epoch: 2, writer_generation: "vnext", legacy_read_allowed: false };
+  fs.writeFileSync(value.store.paths.generation, canonical({ ...untransitionedVnext, marker_digest: sign(untransitionedVnext) }), { mode: 0o600 });
+  assert.throws(
+    () => generation.readGeneration(value.store),
+    (error) => error.code === "UNSUPPORTED_GENERATION_SCHEMA" && /only a genesis generation marker/.test(error.message),
+    "a self-consistent prior-shape marker outside the genesis shape must still be refused",
+  );
+
+  // Persistence is deliberately the decision path only: admission runs before the capability is
+  // issued and in legacy_read mode, so it is not a migration chokepoint.
+  fs.writeFileSync(value.store.paths.generation, canonical(priorMarker), { mode: 0o600 });
+  await generation.withGenerationAdmission({ store: value.store, generation: "legacy" }, () => {});
+  assert.equal(fs.readFileSync(value.store.paths.generation, "utf8"), canonical(priorMarker), "admission must not rewrite the stored marker");
+  generation.decideMigration({ store: value.store, observation: ZERO });
+  assert.equal(fs.readFileSync(value.store.paths.generation, "utf8"), canonical(current), "the decision path persists the re-signed marker");
+});
+
+// Tripwire for the next mandatory marker field. The signature covers key order and membership, so
+// adding a field without appending a MARKER_SHAPE_HISTORY entry strands every marker already on
+// disk -- silently, and exactly as #1144 did. This pins the signed shape the runtime writes, so that
+// addition fails here first and sends the author to the shape history.
+test("the signed marker field list is pinned so a new mandatory field cannot skip the shape history", () => {
+  const value = fixture("marker-shape-pinned");
+  generation.decideMigration({ store: value.store, observation: ZERO });
+  const marker = generation.readGeneration(value.store);
+  assert.deepEqual(Object.keys(marker), [
+    "schema_version", "repository_digest", "epoch", "writer_generation", "legacy_read_allowed",
+    "switched_at", "decision_digest", "transition_operation_id", "transition_actor",
+    "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest",
+    "quiescence_attestation_digest", "marker_digest",
+  ], "adding a signed marker field, or reordering the writer literal, requires a MARKER_SHAPE_HISTORY entry for the shape it supersedes");
+  assert.equal(JSON.parse(fs.readFileSync(value.store.paths.generation, "utf8")).marker_digest, marker.marker_digest);
+});
+
+// A transitioned marker's quiescence attestation lives in its durable transition receipt and switch
+// event, which an earlier runtime wrote in their own narrower shapes too. Re-signing the marker alone
+// from a forced value would publish a marker that contradicts the one buildMarker reconstructs from
+// that receipt, so a superseded shape with a transition must fail closed rather than be repaired.
+test("a transitioned marker in a superseded field shape fails closed instead of being re-signed", () => {
+  const value = rolloutFixture("marker-shape-transitioned");
+  legacyManifest(value, "issue-1142-20260701000000000-33333333");
+  const times = ["2026-07-02T00:00:00.000Z", "2026-07-02T00:00:00.001Z", "2026-07-02T00:00:00.002Z"];
+  startCanonical({ store: value.store, runsRoot: value.runsRoot, actor: "operator", operationId: "shape-transitioned", now: () => times.shift() });
+  const marker = generation.peekGeneration(value.store);
+  assert.notEqual(marker.transition_operation_id, null);
+  assert.match(marker.quiescence_attestation_digest, /^[0-9a-f]{64}$/, "the cutover marker carries a real attestation the prior shape cannot record");
+
+  const canonical = (input) => `${JSON.stringify(input, null, 2)}\n`;
+  const sign = (input) => crypto.createHash("sha256").update(canonical(input)).digest("hex");
+  // A forced null here would re-sign to a marker this receipt does not reconstruct, which is why the
+  // shape upgrade refuses rather than repairs. That refusal is what the loop below pins.
+  const { marker_digest: _signature, quiescence_attestation_digest: _added, ...priorShape } = marker;
+  fs.writeFileSync(value.store.paths.generation, canonical({ ...priorShape, marker_digest: sign(priorShape) }), { mode: 0o600 });
+
+  for (const read of [() => generation.readGeneration(value.store), () => generation.peekGeneration(value.store)]) {
+    assert.throws(read, (error) => error.code === "UNSUPPORTED_GENERATION_SCHEMA" && /transition receipt and switch event/.test(error.message));
+  }
+});
+
 test("read-only generation peek preserves absence and rejects partial stores", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-generation-peek-")));
   execFileSync("git", ["init", "-q", root]);
@@ -1299,6 +1410,45 @@ test("rollout status independently verifies the 30-day and 30-terminal retiremen
   );
 });
 
+// Millisecond timestamps cannot order events inside the switch millisecond, so a legacy surface
+// invoked there is post-boundary activity the cutover cannot disown. Everything else in this fixture
+// is a passing 30-day gate: 30 consecutive checkpoints, 30 elapsed days, 30 terminal receipts, a
+// current checkpoint. If the switch millisecond is excluded, that one legacy invocation disappears
+// and the local retirement gate reads clean while a legacy surface was still being used.
+test("legacy activity in the switch millisecond cannot let the retirement gate read clean", () => {
+  const value = rolloutFixture("switch-millisecond");
+  legacyManifest(value, "issue-1142-20260701000000000-eeeeeeee");
+  const startTimes = ["2026-07-02T00:00:00.000Z", "2026-07-02T00:00:00.001Z", "2026-07-02T00:00:00.002Z"];
+  startCanonical({ store: value.store, runsRoot: value.runsRoot, actor: "operator", operationId: "switch-ms", now: () => startTimes.shift() });
+  const marker = generation.peekGeneration(value.store);
+  for (let index = 1; index <= 30; index += 1) vnextTerminalRun(value, index, "2026-07-02T00:00:00.003Z");
+  generation.recordLegacySurfaceInvocation({
+    store: value.store,
+    command: "recover-state",
+    mode: "legacy",
+    invocationId: "switch-millisecond-read",
+    observedAt: marker.switched_at,
+  });
+  for (let day = 0; day < 30; day += 1) {
+    const at = new Date(Date.UTC(2026, 6, 3 + day, 0, 0, 0, day === 29 ? 5 : 0)).toISOString();
+    generation.recordRolloutCheckpoint({ store: value.store, runsRoot: value.runsRoot, observedAt: at });
+  }
+  const checkpoints = generation.readRolloutObservations(value.store).observations.filter((item) => item.type === "daily_checkpoint");
+  assert.equal(checkpoints.length, 30);
+  assert.equal(checkpoints[0].payload.legacy_activity_count, 1, "a legacy surface invoked at exactly switched_at is post-boundary activity");
+  assert.deepEqual(checkpoints.slice(1).map((item) => item.payload.legacy_activity_count), Array(29).fill(0));
+
+  const now = "2026-08-01T00:00:00.006Z";
+  const status = generation.retirementStatus({ store: value.store, runsRoot: value.runsRoot, now });
+  assert.equal(status.checkpoint_current, true, "every gate input except the switch-millisecond read is satisfied");
+  assert.equal(status.vnext_terminal_run_count, 30);
+  assert.deepEqual(status.pending_terminal_runs, []);
+  assert.ok(status.zero_legacy_elapsed_hours >= 30 * 24);
+  assert.equal(status.consecutive_zero_legacy_days, 29, "day one carries the legacy invocation, so only 29 clean days follow");
+  assert.equal(status.local_gate_satisfied, false, "30-day retirement evidence must not read clean while a legacy surface was invoked");
+  assert.deepEqual(status.blockers, ["zero_legacy_days_below_30", "external_anchor_missing"]);
+});
+
 test("a newly terminal run is a checkpoint-pending blocker, not ledger corruption", () => {
   const value = rolloutFixture("pending-terminal");
   legacyManifest(value, "issue-1142-20260701000000000-abababab");
@@ -1528,3 +1678,4 @@ test("checkpoint and status audit sealed legacy bytes even when size and mtime a
     (error) => error.code === "ACTIVE_LEGACY_AMBIGUITY" && /content drifted/.test(error.message),
   );
 });
+
