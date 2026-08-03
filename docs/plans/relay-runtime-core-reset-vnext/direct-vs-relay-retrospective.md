@@ -4,11 +4,11 @@
 
 **Scope:** Runtime Core Reset vNext implementation and review without Relay
 
-**Measurement anchor:** every figure below is measured at `353f6fc`, the squash of
-PR #1143, which is where this arc ended. They are deliberately not restated when
-later work changes the same quantities — doing so would fold that work's lines
-and tests into a delta this arc did not produce. For current values see
-`docs/script-inventory-and-cleanup.md`.
+**Measurement anchor:** the arc's endpoint figures below are measured at
+`353f6fc`, the squash of PR #1143, and the `from` baseline at `46f2fac`. They are
+deliberately not restated when later work changes the same quantities — doing so
+would fold that work's lines and tests into a delta this arc did not produce. For
+current values see `docs/script-inventory-and-cleanup.md`.
 
 ## Outcome
 
@@ -24,7 +24,7 @@ CLI isolation (#1141) added credential staging, the signed two-phase cleanup
 lifecycle, and runtime-identity binding after that measurement was taken.
 
 The rollout itself is not complete: the live adapter matrix is honestly 2/13 at
-current head, and shim retirement still requires 30 days plus 30 vNext terminal
+`353f6fc`, and shim retirement still requires 30 days plus 30 vNext terminal
 runs with zero legacy reads. Both Codex cells pass the real production path; the
 remaining eleven carry typed external blockers, not weakened isolation.
 

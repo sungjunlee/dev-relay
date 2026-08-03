@@ -216,7 +216,7 @@ test("the signed marker field list is pinned so a new mandatory field cannot ski
     "switched_at", "decision_digest", "transition_operation_id", "transition_actor",
     "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest",
     "quiescence_attestation_digest", "marker_digest",
-  ], "adding or reordering a signed marker field requires a MARKER_SHAPE_HISTORY entry for the shape it supersedes");
+  ], "adding a signed marker field, or reordering the writer literal, requires a MARKER_SHAPE_HISTORY entry for the shape it supersedes");
   assert.equal(JSON.parse(fs.readFileSync(value.store.paths.generation, "utf8")).marker_digest, marker.marker_digest);
 });
 
