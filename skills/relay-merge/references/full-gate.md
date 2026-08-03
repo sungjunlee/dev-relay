@@ -22,8 +22,9 @@ with `--lock-timeout` (600 seconds by default).
 
 Evidence contains a section headed `===== <file> =====` for every test file,
 one `FAILED_FILE: <file>` line per failure, and `TOTAL_FAILED_FILES: N` plus
-`TOTAL_FILES: N`. It can be passed directly to `recover-commit
---test-result-file`.
+`TOTAL_FILES: N`. It is operator-readable evidence only; the `recover-commit
+--test-result-file` surface that once consumed it was deleted with the recovery
+command family.
 
 Exit code 0 means all selected files passed, 1 means at least one suite file
 failed, 2 means the lock wait timed out, and 3 means invocation or runner

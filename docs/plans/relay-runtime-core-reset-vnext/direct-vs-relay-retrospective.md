@@ -14,19 +14,21 @@ current values see `docs/script-inventory-and-cleanup.md`.
 
 Direct orchestration completed the code reset while retaining all seven native
 executors. The installed dispatch runtime fell from 75 JavaScript files / 29,607
-LOC to 18 files / 8,165 LOC. Excluding the two migration-only shims, the core is
-16 files / 6,049 LOC. The serialized gate on Node v22.22.3 reports 703 tests, 701
-passed, 0 failed, and 2 skipped; both skips are the ledger-approved opt-in live
-canaries that require external credentials.
+LOC to 16 files / 6,028 LOC, measured by the ledger generator into
+`tests/ledger/vnext-baseline.generated.json`. The intermediate figure once
+published here — 18 files / 8,165 LOC — was wrong in both halves: the overlay
+build measured 8,262 LOC, and the overlay was subsequently deleted rather than
+retired.
 
 The runtime is larger than the figure published at the reset because production
 CLI isolation (#1141) added credential staging, the signed two-phase cleanup
 lifecycle, and runtime-identity binding after that measurement was taken.
 
 The rollout itself is not complete: the live adapter matrix is honestly 2/13 at
-`353f6fc`, and shim retirement still requires 30 days plus 30 vNext terminal
-runs with zero legacy reads. Both Codex cells pass the real production path; the
-remaining eleven carry typed external blockers, not weakened isolation.
+`353f6fc`. Both Codex cells pass the real production path; the remaining eleven
+carry typed external blockers, not weakened isolation. There are no shims left
+to retire — the migration overlay was deleted on 2026-08-03 rather than
+exercised.
 
 ## What Direct Orchestration Did Better
 

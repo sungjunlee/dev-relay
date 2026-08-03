@@ -69,7 +69,10 @@ test("recovery playbook documents only the canonical inspect/recover surface", (
 
   assert.match(playbook, /relay-recover\.js inspect/);
   assert.match(playbook, /relay-recover\.js recover/);
-  assert.match(playbook, /Retired target-state and force-policy flags fail closed/);
+  assert.match(playbook, /Retired verbs and their target-state\s+and force-policy flags fail closed/);
+  assert.match(playbook, /accepts only `inspect` and `recover`/);
+  assert.doesNotMatch(playbook, /remain temporary argv aliases/);
+  assert.doesNotMatch(playbook, /generation ledger/);
   assert.doesNotMatch(playbook, /recover-state\.js[^\n]*--to/);
   assert.doesNotMatch(playbook, /recover-state\.js[^\n]*--force/);
 });

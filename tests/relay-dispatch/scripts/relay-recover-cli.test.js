@@ -12,7 +12,6 @@ const { createRunRecord } = require("../../../skills/relay-dispatch/scripts/run-
 const factsApi = require("../../../skills/relay-dispatch/scripts/facts");
 const { validateFact } = factsApi;
 const host = require("../../../skills/relay-dispatch/scripts/host");
-const generation = require("../../../skills/relay-dispatch/scripts/runtime-generation");
 
 const ROOT = path.resolve(__dirname, "../../..");
 const CLI = path.join(ROOT, "skills/relay/scripts/relay-recover.js");
@@ -43,9 +42,6 @@ function fixture({ branch = "main" } = {}) {
   if (branch !== "main") git(repo, ["checkout", "-b", branch]);
   const head = git(repo, ["rev-parse", "HEAD"]);
   const tree = git(repo, ["rev-parse", "HEAD^{tree}"]);
-  const generationStore = generation.initializeStore({ checkoutRoot: repo, remote });
-  generation.decideMigration({ store: generationStore, observation: { observed_at: "2026-07-31T23:59:58.000Z", active_legacy_run_count: 6, oldest_active_legacy_age_hours: 100 } });
-  generation.switchGeneration({ store: generationStore, generation: "vnext", actor: "test", operationId: "recover-cli-vnext", switchedAt: "2026-07-31T23:59:59.000Z" });
   const donePath = path.join(runDir, "done-criteria.md");
   fs.writeFileSync(donePath, "done\n");
   const doneHash = crypto.createHash("sha256").update("done\n").digest("hex");

@@ -28,8 +28,7 @@
       "classification": "implementation-detail-delete",
       "removalIssue": "#1135",
       "replacementCoverage": [
-        "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js",
-        "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js"
+        "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js"
       ]
     },
     {
@@ -38,8 +37,7 @@
       "classification": "implementation-detail-delete",
       "removalIssue": "#1135",
       "replacementCoverage": [
-        "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js",
-        "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js"
+        "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js"
       ]
     },
     {
@@ -48,8 +46,7 @@
       "classification": "implementation-detail-delete",
       "removalIssue": "#1135",
       "replacementCoverage": [
-        "tests/relay-dispatch/scripts/recover-scenario-matrix.test.js",
-        "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js"
+        "tests/relay-dispatch/scripts/recover-scenario-matrix.test.js"
       ]
     },
     {
@@ -59,8 +56,7 @@
       "removalIssue": "#1135",
       "replacementCoverage": [
         "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js",
-        "tests/relay-dispatch/scripts/recover-scenario-matrix.test.js",
-        "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js"
+        "tests/relay-dispatch/scripts/recover-scenario-matrix.test.js"
       ]
     },
     {
@@ -70,8 +66,7 @@
       "removalIssue": "#1135",
       "replacementCoverage": [
         "tests/relay-dispatch/scripts/run-fold-vnext.test.js",
-        "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js",
-        "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js"
+        "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js"
       ]
     },
     {
@@ -81,7 +76,6 @@
       "removalIssue": "#1136",
       "replacementCoverage": [
         "tests/relay-dispatch/scripts/dispatch-vnext.test.js",
-        "tests/relay-dispatch/scripts/runtime-generation.test.js",
         "tests/relay-dispatch/scripts/host-crash-drills.test.js"
       ]
     },
@@ -106,7 +100,6 @@
         "tests/relay-dispatch/scripts/facts-vnext.test.js",
         "tests/relay-dispatch/scripts/host-contract.test.js",
         "tests/relay-dispatch/scripts/host-supervisor.test.js",
-        "tests/relay-dispatch/scripts/runtime-generation.test.js",
         "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js"
       ]
     },
@@ -117,7 +110,6 @@
       "removalIssue": "#1136",
       "replacementCoverage": [
         "tests/relay-dispatch/scripts/dispatch-vnext.test.js",
-        "tests/relay-dispatch/scripts/runtime-generation.test.js",
         "tests/relay-dispatch/scripts/host-concurrency.test.js"
       ]
     },
@@ -130,6 +122,24 @@
         "tests/relay/scripts/relay-status-recover.test.js",
         "tests/relay/scripts/run-preflight.test.js",
         "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/runtime-generation.test.js",
+      "productionSurface": "skills/relay-dispatch/scripts/runtime-generation.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1129",
+      "replacementCoverage": [
+        "tests/relay-dispatch/scripts/dispatch-vnext.test.js"
+      ]
+    },
+    {
+      "path": "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js",
+      "productionSurface": "skills/relay-dispatch/scripts/legacy-recovery-shim.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1129",
+      "replacementCoverage": [
+        "tests/relay-dispatch/scripts/relay-recover-cli.test.js"
       ]
     }
   ],
@@ -269,7 +279,7 @@
       "path": "tests/relay-dispatch/scripts/dispatch-vnext.test.js",
       "owner": "runtime-core-reset",
       "classification": "preserve-invariant",
-      "rationale": "Exercises the vNext-only dispatch boundary: closed CLI parsing, generation admission, immutable run creation, retained worktree containment, durable host settlement, registration cleanup, and canonical inspect handoff.",
+      "rationale": "Exercises the vNext-only dispatch boundary: closed CLI parsing, immutable run creation, retained worktree containment, durable host settlement, registration cleanup, and canonical inspect handoff.",
       "invariantIds": [
         "RR-01"
       ]
@@ -385,15 +395,6 @@
       ]
     },
     {
-      "path": "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects only the temporary legacy entrypoint delegation contract after the former recovery implementations were deleted.",
-      "invariantIds": [
-        "RR-12"
-      ]
-    },
-    {
       "path": "tests/relay-dispatch/scripts/opencode-live.test.js",
       "owner": "runtime-core-reset",
       "classification": "preserve-invariant",
@@ -503,15 +504,6 @@
       "rationale": "Each gate is bound to its named canonical runtime invariant.",
       "invariantIds": [
         "RR-01"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/runtime-generation.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects #1136 generation cutover and rollback compatibility while vNext becomes the sole writer and reader.",
-      "invariantIds": [
-        "RR-12"
       ]
     },
     {

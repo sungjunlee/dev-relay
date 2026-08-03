@@ -80,7 +80,7 @@ Evidence records source-tree and dirty-state digests, runner/runtime hashes,
 platform, executable identity/version, credential environment names and file
 IDs, prompt/invocation/output digests, and boundary/cleanup/process audits. It
 never records credential values or credential source paths. The latest checked
-in run is `docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-02.json`;
+in run is `docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-03.json`;
 it is intentionally incomplete until operators provision every required cell.
 
 The outer host boundary permits the trusted CLI's remote provider control-plane

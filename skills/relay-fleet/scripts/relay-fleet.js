@@ -10,7 +10,6 @@ const os = require("node:os");
 const path = require("node:path");
 const { parseArgs: parseNodeArgs } = require("node:util");
 
-const generation = require("../../relay-dispatch/scripts/runtime-generation");
 const { inspectProductionRun } = require("../../relay-dispatch/scripts/recover");
 const runStore = require("../../relay-dispatch/scripts/run-store");
 const { normalizeOwnership, validateOwnershipAgainstSprintState } = require("./ownership");
@@ -103,8 +102,12 @@ function repositoryIdentity(input) {
   catch { remote = `local/${path.basename(checkout)}`; }
   const github = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remote);
   const normalizedRemote = github ? `${github[1]}/${github[2]}` : remote;
-  const shared = generation.resolveRepositoryState({ checkoutRoot: checkout, remote: normalizedRemote });
-  return { checkout, repoRoot: fs.realpathSync(path.dirname(shared.repository.git_common_dir)), remote: normalizedRemote, shared };
+  // A linked worktree shares its main checkout's Git common dir, so fleet state keys off that root.
+  // The common dir is resolved before taking its parent, exactly as dispatch.repositoryIdentity and
+  // run-store do: with a symlinked `.git`, dirname(realpath(x)) and realpath(dirname(x)) disagree, and
+  // fleet would then scan a different run-directory slug than dispatch writes to.
+  const commonDir = fs.realpathSync(path.resolve(checkout, git(checkout, ["rev-parse", "--git-common-dir"])));
+  return { checkout, repoRoot: fs.realpathSync(path.dirname(commonDir)), remote: normalizedRemote };
 }
 function repoSlug(repoRoot) {
   const base = path.basename(repoRoot).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";

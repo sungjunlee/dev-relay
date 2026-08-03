@@ -20,19 +20,18 @@ skills/relay-dispatch/scripts/
   run-store.js             immutable run/artifact trust boundary
   facts.js                 append-only facts + merge authorization
   host.js                  lock, detached host, cancellation, sandbox
-  runtime-generation.js    sealed migration admission/overlay
-  legacy-recovery-shim.js  temporary legacy argv translation
   adapter-contract.js, exec.js
   adapters/                registry + seven retained native executors
 ```
 
-Installed while migration is active: 18 JS / 8,262 LOC. Removing the two
-migration-overlay files leaves a 16 JS / 6,049 LOC core, which is what the honest
-30-days-and-30-vNext-runs zero-legacy-read gate would retire to. The installed
-figure is generated into `tests/ledger/vnext-baseline.generated.json`; refresh it
-with the ledger generator rather than editing it by hand, and treat the core
-figure as arithmetic on that measurement, not as an achieved state. Do not claim
-the retirement before the generated generation evidence proves it.
+Installed: 16 JS / 6,028 LOC. The figure is generated into
+`tests/ledger/vnext-baseline.generated.json`; refresh it with the ledger
+generator rather than editing it by hand.
+
+vNext is the only writer. There is no migration overlay, no writer generation,
+no admission capability, and no retirement gate; a run directory is claimed by a
+non-recursive `mkdir`. Pre-vNext manifests are unreadable and `relay-recover`
+exposes only `inspect` and `recover`. Do not reintroduce any of it.
 
 The seven executors are Claude, Codex, OpenCode, Pi, Antigravity, Cursor, and
 Cline. Add an executor as one `adapters/<name>.js` four-method descriptor,

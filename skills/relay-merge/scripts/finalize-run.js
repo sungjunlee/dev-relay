@@ -12,7 +12,6 @@ const { parseArgs } = require("util");
 const facts = require("../../relay-dispatch/scripts/facts");
 const host = require("../../relay-dispatch/scripts/host");
 const { inspectProductionRun } = require("../../relay-dispatch/scripts/recover");
-const generation = require("../../relay-dispatch/scripts/runtime-generation");
 const {
   fail,
   requireMergeAction,
@@ -465,7 +464,6 @@ function productionServices() {
   }
   return {
     authenticatedGithubLogin,
-    assertGenerationWrite: generation.assertGenerationWrite,
     cleanupWorktree,
     inspectRun: inspectProductionRun,
     mergeObserver,
@@ -475,7 +473,6 @@ function productionServices() {
     recordMerge: facts.recordMerge,
     resumeOperatorMerge: facts.resumeOperatorMerge,
     revalidateExternalFacts: facts.revalidateExternalFacts,
-    withGenerationAdmission: generation.withGenerationAdmission,
     withRunLock,
     beforeMerge: () => {},
     afterMergeRequest: () => {},
@@ -495,90 +492,84 @@ function resumeBinding(inspection, record, binding) {
   return observed;
 }
 
-async function finishTerminal({ store, resolved, mergeFact, cleanup, services, observer }) {
+async function finishTerminal({ resolved, mergeFact, cleanup, services, observer }) {
   const { record, runDir } = resolved;
   const payload = mergeFact.payload;
   if (!SAFE_TOKEN_RE.test(String(payload.operation_id || ""))) {
     fail("terminal merge fact contains an unsafe operation id", "MERGE_TERMINAL_INVALID");
   }
-  return services.withGenerationAdmission(
-    { store, generation: "vnext", mode: "write" },
-    async (admission) => {
-      services.assertGenerationWrite({ store, admission, generation: "vnext" });
-      return services.withRunLock(runDir, async (lockContext) => {
-        const binding = { prNumber: payload.pr_number, head: payload.pr_head_sha };
-        const revalidated = await services.revalidateExternalFacts({
-          runDir,
-          lockContext,
-          observer,
-          request: {
-            repo: record.repo.remote,
-            operation_id: payload.operation_id,
-            pr_number: binding.prNumber,
-            expected_pr_head_sha: binding.head,
-            expected_head_ref: record.git.branch,
-            expected_base_ref: record.git.base_branch,
-            expected_result_target_sha: payload.result_target_sha,
-            required_state: "MERGED",
-          },
-          authorize: (observed) => {
-            assertExactPr(observed, record, binding, new Set(["MERGED"]));
-            if (observed.merge_sha !== payload.result_target_sha) {
-              fail("terminal merge target changed", "MERGE_TARGET_MISMATCH");
-            }
-            return { authorized: true };
-          },
-        });
-        const authorization = services.resumeOperatorMerge({
-          runDir,
-          lockContext,
-          operationId: payload.operation_id,
-          freshObservation: revalidated.observationCapability,
-        });
-        if (
-          payload.authorization_id !== authorization.authorizationId
-          || payload.method !== authorization.method
-          || payload.operator !== authorization.actor
-          || payload.pr_number !== authorization.prNumber
-          || payload.pr_head_sha !== authorization.headSha
-          || payload.reviewed_source_sha !== authorization.headSha
-          || payload.done_criteria_sha256 !== authorization.doneCriteriaSha256
-          || payload.override_reason !== authorization.overrideReason
-        ) fail("terminal fact does not match its verified durable authorization", "MERGE_TERMINAL_AUTH_MISMATCH");
-        const repaired = await services.recordMerge({
-          eventsPath: path.join(runDir, "events.jsonl"),
-          provenance: {
-            pr_number: authorization.prNumber,
-            reviewed_source_sha: authorization.headSha,
-            pr_head_sha: authorization.headSha,
-            result_target_sha: payload.result_target_sha,
-            method: authorization.method,
-            operator: authorization.actor,
-            override_reason: authorization.overrideReason,
-          },
-          authorization,
-          lockContext,
-          observer,
-        });
-        const cleanupResult = cleanup
-          ? await services.cleanupWorktree(record, repaired)
-          : { status: "retained_by_request" };
-        return {
-          run_id: record.run_id,
-          status: "merged",
-          merge_performed: false,
-          merge_recorded: true,
-          pr_number: payload.pr_number,
-          pr_head_sha: payload.pr_head_sha,
-          result_target_sha: payload.result_target_sha,
-          method: authorization.method,
-          operator: authorization.actor,
-          operation_id: authorization.operationId,
-          cleanup: cleanupResult,
-        };
-      });
-    },
-  );
+  return services.withRunLock(runDir, async (lockContext) => {
+    const binding = { prNumber: payload.pr_number, head: payload.pr_head_sha };
+    const revalidated = await services.revalidateExternalFacts({
+      runDir,
+      lockContext,
+      observer,
+      request: {
+        repo: record.repo.remote,
+        operation_id: payload.operation_id,
+        pr_number: binding.prNumber,
+        expected_pr_head_sha: binding.head,
+        expected_head_ref: record.git.branch,
+        expected_base_ref: record.git.base_branch,
+        expected_result_target_sha: payload.result_target_sha,
+        required_state: "MERGED",
+      },
+      authorize: (observed) => {
+        assertExactPr(observed, record, binding, new Set(["MERGED"]));
+        if (observed.merge_sha !== payload.result_target_sha) {
+          fail("terminal merge target changed", "MERGE_TARGET_MISMATCH");
+        }
+        return { authorized: true };
+      },
+    });
+    const authorization = services.resumeOperatorMerge({
+      runDir,
+      lockContext,
+      operationId: payload.operation_id,
+      freshObservation: revalidated.observationCapability,
+    });
+    if (
+      payload.authorization_id !== authorization.authorizationId
+      || payload.method !== authorization.method
+      || payload.operator !== authorization.actor
+      || payload.pr_number !== authorization.prNumber
+      || payload.pr_head_sha !== authorization.headSha
+      || payload.reviewed_source_sha !== authorization.headSha
+      || payload.done_criteria_sha256 !== authorization.doneCriteriaSha256
+      || payload.override_reason !== authorization.overrideReason
+    ) fail("terminal fact does not match its verified durable authorization", "MERGE_TERMINAL_AUTH_MISMATCH");
+    const repaired = await services.recordMerge({
+      eventsPath: path.join(runDir, "events.jsonl"),
+      provenance: {
+        pr_number: authorization.prNumber,
+        reviewed_source_sha: authorization.headSha,
+        pr_head_sha: authorization.headSha,
+        result_target_sha: payload.result_target_sha,
+        method: authorization.method,
+        operator: authorization.actor,
+        override_reason: authorization.overrideReason,
+      },
+      authorization,
+      lockContext,
+      observer,
+    });
+    const cleanupResult = cleanup
+      ? await services.cleanupWorktree(record, repaired)
+      : { status: "retained_by_request" };
+    return {
+      run_id: record.run_id,
+      status: "merged",
+      merge_performed: false,
+      merge_recorded: true,
+      pr_number: payload.pr_number,
+      pr_head_sha: payload.pr_head_sha,
+      result_target_sha: payload.result_target_sha,
+      method: authorization.method,
+      operator: authorization.actor,
+      operation_id: authorization.operationId,
+      cleanup: cleanupResult,
+    };
+  });
 }
 
 async function finalizeRun(cli, overrides = {}) {
@@ -588,16 +579,11 @@ async function finalizeRun(cli, overrides = {}) {
     runDir: cli.values["run-dir"] || null,
     runId: cli.values["run-id"] || null,
   });
-  const { record, runDir, identity } = resolved;
-  const store = generation.initializeStore({ checkoutRoot: identity.repoRoot, remote: identity.remote });
-  if (generation.readGeneration(store)?.writer_generation !== "vnext") {
-    fail("vNext is not the active writer generation", "GENERATION_NOT_ACTIVE");
-  }
+  const { record, runDir } = resolved;
   const terminal = terminalMergeFact(runDir, facts);
   if (terminal.fact) {
     const observer = services.mergeObserver(record);
     return finishTerminal({
-      store,
       resolved,
       mergeFact: terminal.fact,
       cleanup: !cli.values["no-cleanup"],
@@ -644,268 +630,262 @@ async function finalizeRun(cli, overrides = {}) {
 
   const actor = operatorName(record.repo.root, cli.values.actor);
   const observer = services.mergeObserver(record);
-  return services.withGenerationAdmission(
-    { store, generation: "vnext", mode: "write" },
-    async (admission) => {
-      services.assertGenerationWrite({ store, admission, generation: "vnext" });
-      return services.withRunLock(runDir, async (lockContext) => {
-        const fresh = await services.inspectRun({ runDir });
-        let freshBinding;
-        if (hasAuthorization) {
-          if (fresh.derived?.action === "merge") freshBinding = requireMergeAction(fresh, record);
-          else {
-            resumeBinding(fresh, record, binding);
-            freshBinding = binding;
-          }
-        } else {
-          freshBinding = requireMergeAction(fresh, record);
-        }
-        if (freshBinding.head !== binding.head || freshBinding.prNumber !== binding.prNumber) {
-          fail("merge binding changed while acquiring the run lock", "MERGE_BINDING_CHANGED");
-        }
-        const direct = assertExactPr(
-          await services.observeLivePr(record, binding.prNumber),
+  return services.withRunLock(runDir, async (lockContext) => {
+    const fresh = await services.inspectRun({ runDir });
+    let freshBinding;
+    if (hasAuthorization) {
+      if (fresh.derived?.action === "merge") freshBinding = requireMergeAction(fresh, record);
+      else {
+        resumeBinding(fresh, record, binding);
+        freshBinding = binding;
+      }
+    } else {
+      freshBinding = requireMergeAction(fresh, record);
+    }
+    if (freshBinding.head !== binding.head || freshBinding.prNumber !== binding.prNumber) {
+      fail("merge binding changed while acquiring the run lock", "MERGE_BINDING_CHANGED");
+    }
+    const direct = assertExactPr(
+      await services.observeLivePr(record, binding.prNumber),
+      record,
+      binding,
+      hasAuthorization ? new Set(["OPEN", "MERGED"]) : new Set(["OPEN"]),
+    );
+    const revalidated = await services.revalidateExternalFacts({
+      runDir,
+      lockContext,
+      observer,
+      request: {
+        repo: record.repo.remote,
+        pr_number: binding.prNumber,
+        expected_pr_head_sha: binding.head,
+        expected_head_ref: record.git.branch,
+        expected_base_ref: record.git.base_branch,
+        expected_state: direct.pr_state,
+        expected_auto_merge_request: direct.auto_merge_request,
+        expected_merge_state_status: direct.merge_state_status,
+      },
+      authorize: (observed) => {
+        assertExactPr(
+          observed,
           record,
           binding,
           hasAuthorization ? new Set(["OPEN", "MERGED"]) : new Set(["OPEN"]),
         );
-        const revalidated = await services.revalidateExternalFacts({
+        if (
+          isMergePending(observed) !== isMergePending(direct)
+          || (isMergePending(direct) && pendingMethod(observed) !== pendingMethod(direct))
+        ) fail("merge queue state changed across independent observations", "MERGE_QUEUE_OBSERVATION_MISMATCH");
+        return { authorized: true };
+      },
+    });
+    if (!hasAuthorization && isMergePending(revalidated.facts)) {
+      fail("an existing external merge queue request requires canonical recover", "MERGE_RECOVER_REQUIRED");
+    }
+    const githubLogin = await services.authenticatedGithubLogin(record);
+    const authorization = hasAuthorization
+      ? services.resumeOperatorMerge({
           runDir,
           lockContext,
-          observer,
-          request: {
-            repo: record.repo.remote,
-            pr_number: binding.prNumber,
-            expected_pr_head_sha: binding.head,
-            expected_head_ref: record.git.branch,
-            expected_base_ref: record.git.base_branch,
-            expected_state: direct.pr_state,
-            expected_auto_merge_request: direct.auto_merge_request,
-            expected_merge_state_status: direct.merge_state_status,
-          },
-          authorize: (observed) => {
-            assertExactPr(
-              observed,
-              record,
-              binding,
-              hasAuthorization ? new Set(["OPEN", "MERGED"]) : new Set(["OPEN"]),
-            );
-            if (
-              isMergePending(observed) !== isMergePending(direct)
-              || (isMergePending(direct) && pendingMethod(observed) !== pendingMethod(direct))
-            ) fail("merge queue state changed across independent observations", "MERGE_QUEUE_OBSERVATION_MISMATCH");
-            return { authorized: true };
-          },
-        });
-        if (!hasAuthorization && isMergePending(revalidated.facts)) {
-          fail("an existing external merge queue request requires canonical recover", "MERGE_RECOVER_REQUIRED");
-        }
-        const githubLogin = await services.authenticatedGithubLogin(record);
-        const authorization = hasAuthorization
-          ? services.resumeOperatorMerge({
-              runDir,
-              lockContext,
-              operationId: id,
-              freshObservation: revalidated.observationCapability,
-            })
-          : services.planOperatorMerge({
-              runDir,
-              lockContext,
-              freshObservation: revalidated.observationCapability,
-              operatorAction: { actor, method, operationId: id, githubLogin },
-              currentHead: binding.head,
-              currentDoneCriteriaSha256: record.contract.done_criteria_sha256,
-              verdict: {
-                verdict: freshBinding.review.payload.verdict,
-                reviewed_sha: freshBinding.review.payload.reviewed_sha,
-                done_criteria_sha256: freshBinding.review.payload.done_criteria_sha256,
-              },
-              prNumber: binding.prNumber,
-            });
-
-        if (authorization.githubLogin !== githubLogin) {
-          fail(
-            "authenticated GitHub identity differs from the durable merge authorization",
-            "MERGE_AUTH_IDENTITY_DRIFT",
-          );
-        }
-
-        if (hasAuthorization && (authorization.method !== method || authorization.actor !== actor)) {
-          fail(
-            "requested method or actor differs from the verified durable authorization",
-            "MERGE_AUTHORIZATION_REQUEST_MISMATCH",
-          );
-        }
-        const ambiguousFile = ambiguousPath(runDir, authorization.operationId);
-        const ambiguous = readRegularJson(ambiguousFile, "ambiguous merge artifact");
-        if (ambiguous) {
-          validateAmbiguous(ambiguous, authorization, binding);
-          fail("a prior merge command failed after GitHub reported MERGED; use canonical external recover", "MERGE_EXTERNAL_RECOVER_REQUIRED");
-        }
-        const pendingFile = pendingPath(runDir, authorization.operationId);
-        let pending = readRegularJson(pendingFile, "merge pending artifact");
-        if (pending) validatePending(pending, authorization, binding);
-        const intentFile = requestIntentPath(runDir, authorization.operationId);
-        let requestIntent = readRegularJson(intentFile, "merge request intent");
-        if (requestIntent) validateRequestIntent(requestIntent, authorization, binding);
-
-        let live = revalidated.facts;
-        let mergePerformed = false;
-        if (live.pr_state === "OPEN") {
-          if (isMergePending(live)) {
-            const queuedMethod = pendingMethod(live);
-            if (queuedMethod && queuedMethod !== authorization.method) {
-              fail("GitHub merge queue method differs from the durable authorization", "MERGE_QUEUE_METHOD_MISMATCH");
-            }
-            if (!pending && !requestIntent) {
-              fail(
-                "an external merge queue request without durable Relay request evidence must use canonical recover",
-                "MERGE_RECOVER_REQUIRED",
-              );
-            }
-            assertQueueRequestor(live, authorization);
-            if (!pending) pending = recordPending(runDir, authorization, binding);
-            return {
-              run_id: record.run_id,
-              status: "merge_pending",
-              merge_performed: false,
-              merge_recorded: false,
-              pr_number: binding.prNumber,
-              pr_head_sha: binding.head,
-              method: authorization.method,
-              operator: authorization.actor,
-              operation_id: authorization.operationId,
-              cleanup: { status: "deferred_until_merged" },
-            };
-          }
-          if (pending) {
-            fail("durable merge queue request disappeared before merge", "MERGE_QUEUE_STATE_LOST");
-          }
-          if (requestIntent) {
-            fail(
-              "a durable merge request intent has no confirmed GitHub outcome; use canonical recover",
-              "MERGE_REQUEST_OUTCOME_AMBIGUOUS",
-            );
-          }
-          const preflight = assertExactPr(
-            await services.observeLivePr(record, binding.prNumber),
-            record,
-            binding,
-            new Set(["OPEN"]),
-          );
-          if (isMergePending(preflight)) {
-            fail("merge queue state changed immediately before the merge request", "MERGE_QUEUE_OBSERVATION_MISMATCH");
-          }
-          const finalGithubLogin = await services.authenticatedGithubLogin(record);
-          if (finalGithubLogin !== authorization.githubLogin) {
-            fail(
-              "authenticated GitHub identity changed immediately before the merge request",
-              "MERGE_AUTH_IDENTITY_DRIFT",
-            );
-          }
-          await services.beforeMerge({ record, binding, authorization });
-          requestIntent = recordRequestIntent(runDir, authorization, binding);
-          await services.afterRequestIntent({ record, binding, authorization });
-          try {
-            await services.mergePullRequest(record, binding, authorization.method);
-            mergePerformed = true;
-          } catch (error) {
-            live = await services.observeLivePr(record, binding.prNumber);
-            if (live.pr_state === "MERGED") {
-              writeImmutableJson(ambiguousFile, ambiguousValue(authorization, binding));
-              fail(
-                "merge command failed after GitHub reported MERGED; use canonical external recover",
-                "MERGE_EXTERNAL_RECOVER_REQUIRED",
-              );
-            }
-            if (live.pr_state === "OPEN" && isMergePending(live)) {
-              const queuedMethod = pendingMethod(live);
-              if (queuedMethod && queuedMethod !== authorization.method) {
-                fail("GitHub merge queue method differs from the durable authorization", "MERGE_QUEUE_METHOD_MISMATCH");
-              }
-              assertQueueRequestor(live, authorization);
-              pending = recordPending(runDir, authorization, binding);
-              return {
-                run_id: record.run_id,
-                status: "merge_pending",
-                merge_performed: true,
-                merge_recorded: false,
-                pr_number: binding.prNumber,
-                pr_head_sha: binding.head,
-                method: authorization.method,
-                operator: authorization.actor,
-                operation_id: authorization.operationId,
-                cleanup: { status: "deferred_until_merged" },
-              };
-            }
-            fail(
-              `merge request outcome is ambiguous after command failure: ${error.message}`,
-              "MERGE_REQUEST_OUTCOME_AMBIGUOUS",
-            );
-          }
-          await services.afterMergeRequest({ record, binding, authorization });
-          // A successful command is the exactly-once request boundary. Persist
-          // confirmation only after the post-call crash seam has been crossed.
-          pending = recordPending(runDir, authorization, binding);
-          await services.afterMerge({ record, binding, operationId: id });
-          live = await services.observeLivePr(record, binding.prNumber);
-          if (live.pr_state === "OPEN" && isMergePending(live)) {
-            const queuedMethod = pendingMethod(live);
-            if (queuedMethod && queuedMethod !== authorization.method) {
-              fail("GitHub merge queue method differs from the durable authorization", "MERGE_QUEUE_METHOD_MISMATCH");
-            }
-            assertQueueRequestor(live, authorization);
-            pending = recordPending(runDir, authorization, binding);
-            return {
-              run_id: record.run_id,
-              status: "merge_pending",
-              merge_performed: true,
-              merge_recorded: false,
-              pr_number: binding.prNumber,
-              pr_head_sha: binding.head,
-              method: authorization.method,
-              operator: authorization.actor,
-              operation_id: authorization.operationId,
-              cleanup: { status: "deferred_until_merged" },
-            };
-          }
-        }
-        assertExactPr(live, record, binding, new Set(["MERGED"]));
-        requireRelayRequestEvidence({ live, pending, requestIntent, mergePerformed });
-        const mergeFact = await services.recordMerge({
-          eventsPath: path.join(runDir, "events.jsonl"),
-          provenance: {
-            pr_number: binding.prNumber,
-            reviewed_source_sha: binding.head,
-            pr_head_sha: binding.head,
-            result_target_sha: live.merge_sha,
-            method: authorization.method,
-            operator: authorization.actor,
-            override_reason: authorization.overrideReason,
-          },
-          authorization,
+          operationId: id,
+          freshObservation: revalidated.observationCapability,
+        })
+      : services.planOperatorMerge({
+          runDir,
           lockContext,
-          observer,
+          freshObservation: revalidated.observationCapability,
+          operatorAction: { actor, method, operationId: id, githubLogin },
+          currentHead: binding.head,
+          currentDoneCriteriaSha256: record.contract.done_criteria_sha256,
+          verdict: {
+            verdict: freshBinding.review.payload.verdict,
+            reviewed_sha: freshBinding.review.payload.reviewed_sha,
+            done_criteria_sha256: freshBinding.review.payload.done_criteria_sha256,
+          },
+          prNumber: binding.prNumber,
         });
-        const cleanup = cli.values["no-cleanup"]
-          ? { status: "retained_by_request" }
-          : await services.cleanupWorktree(record, mergeFact);
+
+    if (authorization.githubLogin !== githubLogin) {
+      fail(
+        "authenticated GitHub identity differs from the durable merge authorization",
+        "MERGE_AUTH_IDENTITY_DRIFT",
+      );
+    }
+
+    if (hasAuthorization && (authorization.method !== method || authorization.actor !== actor)) {
+      fail(
+        "requested method or actor differs from the verified durable authorization",
+        "MERGE_AUTHORIZATION_REQUEST_MISMATCH",
+      );
+    }
+    const ambiguousFile = ambiguousPath(runDir, authorization.operationId);
+    const ambiguous = readRegularJson(ambiguousFile, "ambiguous merge artifact");
+    if (ambiguous) {
+      validateAmbiguous(ambiguous, authorization, binding);
+      fail("a prior merge command failed after GitHub reported MERGED; use canonical external recover", "MERGE_EXTERNAL_RECOVER_REQUIRED");
+    }
+    const pendingFile = pendingPath(runDir, authorization.operationId);
+    let pending = readRegularJson(pendingFile, "merge pending artifact");
+    if (pending) validatePending(pending, authorization, binding);
+    const intentFile = requestIntentPath(runDir, authorization.operationId);
+    let requestIntent = readRegularJson(intentFile, "merge request intent");
+    if (requestIntent) validateRequestIntent(requestIntent, authorization, binding);
+
+    let live = revalidated.facts;
+    let mergePerformed = false;
+    if (live.pr_state === "OPEN") {
+      if (isMergePending(live)) {
+        const queuedMethod = pendingMethod(live);
+        if (queuedMethod && queuedMethod !== authorization.method) {
+          fail("GitHub merge queue method differs from the durable authorization", "MERGE_QUEUE_METHOD_MISMATCH");
+        }
+        if (!pending && !requestIntent) {
+          fail(
+            "an external merge queue request without durable Relay request evidence must use canonical recover",
+            "MERGE_RECOVER_REQUIRED",
+          );
+        }
+        assertQueueRequestor(live, authorization);
+        if (!pending) pending = recordPending(runDir, authorization, binding);
         return {
           run_id: record.run_id,
-          status: "merged",
-          merge_performed: mergePerformed,
-          merge_recorded: true,
+          status: "merge_pending",
+          merge_performed: false,
+          merge_recorded: false,
           pr_number: binding.prNumber,
           pr_head_sha: binding.head,
-          result_target_sha: mergeFact.payload.result_target_sha,
-          method: mergeFact.payload.method,
-          operator: mergeFact.payload.operator,
-          operation_id: mergeFact.payload.operation_id,
-          cleanup,
+          method: authorization.method,
+          operator: authorization.actor,
+          operation_id: authorization.operationId,
+          cleanup: { status: "deferred_until_merged" },
         };
-      });
-    },
-  );
+      }
+      if (pending) {
+        fail("durable merge queue request disappeared before merge", "MERGE_QUEUE_STATE_LOST");
+      }
+      if (requestIntent) {
+        fail(
+          "a durable merge request intent has no confirmed GitHub outcome; use canonical recover",
+          "MERGE_REQUEST_OUTCOME_AMBIGUOUS",
+        );
+      }
+      const preflight = assertExactPr(
+        await services.observeLivePr(record, binding.prNumber),
+        record,
+        binding,
+        new Set(["OPEN"]),
+      );
+      if (isMergePending(preflight)) {
+        fail("merge queue state changed immediately before the merge request", "MERGE_QUEUE_OBSERVATION_MISMATCH");
+      }
+      const finalGithubLogin = await services.authenticatedGithubLogin(record);
+      if (finalGithubLogin !== authorization.githubLogin) {
+        fail(
+          "authenticated GitHub identity changed immediately before the merge request",
+          "MERGE_AUTH_IDENTITY_DRIFT",
+        );
+      }
+      await services.beforeMerge({ record, binding, authorization });
+      requestIntent = recordRequestIntent(runDir, authorization, binding);
+      await services.afterRequestIntent({ record, binding, authorization });
+      try {
+        await services.mergePullRequest(record, binding, authorization.method);
+        mergePerformed = true;
+      } catch (error) {
+        live = await services.observeLivePr(record, binding.prNumber);
+        if (live.pr_state === "MERGED") {
+          writeImmutableJson(ambiguousFile, ambiguousValue(authorization, binding));
+          fail(
+            "merge command failed after GitHub reported MERGED; use canonical external recover",
+            "MERGE_EXTERNAL_RECOVER_REQUIRED",
+          );
+        }
+        if (live.pr_state === "OPEN" && isMergePending(live)) {
+          const queuedMethod = pendingMethod(live);
+          if (queuedMethod && queuedMethod !== authorization.method) {
+            fail("GitHub merge queue method differs from the durable authorization", "MERGE_QUEUE_METHOD_MISMATCH");
+          }
+          assertQueueRequestor(live, authorization);
+          pending = recordPending(runDir, authorization, binding);
+          return {
+            run_id: record.run_id,
+            status: "merge_pending",
+            merge_performed: true,
+            merge_recorded: false,
+            pr_number: binding.prNumber,
+            pr_head_sha: binding.head,
+            method: authorization.method,
+            operator: authorization.actor,
+            operation_id: authorization.operationId,
+            cleanup: { status: "deferred_until_merged" },
+          };
+        }
+        fail(
+          `merge request outcome is ambiguous after command failure: ${error.message}`,
+          "MERGE_REQUEST_OUTCOME_AMBIGUOUS",
+        );
+      }
+      await services.afterMergeRequest({ record, binding, authorization });
+      // A successful command is the exactly-once request boundary. Persist
+      // confirmation only after the post-call crash seam has been crossed.
+      pending = recordPending(runDir, authorization, binding);
+      await services.afterMerge({ record, binding, operationId: id });
+      live = await services.observeLivePr(record, binding.prNumber);
+      if (live.pr_state === "OPEN" && isMergePending(live)) {
+        const queuedMethod = pendingMethod(live);
+        if (queuedMethod && queuedMethod !== authorization.method) {
+          fail("GitHub merge queue method differs from the durable authorization", "MERGE_QUEUE_METHOD_MISMATCH");
+        }
+        assertQueueRequestor(live, authorization);
+        pending = recordPending(runDir, authorization, binding);
+        return {
+          run_id: record.run_id,
+          status: "merge_pending",
+          merge_performed: true,
+          merge_recorded: false,
+          pr_number: binding.prNumber,
+          pr_head_sha: binding.head,
+          method: authorization.method,
+          operator: authorization.actor,
+          operation_id: authorization.operationId,
+          cleanup: { status: "deferred_until_merged" },
+        };
+      }
+    }
+    assertExactPr(live, record, binding, new Set(["MERGED"]));
+    requireRelayRequestEvidence({ live, pending, requestIntent, mergePerformed });
+    const mergeFact = await services.recordMerge({
+      eventsPath: path.join(runDir, "events.jsonl"),
+      provenance: {
+        pr_number: binding.prNumber,
+        reviewed_source_sha: binding.head,
+        pr_head_sha: binding.head,
+        result_target_sha: live.merge_sha,
+        method: authorization.method,
+        operator: authorization.actor,
+        override_reason: authorization.overrideReason,
+      },
+      authorization,
+      lockContext,
+      observer,
+    });
+    const cleanup = cli.values["no-cleanup"]
+      ? { status: "retained_by_request" }
+      : await services.cleanupWorktree(record, mergeFact);
+    return {
+      run_id: record.run_id,
+      status: "merged",
+      merge_performed: mergePerformed,
+      merge_recorded: true,
+      pr_number: binding.prNumber,
+      pr_head_sha: binding.head,
+      result_target_sha: mergeFact.payload.result_target_sha,
+      method: mergeFact.payload.method,
+      operator: mergeFact.payload.operator,
+      operation_id: mergeFact.payload.operation_id,
+      cleanup,
+    };
+  });
 }
 
 async function main(argv = process.argv.slice(2)) {

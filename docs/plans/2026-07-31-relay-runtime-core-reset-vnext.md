@@ -1,6 +1,6 @@
 # Relay Runtime Core Reset vNext
 
-**Status:** implementation complete; rollout evidence pending
+**Status:** implementation complete; migration withdrawn 2026-08-03; rollout evidence pending
 **Date:** 2026-07-31
 **Scope:** `relay-dispatch` runtime and the shared run contracts consumed by
 `relay`, `relay-review`, `relay-merge`, `relay-fleet`, and `relay-config`
@@ -27,7 +27,8 @@ size target by reducing executor diversity.
 1. Reduce the installed `relay-dispatch/scripts` runtime from 75 JavaScript
    files to 14-18 files.
 2. Reduce production runtime code from 29,607 lines to a 4,000-6,000 line
-   budget after migration shims are retired.
+   budget. Delivered at 6,028 lines with no migration shims outstanding — 28
+   lines over the band.
 3. Replace eleven persisted workflow states with append-only durable facts and
    a derived current action.
 4. Replace the recovery command family with one read-only `inspect` surface and
@@ -78,20 +79,23 @@ implementations are removed.
 
 ## Implementation Snapshot (2026-08-02)
 
-- Installed dispatch runtime: 18 JavaScript files / 8,262 LOC.
-- Retained core after excluding the two migration-only shims: 16 files / 6,049 LOC.
+- Installed dispatch runtime: 16 JavaScript files / 6,028 LOC (measured into
+  `tests/ledger/vnext-baseline.generated.json`).
 - All seven native executors remain registered; the unused generic argv-template
   framework was removed so native descriptors are the only extension path.
-- The serialized repository gate on Node v22.22.3 reports 707 tests, 705 passed,
-  0 failed, 2 skipped. Both skips are the ledger-approved opt-in live canaries
-  (`opencode-live`, `pi-live`) that require external credentials to run.
+- The serialized repository gate on Node v22.22.3 reported 707 tests, 705 passed,
+  0 failed, 2 skipped **on 2026-08-02, before the overlay deletion**. Both skips
+  are the ledger-approved opt-in live canaries (`opencode-live`, `pi-live`) that
+  require external credentials to run. The two deleted suites took 64 test
+  declarations with them, so the current count is lower; re-measure rather than
+  quoting this line.
 - Independent lifecycle re-review is LGTM after PID-reuse, zombie, quarantine,
   signed-close, and reviewer-cleanup regressions were closed.
 - The exact live-canary release matrix remains intentionally incomplete at
   2/13. Missing credentials, CLIs, skips, and fallbacks do not satisfy a cell.
-- Migration shims remain installed until both 30 days and 30 vNext terminal
-  runs show zero legacy reads. This calendar/operational gate is not a code
-  defect and is not self-attested by `--bootstrap-vnext`.
+- The migration overlay was deleted on 2026-08-03 rather than exercised. There
+  are no shims, no writer generation, and no retirement gate; vNext admits
+  itself and claims a run directory with a non-recursive `mkdir`.
 
 ## Durable Invariants
 
@@ -485,7 +489,7 @@ Publication rules are exact:
 - a clean worktree with an existing PR may record same-SHA operator
   verification without inventing a commit;
 - publication is permitted only for `publish_policy=immediate`; delayed
-  publication is removed by the product-surface workstream before cutover;
+  publication is removed by the product-surface workstream;
 - every PR create passes explicit base and head refs;
 - create failure is followed by one exact-head lookup to converge on a PR
   created concurrently.
@@ -586,62 +590,25 @@ Delete exact error text, exhaustive old-state matrices, and helper-level tests
 when the associated implementation is removed. Retain the smallest
 anti-regression case that fails if the invariant is removed.
 
-## Migration
+## Migration — withdrawn 2026-08-03
 
-First inventory all run/manifest/event/evidence readers and writers across the
-bundle and scan active local runs.
+This section planned a drain-and-cutover / dual-read migration, an explicit
+legacy-to-vNext record mapping, and a `runtime-generation` marker switched
+atomically between `legacy` and `vnext`. **None of it shipped, and the code
+that implemented part of it has been deleted.** Read it as design history only.
 
-Choose one path from measured data:
+There is no migration. The legacy manifest reader went with the runtime reset
+in #1140, so no installed script can read a pre-vNext run: a repository holding
+pre-vNext state does not migrate, it starts its next run as a vNext run. Nothing
+admits a writer, records a generation, or translates retired argv.
 
-- **Drain and cut over:** use when active runs are short-lived and can reach
-  terminal state in a bounded maintenance window.
-- **Dual-read / vNext-write:** use when active legacy runs cannot be drained.
-  On the first mutation, snapshot the original manifest and append a migration
-  event before an atomic vNext write.
+The overlay was measured before it was removed. Every path to a dispatchable
+vNext marker required an external Ed25519 attestation whose file and every
+parent directory up to `/` had to be owned by a different UID and non-writable
+by the operator — satisfiable on a single-operator machine only by becoming root
+and signing to yourself. See
+[../decisions/2026-08-03-migration-overlay-disposition.md](../decisions/2026-08-03-migration-overlay-disposition.md).
 
-Rules:
-
-- terminal legacy runs remain read-only archives;
-- historical JSONL events are never rewritten;
-- unsupported future versions fail closed;
-- migration is idempotent;
-- rollback restores the original reader/writer version and preserved snapshot;
-- compatibility shims remain until there are zero active legacy runs and zero
-  old-format reads for the agreed window.
-
-The orchestrator decides from a checked-in inventory report. Drain-and-cutover
-is mandatory when there are at most five active legacy runs and the oldest is
-under 72 hours; dispatch is paused until all five terminate or are explicitly
-closed. Otherwise use dual-read/vNext-write. Shim removal requires zero active
-legacy runs and zero old-format reads for 30 consecutive days or 30 consecutive
-vNext runs, whichever is later.
-
-The migration mapping is explicit:
-
-| Legacy source | vNext destination |
-| --- | --- |
-| identity, repo, paths, roles, branch/base, source/anchor | immutable `run.json` |
-| `state=dispatched` plus latest dispatch event | `attempt_started` without a terminal outcome |
-| completed dispatch/recovery evidence | `attempt_finished` or `attempt_interrupted` |
-| `git.pr_number` | `pull_request_recorded` after live identity validation |
-| review round/verdict/reviewed SHA | `review_recorded` |
-| `state=merged` plus confirmed PR | `merge_recorded` with confirmed merge SHA |
-| `state=closed` | `run_closed` |
-| routing, assurance, guidance, compatibility-only fields | preserved in read-only `legacy.json`; never authorize vNext actions |
-
-For active runs, `migration_started` is appended to the legacy journal, the
-original manifest is copied byte-for-byte to `legacy-manifest.md`, then
-`run.json` and vNext events are written atomically under the existing manifest
-transaction lock. `migration_completed` is the final legacy event. If any
-write fails, vNext files are removed and the legacy manifest remains
-authoritative.
-
-Rollback never lets both writers operate. A `runtime-generation` marker is
-atomically switched between `legacy` and `vnext`. When rolling back, the legacy
-snapshot and post-migration vNext events are retained; a generated
-`legacy-recovery-overlay.json` records only vNext facts that the old reader must
-see to avoid duplicate PR/merge actions. Rollback is blocked if the installed
-legacy reader cannot consume that overlay.
 
 ## Delivery Plan
 
@@ -659,10 +626,7 @@ Foundation contracts and inventory
         +--> product-surface subtraction
                        |
                        v
-               migration + cutover
-                       |
-                       v
-               old runtime retirement
+               old runtime deletion
 ```
 
 The dispatch entrypoint is rewritten only after the fact model, host contract,
@@ -684,24 +648,26 @@ adapter contract, and removal list are proven. Refactoring the existing
    with zero failures classified as success.
 6. **Fleet gate:** five two-leaf fleets preserve parent back-pointers, recover
    orphaned children, and never double-dispatch.
-7. **Migration gate:** all non-terminal legacy runs migrate or close; old/new
-   fold results agree; unsupported inputs are never silently accepted.
+7. **Migration gate:** withdrawn with the migration itself. Non-terminal legacy
+   runs neither migrate nor close; they are unreadable and stay that way.
 8. **Canary gate:** no wrong merge, lost work, criteria drift, duplicate
    invocation, or wrong-SHA review across 30 vNext runs and at least 14 calendar
    days.
 9. **Subtraction gate:** final runtime is 14-18 files and 4,000-6,000 production
-   LOC after shims, with the current executor set still supported.
+   LOC, with the current executor set still supported. Delivered at 16 files /
+   6,028 LOC — inside the file target, above the LOC band because production CLI
+   isolation (#1141) added credential staging, the signed two-phase cleanup
+   lifecycle, and runtime-identity binding.
 
 ## Rollback
 
-- Every workstream lands independently behind the old runtime path or a shadow
-  reader until its gate passes.
-- vNext writes keep the original legacy snapshot for active migrated runs.
-- A cutover rollback restores the prior command entrypoints and reader while
-  leaving append-only vNext events intact.
+- Each workstream landed independently behind a shadow reader until its gate
+  passed. That scaffolding is gone with the old runtime path.
 - No rollback rewrites terminal event history.
 - Any wrong merge, duplicate invocation, lost work, or stale-SHA acceptance
   immediately stops the rollout and restores the last proven path.
+- There is no cutover rollback, because there was no cutover: vNext is the only
+  writer and the prior entrypoints and reader are deleted, not shadowed.
 
 ## Implementation Issues
 
@@ -713,7 +679,7 @@ adapter contract, and removal list are proven. Refactoring the existing
 | 2c | [#1133](https://github.com/sungjunlee/dev-relay/issues/1133) | Universal executor adapter and migration of every current executor | #1130 |
 | 2d | [#1134](https://github.com/sungjunlee/dev-relay/issues/1134) | Runtime policy/assurance/analytics/CLI subtraction | #1130 |
 | 3 | [#1135](https://github.com/sungjunlee/dev-relay/issues/1135) | Read-only `inspect` and idempotent `recover` | #1131, #1132 |
-| 4 | [#1136](https://github.com/sungjunlee/dev-relay/issues/1136) | Cutover, dispatch rewrite, and legacy retirement | #1131–#1135 |
+| 4 | [#1136](https://github.com/sungjunlee/dev-relay/issues/1136) | Dispatch rewrite and legacy runtime deletion | #1131–#1135 |
 
 Umbrella: [#1129](https://github.com/sungjunlee/dev-relay/issues/1129).
 
@@ -746,17 +712,22 @@ retain these open issues:
 4. The old eleven-state writer and recovery entrypoints are removed.
 5. The current routing/advisory/analytics runtime surfaces are removed rather
    than moved within the bundle.
-6. Active legacy runs are drained or migrated without losing audit history.
+6. ~~Active legacy runs are drained or migrated without losing audit history.~~
+   Withdrawn 2026-08-03 with the migration. Legacy runs are neither drained nor
+   migrated: the legacy manifest reader is deleted, so they are unreadable and
+   their audit history is untouched because nothing reads or writes it.
 7. The full bundle test suite passes with the new black-box contract suite.
 8. Documentation describes one run fact model, one adapter protocol, and one
    recovery flow.
 9. Final measured runtime is 14-18 JavaScript files and 4,000-6,000 production
-   lines, excluding tests and terminal historical fixtures.
+   lines, excluding tests and terminal historical fixtures. **Delivered 16 files
+   / 6,028 lines — the file target is met and the LOC band is missed by 28
+   lines.** The overrun is production CLI isolation (#1141), not migration
+   scaffolding; there is no shim left whose removal would close it.
 
 The subtraction measurement includes every shipped JavaScript file imported or
 executed by `relay-dispatch`, including shared bundle modules, generated runtime
 code, compatibility shims, and adapter files. It excludes tests, fixtures,
 Markdown, archived one-off analysis tools outside installed skills, and
-terminal user data. The 4,000-6,000 line gate is evaluated only after shims are
-removed; during migration, concept and command budgets are binding while LOC is
-reported without failing the rollout.
+terminal user data. The 4,000-6,000 line gate is live now that no shims remain,
+and the measured runtime misses it by 28 lines; see Definition of Done item 9.

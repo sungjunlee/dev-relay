@@ -47,7 +47,7 @@ The runner:
 3. Requires an exact durable/live PR identity, PR head, and passed verification proof for the frozen Done Criteria hash.
 4. Builds one review bundle containing only the immutable contract, exact diff, PR identity, and verification fact. It never includes the dispatch prompt, executor transcript, session id, or mutable manifest state.
 5. Stages that bundle in an isolated temporary directory and asks the bound adapter for a direct read-only structured-output invocation.
-6. Re-enters vNext generation admission and the per-run lock, repeats inspection, and appends exactly one `review_recorded` fact.
+6. Re-enters the per-run lock, repeats inspection, and appends exactly one `review_recorded` fact.
 7. Re-inspects and returns the next derived action.
 
 The reviewer returns only:
@@ -67,6 +67,6 @@ The reviewer returns only:
 - Current remote reviewers use `--network-access enabled` (the default); selecting `disabled` fails before invocation. Enabled transport is unrestricted reviewer-process network and does not claim provider-only or tool-network separation.
 - macOS uses `sandbox-exec` around the actual reviewer CLI and exposes only staged inputs plus required system/executable paths.
 - Linux does not claim direct CLI isolation through Node's permission model; unsupported hosts fail closed.
-- A stale PR head, missing verification, changed action, inactive vNext writer generation, unsupported adapter, or reviewer-binding mismatch writes no review fact.
+- A stale PR head, missing verification, changed action, unsupported adapter, or reviewer-binding mismatch writes no review fact.
 
 See [runner notes](references/runner-notes.md) and the [adapter platform](../relay-dispatch/references/agent-adapter-platform.md).

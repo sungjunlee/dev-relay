@@ -88,7 +88,7 @@ Criteria into an isolated review bundle, then appends one `review_recorded`
 fact. A passing verdict is `lgtm`; changed requests derive `redispatch`.
 
 `gate-check.js` is read-only. `finalize-run.js` is the explicit merge writer:
-it repeats inspection under admission and lock, records an HMAC-bound
+it repeats inspection under the run lock, records an HMAC-bound
 authorization tied to the authenticated GitHub login, uses GitHub's
 expected-source-SHA guard, re-observes the exact merge, records one
 `merge_recorded` fact, and only then removes a clean trusted worktree. GitHub
@@ -122,21 +122,18 @@ signed cleanup obligation. See the
 [adapter platform](../skills/relay-dispatch/references/agent-adapter-platform.md)
 for the full contract.
 
-## Migration overlay
+## Runtime size
 
-`runtime-generation.js` is an explicit repository-scoped migration store. A
-repository first records a decision and a zero-active-legacy-run drain, then
-switches to a sealed vNext writer generation. Legacy recovery is available only
-through `legacy-recovery-shim.js`, which translates historical command names at
-the public `relay-recover` boundary; it is not a parallel lifecycle runtime.
+There is one runtime. The installed dispatch package contains 16 JavaScript
+files and 6,028 production LOC, measured by the ledger generator into
+`tests/ledger/vnext-baseline.generated.json`; refresh it with that generator
+rather than editing the figure by hand.
 
-The overlay must remain until **both** 30 consecutive days and 30 vNext runs
-have completed with zero legacy reads. Until that later threshold is met, the
-installed dispatch package contains 19 JavaScript files and 7,149 production
-LOC (including the two migration files). After retiring the overlay, the core
-target is 17 JavaScript files and 6,000 production LOC. The sealed production
-bootstrap is active; the retirement threshold is deliberately not claimed as
-complete.
+vNext is the only writer. Nothing admits a run, stamps a writer generation, or
+translates retired argv, and pre-vNext manifests are not readable — the legacy
+manifest reader went with the runtime reset. A repository that still holds
+pre-vNext state does not migrate; its historical runs stay unreadable and new
+work starts as a vNext run.
 
 ## Trust boundaries
 

@@ -20,11 +20,13 @@ relay-fleet --> relay-dispatch, relay-review, relay-merge
 relay-config -> relay-dispatch (adapter registry and capability contract)
 ```
 
-The shared dispatch core is deliberately the sole lifecycle implementation:
-`run-store.js`, `facts.js`, `inspect.js`, `recover.js`, `host.js`, and
-`runtime-generation.js`, with the seven files in `adapters/`. No skill may
-import a legacy manifest facade, event helper, execution-evidence sidecar,
-executor-specific registration module, or worktree utility.
+The shared dispatch core is deliberately the sole lifecycle implementation, and
+it is all 16 installed files: `dispatch.js`, `run-store.js`, `facts.js`,
+`inspect.js`, `recover.js`, `host.js`, `adapter-contract.js`, and `exec.js`,
+plus the eight files in `adapters/` (the registry and seven executor
+descriptors). No skill may import a legacy manifest facade, event helper,
+execution-evidence sidecar, executor-specific registration module, worktree
+utility, or migration-overlay module.
 
 | Phase | Entry point | Write authority |
 | --- | --- | --- |

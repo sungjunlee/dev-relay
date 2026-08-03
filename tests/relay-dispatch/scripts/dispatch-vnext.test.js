@@ -9,7 +9,6 @@ const os = require("os");
 const path = require("path");
 
 const facts = require("../../../skills/relay-dispatch/scripts/facts");
-const generation = require("../../../skills/relay-dispatch/scripts/runtime-generation");
 const dispatch = require("../../../skills/relay-dispatch/scripts/dispatch");
 const host = require("../../../skills/relay-dispatch/scripts/host");
 const recovery = require("../../../skills/relay-dispatch/scripts/recover");
@@ -24,9 +23,20 @@ const FAKE_CLINE = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-cli
 const CRASH_AFTER_START = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-crash-after-start-preload.js");
 const WRITE_CONTAINMENT_EXECUTOR = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-write-containment-executor.js");
 const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-adapter-runtime-preload.js");
+const RUN_CLAIM_RACE = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-run-claim-race-preload.js");
 
 function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+// Absolute path to the real git, so a RELAY_GIT_BIN stub can delegate without inheriting a PATH
+// that already points back at itself.
+function realGit() {
+  for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
+    const candidate = path.join(dir, "git");
+    try { fs.accessSync(candidate, fs.constants.X_OK); return fs.realpathSync(candidate); } catch {}
+  }
+  throw new Error("git is not on PATH");
 }
 
 function installNodeFixture(source, target) {
@@ -34,7 +44,7 @@ function installNodeFixture(source, target) {
   fs.writeFileSync(target, bytes, { mode: 0o755 });
 }
 
-function fixture(label, { active = true } = {}) {
+function fixture(label) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-dispatch-vnext-${label}-`)));
   const repo = path.join(root, "repo");
   const remote = path.join(root, "remote.git");
@@ -61,16 +71,6 @@ function fixture(label, { active = true } = {}) {
   const env = { ...process.env, RELAY_HOME: relayHome, RELAY_CURSOR_AGENT_BIN: path.join(bin, "agent"), RELAY_CLINE_BIN: fakeCline,
     NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${ADAPTER_RUNTIME_PRELOAD}`].filter(Boolean).join(" "),
     PATH: `${bin}${path.delimiter}${process.env.PATH}` };
-  if (active) {
-    const identity = dispatch.repositoryIdentity(fs.realpathSync(repo));
-    const store = generation.initializeStore({ checkoutRoot: identity.checkout, remote: identity.remote });
-    generation.decideMigration({ store, observation: { observed_at: "2026-08-01T00:00:00.000Z", active_legacy_run_count: 0, oldest_active_legacy_age_hours: null } });
-    const drain = generation.recordDrainCompleted({ store,
-      inventory: { observed_at: "2026-08-01T00:00:00.001Z", active_legacy_run_count: 0, oldest_active_legacy_age_hours: null },
-      actor: "test-fixture", operationId: `drain-${label}` }).inventory;
-    generation.switchGeneration({ store, generation: "vnext", actor: "test-fixture", operationId: `switch-${label}`,
-      switchedAt: "2026-08-01T00:00:00.002Z", drainInventoryDigest: drain.inventory_digest });
-  }
   return { root, repo, remote, relayHome, prompt, rubric, env };
 }
 
@@ -81,28 +81,11 @@ function run(value, args, env = value.env) {
 
 function json(stdout) { return JSON.parse(stdout); }
 
-function processLive(pid) {
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
-}
-
 function fixtureRunsDir(value) {
   const canonical = fs.realpathSync(value.repo);
   const base = path.basename(canonical).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
   const slug = `${base}-${crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 8)}`;
   return path.join(value.relayHome, "runs", slug);
-}
-
-function byteTree(root) {
-  if (!fs.existsSync(root)) return null;
-  const visit = (directory, prefix = "") => fs.readdirSync(directory).sort().flatMap((name) => {
-    const absolute = path.join(directory, name);
-    const relative = path.join(prefix, name);
-    const stat = fs.lstatSync(absolute);
-    if (stat.isDirectory()) return [{ path: relative, kind: "directory", mode: stat.mode & 0o777 }, ...visit(absolute, relative)];
-    if (stat.isSymbolicLink()) return [{ path: relative, kind: "symlink", target: fs.readlinkSync(absolute) }];
-    return [{ path: relative, kind: "file", mode: stat.mode & 0o777, bytes: fs.readFileSync(absolute).toString("base64") }];
-  });
-  return visit(root);
 }
 
 test("cleanup recovery refuses to release an owner without a signed exact obligation", async () => {
@@ -113,7 +96,7 @@ test("cleanup recovery refuses to release an owner without a signed exact obliga
   const originalWait = host.waitForTerminalResult;
   host.waitForTerminalResult = async () => { throw Object.assign(new Error("cleanup remains"), { code: "HOST_CLEANUP_INCOMPLETE" }); };
   try {
-    await assert.rejects(dispatch.finishAttempt({ cli: {}, store: null, adapter: null, started: { receipt: {}, lockContext, runDir } }),
+    await assert.rejects(dispatch.finishAttempt({ cli: {}, adapter: null, started: { receipt: {}, lockContext, runDir } }),
       (error) => error.code === "BREAK_EVIDENCE_INSUFFICIENT" && error.cleanup_recovery === "incomplete");
     assert.equal(fs.readFileSync(path.join(runDir, "events.jsonl"), "utf8"), "");
     assert.equal(host.inspectOwnership({ runDir }).status, "live");
@@ -123,7 +106,7 @@ test("cleanup recovery refuses to release an owner without a signed exact obliga
 });
 
 test("dry-run validates the closed vNext surface while writing zero durable bytes", () => {
-  const value = fixture("dry", { active: false });
+  const value = fixture("dry");
   const stateDir = path.join(value.repo, ".git", "relay-runtime-vnext");
   const result = run(value, ["--branch", "dry-run", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--dry-run", "--json"]);
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
@@ -198,95 +181,92 @@ test("removed readiness identity flags fail closed instead of being silently ign
   assert.equal(fs.existsSync(value.relayHome), false);
 });
 
-test("missing generation marker and caller bootstrap both fail closed", () => {
-  const value = fixture("generation", { active: false });
-  const stateDir = path.join(value.repo, ".git", "relay-runtime-vnext");
-  assert.equal(fs.existsSync(stateDir), false);
-  const denied = run(value, ["--branch", "denied", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
-  assert.notEqual(denied.status, 0);
-  assert.equal(json(denied.stderr).code, "GENERATION_NOT_ACTIVE");
-  assert.equal(git(value.repo, ["branch", "--list", "denied"]), "");
-  assert.equal(fs.existsSync(stateDir), false, "ordinary admission must not initialize an absent store");
-
-  const allowed = run(value, ["--branch", "issue-42", "--issue-number", "42", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--json"]);
-  assert.notEqual(allowed.status, 0);
-  assert.equal(json(allowed.stderr).code, "CUTOVER_GATE_UNSATISFIED");
-  assert.equal(fs.existsSync(stateDir), false, "sealed bootstrap must not initialize an absent store");
-  const store = generation.initializeStore({ checkoutRoot: value.repo, remote: value.remote });
-  assert.equal(generation.readGeneration(store), null);
-});
-
-test("an initialized store without an active marker is byte-for-byte read-only on dispatch admission", () => {
-  const value = fixture("generation-inactive-store", { active: false });
-  const store = generation.initializeStore({ checkoutRoot: value.repo, remote: value.remote });
-  const before = byteTree(store.stateDir);
-  const denied = run(value, ["--branch", "inactive-store", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
-  assert.notEqual(denied.status, 0);
-  assert.equal(json(denied.stderr).code, "GENERATION_NOT_ACTIVE");
-  assert.deepEqual(byteTree(store.stateDir), before);
-  assert.equal(git(value.repo, ["branch", "--list", "inactive-store"]), "");
-});
-
-test("a malformed generation marker fails closed without repairing or rewriting the store", () => {
-  const value = fixture("generation-malformed-store", { active: false });
-  const store = generation.initializeStore({ checkoutRoot: value.repo, remote: value.remote });
-  fs.writeFileSync(store.paths.generation, "{malformed\n");
-  const before = byteTree(store.stateDir);
-  const denied = run(value, ["--branch", "malformed-store", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
-  assert.notEqual(denied.status, 0);
-  assert.equal(json(denied.stderr).code, "INVALID_GENERATION_ARTIFACT");
-  assert.deepEqual(byteTree(store.stateDir), before);
-  assert.equal(git(value.repo, ["branch", "--list", "malformed-store"]), "");
-});
-
-test("self-attested 30-run JSON and caller digest cannot authorize bootstrap", () => {
-  const value = fixture("bootstrap-gate", { active: false });
-  const gate = path.join(value.root, "self-attested.json");
-  fs.writeFileSync(gate, JSON.stringify({ successful_vnext_runs: 30, days: 14, violations: 0 }));
-  const result = run(value, ["--branch", "gate-self-attested", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--json"], {
-    ...value.env, RELAY_VNEXT_CUTOVER_GATE: gate,
-    RELAY_VNEXT_CUTOVER_GATE_SHA256: crypto.createHash("sha256").update(fs.readFileSync(gate)).digest("hex"),
-  });
+test("the removed migration cutover flag fails closed instead of being silently ignored", () => {
+  const value = fixture("removed-cutover-flag");
+  const result = run(value, ["--branch", "closed-cutover", "--prompt", "x", "--rubric-file", value.rubric, "--bootstrap-vnext", "--dry-run", "--json"]);
   assert.notEqual(result.status, 0);
-  assert.equal(json(result.stderr).code, "CUTOVER_GATE_UNSATISFIED");
+  assert.match(result.stderr, /unknown flag/i);
+  assert.equal(fs.existsSync(value.relayHome), false);
 });
 
-test("bootstrap resumes the same durable transition identity after a receipt-before-marker crash", () => {
-  const value = fixture("bootstrap-resume", { active: false });
-  const identity = dispatch.repositoryIdentity(fs.realpathSync(value.repo));
-  const store = generation.initializeStore({ checkoutRoot: identity.checkout, remote: identity.remote });
-  const observed = new Date().toISOString();
-  generation.decideMigration({ store, observation: { observed_at: observed, active_legacy_run_count: 0, oldest_active_legacy_age_hours: null } });
-  const drainedAt = new Date(Date.parse(observed) + 1).toISOString();
-  const drained = generation.recordDrainCompleted({
-    store,
-    inventory: { observed_at: drainedAt, active_legacy_run_count: 0, oldest_active_legacy_age_hours: null },
-    actor: "relay-dispatch",
-    operationId: `bootstrap-drain-${store.repositoryDigest.slice(0, 24)}`,
-  }).inventory;
-  const operationId = `bootstrap-vnext-${store.repositoryDigest.slice(0, 24)}`;
-  assert.throws(() => generation.switchGeneration({
-    store,
-    generation: "vnext",
-    actor: "relay-dispatch",
-    operationId,
-    switchedAt: new Date(Date.parse(drainedAt) + 1).toISOString(),
-    drainInventoryDigest: drained.inventory_digest,
-    fault(stage, filePath) {
-      if (stage === "dir_fsync" && filePath.includes("generation-transitions")) throw new Error("crash after receipt");
-    },
-  }), /crash after receipt/);
-  const selected = generation.switchGeneration({ store, generation: "vnext", actor: "relay-dispatch", operationId,
-    switchedAt: new Date(Date.parse(drainedAt) + 1).toISOString(), drainInventoryDigest: drained.inventory_digest });
-  assert.equal(selected.marker.writer_generation, "vnext");
-  assert.equal(selected.marker.transition_operation_id, operationId);
-  assert.equal(generation.readEvents(store).filter((event) => event.type === "generation_switched").length, 1);
+// The run directory is claimed by a non-recursive mkdir, which replaced an existsSync/mkdir pair that
+// the deleted repository-wide generation lock used to serialize. A duplicate run id must be rejected
+// on the cheap pre-check, before any Git work happens.
+test("a duplicate run id is rejected before any branch or worktree is created", () => {
+  const value = fixture("run-id-conflict");
+  const runId = "conflict-run";
+  const runDir = path.join(fixtureRunsDir(value), runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, "sentinel"), "winner\n");
+
+  const second = run(value, ["--branch", "conflict-b", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env, RELAY_DISPATCH_INTERNAL_RUN_ID: runId,
+  });
+  assert.notEqual(second.status, 0);
+  assert.match(`${second.stdout}${second.stderr}`, /run already exists/);
+  assert.equal(fs.readFileSync(path.join(runDir, "sentinel"), "utf8"), "winner\n", "the winner's run directory must survive");
+  assert.equal(git(value.repo, ["branch", "--list", "conflict-b"]), "", "no branch may be created for a duplicate run id");
+});
+
+// The pre-check above is an optimization; the authoritative claim is the mkdir. The preload hides the
+// directory from `existsSync` exactly once, which is what a real concurrent dispatch looks like: the
+// loser has already built its worktree by the time mkdir returns EEXIST. It must then unwind only its
+// own branch and worktree and leave the winner's run directory untouched.
+test("losing the run-directory claim race unwinds only the loser's own branch and worktree", () => {
+  const value = fixture("run-claim-race");
+  const runId = "race-run";
+  const runDir = path.join(fixtureRunsDir(value), runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, "sentinel"), "winner\n");
+
+  const loser = run(value, ["--branch", "race-loser", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env,
+    RELAY_DISPATCH_INTERNAL_RUN_ID: runId,
+    RELAY_TEST_RACE_RUN_DIR: runDir,
+    NODE_OPTIONS: [value.env.NODE_OPTIONS, `--require=${RUN_CLAIM_RACE}`].filter(Boolean).join(" "),
+  });
+  assert.notEqual(loser.status, 0);
+  assert.match(`${loser.stdout}${loser.stderr}`, /run already exists/);
+  assert.deepEqual(fs.readdirSync(runDir), ["sentinel"], "the loser must not delete or add to the winner's run directory");
+  assert.equal(fs.readFileSync(path.join(runDir, "sentinel"), "utf8"), "winner\n");
+  assert.equal(git(value.repo, ["branch", "--list", "race-loser"]), "", "the loser must remove the branch it created");
+});
+
+// Regression guard for the ordering of the run-directory claim. The claim happens after the retained
+// worktree exists, so a crash during `git worktree add` cannot strand an empty run directory that
+// afterwards rejects create, resume, inspect, and recover alike with no way to clear it.
+test("a crash during retained-worktree creation strands no run directory", () => {
+  const value = fixture("worktree-crash");
+  const runId = "worktree-crash-run";
+  const gitStub = path.join(value.root, "slow-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const args = process.argv.slice(2);',
+    'const at = args[0] === "-C" ? 2 : 0;',
+    'if (args[at] === "worktree" && args[at + 1] === "add") {',
+    '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30_000);',
+    '}',
+    'execFileSync(REAL_GIT, args, { stdio: "inherit" });',
+  ].join("\n").replace("REAL_GIT", JSON.stringify(realGit())), { mode: 0o755 });
+
+  const child = spawn(process.execPath, [DISPATCH, value.repo, "--branch", "worktree-crash", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--network-access", "enabled", "--json"], {
+    env: { ...value.env, RELAY_DISPATCH_INTERNAL_RUN_ID: runId, RELAY_GIT_BIN: gitStub },
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3_000);
+  child.kill("SIGKILL");
+
+  const runsDir = fixtureRunsDir(value);
+  const stranded = fs.existsSync(runsDir) ? fs.readdirSync(runsDir) : [];
+  assert.deepEqual(stranded, [], "a mid-worktree crash must leave no claimed run directory behind");
 });
 
 test("attempt_started is durable before executor gate launch, so a launch-window crash cannot orphan work", () => {
   const value = fixture("launch-window");
   const runId = "crash-start-run";
-  const crashed = run(value, ["--branch", "crash-start", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--json"], {
+  const crashed = run(value, ["--branch", "crash-start", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
     ...value.env,
     RELAY_DISPATCH_INTERNAL_RUN_ID: runId,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --require=${CRASH_AFTER_START}`.trim(),
@@ -306,7 +286,7 @@ test("dispatch persists immutable bindings and exact attempt facts but never aut
   const result = run(value, [
     "--branch", "issue-7", "--issue-number", "7", "--prompt-file", value.prompt,
     "--rubric-file", value.rubric, "--done-criteria-file", value.rubric,
-    "--executor", "codex", "--model", "test/model", "--bootstrap-vnext", "--json",
+    "--executor", "codex", "--model", "test/model", "--json",
   ]);
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const output = json(result.stdout);
@@ -350,7 +330,7 @@ test("the actual executor process tree enforces filesystem/service boundaries an
   });
   try {
     fs.writeFileSync(value.prompt, JSON.stringify({ active: activeTarget, sibling: siblingTarget, outside: outsideTarget, port }));
-    const result = run(value, ["--branch", "contained", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--json"], {
+    const result = run(value, ["--branch", "contained", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
       ...value.env,
     });
     assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
@@ -382,7 +362,7 @@ test("read-only dispatch denies worktree writes while retaining only result and 
   installNodeFixture(WRITE_CONTAINMENT_EXECUTOR, path.join(value.root, "bin", "codex"));
   fs.writeFileSync(value.prompt, JSON.stringify({ active: path.join(value.repo, "active.txt"), sibling: path.join(value.root, "sibling.txt"),
     outside: path.join(os.tmpdir(), `relay-readonly-${crypto.randomUUID()}`), proof_in_result: true }));
-  const result = run(value, ["--branch", "read-only-contained", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--sandbox", "read-only", "--bootstrap-vnext", "--json"], value.env);
+  const result = run(value, ["--branch", "read-only-contained", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--sandbox", "read-only", "--json"], value.env);
   assert.equal(result.status, 0, result.stderr);
   const output = json(result.stdout);
   const proof = JSON.parse(output.outcome.output);
@@ -412,7 +392,7 @@ test("executor dispatch fails closed on hosts without an enforceable write bound
 test("an empty adapter result cannot turn an exit-zero host result into a completed attempt", () => {
   const value = fixture("empty-outcome");
   fs.writeFileSync(value.prompt, JSON.stringify({ empty: true }));
-  const result = run(value, ["--branch", "empty-outcome", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--json"], value.env);
+  const result = run(value, ["--branch", "empty-outcome", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], value.env);
   assert.notEqual(result.status, 0);
   const output = json(result.stdout);
   assert.equal(output.host_status, "completed");
@@ -426,7 +406,7 @@ test("an empty adapter result cannot turn an exit-zero host result into a comple
 
 test("a malformed structured adapter result cannot turn an exit-zero host result into a completed attempt", () => {
   const value = fixture("malformed-outcome");
-  const result = run(value, ["--branch", "malformed-outcome", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--executor", "cline", "--bootstrap-vnext", "--json"]);
+  const result = run(value, ["--branch", "malformed-outcome", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--executor", "cline", "--json"]);
   assert.notEqual(result.status, 0);
   const output = json(result.stdout);
   assert.equal(output.host_status, "completed");
@@ -442,7 +422,7 @@ test("detached mode returns a durable launch receipt while a child dispatcher re
   const value = fixture("detach");
   fs.writeFileSync(value.prompt, JSON.stringify({ delay_ms: 1000 }));
   const started = Date.now();
-  const result = run(value, ["--branch", "detached", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--detach", "--json"], {
+  const result = run(value, ["--branch", "detached", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--detach", "--json"], {
     ...value.env,
   });
   assert.equal(result.status, 0, result.stderr);
@@ -460,42 +440,10 @@ test("detached mode returns a durable launch receipt while a child dispatcher re
   assert.fail("detached dispatcher did not persist attempt_finished");
 });
 
-test("a rollback between launch and settlement leaves an authenticated terminal result for canonical recovery", async () => {
-  const value = fixture("rollback-window");
-  fs.writeFileSync(value.prompt, JSON.stringify({ delay_ms: 700 }));
-  const launched = run(value, ["--branch", "rollback-window", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--detach", "--json"], {
-    ...value.env,
-  });
-  assert.equal(launched.status, 0, launched.stderr);
-  const output = json(launched.stdout);
-  const record = readRunRecord({ runDir: output.run_dir });
-  const identity = dispatch.repositoryIdentity(fs.realpathSync(value.repo));
-  const store = generation.initializeStore({ checkoutRoot: identity.checkout, remote: identity.remote });
-  const currentFacts = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") }).facts;
-  generation.rollbackToLegacy({
-    store,
-    runIds: [record.run_id],
-    loadRunFacts: () => [{ run_id: record.run_id, closed: false, facts: currentFacts }],
-    switchedAt: new Date().toISOString(),
-    actor: "rollback-test",
-    operationId: "rollback-dispatch-window",
-  });
-  const resultPath = path.join(output.run_dir, `attempt-${output.attempt_id}.result.json`);
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline && (!fs.existsSync(resultPath) || processLive(output.dispatcher_pid))) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  assert.equal(fs.existsSync(resultPath), true, "host result must outlive the rejected vNext terminal write");
-  assert.equal(facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") }).facts.some((fact) => fact.type === "attempt_finished"), false);
-  const inspection = host.inspectOwnership({ runDir: output.run_dir });
-  assert.equal(inspection.status, "stale");
-  assert.equal(inspection.reason, "terminal_result");
-});
-
 test("fleet parent and ownership digest are immutable across redispatch", () => {
   const value = fixture("fleet");
   const ownership = JSON.stringify({ sprint: "backlog/sprints/runtime.md", track: "runtime", component: "dispatch" });
-  const first = run(value, ["--branch", "fleet-child", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--fleet-id", "fleet-1", "--ownership-json", ownership, "--bootstrap-vnext", "--json"]);
+  const first = run(value, ["--branch", "fleet-child", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--fleet-id", "fleet-1", "--ownership-json", ownership, "--json"]);
   assert.equal(first.status, 0, first.stderr);
   const output = json(first.stdout);
   const record = readRunRecord({ runDir: output.run_dir });
@@ -527,7 +475,7 @@ test("resume admission accepts only an exact inspect-derived redispatch action",
 
 test("resume revalidates the exact action key under the acquired run lock before prompt or attempt facts", async () => {
   const value = fixture("resume-lock-barrier");
-  const first = run(value, ["--branch", "resume-lock-barrier", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--json"]);
+  const first = run(value, ["--branch", "resume-lock-barrier", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
   assert.equal(first.status, 0, first.stderr);
   const output = json(first.stdout);
   const beforePrompts = fs.readdirSync(output.run_dir).filter((name) => name.startsWith("prompt-")).sort();
@@ -554,7 +502,7 @@ test("resume revalidates the exact action key under the acquired run lock before
 
 test("production inspection excludes only the self-held dispatch lock from exact action identity", async () => {
   const value = fixture("production-self-lock");
-  const first = run(value, ["--branch", "production-self-lock", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--json"]);
+  const first = run(value, ["--branch", "production-self-lock", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
   assert.equal(first.status, 0, first.stderr);
   const output = json(first.stdout);
   const record = readRunRecord({ runDir: output.run_dir });
@@ -603,7 +551,7 @@ test("production inspection excludes only the self-held dispatch lock from exact
 
 test("a denied resume writes no prompt, attempt, or fact before failing closed", () => {
   const value = fixture("resume-gate");
-  const first = run(value, ["--branch", "resume-gate", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--bootstrap-vnext", "--json"]);
+  const first = run(value, ["--branch", "resume-gate", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
   assert.equal(first.status, 0, first.stderr);
   const output = json(first.stdout);
   const beforeFiles = fs.readdirSync(output.run_dir).sort();
