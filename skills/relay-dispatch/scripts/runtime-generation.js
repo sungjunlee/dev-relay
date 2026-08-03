@@ -1860,6 +1860,11 @@ const LEGACY_ACTIVITY_TYPES = new Set(["legacy_artifact_read", "legacy_surface_i
  * millisecond can only overstate legacy activity; excluding it lets post-boundary legacy reads
  * vanish from the retirement evidence permanently.  recordRolloutCheckpoint and retirementStatus
  * must apply the identical boundary or a checkpoint fails its own canonical recount.
+ *
+ * The `zero_legacy_since` caller shares this predicate for one rule rather than for a behaviour
+ * change: an activity at exactly switched_at yields the same instant as the `|| marker.switched_at`
+ * fallback it replaces, so that use is boundary-inert by construction and no test can distinguish
+ * it.  It is shared so the boundary cannot drift between callers.
  */
 function postCutoverLegacyActivity(item, marker) {
   return LEGACY_ACTIVITY_TYPES.has(item.type) && item.occurred_at >= marker.switched_at;

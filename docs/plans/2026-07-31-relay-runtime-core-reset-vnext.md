@@ -78,11 +78,11 @@ implementations are removed.
 
 ## Implementation Snapshot (2026-08-02)
 
-- Installed dispatch runtime: 18 JavaScript files / 8,257 LOC.
+- Installed dispatch runtime: 18 JavaScript files / 8,262 LOC.
 - Retained core after excluding the two migration-only shims: 16 files / 6,049 LOC.
 - All seven native executors remain registered; the unused generic argv-template
   framework was removed so native descriptors are the only extension path.
-- The serialized repository gate on Node v22.22.3 reports 706 tests, 704 passed,
+- The serialized repository gate on Node v22.22.3 reports 707 tests, 705 passed,
   0 failed, 2 skipped. Both skips are the ledger-approved opt-in live canaries
   (`opencode-live`, `pi-live`) that require external credentials to run.
 - Independent lifecycle re-review is LGTM after PID-reuse, zombie, quarantine,

@@ -169,4 +169,4 @@ fail-closed outcomes rather than silent, unbounded process leakage.
 The production bootstrap is sealed to vNext. The migration overlay remains only
 for legacy recovery translation and read observation. It retires after 30 days
 and 30 vNext runs with zero legacy reads; until then the installed package is
-18 JS / 8,257 LOC, with the post-retirement core target 16 JS / 6,049 LOC.
+18 JS / 8,262 LOC, with the post-retirement core target 16 JS / 6,049 LOC.

@@ -155,6 +155,18 @@ test("a generation marker signed in an earlier field shape is admitted and re-si
   assert.deepEqual(generation.peekGeneration(value.store), current);
   assert.equal(fs.readFileSync(value.store.paths.generation, "utf8"), canonical(priorMarker), "admission alone must not write");
 
+  // Tamper a field the genesis guard does NOT constrain, so only the historical digest check can
+  // reject it. switched_at is the field the whole post-cutover activity boundary reads, and the
+  // upgrade re-signs whatever it admits -- laundering one here would mint a valid signature over a
+  // moved cutover instant.
+  const movedCutover = { ...priorShape, switched_at: "2020-01-01T00:00:00.000Z" };
+  fs.writeFileSync(value.store.paths.generation, canonical({ ...movedCutover, marker_digest: priorMarker.marker_digest }), { mode: 0o600 });
+  assert.throws(
+    () => generation.readGeneration(value.store),
+    (error) => error.code === "INVALID_GENERATION_ARTIFACT" && /digest is invalid/.test(error.message),
+    "the upgrade must not launder a genesis-shaped marker with a tampered switched_at",
+  );
+
   const forged = { ...priorShape, epoch: priorShape.epoch + 1 };
   fs.writeFileSync(value.store.paths.generation, canonical({ ...forged, marker_digest: priorMarker.marker_digest }), { mode: 0o600 });
   assert.throws(
@@ -162,6 +174,7 @@ test("a generation marker signed in an earlier field shape is admitted and re-si
     (error) => error.code === "INVALID_GENERATION_ARTIFACT" && /digest is invalid/.test(error.message),
     "the upgrade must not launder a tampered prior-shape marker into admission",
   );
+
 
   fs.writeFileSync(value.store.paths.generation, canonical({ ...priorShape, unexpected: 1, marker_digest: priorMarker.marker_digest }), { mode: 0o600 });
   assert.throws(
@@ -190,6 +203,23 @@ test("a generation marker signed in an earlier field shape is admitted and re-si
   assert.equal(fs.readFileSync(value.store.paths.generation, "utf8"), canonical(current), "the decision path persists the re-signed marker");
 });
 
+// Tripwire for the next mandatory marker field. The signature covers key order and membership, so
+// adding a field without appending a MARKER_SHAPE_HISTORY entry strands every marker already on
+// disk -- silently, and exactly as #1144 did. This pins the signed shape the runtime writes, so that
+// addition fails here first and sends the author to the shape history.
+test("the signed marker field list is pinned so a new mandatory field cannot skip the shape history", () => {
+  const value = fixture("marker-shape-pinned");
+  generation.decideMigration({ store: value.store, observation: ZERO });
+  const marker = generation.readGeneration(value.store);
+  assert.deepEqual(Object.keys(marker), [
+    "schema_version", "repository_digest", "epoch", "writer_generation", "legacy_read_allowed",
+    "switched_at", "decision_digest", "transition_operation_id", "transition_actor",
+    "transition_receipt_digest", "transition_event_digest", "rollback_overlay_digest",
+    "quiescence_attestation_digest", "marker_digest",
+  ], "adding or reordering a signed marker field requires a MARKER_SHAPE_HISTORY entry for the shape it supersedes");
+  assert.equal(JSON.parse(fs.readFileSync(value.store.paths.generation, "utf8")).marker_digest, marker.marker_digest);
+});
+
 // A transitioned marker's quiescence attestation lives in its durable transition receipt and switch
 // event, which an earlier runtime wrote in their own narrower shapes too. Re-signing the marker alone
 // from a forced value would publish a marker that contradicts the one buildMarker reconstructs from
@@ -205,9 +235,9 @@ test("a transitioned marker in a superseded field shape fails closed instead of 
 
   const canonical = (input) => `${JSON.stringify(input, null, 2)}\n`;
   const sign = (input) => crypto.createHash("sha256").update(canonical(input)).digest("hex");
+  // A forced null here would re-sign to a marker this receipt does not reconstruct, which is why the
+  // shape upgrade refuses rather than repairs. That refusal is what the loop below pins.
   const { marker_digest: _signature, quiescence_attestation_digest: _added, ...priorShape } = marker;
-  assert.notEqual(sign({ ...priorShape, quiescence_attestation_digest: null }), marker.marker_digest,
-    "a forced null would re-sign to a marker its own transition receipt does not reconstruct");
   fs.writeFileSync(value.store.paths.generation, canonical({ ...priorShape, marker_digest: sign(priorShape) }), { mode: 0o600 });
 
   for (const read of [() => generation.readGeneration(value.store), () => generation.peekGeneration(value.store)]) {
