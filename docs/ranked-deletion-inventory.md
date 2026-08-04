@@ -26,7 +26,7 @@ See [the disposition](decisions/2026-08-03-migration-overlay-disposition.md).
 | --- | ---: | ---: | --- |
 | Dispatch runtime core | 16 | 6,044 | Justified. Each file owns a distinct invariant. |
 | Migration overlay | — | — | **Deleted 2026-08-03.** |
-| Relay tests | 53 | 14,335 | Mostly justified. |
+| Relay tests | 53 | 14,339 | Mostly justified. |
 | Test-accounting tooling | 11 | 3,185 | Largest candidate, but see §4 — its case is weaker than it first looks. |
 | Ledger artifacts | 5 | 1,463 | 639 regenerate, 716 are hand-curated rationale, 108 prose/benchmark. |
 
