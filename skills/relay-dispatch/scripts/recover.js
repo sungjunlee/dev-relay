@@ -4,7 +4,6 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const factsModule = require("./facts");
-const generation = require("./runtime-generation");
 const host = require("./host");
 const { execGh, execGit, resolveBranchRemote } = require("./exec");
 const { assertTrustedWorktree, readArtifact, readJsonIfPresent, readRunRecord, writeImmutableJson } = require("./run-store");
@@ -1381,10 +1380,6 @@ async function recoverProductionRun({
     relayWorktreeBase: relayWorktreeBase || runStore.relayWorktreeBase(),
     worktree: record.git.worktree,
   });
-  const generationStore = generation.peekStore({ checkoutRoot: trustedWorktree, remote: record.repo.remote });
-  if (!generationStore) throw Object.assign(new Error("vNext generation store is required for production recovery"), { code: "GENERATION_NOT_ACTIVE" });
-  return generation.withGenerationAdmission({ store: generationStore, generation: "vnext", mode: "write" }, async (admission) => {
-    generation.assertGenerationWrite({ store: generationStore, admission, generation: "vnext" });
   if (closeIntent !== null) {
     if (!closeIntent || typeof closeIntent !== "object" || Array.isArray(closeIntent)
       || Object.keys(closeIntent).sort().join(",") !== "operator,reason"
@@ -1463,7 +1458,6 @@ async function recoverProductionRun({
         lockContext,
       });
     },
-  });
   });
 }
 module.exports = {

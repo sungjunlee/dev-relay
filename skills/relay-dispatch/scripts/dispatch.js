@@ -14,7 +14,6 @@ const { getAdapter, listAdapters } = require("./adapters");
 const { assertInvocationShape, credentialRequest: validateCredentialRequest, validateCapabilities } = require("./adapter-contract");
 const facts = require("./facts");
 const host = require("./host");
-const generation = require("./runtime-generation");
 const recover = require("./recover");
 const runStore = require("./run-store");
 
@@ -40,7 +39,6 @@ const OPTIONS = Object.freeze({
   "ownership-json": { type: "string" },
   detach: { type: "boolean", default: false },
   "dry-run": { type: "boolean", default: false },
-  "bootstrap-vnext": { type: "boolean", default: false },
   json: { type: "boolean", default: false },
   help: { type: "boolean", short: "h", default: false },
 });
@@ -56,7 +54,6 @@ function usage() {
     "  dispatch.js [<repo>] --run-id <id> (--prompt <text> | --prompt-file <path>) [options]",
     "",
     `Executors: ${listAdapters().join(", ")}`,
-    "A repository without a vNext generation marker requires --bootstrap-vnext and a fresh zero legacy-run inventory.",
     "Dispatch never commits, pushes, opens a PR, or runs recovery. Use relay-recover for those actions.",
   ].join("\n");
 }
@@ -191,14 +188,6 @@ function parseCli(argv) {
   return { values, repo, runId, creating, issueNumber, timeoutSeconds, ownership };
 }
 
-function ensureVnextGeneration(identity, allowBootstrap) {
-  const store = generation.peekStore({ checkoutRoot: identity.checkout, remote: identity.remote });
-  const marker = store ? generation.peekGeneration(store) : null;
-  if (marker?.writer_generation === "vnext") return { store, marker, bootstrapped: false };
-  if (!allowBootstrap) fail("vNext generation is not active; rerun with --bootstrap-vnext after verifying the legacy inventory", "GENERATION_NOT_ACTIVE");
-  fail("--bootstrap-vnext is sealed until 30-day/30-run zero-legacy-read evidence is independently verifiable", "CUTOVER_GATE_UNSATISFIED");
-}
-
 function validateCopyInputs(repoRoot, copyValue) {
   if (!copyValue) return [];
   const inputs = [];
@@ -239,10 +228,32 @@ function createRetainedWorktree(identity, runId, branch) {
   const worktree = path.join(canonicalBase, repoSlug(identity.repoRoot), runId, path.basename(identity.repoRoot));
   if (fs.existsSync(worktree)) fail(`retained worktree already exists: ${worktree}`);
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
-  git(identity.checkout, ["worktree", "add", "-b", branch, worktree, startSha]);
-  const canonicalWorktree = fs.realpathSync(worktree);
-  runStore.assertTrustedWorktree({ repoRoot: identity.repoRoot, activeCheckout: identity.checkout, relayWorktreeBase: canonicalBase, worktree: canonicalWorktree });
-  return { worktree: canonicalWorktree, baseBranch, startSha, canonicalBase };
+  // Create the branch as its own step. `git branch` is an atomic exclusive ref creation: it fails
+  // closed if the name is taken, so a successful create is an ownership token for this dispatch.
+  // `worktree add -b` cannot serve that role — it creates the branch before it validates the
+  // destination, so a rejected destination leaves the branch behind and nothing afterwards
+  // distinguishes ours from one a concurrent dispatch created a moment earlier. Probing with
+  // `rev-parse` first would only move that race, not close it.
+  git(identity.checkout, ["branch", branch, startSha]);
+  let registered = false;
+  try {
+    git(identity.checkout, ["worktree", "add", worktree, branch]);
+    registered = true;
+    // Containment is validated inside this try so a rejected worktree unwinds like any other
+    // failure. Validating it afterwards left an untrusted-path rejection holding both a registered
+    // worktree and the branch.
+    const canonicalWorktree = fs.realpathSync(worktree);
+    runStore.assertTrustedWorktree({ repoRoot: identity.repoRoot, activeCheckout: identity.checkout, relayWorktreeBase: canonicalBase, worktree: canonicalWorktree });
+    return { worktree: canonicalWorktree, baseBranch, startSha, canonicalBase };
+  } catch (error) {
+    // Remove the destination only when this invocation registered it. A failed `worktree add` may
+    // have failed precisely because a competing dispatch owns that path, and `--force` deletes a
+    // dirty worktree without asking — it would destroy that run's uncommitted executor work.
+    // `branch -D` needs no such test: the atomic create above proves the branch is ours.
+    if (registered) { try { git(identity.checkout, ["worktree", "remove", "--force", worktree]); } catch {} }
+    try { git(identity.checkout, ["branch", "-D", branch]); } catch {}
+    throw error;
+  }
 }
 
 function removeUnpublishedWorktree(identity, created, branch) {
@@ -253,12 +264,18 @@ function removeUnpublishedWorktree(identity, created, branch) {
   try { fs.rmdirSync(path.dirname(runParent)); } catch {}
 }
 
+// `runDir` is null when this dispatch never claimed the directory, which is the
+// case when another dispatch won the mkdir race: the loser must remove only the
+// worktree and branch it created, never the winner's run directory. The shared
+// per-repository parent is deliberately left behind — rmdir'ing it raced other
+// dispatches into a bare ENOENT on their own leaf mkdir.
 function removeUnpublishedRun(identity, created, branch, runDir) {
-  const expectedParent = path.join(process.env.RELAY_RUNS_BASE || path.join(relayHome(), "runs"), repoSlug(identity.repoRoot));
-  const relative = path.relative(expectedParent, runDir);
-  if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-    try { fs.rmSync(runDir, { recursive: true, force: true }); } catch {}
-    try { fs.rmdirSync(expectedParent); } catch {}
+  if (runDir) {
+    // Re-derive the canonical location from immutable inputs; anything that does
+    // not match it is not this run's directory to delete.
+    let canonical = null;
+    try { canonical = runStore.resolveRunDirectory(identity.checkout, path.basename(runDir)); } catch {}
+    if (canonical === runDir) { try { fs.rmSync(runDir, { recursive: true, force: true }); } catch {} }
   }
   removeUnpublishedWorktree(identity, created, branch);
 }
@@ -334,124 +351,136 @@ function attemptFact({ runId, attemptId, type, actor, payload }) {
   return { event_id: crypto.createHash("sha256").update(crypto.randomBytes(32)).digest("hex"), run_id: runId, attempt_id: attemptId, type, at: new Date().toISOString(), actor, payload };
 }
 
-async function startAttempt({ cli, identity, store, adapter, prompt, rubric, resumeInspection = null, inspectRun = recover.inspectProductionRun }) {
+async function startAttempt({ cli, identity, adapter, prompt, rubric, resumeInspection = null, inspectRun = recover.inspectProductionRun }) {
   const actor = process.env.RELAY_ORCHESTRATOR || "codex";
-  return generation.withGenerationAdmission({ store, generation: "vnext", mode: "write" }, async (admission) => {
-    generation.assertGenerationWrite({ store, admission, generation: "vnext" });
-    let record;
-    let runDir = runStore.resolveRunDirectory(identity.checkout, cli.runId);
-    if (cli.creating) {
-      if (fs.existsSync(runDir)) fail(`run already exists: ${cli.runId}`, "RUN_RECORD_CONFLICT");
-      const worktree = createRetainedWorktree(identity, cli.runId, cli.values.branch);
+  let record;
+  let runDir = runStore.resolveRunDirectory(identity.checkout, cli.runId);
+  if (cli.creating) {
+    // Reject a duplicate run id before any Git work. This is an optimization, not the
+    // guard: the authoritative claim is the non-recursive mkdir below.
+    if (fs.existsSync(runDir)) fail(`run already exists: ${cli.runId}`, "RUN_RECORD_CONFLICT");
+    const worktree = createRetainedWorktree(identity, cli.runId, cli.values.branch);
+    let claimed = false;
+    try {
+      // Claim the run directory atomically. A repository-wide lock used to serialize the
+      // check and the create; a non-recursive mkdir on the leaf is a stronger guard with no
+      // lock timeout and no serialization between unrelated runs in the same repository.
+      // It is claimed after the worktree so that a crash during `git worktree add` cannot
+      // strand an empty run directory that permanently rejects both create and resume.
+      fs.mkdirSync(path.dirname(runDir), { recursive: true });
       try {
-        fs.mkdirSync(runDir, { recursive: true });
-        const criteriaSource = cli.values["done-criteria-file"] ? secureBytes(cli.values["done-criteria-file"], "Done Criteria") : rubric;
-        const stagedCriteria = path.join(runDir, ".done-criteria.source");
-        immutableBytes(stagedCriteria, criteriaSource.bytes);
-        const frozen = runStore.freezeDoneCriteria({ sourcePath: stagedCriteria, runDir });
-        fs.unlinkSync(stagedCriteria);
-        immutableBytes(path.join(runDir, "rubric.yaml"), rubric.bytes);
-        record = {
-          version: runStore.RUN_VERSION, run_id: cli.runId,
-          repo: { root: identity.repoRoot, remote: identity.remote },
-          git: { branch: cli.values.branch, base_branch: worktree.baseBranch, worktree: worktree.worktree, start_sha: worktree.startSha },
-          contract: { done_criteria_path: frozen.path, done_criteria_sha256: frozen.sha256 },
-          roles: { orchestrator: actor, executor: adapter.name, reviewer: process.env.RELAY_REVIEWER || "codex" },
-          parent: cli.values["fleet-id"] ? { kind: "fleet", id: cli.values["fleet-id"] } : null,
-          ownership_digest: cli.ownership.digest,
-          created_at: new Date().toISOString(),
-        };
-        runStore.createRunRecord({ runDir, record });
-        copyInputs(identity.repoRoot, record.git.worktree, cli.values.copy);
+        fs.mkdirSync(runDir);
       } catch (error) {
-        removeUnpublishedRun(identity, worktree, cli.values.branch, runDir);
+        if (error.code === "EEXIST") fail(`run already exists: ${cli.runId}`, "RUN_RECORD_CONFLICT");
         throw error;
       }
-    } else {
-      record = runStore.readRunRecord({ runDir });
-      if (record.repo.root !== identity.repoRoot || record.repo.remote !== identity.remote) fail("run repository identity does not match checkout");
-      if (record.roles.executor !== adapter.name) fail(`run executor is immutably bound to ${record.roles.executor}`);
-      if (cli.values["fleet-id"] && record.parent?.id !== cli.values["fleet-id"]) fail("fleet parent cannot change on redispatch");
-      if (cli.ownership.digest && record.ownership_digest !== cli.ownership.digest) fail("fleet ownership cannot change on redispatch");
-      runStore.assertTrustedWorktree({ repoRoot: record.repo.root, activeCheckout: identity.checkout, relayWorktreeBase: fs.realpathSync(worktreeBase()), worktree: record.git.worktree });
-    }
-    const attemptId = `dispatch-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
-    const promptPath = path.join(runDir, `prompt-${attemptId}.md`);
-    const outputPath = path.join(runDir, `attempt-${attemptId}.executor-output`);
-    const resultPath = path.join(runDir, `attempt-${attemptId}.result.json`);
-    const stdoutPath = path.join(runDir, `attempt-${attemptId}.stdout.log`);
-    const stderrPath = path.join(runDir, `attempt-${attemptId}.stderr.log`);
-    const audit = hostAuditAppender(runDir, cli.runId, actor);
-    const lockContext = host.acquireRunLock({
-      runDir, attemptId, operation: "dispatch", hostKind: "local_supervisor",
-      hostHandle: `dispatch:${process.pid}:${crypto.randomBytes(8).toString("hex")}`,
-      worktreeDir: record.git.worktree, audit,
-    });
-    let attemptStarted = false;
-    let invocation;
-    let startSha;
-    let timeoutMs;
-    let receipt;
-    try {
-      if (!cli.creating) {
-        const fresh = assertResumeInspection(await inspectRun({
-          runDir,
-          activeRunLock: lockContext,
-        }), resumeInspection?.recommended_action?.key || null);
-        if (fresh.recommended_action.key !== resumeInspection?.recommended_action?.key) {
-          fail("redispatch action key was not preserved under the run lock", "RUN_ACTION_CHANGED");
-        }
-      }
-      immutableBytes(promptPath, prompt.bytes);
-      validateCapabilities(adapter, "dispatch", { sandbox: cli.values.sandbox, readOnly: cli.values.sandbox === "read-only", networkAccess: cli.values["network-access"] });
-      invocation = adapter.buildInvocation({
-        phase: "dispatch", cwd: record.git.worktree, promptPath, resultPath: outputPath,
-        promptBytes: prompt.bytes,
-        model: cli.values.model || null, timeoutMs: (cli.timeoutSeconds || adapter.defaults.timeoutMs / 1000) * 1000,
-        sandbox: cli.values.sandbox, networkAccess: cli.values["network-access"], reasoning: cli.values.reasoning || null,
-      });
-      startSha = git(record.git.worktree, ["rev-parse", "HEAD"]);
-      timeoutMs = (cli.timeoutSeconds || adapter.defaults.timeoutMs / 1000) * 1000;
-      const requestedCredentials = credentialRequest(adapter, cli.values);
-      // The durable attempt intent deliberately precedes credential reads. launchLocalSupervisor binds them next,
-      // under this same run lock and before publishing config or spawning any host/executor process.
-      facts.appendFact({ eventsPath: path.join(runDir, "events.jsonl"), lockContext, fact: attemptFact({
-        runId: cli.runId, attemptId, type: "attempt_started", actor,
-        payload: { executor: adapter.name, model: cli.values.model || null, start_sha: startSha, host_kind: "local_supervisor", host_handle: lockContext.host_handle, stdout_path: stdoutPath, stderr_path: stderrPath, result_path: resultPath, timeout_ms: timeoutMs },
-      }) });
-      attemptStarted = true;
-      receipt = host.launchLocalSupervisor({
-        runDir, attemptId, command: invocation.command, args: invocation.args,
-        trustedWorktreeRoot: record.git.worktree, cwd: invocation.cwd,
-        stdoutPath, stderrPath, resultPath,
-        inputFiles: [promptPath],
-        stdinPath: invocation.stdinPath || null,
-        stdinSha256: invocation.stdinSha256 || null,
-        executorResultPath: outputPath,
-        executorSandbox: cli.values.sandbox,
-        executorNetworkAccess: cli.values["network-access"],
-        runtimeDependencies: invocation.runtimeDependencies,
-        privateEnvPaths: invocation.privateEnvPaths,
-        timeoutMs,
-        credentialRequest: { metadata: requestedCredentials.metadata, envNames: requestedCredentials.envNames, fileSpecs: requestedCredentials.fileSpecs, env: process.env },
-        processContainment: adapter.metadata.processContainment,
-        lockContext,
-      });
+      claimed = true;
+      const criteriaSource = cli.values["done-criteria-file"] ? secureBytes(cli.values["done-criteria-file"], "Done Criteria") : rubric;
+      const stagedCriteria = path.join(runDir, ".done-criteria.source");
+      immutableBytes(stagedCriteria, criteriaSource.bytes);
+      const frozen = runStore.freezeDoneCriteria({ sourcePath: stagedCriteria, runDir });
+      fs.unlinkSync(stagedCriteria);
+      immutableBytes(path.join(runDir, "rubric.yaml"), rubric.bytes);
+      record = {
+        version: runStore.RUN_VERSION, run_id: cli.runId,
+        repo: { root: identity.repoRoot, remote: identity.remote },
+        git: { branch: cli.values.branch, base_branch: worktree.baseBranch, worktree: worktree.worktree, start_sha: worktree.startSha },
+        contract: { done_criteria_path: frozen.path, done_criteria_sha256: frozen.sha256 },
+        roles: { orchestrator: actor, executor: adapter.name, reviewer: process.env.RELAY_REVIEWER || "codex" },
+        parent: cli.values["fleet-id"] ? { kind: "fleet", id: cli.values["fleet-id"] } : null,
+        ownership_digest: cli.ownership.digest,
+        created_at: new Date().toISOString(),
+      };
+      runStore.createRunRecord({ runDir, record });
+      copyInputs(identity.repoRoot, record.git.worktree, cli.values.copy);
     } catch (error) {
-      try {
-        if (attemptStarted) {
-          const observed = observeAttemptWorktree(record.git.worktree);
-          facts.appendFact({ eventsPath: path.join(runDir, "events.jsonl"), lockContext, fact: attemptFact({
-            runId: cli.runId, attemptId, type: "attempt_interrupted", actor,
-            payload: { last_known_sha: observed.head_sha, reason: `host launch failed: ${error.message}`, host_liveness: "dead", reviewable_work: observed.reviewable_work },
-          }) });
-        }
-        host.releaseRunLock(lockContext, { outcome: "failed", audit });
-      } catch {}
+      removeUnpublishedRun(identity, worktree, cli.values.branch, claimed ? runDir : null);
       throw error;
     }
-    return { record, runDir, attemptId, receipt, lockContext, audit, invocation, outputPath, actor, startSha };
+  } else {
+    record = runStore.readRunRecord({ runDir });
+    if (record.repo.root !== identity.repoRoot || record.repo.remote !== identity.remote) fail("run repository identity does not match checkout");
+    if (record.roles.executor !== adapter.name) fail(`run executor is immutably bound to ${record.roles.executor}`);
+    if (cli.values["fleet-id"] && record.parent?.id !== cli.values["fleet-id"]) fail("fleet parent cannot change on redispatch");
+    if (cli.ownership.digest && record.ownership_digest !== cli.ownership.digest) fail("fleet ownership cannot change on redispatch");
+    runStore.assertTrustedWorktree({ repoRoot: record.repo.root, activeCheckout: identity.checkout, relayWorktreeBase: fs.realpathSync(worktreeBase()), worktree: record.git.worktree });
+  }
+  const attemptId = `dispatch-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  const promptPath = path.join(runDir, `prompt-${attemptId}.md`);
+  const outputPath = path.join(runDir, `attempt-${attemptId}.executor-output`);
+  const resultPath = path.join(runDir, `attempt-${attemptId}.result.json`);
+  const stdoutPath = path.join(runDir, `attempt-${attemptId}.stdout.log`);
+  const stderrPath = path.join(runDir, `attempt-${attemptId}.stderr.log`);
+  const audit = hostAuditAppender(runDir, cli.runId, actor);
+  const lockContext = host.acquireRunLock({
+    runDir, attemptId, operation: "dispatch", hostKind: "local_supervisor",
+    hostHandle: `dispatch:${process.pid}:${crypto.randomBytes(8).toString("hex")}`,
+    worktreeDir: record.git.worktree, audit,
   });
+  let attemptStarted = false;
+  let invocation;
+  let startSha;
+  let timeoutMs;
+  let receipt;
+  try {
+    if (!cli.creating) {
+      const fresh = assertResumeInspection(await inspectRun({
+        runDir,
+        activeRunLock: lockContext,
+      }), resumeInspection?.recommended_action?.key || null);
+      if (fresh.recommended_action.key !== resumeInspection?.recommended_action?.key) {
+        fail("redispatch action key was not preserved under the run lock", "RUN_ACTION_CHANGED");
+      }
+    }
+    immutableBytes(promptPath, prompt.bytes);
+    validateCapabilities(adapter, "dispatch", { sandbox: cli.values.sandbox, readOnly: cli.values.sandbox === "read-only", networkAccess: cli.values["network-access"] });
+    invocation = adapter.buildInvocation({
+      phase: "dispatch", cwd: record.git.worktree, promptPath, resultPath: outputPath,
+      promptBytes: prompt.bytes,
+      model: cli.values.model || null, timeoutMs: (cli.timeoutSeconds || adapter.defaults.timeoutMs / 1000) * 1000,
+      sandbox: cli.values.sandbox, networkAccess: cli.values["network-access"], reasoning: cli.values.reasoning || null,
+    });
+    startSha = git(record.git.worktree, ["rev-parse", "HEAD"]);
+    timeoutMs = (cli.timeoutSeconds || adapter.defaults.timeoutMs / 1000) * 1000;
+    const requestedCredentials = credentialRequest(adapter, cli.values);
+    // The durable attempt intent deliberately precedes credential reads. launchLocalSupervisor binds them next,
+    // under this same run lock and before publishing config or spawning any host/executor process.
+    facts.appendFact({ eventsPath: path.join(runDir, "events.jsonl"), lockContext, fact: attemptFact({
+      runId: cli.runId, attemptId, type: "attempt_started", actor,
+      payload: { executor: adapter.name, model: cli.values.model || null, start_sha: startSha, host_kind: "local_supervisor", host_handle: lockContext.host_handle, stdout_path: stdoutPath, stderr_path: stderrPath, result_path: resultPath, timeout_ms: timeoutMs },
+    }) });
+    attemptStarted = true;
+    receipt = host.launchLocalSupervisor({
+      runDir, attemptId, command: invocation.command, args: invocation.args,
+      trustedWorktreeRoot: record.git.worktree, cwd: invocation.cwd,
+      stdoutPath, stderrPath, resultPath,
+      inputFiles: [promptPath],
+      stdinPath: invocation.stdinPath || null,
+      stdinSha256: invocation.stdinSha256 || null,
+      executorResultPath: outputPath,
+      executorSandbox: cli.values.sandbox,
+      executorNetworkAccess: cli.values["network-access"],
+      runtimeDependencies: invocation.runtimeDependencies,
+      privateEnvPaths: invocation.privateEnvPaths,
+      timeoutMs,
+      credentialRequest: { metadata: requestedCredentials.metadata, envNames: requestedCredentials.envNames, fileSpecs: requestedCredentials.fileSpecs, env: process.env },
+      processContainment: adapter.metadata.processContainment,
+      lockContext,
+    });
+  } catch (error) {
+    try {
+      if (attemptStarted) {
+        const observed = observeAttemptWorktree(record.git.worktree);
+        facts.appendFact({ eventsPath: path.join(runDir, "events.jsonl"), lockContext, fact: attemptFact({
+          runId: cli.runId, attemptId, type: "attempt_interrupted", actor,
+          payload: { last_known_sha: observed.head_sha, reason: `host launch failed: ${error.message}`, host_liveness: "dead", reviewable_work: observed.reviewable_work },
+        }) });
+      }
+      host.releaseRunLock(lockContext, { outcome: "failed", audit });
+    } catch {}
+    throw error;
+  }
+  return { record, runDir, attemptId, receipt, lockContext, audit, invocation, outputPath, actor, startSha };
 }
 
 async function recoverIncompleteHostCleanup(started, hostError) {
@@ -472,7 +501,7 @@ async function recoverIncompleteHostCleanup(started, hostError) {
   return { terminal, lockContext };
 }
 
-async function finishAttempt({ cli, store, adapter, started }) {
+async function finishAttempt({ cli, adapter, started }) {
   let terminal, finalizerLock = started.lockContext;
   try { terminal = await host.waitForTerminalResult(started.receipt); }
   catch (error) {
@@ -484,37 +513,31 @@ async function finishAttempt({ cli, store, adapter, started }) {
       // for canonical recovery rather than guessing that credentials are gone.
       throw error;
     } else {
-      return generation.withGenerationAdmission({ store, generation: "vnext", mode: "write" }, async (admission) => {
-        generation.assertGenerationWrite({ store, admission, generation: "vnext" });
-        const observed = observeAttemptWorktree(started.record.git.worktree);
-        facts.appendFact({ eventsPath: path.join(started.runDir, "events.jsonl"), lockContext: started.lockContext, fact: attemptFact({
-          runId: cli.runId, attemptId: started.attemptId, type: "attempt_interrupted", actor: started.actor,
-          payload: { last_known_sha: observed.head_sha, reason: error.message, host_liveness: "unknown", reviewable_work: observed.reviewable_work },
-        }) });
-        host.releaseRunLock(started.lockContext, { outcome: "failed", audit: started.audit });
-        throw error;
-      });
+      const observed = observeAttemptWorktree(started.record.git.worktree);
+      facts.appendFact({ eventsPath: path.join(started.runDir, "events.jsonl"), lockContext: started.lockContext, fact: attemptFact({
+        runId: cli.runId, attemptId: started.attemptId, type: "attempt_interrupted", actor: started.actor,
+        payload: { last_known_sha: observed.head_sha, reason: error.message, host_liveness: "unknown", reviewable_work: observed.reviewable_work },
+      }) });
+      host.releaseRunLock(started.lockContext, { outcome: "failed", audit: started.audit });
+      throw error;
     }
   }
   if (!TERMINAL_STATUSES.has(terminal.status)) fail(`unknown terminal host status: ${terminal.status}`);
-  return generation.withGenerationAdmission({ store, generation: "vnext", mode: "write" }, async (admission) => {
-    generation.assertGenerationWrite({ store, admission, generation: "vnext" });
-    const observed = observeAttemptWorktree(started.record.git.worktree);
-    const committedTreeSha = git(started.record.git.worktree, ["rev-parse", "HEAD^{tree}"]);
-    const parsed = adapter.parseOutcome({
-      phase: "dispatch", exitCode: terminal.exit_code, signal: terminal.signal,
-      timedOut: terminal.status === "timed_out", cancelled: terminal.status === "cancelled",
-      stdoutPath: started.receipt.stdout_path, stderrPath: started.receipt.stderr_path, resultPath: started.outputPath,
-    });
-    const status = terminal.status === "completed" && terminal.exit_code === 0 && parsed.status === "succeeded" ? "completed"
-      : new Set(["cancelled", "timed_out"]).has(terminal.status) ? "cancelled" : "failed";
-    facts.appendFact({ eventsPath: path.join(started.runDir, "events.jsonl"), lockContext: finalizerLock, fact: attemptFact({
-      runId: cli.runId, attemptId: started.attemptId, type: "attempt_finished", actor: started.actor,
-      payload: { status, start_sha: started.startSha, final_sha: observed.head_sha, tree_sha: committedTreeSha, result_path: started.receipt.result_path, exit_code: terminal.exit_code ?? 1, verification_status: "not_declared" },
-    }) });
-    host.releaseRunLock(finalizerLock, { outcome: status, audit: started.audit });
-    return { terminal, parsed, status };
+  const observed = observeAttemptWorktree(started.record.git.worktree);
+  const committedTreeSha = git(started.record.git.worktree, ["rev-parse", "HEAD^{tree}"]);
+  const parsed = adapter.parseOutcome({
+    phase: "dispatch", exitCode: terminal.exit_code, signal: terminal.signal,
+    timedOut: terminal.status === "timed_out", cancelled: terminal.status === "cancelled",
+    stdoutPath: started.receipt.stdout_path, stderrPath: started.receipt.stderr_path, resultPath: started.outputPath,
   });
+  const status = terminal.status === "completed" && terminal.exit_code === 0 && parsed.status === "succeeded" ? "completed"
+    : new Set(["cancelled", "timed_out"]).has(terminal.status) ? "cancelled" : "failed";
+  facts.appendFact({ eventsPath: path.join(started.runDir, "events.jsonl"), lockContext: finalizerLock, fact: attemptFact({
+    runId: cli.runId, attemptId: started.attemptId, type: "attempt_finished", actor: started.actor,
+    payload: { status, start_sha: started.startSha, final_sha: observed.head_sha, tree_sha: committedTreeSha, result_path: started.receipt.result_path, exit_code: terminal.exit_code ?? 1, verification_status: "not_declared" },
+  }) });
+  host.releaseRunLock(finalizerLock, { outcome: status, audit: started.audit });
+  return { terminal, parsed, status };
 }
 
 function loadInputs(cli) {
@@ -547,31 +570,15 @@ async function executeForeground(cli, overrides = {}) {
   const inputs = loadInputs(cli);
   if (cli.values["dry-run"]) {
     const invocation = dryRunInvocation({ cli, identity, adapter, inputs });
-    return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, credential_request: requestedCredentials.summary, durable_bytes_written: 0, generation_admission: "deferred", invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
+    return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, credential_request: requestedCredentials.summary, durable_bytes_written: 0, invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
   }
-  const selected = ensureVnextGeneration(identity, cli.values["bootstrap-vnext"]);
-  const started = await startAttempt({ cli, identity, store: selected.store, adapter, prompt: inputs.prompt, rubric: inputs.rubric, resumeInspection, inspectRun });
+  const started = await startAttempt({ cli, identity, adapter, prompt: inputs.prompt, rubric: inputs.rubric, resumeInspection, inspectRun });
   const launch = { status: "dispatched", run_id: cli.runId, run_dir: started.runDir, worktree: started.record.git.worktree, attempt_id: started.attemptId, host_handle: started.receipt.host_handle };
   if (process.env.RELAY_DISPATCH_NOTIFY_PATH) {
     const inspection = await recover.inspectProductionRun({ runDir: started.runDir });
     atomicJson(process.env.RELAY_DISPATCH_NOTIFY_PATH, { ...launch, dispatcher_pid: process.pid, inspection });
   }
-  let finished;
-  try {
-    finished = await finishAttempt({ cli, store: selected.store, adapter, started });
-  } catch (error) {
-    if (error.code === "GENERATION_NOT_ACTIVE" || error.code === "GENERATION_ADMISSION_EXPIRED") {
-      const pending = new Error(
-        `executor reached a durable terminal host result after the writer generation changed; `
-        + `reactivate vnext and run canonical recover --run-dir ${started.runDir} --break-lock`,
-      );
-      pending.code = "ATTEMPT_TERMINAL_PENDING_GENERATION";
-      pending.run_dir = started.runDir;
-      pending.result_path = started.receipt.result_path;
-      throw pending;
-    }
-    throw error;
-  }
+  const finished = await finishAttempt({ cli, adapter, started });
   const inspection = await recover.inspectProductionRun({ runDir: started.runDir });
   return { ...launch, status: finished.status, host_status: finished.terminal.status, outcome: finished.parsed, inspection };
 }
@@ -623,4 +630,4 @@ async function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main().then((code) => { process.exitCode = code; });
 
-module.exports = { assertResumeInspection, credentialRequest, dryRunInvocation, ensureVnextGeneration, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, startAttempt, validateCopyInputs };
+module.exports = { assertResumeInspection, credentialRequest, dryRunInvocation, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, startAttempt, validateCopyInputs };

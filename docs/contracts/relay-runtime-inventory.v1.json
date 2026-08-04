@@ -386,37 +386,67 @@
       "path": "skills/relay-dispatch/scripts/cli-args.js",
       "removalIssue": "#1136",
       "replacement": "Closed parsers local to their public vNext command surfaces",
-      "deletedEvidence": ["tests/relay-dispatch/scripts/cli-args.test.js"]
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/cli-args.test.js"
+      ]
     },
     {
       "path": "skills/relay-dispatch/scripts/dispatch-publish.js",
       "removalIssue": "#1136",
       "replacement": "Canonical inspect/recover publication action",
-      "deletedEvidence": ["tests/relay-dispatch/scripts/publish-run.test.js"]
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/publish-run.test.js"
+      ]
     },
     {
       "path": "skills/relay-dispatch/scripts/manifest/inflight-runs.js",
       "removalIssue": "#1136",
       "replacement": "Derived inspection of immutable run facts",
-      "deletedEvidence": ["tests/relay-dispatch/scripts/inflight-runs.test.js"]
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/inflight-runs.test.js"
+      ]
     },
     {
       "path": "skills/relay-dispatch/scripts/manifest/pr-number-stamp.js",
       "removalIssue": "#1136",
       "replacement": "Immutable pull_request_recorded fact",
-      "deletedEvidence": ["tests/relay-dispatch/scripts/dispatch.test.js"]
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/dispatch.test.js"
+      ]
     },
     {
       "path": "skills/relay-dispatch/scripts/relay-config.js",
       "removalIssue": "#1136",
       "replacement": "Dedicated read-only relay-config command",
-      "deletedEvidence": ["tests/relay-config/scripts/relay-config.test.js"]
+      "deletedEvidence": [
+        "tests/relay-config/scripts/relay-config.test.js"
+      ]
     },
     {
       "path": "skills/relay-dispatch/scripts/wait-for-check.js",
       "removalIssue": "#1136",
       "replacement": "Fresh inspection and explicit verification fact",
-      "deletedEvidence": ["tests/relay-dispatch/scripts/wait-for-check.test.js"]
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/wait-for-check.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/runtime-generation.js",
+      "removalIssue": "#1129",
+      "replacement": "None. The writer-generation marker and its external-attestation cutover were removed; dispatch no longer consults a generation store.",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/runtime-generation.test.js",
+        "tests/relay-dispatch/fixtures/runtime-generation-worker.js",
+        "tests/relay-dispatch/fixtures/external-authority-preload.js"
+      ]
+    },
+    {
+      "path": "skills/relay-dispatch/scripts/legacy-recovery-shim.js",
+      "removalIssue": "#1129",
+      "replacement": "None. It translated retired argv into a runtime that cannot read legacy manifests.",
+      "deletedEvidence": [
+        "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js"
+      ]
     }
   ],
   "roleModel": {
@@ -786,27 +816,6 @@
           }
         }
       ]
-    },
-    {
-      "disposition": "migrate",
-      "artifacts": [
-        {
-          "path": "skills/relay-dispatch/scripts/legacy-recovery-shim.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-dispatch/scripts/runtime-generation.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        }
-      ]
     }
   ],
   "crossSkillStaticImports": [
@@ -827,10 +836,6 @@
       "to": "skills/relay-dispatch/scripts/run-store.js"
     },
     {
-      "from": "skills/relay-fleet/scripts/relay-fleet.js",
-      "to": "skills/relay-dispatch/scripts/runtime-generation.js"
-    },
-    {
       "from": "skills/relay-merge/scripts/finalize-run.js",
       "to": "skills/relay-dispatch/scripts/facts.js"
     },
@@ -841,10 +846,6 @@
     {
       "from": "skills/relay-merge/scripts/finalize-run.js",
       "to": "skills/relay-dispatch/scripts/recover.js"
-    },
-    {
-      "from": "skills/relay-merge/scripts/finalize-run.js",
-      "to": "skills/relay-dispatch/scripts/runtime-generation.js"
     },
     {
       "from": "skills/relay-merge/scripts/gate-check.js",
@@ -881,14 +882,6 @@
     {
       "from": "skills/relay-review/scripts/review-runner.js",
       "to": "skills/relay-dispatch/scripts/run-store.js"
-    },
-    {
-      "from": "skills/relay-review/scripts/review-runner.js",
-      "to": "skills/relay-dispatch/scripts/runtime-generation.js"
-    },
-    {
-      "from": "skills/relay/scripts/relay-recover.js",
-      "to": "skills/relay-dispatch/scripts/legacy-recovery-shim.js"
     },
     {
       "from": "skills/relay/scripts/relay-recover.js",

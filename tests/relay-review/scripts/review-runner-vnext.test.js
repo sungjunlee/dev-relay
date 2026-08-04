@@ -10,7 +10,6 @@ const path = require("path");
 
 const facts = require("../../../skills/relay-dispatch/scripts/facts");
 const host = require("../../../skills/relay-dispatch/scripts/host");
-const generation = require("../../../skills/relay-dispatch/scripts/runtime-generation");
 const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
 const runner = require("../../../skills/relay-review/scripts/review-runner");
 const runtime = { withRunLock(runDir, callback) { const canonical = fs.realpathSync(runDir);
@@ -22,9 +21,6 @@ function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function isoAfter(value, milliseconds) {
-  return new Date(Date.parse(value) + milliseconds).toISOString();
-}
 
 function reviewBinding(input) {
   return {
@@ -77,23 +73,6 @@ async function fixture(label) {
     created_at: "2026-08-01T00:00:00.000Z",
   };
   runStore.createRunRecord({ runDir, record });
-  const store = generation.initializeStore({ checkoutRoot: record.repo.root, remote });
-  const observed = "2026-08-01T00:00:01.000Z";
-  generation.decideMigration({ store, observation: { observed_at: observed, active_legacy_run_count: 0, oldest_active_legacy_age_hours: null } });
-  const drain = generation.recordDrainCompleted({
-    store,
-    inventory: { observed_at: isoAfter(observed, 1), active_legacy_run_count: 0, oldest_active_legacy_age_hours: null },
-    actor: "test",
-    operationId: `drain-${label}`,
-  }).inventory;
-  generation.switchGeneration({
-    store,
-    generation: "vnext",
-    actor: "test",
-    operationId: `switch-${label}`,
-    switchedAt: isoAfter(drain.observed_at, 1),
-    drainInventoryDigest: drain.inventory_digest,
-  });
   const eventsPath = path.join(runDir, "events.jsonl");
   await runtime.withRunLock(runDir, (lockContext) => {
     facts.appendFact({ eventsPath, lockContext, fact: {

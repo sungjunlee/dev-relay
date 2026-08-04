@@ -1,7 +1,7 @@
 # Operational Visibility for Relay Runs
 
 > Historical design note. The manifest-era observer and dry-run reconciliation
-> surface described below were retired by the vNext cutover. `relay-status.js`
+> surface described below were retired by the vNext runtime reset. `relay-status.js`
 > now selects validated `run.json` records and delegates lifecycle derivation
 > to `runtime.inspectRun`; mutation is exclusively `runtime.recoverRun` with an
 > explicit audit reason.

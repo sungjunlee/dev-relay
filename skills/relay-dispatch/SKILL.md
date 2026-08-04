@@ -65,7 +65,7 @@ Essential flags:
 - `--fleet-id` requires typed `--ownership-json` with exactly `sprint`, `track`, and `component`; parent and ownership digest are immutable.
 - `--detach` starts a detached dispatch supervisor, prints a receipt, and returns before executor completion.
 - `--dry-run` is a zero-write preflight for inputs, branch, capabilities, registration support, and invocation shape. Its argv is diagnostic and must never be launched raw: production always wraps it in the host sandbox.
-- `--bootstrap-vnext` remains sealed. Operators cut over only through `runtime-generation.js start --dry-run` with actor, operation ID, and quiescence reason, then obtain an external Ed25519 envelope for the emitted exact request. Actual start reads the envelope and key from different-UID, Relay-non-writable canonical paths. Small/young inventory drains, larger/older inventory enters dual-read/vNext-write, and vNext-only requires locked pre/post-marker zero scans. Retirement additionally requires 30 runs and a 30-day authority-signed daily lineage chained from the quiescence digest. Normal dispatch requires an active vNext marker.
+- Dispatch admits itself. There is no writer generation, cutover flag, or migration overlay: a new run is claimed by a non-recursive `mkdir` on its run directory, which fails closed if the directory already exists.
 - `--json` returns structured output for orchestration.
 
 The durable layout is `~/.relay/runs/<repo-slug>/<run-id>/`: immutable `run.json`, `done-criteria.md`, and `rubric.yaml`; append-only `events.jsonl`; and per-attempt prompt, log, and result artifacts. Legacy manifests, routing hints, and readiness identity flags do not participate in dispatch.
@@ -76,8 +76,9 @@ retained worktree, the exact attempt result artifact, and attempt-private
 temp/HOME/XDG directories; read-only credential copies remain exact write denies. The exact `/dev/null` device is available only for descendant
 stdio, and `read-only` omits worktree writes. The `osascript` AppleEvent entry
 point, active checkouts, sibling
-worktrees, home, broad temp, and other paths are never writable. Unsupported platforms fail closed before migration,
-run, prompt, or attempt state is written.
+worktrees, home, broad temp, and other paths are never writable. Unsupported platforms fail closed before any
+executor process starts; the run record, prompt, and `attempt_started` fact are already durable by then, so the
+run is recoverable rather than silently unisolated.
 
 Executor attempts intentionally cannot write linked-worktree Git administration,
 objects, refs, config, or hooks. They leave reviewable dirty worktree bytes; only

@@ -94,6 +94,8 @@ single primary-review path.
 | `relay-review/scripts/review-runner/advisory.js` | advisory lane entry point and runner-advisory tests were deleted |
 | `relay-review/scripts/review-runner/assurance.js` | assurance mutation and score-authority tests were deleted; blocking verdict semantics remain direct |
 | `relay-review/scripts/review-runner/evaluation-channels.js` | multi-channel evaluation/lane state and lane-field tests were deleted; the primary Done Criteria verdict is authoritative |
+| `relay-dispatch/scripts/runtime-generation.js` | writer-generation marker, admission capability, and the external-attestation cutover were removed; dispatch no longer consults a generation store and the run directory is claimed by an atomic mkdir |
+| `relay-dispatch/scripts/legacy-recovery-shim.js` | translated retired recovery argv into a runtime that cannot read legacy manifests; `relay-recover` exposes only `inspect` and `recover` |
 
 The surviving precedence is intentionally closed: a new run binds explicit
 `--executor`/`--model` values (or the adapter defaults), and a resumed run uses
@@ -113,11 +115,11 @@ deleted in the same slice, and `relay-config` now exposes only read-only
 executor/model capability checks. This keeps project configuration from
 reintroducing a second routing or policy precedence path.
 
-This is a policy-surface deletion, not a vNext lifecycle-writer cutover. Legacy
+This is a policy-surface deletion, not a vNext lifecycle-writer replacement. Legacy
 persisted assurance, round-budget, lane-demotion, and secondary-review fields
 are tolerated only as inert historical data; they do not authorize, downgrade,
-or block a new lifecycle action. Retirement of remaining legacy lifecycle
-readers stays with the dependent lifecycle cutover work.
+or block a new lifecycle action. The remaining legacy lifecycle readers were
+deleted outright rather than retired through a migration.
 
 ## Rollback
 

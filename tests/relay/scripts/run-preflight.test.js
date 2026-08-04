@@ -10,7 +10,6 @@ const path = require("path");
 
 const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
 const dispatch = require("../../../skills/relay-dispatch/scripts/dispatch");
-const generation = require("../../../skills/relay-dispatch/scripts/runtime-generation");
 const {
   buildReadinessDecision,
   checkInflightRuns,
@@ -47,15 +46,6 @@ function fixture() {
   const gh = path.join(root, "gh.js");
   fs.writeFileSync(gh, "#!/usr/bin/env node\nprocess.stdout.write('[]')\n");
   fs.chmodSync(gh, 0o755);
-  // Production recovery requires an active vNext generation store; without it `--recover` fails closed.
-  const identity = dispatch.repositoryIdentity(canonical);
-  const store = generation.initializeStore({ checkoutRoot: identity.checkout, remote: identity.remote });
-  generation.decideMigration({ store, observation: { observed_at: "2026-08-01T00:00:00.000Z", active_legacy_run_count: 0, oldest_active_legacy_age_hours: null } });
-  const drain = generation.recordDrainCompleted({ store,
-    inventory: { observed_at: "2026-08-01T00:00:00.001Z", active_legacy_run_count: 0, oldest_active_legacy_age_hours: null },
-    actor: "test-fixture", operationId: "drain-preflight" }).inventory;
-  generation.switchGeneration({ store, generation: "vnext", actor: "test-fixture", operationId: "switch-preflight",
-    switchedAt: "2026-08-01T00:00:00.002Z", drainInventoryDigest: drain.inventory_digest });
   return { root, repo: canonical, remote, relayHome, runs, worktreeBase, gh };
 }
 

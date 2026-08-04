@@ -6,11 +6,6 @@ const { execFileSync } = require("child_process");
 
 const runStore = require("../../relay-dispatch/scripts/run-store");
 const { inspectProductionRun, recoverProductionRun } = require("../../relay-dispatch/scripts/recover");
-const {
-  COMMANDS: LEGACY_COMMANDS,
-  translateLegacyRecovery,
-  usage: legacyUsage,
-} = require("../../relay-dispatch/scripts/legacy-recovery-shim");
 
 const KNOWN_FLAGS = [
   "--repo", "--run-id", "--run-dir", "--reason", "--actor",
@@ -75,20 +70,11 @@ function formatText(result) {
 }
 
 async function main(argv = process.argv.slice(2)) {
-  let command = argv[0];
-  let rest = argv.slice(1);
+  const command = argv[0];
+  const rest = argv.slice(1);
   if (command === "--help" || command === "-h") {
     console.log(usage());
     return 0;
-  }
-  if (Object.prototype.hasOwnProperty.call(LEGACY_COMMANDS, command)) {
-    if (rest.length === 0 || rest.some((value) => value === "--help" || value === "-h")) {
-      console.log(legacyUsage(command));
-      return rest.length === 0 ? 1 : 0;
-    }
-    const translated = translateLegacyRecovery(command, rest);
-    command = translated.argv[0];
-    rest = translated.argv.slice(1);
   }
   const cli = parseCli(rest);
   if (!command || cli.hasFlag(["--help", "-h"])) {

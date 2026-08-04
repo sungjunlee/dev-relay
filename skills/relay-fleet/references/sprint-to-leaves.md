@@ -116,8 +116,9 @@ Sprint-file writes are single-writer. The orchestrator session performs
 entries. Fleet children MUST NOT write under `backlog/`; doing so creates a
 multi-worktree source-of-truth hazard.
 
-## Cutover boundary
+## Legacy fleet boundary
 
 relay-fleet is vNext-only. A historical fleet without an immutable cohort, or
-with only legacy manifests, is not adopted or backfilled. Drain it with the
-historical runtime or create a new fleet id from a newly validated leaves file.
+with only legacy manifests, is not adopted or backfilled. There is no historical
+runtime left to drain it with — the legacy manifest reader was deleted — so the
+only path forward is a new fleet id from a newly validated leaves file.

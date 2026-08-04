@@ -69,12 +69,12 @@ node skills/relay-config/scripts/relay-config.js \
   check --phase dispatch --executor opencode --model provider/model --json
 ```
 
-## Migration status
+## Runtime size
 
-The vNext bootstrap is sealed. A narrow migration overlay remains for legacy
-recovery translation and observation until both 30 consecutive zero-legacy-read
-days and 30 vNext runs are proven. Current installed dispatch runtime: **18 JS
-files / 6,985 LOC**. Post-retirement target: **16 JS files / 5,836 LOC**.
+There is one runtime and no migration overlay. Current installed dispatch
+runtime: **16 JS files / 6,050 LOC**, measured by the ledger generator into
+`tests/ledger/vnext-baseline.generated.json`. Refresh it with that generator
+rather than editing the figure by hand.
 
 ## References
 

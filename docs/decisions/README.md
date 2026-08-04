@@ -20,6 +20,15 @@ For live schema and state-machine reference, prefer [`references/architecture.md
 | [0005-rubric-mandatory-policy.md](./0005-rubric-mandatory-policy.md) | `anchor.rubric_grandfathered` retired; rubric required | `#190` |
 | [0006-merge-gate-contention-policy.md](./0006-merge-gate-contention-policy.md) | Lock timeout policy split by downstream consumer | `#166`, `#185` |
 
+Dated records carry their own measurements and are longer than the numbered
+form; they are decisions all the same.
+
+| Record | Decision |
+| --- | --- |
+| [2026-07-21-risk-adaptive-observation-window.md](./2026-07-21-risk-adaptive-observation-window.md) | Bounded observation window per risk class |
+| [2026-08-03-migration-overlay-disposition.md](./2026-08-03-migration-overlay-disposition.md) | Delete the migration overlay; vNext admits itself via an atomic run-dir `mkdir` |
+| [2026-08-03-harness-complexity-criterion.md](./2026-08-03-harness-complexity-criterion.md) | What earns its size, and the tripwires that say otherwise |
+
 ## When to add an ADR
 
 Add or extend an ADR when a merged issue encodes a **durable invariant** (role boundary, fail-closed rule, module ownership) that operators or future refactors must not accidentally undo.

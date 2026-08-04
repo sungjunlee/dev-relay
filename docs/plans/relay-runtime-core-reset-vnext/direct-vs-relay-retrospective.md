@@ -19,14 +19,20 @@ LOC to 18 files / 8,165 LOC. Excluding the two migration-only shims, the core is
 passed, 0 failed, and 2 skipped; both skips are the ledger-approved opt-in live
 canaries that require external credentials.
 
+Both figures are the anchor's, per the measurement rule above, and are left
+as measured. Later work moved them: the migration overlay was deleted on
+2026-08-03, so the shims no longer exist and the installed runtime is now the
+core. See `docs/script-inventory-and-cleanup.md` for current values.
+
 The runtime is larger than the figure published at the reset because production
 CLI isolation (#1141) added credential staging, the signed two-phase cleanup
 lifecycle, and runtime-identity binding after that measurement was taken.
 
 The rollout itself is not complete: the live adapter matrix is honestly 2/13 at
-`353f6fc`, and shim retirement still requires 30 days plus 30 vNext terminal
-runs with zero legacy reads. Both Codex cells pass the real production path; the
-remaining eleven carry typed external blockers, not weakened isolation.
+`353f6fc`, and shim retirement still required 30 days plus 30 vNext terminal runs
+with zero legacy reads. Both Codex cells pass the real production path; the
+remaining eleven carry typed external blockers, not weakened isolation. That
+retirement gate was never run: the overlay was deleted outright on 2026-08-03.
 
 ## What Direct Orchestration Did Better
 

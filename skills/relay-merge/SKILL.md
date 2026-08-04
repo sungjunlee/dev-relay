@@ -50,8 +50,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js" \
   --repo . --run-id "$RUN_ID" --merge-method squash --json
 ```
 
-`finalize-run.js` repeats inspection after generation admission and run-lock
-acquisition, issues a durable merge authorization, invokes GitHub, revalidates
+`finalize-run.js` repeats inspection after run-lock acquisition, issues a
+durable merge authorization, invokes GitHub, revalidates
 the exact merged PR, and appends one `merge_recorded` fact. It then removes the
 clean linked worktree. A dirty, changed, unregistered, or repository-mismatched
 worktree is retained rather than forced away.

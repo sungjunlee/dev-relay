@@ -70,11 +70,12 @@ not read as stronger than it is.
   staged bytes directly, so it grants no capability the attacker lacks.
 
 The removed `reconcile-run`, `recover-commit`, `recover-state`,
-`rebrand-evidence`, and `publish-run` command names remain temporary argv
-aliases on `relay-recover.js`. The compatibility parser accepts only the narrow
-locator/evidence subset. Retired target-state and force-policy flags fail closed;
-no standalone legacy script is installed. Every supported alias invocation is
-recorded as typed rollout activity in the repository generation ledger before
-canonical inspect/recover runs. If repository identity cannot be resolved for
-that observation, the compatibility invocation fails closed instead of becoming
-an invisible legacy surface.
+`rebrand-evidence`, and `publish-run` command names are gone entirely.
+`relay-recover.js` accepts only `inspect` and `recover`; every other verb exits
+with `unknown operation`. The temporary argv shim that translated them was
+deleted on 2026-08-03 with the migration overlay, and it never helped: it
+translated argv into a runtime that cannot read a legacy manifest, so
+`--manifest` failed as an unknown flag and `recover-state` failed with ENOENT.
+No standalone legacy script is installed. Retired verbs and their target-state
+and force-policy flags fail closed: there is no alias, no translation, and no
+compatibility parser to accept them.

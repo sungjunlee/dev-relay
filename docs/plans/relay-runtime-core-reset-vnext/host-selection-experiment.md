@@ -184,6 +184,6 @@ primitive, and implementation version rather than rerunning 20 trials in every
 selector process.
 
 `ci`, `codex_app`, and Windows remain unsupported until they implement the same durable
-handle, result, cancellation, and liveness contract. Production cutover remains
+handle, result, cancellation, and liveness contract. Production use remains
 gated on vNext fact-store and inspect/recover integration; unsupported
 environments return an actionable `inspect` result.

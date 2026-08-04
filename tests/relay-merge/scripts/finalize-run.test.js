@@ -10,7 +10,6 @@ const test = require("node:test");
 
 const facts = require("../../../skills/relay-dispatch/scripts/facts");
 const host = require("../../../skills/relay-dispatch/scripts/host");
-const generation = require("../../../skills/relay-dispatch/scripts/runtime-generation");
 const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
 const finalize = require("../../../skills/relay-merge/scripts/finalize-run");
 const runtime = { recordMerge: facts.recordMerge, withRunLock(runDir, callback) { const canonical = fs.realpathSync(runDir);
@@ -27,36 +26,6 @@ function git(repo, args) {
   }).trim();
 }
 
-function switchVnext(repo, remote, label) {
-  const store = generation.initializeStore({ checkoutRoot: repo, remote });
-  const observedAt = "2026-08-01T00:00:00.000Z";
-  generation.decideMigration({
-    store,
-    observation: {
-      observed_at: observedAt,
-      active_legacy_run_count: 0,
-      oldest_active_legacy_age_hours: null,
-    },
-  });
-  const drain = generation.recordDrainCompleted({
-    store,
-    inventory: {
-      observed_at: "2026-08-01T00:00:01.000Z",
-      active_legacy_run_count: 0,
-      oldest_active_legacy_age_hours: null,
-    },
-    actor: "test",
-    operationId: `drain-${label}`,
-  }).inventory;
-  generation.switchGeneration({
-    store,
-    generation: "vnext",
-    actor: "test",
-    operationId: `switch-${label}`,
-    switchedAt: "2026-08-01T00:00:02.000Z",
-    drainInventoryDigest: drain.inventory_digest,
-  });
-}
 
 function writeFakeGh(root, initial) {
   const statePath = path.join(root, "gh-state.json");
@@ -202,7 +171,7 @@ async function appendReadyFacts(value) {
   });
 }
 
-async function fixture(label, { activateVnext = true, github = {} } = {}) {
+async function fixture(label, { github = {} } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-merge-vnext-${label}-`)));
   const repo = path.join(root, "repo");
   const origin = path.join(root, "origin.git");
@@ -247,7 +216,6 @@ async function fixture(label, { activateVnext = true, github = {} } = {}) {
     created_at: "2026-08-01T00:00:00.000Z",
   };
   runStore.createRunRecord({ runDir, record });
-  if (activateVnext) switchVnext(repo, record.repo.remote, label);
   const value = { root, repo, origin, worktree, runDir, record, label, head, tree, criteriaHash };
   await appendReadyFacts(value);
   const gh = writeFakeGh(root, {
@@ -404,19 +372,6 @@ test("merge side effect is conditional on the exact reviewed head across the fin
   assert.equal(fs.existsSync(value.worktree), true);
   const log = fs.readFileSync(value.gh.logPath, "utf8");
   assert.match(log, new RegExp(`--match-head-commit ${value.head}`));
-});
-
-test("inactive writer generation and removed legacy flags are rejected", async () => {
-  const value = await fixture("generation", { activateVnext: false });
-  await assert.rejects(withGh(value, () => finalize.finalizeRun(value.cli, services())), /active writer generation/);
-  assert.throws(
-    () => finalize.parseCli(["--repo", value.repo, "--run-dir", value.runDir, "--skip-review", "hotfix"]),
-    /unknown flag/,
-  );
-  assert.throws(
-    () => finalize.parseCli(["--repo", value.repo, "--run-dir", value.runDir, "--force-finalize-nonready"]),
-    /unknown flag/,
-  );
 });
 
 test("CLI help is explicit about mandatory review and the dry-run writes no authorization", async () => {

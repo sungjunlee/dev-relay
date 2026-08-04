@@ -13,7 +13,8 @@ prepare frozen Done Criteria -> dispatch -> inspect -> recover -> review -> merg
 ```
 
 1. Dispatch a new immutable run. New runs require a frozen rubric or Done
-   Criteria source and an active sealed vNext generation.
+   Criteria source; the run directory is claimed by a non-recursive `mkdir`,
+   which fails closed if that run id already exists.
 
    ```bash
    node skills/relay-dispatch/scripts/dispatch.js . \
@@ -61,7 +62,8 @@ observation. It has no review or state bypass.
 
 ## Close a run
 
-Use the canonical recovery operation with an explicit operator and reason.
+Closing is not its own verb: use `relay-recover recover` — the only mutating
+operation — with an explicit operator and reason.
 Closing appends a `run_closed` fact and is idempotent only for the same intent;
 it cannot be applied to an already merged run.
 
@@ -164,9 +166,12 @@ survivors are reported, not killed:
 A CLI that drops the marker is outside the contract and will produce these
 fail-closed outcomes rather than silent, unbounded process leakage.
 
-## Migration status
+## Runtime size
 
-The production bootstrap is sealed to vNext. The migration overlay remains only
-for legacy recovery translation and read observation. It retires after 30 days
-and 30 vNext runs with zero legacy reads; until then the installed package is
-18 JS / 8,262 LOC, with the post-retirement core target 16 JS / 6,049 LOC.
+vNext is the only writer and there is no migration overlay. The installed
+package is 16 JS / 6,050 LOC, measured into
+`tests/ledger/vnext-baseline.generated.json` by the ledger generator.
+
+Pre-vNext manifests are not readable and `relay-recover` exposes only `inspect`
+and `recover`. A repository holding pre-vNext state does not migrate: its
+historical runs stay unreadable, and new work starts as a vNext run.

@@ -321,12 +321,12 @@ test("canary runtime provenance follows the complete static production entrypoin
     "skills/relay-dispatch/scripts/adapters/pi.js", "skills/relay-dispatch/scripts/dispatch.js",
     "skills/relay-dispatch/scripts/exec.js", "skills/relay-dispatch/scripts/facts.js", "skills/relay-dispatch/scripts/host.js",
     "skills/relay-dispatch/scripts/inspect.js", "skills/relay-dispatch/scripts/recover.js", "skills/relay-dispatch/scripts/run-store.js",
-    "skills/relay-dispatch/scripts/runtime-generation.js", "skills/relay-review/scripts/review-runner.js",
+    "skills/relay-review/scripts/review-runner.js",
   ]);
 });
 
 test("checked-in current evidence is schema-valid and honestly non-release", () => {
-  const evidence = JSON.parse(fs.readFileSync(path.join(__dirname, "../../../docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-02.json"), "utf8"));
+  const evidence = JSON.parse(fs.readFileSync(path.join(__dirname, "../../../docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-03.json"), "utf8"));
   assert.equal(validateReport(evidence), evidence);
   assert.equal(evidence.policy.required_cells.length, 13);
   assert.equal(evidence.evidence_status, "incomplete_non_release");

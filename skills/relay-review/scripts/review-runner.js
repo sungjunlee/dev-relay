@@ -15,7 +15,6 @@ const { credentialRequest, validateCapabilities } = require("../../relay-dispatc
 const facts = require("../../relay-dispatch/scripts/facts");
 const host = require("../../relay-dispatch/scripts/host");
 const { inspectProductionRun } = require("../../relay-dispatch/scripts/recover");
-const generation = require("../../relay-dispatch/scripts/runtime-generation");
 const runStore = require("../../relay-dispatch/scripts/run-store");
 
 const SHA1_RE = /^[0-9a-f]{40}$/;
@@ -330,8 +329,6 @@ function productionServices() {
         parseOutcome: (input) => adapter.parseOutcome(input),
       });
     },
-    withGenerationAdmission: generation.withGenerationAdmission,
-    assertGenerationWrite: generation.assertGenerationWrite,
     withRunLock,
     appendFact: facts.appendFact,
   };
@@ -339,7 +336,7 @@ function productionServices() {
 
 async function runReview(cli, overrides = {}) {
   const services = { ...productionServices(), ...overrides };
-  const { identity, runDir, record } = resolveRun(cli);
+  const { runDir, record } = resolveRun(cli);
   const reviewer = cli.values.reviewer || record.roles.reviewer;
   if (reviewer !== record.roles.reviewer) {
     fail(`reviewer override is not part of the vNext contract; immutable binding is '${record.roles.reviewer}'`, "REVIEWER_BINDING_MISMATCH");
@@ -350,10 +347,6 @@ async function runReview(cli, overrides = {}) {
   try { requestedCredentials = credentialRequest(adapter.metadata.credentials, { envNames: cli.values["credential-env"], fileSpecs: cli.values["credential-file"] }); }
   catch (error) { fail(error.message, "INVALID_CREDENTIAL"); }
   const credentialEnv = Object.fromEntries(requestedCredentials.envNames.map((name) => [name, process.env[name]]));
-  const store = generation.initializeStore({ checkoutRoot: identity.repoRoot, remote: identity.remote });
-  if (generation.readGeneration(store)?.writer_generation !== "vnext") {
-    fail("vNext is not the active writer generation", "GENERATION_NOT_ACTIVE");
-  }
   const initial = await services.inspectRun({ runDir });
   const binding = requireReviewAction(initial, record);
   const criteriaBytes = readFrozenCriteria(record);
@@ -396,70 +389,67 @@ async function runReview(cli, overrides = {}) {
     executedRuntime = normalizeExecutedRuntime(error.executed_runtime);
     verdict = { verdict: "escalated", summary: `Reviewer invocation failed: ${error.message}`, issues: [] };
   }
-  const written = await services.withGenerationAdmission({ store, generation: "vnext", mode: "write" }, async (admission) => {
-    services.assertGenerationWrite({ store, admission, generation: "vnext" });
-    return services.withRunLock(runDir, async (lockContext) => {
-      const freshRecord = runStore.readRunRecord({ runDir });
-      if (freshRecord.contract.done_criteria_sha256 !== record.contract.done_criteria_sha256) {
-        fail("immutable Done Criteria contract changed during independent review", "DONE_CRITERIA_CONTRACT_CHANGED");
-      }
-      readFrozenCriteria(freshRecord);
-      const currentDiffDigest = secureDigest(diffPath, "immutable review diff");
-      const currentPromptDigest = secureDigest(promptPath, "immutable review prompt");
-      if (
-        currentDiffDigest !== diffDigest
-        || currentPromptDigest !== promptDigest
-        || !stagedBinding
-        || stagedBinding.diff_sha256 !== diffDigest
-        || stagedBinding.prompt_sha256 !== promptDigest
-        || stagedBinding.staged_diff_sha256 !== diffDigest
-        || stagedBinding.staged_prompt_sha256 !== promptDigest
-        || stagedBinding.staged_done_criteria_sha256 !== record.contract.done_criteria_sha256
-      ) {
-        fail("reviewer result is not bound to the exact staged prompt and diff", "REVIEW_INPUT_BINDING_CHANGED");
-      }
-      const fresh = await services.inspectRun({ runDir });
-      const freshBinding = requireReviewAction(fresh, freshRecord);
-      if (freshBinding.head !== binding.head || freshBinding.prNumber !== binding.prNumber) {
-        fail("review binding changed during independent review", "REVIEW_BINDING_CHANGED");
-      }
-      const round = Math.max(0, ...fresh.facts.filter((fact) => fact.type === "review_recorded").map((fact) => fact.payload.round)) + 1;
-      const artifact = {
-        schema_version: 2,
-        run_id: record.run_id,
+  const written = await services.withRunLock(runDir, async (lockContext) => {
+    const freshRecord = runStore.readRunRecord({ runDir });
+    if (freshRecord.contract.done_criteria_sha256 !== record.contract.done_criteria_sha256) {
+      fail("immutable Done Criteria contract changed during independent review", "DONE_CRITERIA_CONTRACT_CHANGED");
+    }
+    readFrozenCriteria(freshRecord);
+    const currentDiffDigest = secureDigest(diffPath, "immutable review diff");
+    const currentPromptDigest = secureDigest(promptPath, "immutable review prompt");
+    if (
+      currentDiffDigest !== diffDigest
+      || currentPromptDigest !== promptDigest
+      || !stagedBinding
+      || stagedBinding.diff_sha256 !== diffDigest
+      || stagedBinding.prompt_sha256 !== promptDigest
+      || stagedBinding.staged_diff_sha256 !== diffDigest
+      || stagedBinding.staged_prompt_sha256 !== promptDigest
+      || stagedBinding.staged_done_criteria_sha256 !== record.contract.done_criteria_sha256
+    ) {
+      fail("reviewer result is not bound to the exact staged prompt and diff", "REVIEW_INPUT_BINDING_CHANGED");
+    }
+    const fresh = await services.inspectRun({ runDir });
+    const freshBinding = requireReviewAction(fresh, freshRecord);
+    if (freshBinding.head !== binding.head || freshBinding.prNumber !== binding.prNumber) {
+      fail("review binding changed during independent review", "REVIEW_BINDING_CHANGED");
+    }
+    const round = Math.max(0, ...fresh.facts.filter((fact) => fact.type === "review_recorded").map((fact) => fact.payload.round)) + 1;
+    const artifact = {
+      schema_version: 2,
+      run_id: record.run_id,
+      round,
+      reviewer,
+      reviewed_sha: binding.head,
+      done_criteria_sha256: record.contract.done_criteria_sha256,
+      diff_sha256: diffDigest,
+      prompt_sha256: promptDigest,
+      staging_request_sha256: stagedBinding.request_sha256,
+      executed_runtime: executedRuntime,
+      verdict,
+    };
+    const artifactBytes = Buffer.from(`${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+    const artifactDigest = crypto.createHash("sha256").update(artifactBytes).digest("hex");
+    const artifactPath = immutableBytes(path.join(runDir, `review-${round}-${artifactDigest}.json`), artifactBytes);
+    const fact = {
+      event_id: crypto.createHash("sha256").update(`review:${record.run_id}:${round}:${artifactDigest}`).digest("hex"),
+      run_id: record.run_id,
+      type: "review_recorded",
+      at: new Date().toISOString(),
+      actor: reviewer,
+      payload: {
         round,
-        reviewer,
+        verdict: verdict.verdict === "pass" ? "lgtm" : verdict.verdict,
         reviewed_sha: binding.head,
         done_criteria_sha256: record.contract.done_criteria_sha256,
-        diff_sha256: diffDigest,
-        prompt_sha256: promptDigest,
-        staging_request_sha256: stagedBinding.request_sha256,
+        reviewer,
+        review_artifact: artifactPath,
         executed_runtime: executedRuntime,
-        verdict,
-      };
-      const artifactBytes = Buffer.from(`${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-      const artifactDigest = crypto.createHash("sha256").update(artifactBytes).digest("hex");
-      const artifactPath = immutableBytes(path.join(runDir, `review-${round}-${artifactDigest}.json`), artifactBytes);
-      const fact = {
-        event_id: crypto.createHash("sha256").update(`review:${record.run_id}:${round}:${artifactDigest}`).digest("hex"),
-        run_id: record.run_id,
-        type: "review_recorded",
-        at: new Date().toISOString(),
-        actor: reviewer,
-        payload: {
-          round,
-          verdict: verdict.verdict === "pass" ? "lgtm" : verdict.verdict,
-          reviewed_sha: binding.head,
-          done_criteria_sha256: record.contract.done_criteria_sha256,
-          reviewer,
-          review_artifact: artifactPath,
-          executed_runtime: executedRuntime,
-          override: null,
-        },
-      };
-      services.appendFact({ eventsPath: path.join(runDir, "events.jsonl"), fact, lockContext });
-      return { round, artifactPath, fact };
-    });
+        override: null,
+      },
+    };
+    services.appendFact({ eventsPath: path.join(runDir, "events.jsonl"), fact, lockContext });
+    return { round, artifactPath, fact };
   });
   const inspection = await services.inspectRun({ runDir });
   return {
