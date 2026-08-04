@@ -447,6 +447,12 @@
       "deletedEvidence": [
         "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js"
       ]
+    },
+    {
+      "path": "skills/relay-fleet/scripts/sprint-state.js",
+      "removalIssue": "#1148",
+      "replacement": "skills/relay-merge/scripts/sprint-state.js (byte-identical copy; relay-fleet now imports the relay-merge module).",
+      "deletedEvidence": []
     }
   ],
   "roleModel": {
@@ -622,13 +628,6 @@
               "done-criteria:read",
               "done-criteria:write"
             ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-fleet/scripts/sprint-state.js",
-          "roles": {
-            "detected": [],
             "reviewedSemantic": []
           }
         },
@@ -902,6 +901,10 @@
     {
       "from": "skills/relay/scripts/run-preflight.js",
       "to": "skills/relay-dispatch/scripts/recover.js"
+    },
+    {
+      "from": "skills/relay-fleet/scripts/ownership.js",
+      "to": "skills/relay-merge/scripts/sprint-state.js"
     }
   ],
   "dynamicInvocationEdges": [
