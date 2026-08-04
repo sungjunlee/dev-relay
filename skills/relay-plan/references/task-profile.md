@@ -32,7 +32,7 @@ Build the profile from the same planning evidence used for the rubric:
 - probe signal: use available tests, CI, scripts, and detected project tools as evidence for domains and runnable verification, not as automatic commands.
 - task risk: surface trust boundaries, state machines, public APIs, migrations, data loss, prompt contracts, or backward-compatibility concerns as `risk_tags`.
 - calibration class: select the primary observation surface as `task_class`; do not add a second class merely because implementation code is involved.
-- readiness route: when task risk includes `route_decision: ready_light`, default to `size: S` and `execution_mode: quick` unless risk tags require stronger review or fresh context.
+- readiness route: when the orchestrator's ready-light readiness judgment (per the relay-ready SKILL.md checklist) applies, default to `size: S` and `execution_mode: quick` unless risk tags require stronger review or fresh context.
 
 ## Planner Boundary
 
