@@ -251,8 +251,35 @@ test("losing the retained-worktree race deletes only the branch this dispatch cr
     NODE_OPTIONS: [value.env.NODE_OPTIONS, `--require=${RUN_CLAIM_RACE}`].filter(Boolean).join(" "),
   });
   assert.notEqual(loser.status, 0);
+  // Negative control: without the preload this dispatch dies at the `existsSync(worktree)`
+  // pre-check, never creates a branch, and every assertion below would hold for the wrong reason.
+  // Requiring the worktree-add failure proves the lie fired and the branch really was created.
+  assert.match(`${loser.stdout}${loser.stderr}`, /worktree add|already exists/,
+    "the preload must push this past the pre-check into the real worktree-add failure");
+  assert.doesNotMatch(`${loser.stdout}${loser.stderr}`, /retained worktree already exists/,
+    "hitting the pre-check means the race was never exercised");
   assert.equal(git(value.repo, ["branch", "--list", "wt-loser"]), "", "the loser must delete the branch git created for it");
   assert.equal(fs.readFileSync(path.join(worktree, "winner"), "utf8"), "winner\n", "the winner's worktree must survive");
+});
+
+// The failure path force-deletes a branch, so the property that matters is that it can only ever
+// reach a branch this dispatch created. `git branch` is what makes that true: it fails closed on an
+// existing name, so a branch carrying unmerged executor work is never reachable by the `-D`.
+test("a pre-existing branch carrying unmerged work survives a failed dispatch", () => {
+  const value = fixture("branch-preserved");
+  git(value.repo, ["branch", "carries-work"]);
+  git(value.repo, ["checkout", "-q", "carries-work"]);
+  fs.writeFileSync(path.join(value.repo, "executor.txt"), "unmerged executor work\n");
+  git(value.repo, ["add", "-A"]);
+  git(value.repo, ["commit", "-m", "executor work"]);
+  const work = git(value.repo, ["rev-parse", "HEAD"]);
+  git(value.repo, ["checkout", "-q", "main"]);
+
+  const result = run(value, ["--branch", "carries-work", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.notEqual(result.status, 0, "dispatch must refuse a branch it does not own");
+  assert.equal(git(value.repo, ["rev-parse", "--verify", "carries-work"]), work, "the branch must still point at the executor commit");
+  assert.match(git(value.repo, ["for-each-ref", "--contains", work, "--format=%(refname)"]), /refs\/heads\/carries-work/,
+    "the executor commit must remain reachable");
 });
 
 // The ownership token for a branch name is `git branch`, an atomic exclusive ref creation.

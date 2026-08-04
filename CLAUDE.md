@@ -24,7 +24,7 @@ skills/relay-dispatch/scripts/
   adapters/                registry + seven retained native executors
 ```
 
-Installed: 16 JS / 6,040 LOC. The figure is generated into
+Installed: 16 JS / 6,044 LOC. The figure is generated into
 `tests/ledger/vnext-baseline.generated.json`; refresh it with the ledger
 generator rather than editing it by hand.
 

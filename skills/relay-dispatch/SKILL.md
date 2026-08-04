@@ -77,7 +77,8 @@ temp/HOME/XDG directories; read-only credential copies remain exact write denies
 stdio, and `read-only` omits worktree writes. The `osascript` AppleEvent entry
 point, active checkouts, sibling
 worktrees, home, broad temp, and other paths are never writable. Unsupported platforms fail closed before any
-run, prompt, or attempt state is written.
+executor process starts; the run record, prompt, and `attempt_started` fact are already durable by then, so the
+run is recoverable rather than silently unisolated.
 
 Executor attempts intentionally cannot write linked-worktree Git administration,
 objects, refs, config, or hooks. They leave reviewable dirty worktree bytes; only

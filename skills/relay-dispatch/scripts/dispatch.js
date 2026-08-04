@@ -237,13 +237,17 @@ function createRetainedWorktree(identity, runId, branch) {
   git(identity.checkout, ["branch", branch, startSha]);
   try {
     git(identity.checkout, ["worktree", "add", worktree, branch]);
+    // Containment is validated inside this try so a rejected worktree unwinds like any other
+    // failure. Validating it afterwards left an untrusted-path rejection holding both a registered
+    // worktree and the branch.
+    const canonicalWorktree = fs.realpathSync(worktree);
+    runStore.assertTrustedWorktree({ repoRoot: identity.repoRoot, activeCheckout: identity.checkout, relayWorktreeBase: canonicalBase, worktree: canonicalWorktree });
+    return { worktree: canonicalWorktree, baseBranch, startSha, canonicalBase };
   } catch (error) {
+    try { git(identity.checkout, ["worktree", "remove", "--force", worktree]); } catch {}
     try { git(identity.checkout, ["branch", "-D", branch]); } catch {}
     throw error;
   }
-  const canonicalWorktree = fs.realpathSync(worktree);
-  runStore.assertTrustedWorktree({ repoRoot: identity.repoRoot, activeCheckout: identity.checkout, relayWorktreeBase: canonicalBase, worktree: canonicalWorktree });
-  return { worktree: canonicalWorktree, baseBranch, startSha, canonicalBase };
 }
 
 function removeUnpublishedWorktree(identity, created, branch) {
