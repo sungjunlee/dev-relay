@@ -27,7 +27,7 @@ size target by reducing executor diversity.
 1. Reduce the installed `relay-dispatch/scripts` runtime from 75 JavaScript
    files to 14-18 files.
 2. Reduce production runtime code from 29,607 lines to a 4,000-6,000 line
-   budget. Delivered at 6,039 lines with no migration shims outstanding — 39
+   budget. Delivered at 6,040 lines with no migration shims outstanding — 40
    lines over the band.
 3. Replace eleven persisted workflow states with append-only durable facts and
    a derived current action.
@@ -79,7 +79,7 @@ implementations are removed.
 
 ## Implementation Snapshot (2026-08-02)
 
-- Installed dispatch runtime: 16 JavaScript files / 6,039 LOC (measured into
+- Installed dispatch runtime: 16 JavaScript files / 6,040 LOC (measured into
   `tests/ledger/vnext-baseline.generated.json`).
 - All seven native executors remain registered; the unused generic argv-template
   framework was removed so native descriptors are the only extension path.
@@ -655,7 +655,7 @@ adapter contract, and removal list are proven. Refactoring the existing
    days.
 9. **Subtraction gate:** final runtime is 14-18 files and 4,000-6,000 production
    LOC, with the current executor set still supported. Delivered at 16 files /
-   6,039 LOC — inside the file target, above the LOC band because production CLI
+   6,040 LOC — inside the file target, above the LOC band because production CLI
    isolation (#1141) added credential staging, the signed two-phase cleanup
    lifecycle, and runtime-identity binding.
 
@@ -721,8 +721,8 @@ retain these open issues:
    recovery flow.
 9. Final measured runtime is 14-18 JavaScript files and 4,000-6,000 production
    lines, excluding tests and terminal historical fixtures. **NOT MET at 16
-   files / 6,039 lines:** the file target is met, the LOC band is exceeded by
-   39 lines. The overrun is production CLI isolation (#1141), not migration
+   files / 6,040 lines:** the file target is met, the LOC band is exceeded by
+   40 lines. The overrun is production CLI isolation (#1141), not migration
    scaffolding, so no remaining deletion closes it. This item stays unsatisfied
    until either the runtime drops below 6,000 or the band is explicitly raised.
 
@@ -731,4 +731,4 @@ executed by `relay-dispatch`, including shared bundle modules, generated runtime
 code, compatibility shims, and adapter files. It excludes tests, fixtures,
 Markdown, archived one-off analysis tools outside installed skills, and
 terminal user data. The 4,000-6,000 line gate is live now that no shims remain,
-and the measured runtime misses it by 39 lines; see Definition of Done item 9.
+and the measured runtime misses it by 40 lines; see Definition of Done item 9.

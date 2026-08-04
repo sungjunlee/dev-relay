@@ -20,7 +20,7 @@ its run directory, which fails closed if the directory already exists.
 Deleted with tests and fixtures: `runtime-generation.js` (2,044),
 `legacy-recovery-shim.js` (169), `runtime-generation.test.js` (1,681),
 `legacy-recovery-shim.test.js`, and two fixtures — about −4,300 lines. Runtime
-8,262 → 6,039 LOC across 18 → 16 files.
+8,262 → 6,040 LOC across 18 → 16 files.
 
 ## What decided it
 

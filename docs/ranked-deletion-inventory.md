@@ -24,7 +24,7 @@ See [the disposition](decisions/2026-08-03-migration-overlay-disposition.md).
 
 | Layer | Files | LOC | Verdict |
 | --- | ---: | ---: | --- |
-| Dispatch runtime core | 16 | 6,039 | Justified. Each file owns a distinct invariant. |
+| Dispatch runtime core | 16 | 6,040 | Justified. Each file owns a distinct invariant. |
 | Migration overlay | — | — | **Deleted 2026-08-03.** |
 | Relay tests | 53 | 14,253 | Mostly justified. |
 | Test-accounting tooling | 11 | 3,185 | Largest candidate, but see §4 — its case is weaker than it first looks. |
@@ -37,7 +37,7 @@ See [the disposition](decisions/2026-08-03-migration-overlay-disposition.md).
 | `recover.js` | 1,488 | Inspect-before-write and re-inspect under the run lock with the same action key; the only general lifecycle writer | Justified — single writer is the point |
 | `host.js` | 1,297 | Run lock, detached host, cancellation, sandbox containment; host locks are capabilities | Justified |
 | `facts.js` | 739 | Append-only `events.jsonl`; merge authorization | Justified |
-| `dispatch.js` | 622 | Worktree containment; dispatch never commits, pushes, opens a PR, or recovers | Justified |
+| `dispatch.js` | 623 | Worktree containment; dispatch never commits, pushes, opens a PR, or recovers | Justified |
 | `run-store.js` | 591 | Immutable run/artifact trust boundary; regular-file containment | Justified |
 | `inspect.js` | 533 | Pure fact fold to one typed action | Justified |
 | `adapter-contract.js` | 353 | argv-only execution, capability fail-closed, reviewer isolation | Justified |
@@ -45,7 +45,7 @@ See [the disposition](decisions/2026-08-03-migration-overlay-disposition.md).
 | `exec.js` | 58 | `execFileSync`/`spawn`, never interpolated shell | Justified |
 
 Nothing in the core is a candidate. Each file maps to a distinct invariant with a
-live call site, and the rows sum to exactly 6,039.
+live call site, and the rows sum to exactly 6,040.
 
 ## 2. Migration overlay — deleted
 
@@ -126,12 +126,12 @@ bearing for retired ones — which narrows the available simplification.
 | `ci-matrix-completeness.test.js` | 152 | CI matrix covers every platform cell |
 | `skill-inputs-drift.test.js` | 51 | Skill input drift |
 
-3,185 LOC plus 1,460 lines of ledger artifacts to account for a 6,039-LOC runtime
+3,185 LOC plus 1,460 lines of ledger artifacts to account for a 6,040-LOC runtime
 and its tests. The genuine property is *silent test loss*: the generated site
 table pins path + kind + lexical ordinal, so a deleted or renamed test shows up as
 a reviewable diff. That is worth having.
 
-This layer did **not** shrink when the runtime it accounts for lost 2,223 lines —
+This layer did **not** shrink when the runtime it accounts for lost 2,222 lines —
 the ledgers gave back 68. That is tripwire A in
 [the complexity criterion](decisions/2026-08-03-harness-complexity-criterion.md)
 moving the wrong way, and it makes this the highest-yield remaining layer by

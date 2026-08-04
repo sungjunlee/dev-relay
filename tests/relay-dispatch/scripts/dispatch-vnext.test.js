@@ -255,6 +255,38 @@ test("losing the retained-worktree race deletes only the branch this dispatch cr
   assert.equal(fs.readFileSync(path.join(worktree, "winner"), "utf8"), "winner\n", "the winner's worktree must survive");
 });
 
+// The ownership token for a branch name is `git branch`, an atomic exclusive ref creation.
+// `worktree add -b` cannot serve that role: it creates the branch before validating the destination,
+// so a rejected destination leaves the branch behind, and probing with `rev-parse` first only moves
+// the race. Twelve dispatches contend for one branch name *concurrently* — sequential spawns would
+// prove nothing here. A branch may survive only if a retained worktree holds it.
+//
+// Honest scope: this test does NOT fail against the earlier `rev-parse` + `worktree add -b` shape.
+// Git refuses `branch -D` on a branch checked out in another worktree, so it independently blocks
+// the loser from deleting the winner's branch, and every branch relay creates is checked out
+// immediately. The atomic token is kept because it removes the race rather than relying on that
+// refusal, and because it is less code — not because this test distinguishes the two.
+test("concurrent dispatches contending for one branch name leave no orphan branch", { timeout: 120_000 }, async () => {
+  const value = fixture("branch-contention");
+  const started = Array.from({ length: 12 }, (unused, index) => new Promise((resolve) => {
+    const child = spawn(process.execPath,
+      [DISPATCH, value.repo, "--branch", "contended", "--prompt-file", value.prompt,
+        "--rubric-file", value.rubric, "--network-access", "enabled", "--json"],
+      { encoding: "utf8", stdio: ["ignore", "ignore", "ignore"],
+        env: { ...value.env, RELAY_DISPATCH_INTERNAL_RUN_ID: `contend-${index}` } });
+    child.on("exit", (code) => resolve(code));
+  }));
+  const codes = await Promise.all(started);
+  assert.equal(codes.length, 12);
+  assert.ok(codes.filter((code) => code === 0).length <= 1, `at most one dispatch may win the branch, saw ${codes.filter((c) => c === 0).length}`);
+
+  const branches = git(value.repo, ["branch", "--list", "contended"]).split("\n").filter(Boolean);
+  const holders = git(value.repo, ["worktree", "list"]).split("\n").filter((line) => /\[contended\]/.test(line));
+  assert.ok(branches.length <= 1, `at most one branch may survive, saw ${branches.length}`);
+  assert.equal(branches.length, holders.length,
+    `a surviving branch must be held by a retained worktree; branches=${branches.length} holders=${holders.length}`);
+});
+
 // Regression guard for the ordering of the run-directory claim. The claim happens after the retained
 // worktree exists, so a crash during `git worktree add` cannot strand an empty run directory that
 // afterwards rejects create, resume, inspect, and recover alike with no way to clear it.

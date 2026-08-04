@@ -228,16 +228,17 @@ function createRetainedWorktree(identity, runId, branch) {
   const worktree = path.join(canonicalBase, repoSlug(identity.repoRoot), runId, path.basename(identity.repoRoot));
   if (fs.existsSync(worktree)) fail(`retained worktree already exists: ${worktree}`);
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
-  let branchExisted = true;
-  try { git(identity.checkout, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]); }
-  catch { branchExisted = false; }
+  // Create the branch as its own step. `git branch` is an atomic exclusive ref creation: it fails
+  // closed if the name is taken, so a successful create is an ownership token for this dispatch.
+  // `worktree add -b` cannot serve that role — it creates the branch before it validates the
+  // destination, so a rejected destination leaves the branch behind and nothing afterwards
+  // distinguishes ours from one a concurrent dispatch created a moment earlier. Probing with
+  // `rev-parse` first would only move that race, not close it.
+  git(identity.checkout, ["branch", branch, startSha]);
   try {
-    git(identity.checkout, ["worktree", "add", "-b", branch, worktree, startSha]);
+    git(identity.checkout, ["worktree", "add", worktree, branch]);
   } catch (error) {
-    // `git worktree add -b` creates the branch before it can reject an occupied destination, so a
-    // failure here leaves a branch this dispatch never got to use. Remove only what this call
-    // created: never a branch that already existed, and never another run's worktree.
-    if (!branchExisted) { try { git(identity.checkout, ["branch", "-D", branch]); } catch {} }
+    try { git(identity.checkout, ["branch", "-D", branch]); } catch {}
     throw error;
   }
   const canonicalWorktree = fs.realpathSync(worktree);

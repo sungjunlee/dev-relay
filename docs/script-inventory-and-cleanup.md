@@ -5,12 +5,12 @@ runtime. Historical cleanup rationale remains under [`docs/archive/`](archive/).
 
 ## Installed dispatch package
 
-vNext production currently installs **16 JavaScript files / 6,039 production
+vNext production currently installs **16 JavaScript files / 6,040 production
 LOC** under `skills/relay-dispatch/scripts/`.
 
 | Group | Files | LOC | Purpose |
 | --- | ---: | ---: | --- |
-| Core | 8 | 5,681 | `dispatch`, `inspect`, `recover`, `run-store`, `facts`, `host`, `exec`, and `adapter-contract`. |
+| Core | 8 | 5,682 | `dispatch`, `inspect`, `recover`, `run-store`, `facts`, `host`, `exec`, and `adapter-contract`. |
 | Universal adapters | 8 | 358 | Registry and the seven retained native executor descriptors. |
 
 That is the whole installed runtime: the core plus all seven executors. There
