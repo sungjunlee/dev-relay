@@ -1,7 +1,7 @@
 ---
 name: relay-ready
 argument-hint: "[task description or readiness handoff candidate]"
-description: Verify a task is ready to relay — score readiness on clarity, granularity, and verifiability, then ask bounded questions when the task is too ambiguous to plan.
+description: Verify a task is ready to relay — judge readiness on clarity, granularity, and verifiability, then ask bounded questions when the task is too ambiguous to plan.
 compatibility: Requires git and Node.js 18+.
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-review"
@@ -26,6 +26,54 @@ metadata:
 - Delegating implementation work — use `relay-dispatch`
 - Reviewing executor output — use `relay-review`
 - Merging a reviewed PR — use `relay-merge`
+
+## Readiness Judgment
+
+No script scores readiness. Judge the request yourself against these factors,
+reading only text outside fenced code blocks — a fenced example is not a signal.
+
+- **Clarity** is low when any of these hold: a vague verb (`improve`, `enhance`,
+  `clean up`, `polish`); no explicit target (no file path, no `function()`); a
+  body under roughly 200 characters. It is high only when an explicit target and
+  an observable end state both appear in the opening paragraph.
+- **Granularity** is low when any of these hold: a top-level `and` joining two
+  action clauses in the opening line; a multi-verb opener spanning more than one
+  subsystem; three or more bullets across two or more modules, ignoring
+  `Non-goals`, `Out of scope`, and `Tests` sections. It is high when one action
+  verb acts on one subsystem.
+- **Verifiability** is low when subjective wording (`feels`, `good`, `smoother`,
+  `nicer`) carries the criteria, or a Done/Acceptance Criteria heading exists but
+  its section states nothing observable. It is high when the text names a test
+  path, a quoted log line, a file or diff target, or a numeric threshold.
+- **Task shape** measures decomposition pressure. Signals: four or more criteria
+  group headings or eight or more criteria bullets; sprint, epic, milestone,
+  foundation, roadmap, or initiative scope language; three or more distinct
+  subsystems; a multi-stage journey (flow, journey, or end-to-end wording plus
+  three or more stages such as signup, onboarding, review, export); a product
+  surface mixed with platform foundation terms. Two or more signals — or six or
+  more criteria groups, eight or more bullets, or four or more subsystems — is a
+  **strong** shape.
+- **Risk** is high when `migration`, `drop`, `delete`, `schema`, `auth`,
+  `secret`, or `prod` appears outside fenced code.
+
+Route on that judgment:
+
+- **Ready** — a Done/Acceptance Criteria heading, an observable assertion inside
+  that section, no high-risk keyword, single-leaf granularity, and no strong task
+  shape. Proceed to `relay-plan`.
+- **needs_split** — a strong task shape. Take the proposal-first shaping route
+  below before any dispatch; only an explicit operator override skips it.
+- **Escalate** — high risk together with any low dimension. Confirm scope with
+  the operator instead of dispatching.
+- **Otherwise** — ask bounded questions until one of the routes above holds.
+
+An accepted relay-ready handoff supersedes the issue's own acceptance criteria
+only when the bundle's source identity matches the task in hand: the issue
+number or issue URL recorded under `source`, or, when neither was recorded, the
+`request_id` the operator was given. Before treating an issue body as ready,
+check `~/.relay/requests/<repo-slug>/` for such a bundle and use it as the
+source of truth. A newer bundle for a different issue is irrelevant — never let
+it override the current issue's criteria.
 
 ## Output Contract
 
@@ -56,7 +104,7 @@ Readiness is optional, but if supplied, all readiness dimensions are required; s
 
 ## Decomposition Boundary
 
-Readiness scripts emit deterministic signals and persist validated handoffs; they do not infer semantic leaf boundaries. When strong decomposition signals appear, use AI proposal-first shaping to decide whether the request is one high-risk leaf or multiple ordered leaves, then persist the accepted shape. Detailed operator contract and oversized product-foundation example: [`references/decomposition-contract.md`](references/decomposition-contract.md).
+Scripts only validate and persist handoffs; they do not infer semantic leaf boundaries. The task-shape factors above detect decomposition pressure, not the correct leaves. When the shape is strong, use AI proposal-first shaping to decide whether the request is one high-risk leaf or multiple ordered leaves, then persist the accepted shape. Detailed operator contract and oversized product-foundation example: [`references/decomposition-contract.md`](references/decomposition-contract.md).
 
 Proposal, clarification, answer, and edit state stays in the conversation. Do not
 persist mutable intake state or a readiness event journal. Call `persist-request.js`

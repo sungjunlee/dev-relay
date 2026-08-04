@@ -97,6 +97,8 @@ single primary-review path.
 | `relay-dispatch/scripts/runtime-generation.js` | writer-generation marker, admission capability, and the external-attestation cutover were removed; dispatch no longer consults a generation store and the run directory is claimed by an atomic mkdir |
 | `relay-dispatch/scripts/legacy-recovery-shim.js` | translated retired recovery argv into a runtime that cannot read legacy manifests; `relay-recover` exposes only `inspect` and `recover` |
 | `relay-fleet/scripts/sprint-state.js` | byte-identical duplicate of `relay-merge/scripts/sprint-state.js`; relay-fleet ownership validation now imports the relay-merge module (#1148) |
+| `relay-ready/scripts/probe-readiness.js` | fail-open readiness probe and its probe test were deleted; the route stage no longer shells out and returns only the in-flight dedup guard (#1156) |
+| `relay-ready/scripts/score-readiness.js` | scored readiness heuristics and their unit test were deleted; the clarity, granularity, verifiability, task-shape, and risk factors are prose in `relay-ready/SKILL.md` (#1156) |
 
 The surviving precedence is intentionally closed: a new run binds explicit
 `--executor`/`--model` values (or the adapter defaults), and a resumed run uses

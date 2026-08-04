@@ -11,7 +11,6 @@ const path = require("path");
 const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
 const dispatch = require("../../../skills/relay-dispatch/scripts/dispatch");
 const {
-  buildReadinessDecision,
   checkInflightRuns,
   routeFromInflight,
 } = require("../../../skills/relay/scripts/run-preflight");
@@ -80,25 +79,51 @@ function run(value, args) {
   });
 }
 
-function readyEnvelope(overrides = {}) {
-  return {
-    readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
-    bypass: true,
-    next_action: "proceed",
-    signals_summary: "Ready.",
-    task_shape: { strong: false },
-    risk: { high: false, signals: [] },
-    ...overrides,
-  };
-}
+test("route stage emits only the inflight dedup guard, never a readiness envelope", () => {
+  const value = fixture();
+  const created = createRun(value, 805);
+  const result = run(value, ["--stage", "route", "--repo", value.repo, "--issue-number", "805"]);
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.deepEqual(Object.keys(payload), ["ok", "stage", "repo", "inflight"]);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.stage, "route");
+  assert.deepEqual(Object.keys(payload.inflight), [
+    "issueNumber", "branch", "pull_request", "run", "route", "instruction", "next_action", "prNumber", "runId",
+  ]);
+  assert.equal(payload.inflight.route, "inflight-run");
+  assert.equal(payload.inflight.next_action, "resume_or_inspect_inflight_run");
+  assert.equal(payload.inflight.branch, "issue-805");
+  assert.equal(payload.inflight.runId, created.runId);
+});
 
-test("readiness routing remains deterministic and host-neutral", () => {
-  const bypass = buildReadinessDecision(readyEnvelope(), { promptAllowed: false });
-  assert.equal(bypass.route_decision, "ready_single");
-  assert.equal(bypass.recommended_branch, "bypass");
-  const prompt = buildReadinessDecision(readyEnvelope({ bypass: false, next_action: "qa_needed" }), { promptAllowed: true });
-  assert.equal(prompt.recommended_branch, "prompt");
-  assert.match(prompt.instruction, /y, n, or abort/);
+test("route stage with no PR and no inflight run continues without readiness plumbing", () => {
+  const value = fixture();
+  const result = run(value, ["--stage", "route", "--repo", value.repo, "--issue-number", "900"]);
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.inflight.route, "continue");
+  assert.equal(payload.inflight.next_action, "continue_to_readiness");
+  assert.equal(payload.inflight.pull_request.status, "not_found");
+  assert.equal(payload.inflight.run.status, "not_found");
+  assert.equal("readiness" in payload, false);
+});
+
+test("retired readiness route flags fail closed instead of being silently ignored", () => {
+  const value = fixture();
+  for (const flag of [
+    "--skip-readiness", "--bypass-readiness", "--non-interactive",
+    "--body", "--body-file", "--skip-readiness-reason",
+  ]) {
+    const result = run(value, ["--stage", "route", "--repo", value.repo, "--issue-number", "901", flag, "x"]);
+    assert.notEqual(result.status, 0, `${flag} must be rejected`);
+    assert.match(`${result.stdout}${result.stderr}`, /unknown flags/, flag);
+  }
+});
+
+test("route stage no longer shells out to any readiness probe", () => {
+  const source = fs.readFileSync(SCRIPT, "utf8");
+  assert.doesNotMatch(source, /probe-readiness|score-readiness|readiness_probe|bypass_override_by_user/);
 });
 
 test("inflight scanner failures remain fail-closed", async () => {

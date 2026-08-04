@@ -402,13 +402,18 @@ function assertProjectDocsPreserveExplicitMergeBoundary(docs) {
 function assertNeedsSplitProposalFirstBoundary(docs) {
   assert.match(
     docs.relaySkill,
-    /route_decision == "needs_split"[\s\S]*proposal-first relay-ready shaping/i,
+    /judgment is `needs_split`[\s\S]*proposal-first relay-ready shaping/i,
     "relay skill must route needs_split to proposal-first relay-ready shaping",
   );
   assert.match(
     docs.preflightGuards,
-    /`proposal-first`[\s\S]*requires_accepted_handoff[\s\S]*`chain-n`[\s\S]*explicit operator override/i,
+    /`proposal-first`[\s\S]*requires an accepted handoff[\s\S]*explicit\s+operator override, never the default route/i,
     "preflight guard docs must expose the accepted-handoff default and explicit operator override for needs_split",
+  );
+  assert.match(
+    docs.relayReadySkill,
+    /accepted relay-ready handoff supersedes[\s\S]{0,80}?acceptance criteria\s+only when[\s\S]{0,300}?source identity[\s\S]{0,200}?matches/i,
+    "relay-ready must keep the accepted-handoff source-of-truth rule, scoped to a bundle whose recorded source identity matches this issue",
   );
   assert.match(
     docs.relayReadyDesign,
@@ -479,6 +484,7 @@ test("relay skill description preserves explicit ready_to_merge stop boundary", 
 test("needs_split route documents proposal-first relay-ready shaping boundary", () => {
   assertNeedsSplitProposalFirstBoundary({
     relaySkill: fs.readFileSync(path.join(SKILLS_DIR, "relay", "SKILL.md"), "utf-8"),
+    relayReadySkill: fs.readFileSync(path.join(SKILLS_DIR, "relay-ready", "SKILL.md"), "utf-8"),
     preflightGuards: fs.readFileSync(path.join(SKILLS_DIR, "relay", "references", "preflight-guards.md"), "utf-8"),
     relayReadyDesign: fs.readFileSync(RELAY_READY_DESIGN_PATH, "utf-8"),
   });
