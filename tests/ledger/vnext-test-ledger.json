@@ -141,6 +141,24 @@
       "replacementCoverage": [
         "tests/relay-dispatch/scripts/relay-recover-cli.test.js"
       ]
+    },
+    {
+      "path": "tests/relay-ready/scripts/probe-readiness.test.js",
+      "productionSurface": "skills/relay-ready/scripts/probe-readiness.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1156",
+      "replacementCoverage": [
+        "tests/relay/scripts/run-preflight.test.js"
+      ]
+    },
+    {
+      "path": "tests/relay-ready/scripts/score-readiness.test.js",
+      "productionSurface": "skills/relay-ready/scripts/score-readiness.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1156",
+      "replacementCoverage": [
+        "tests/skills-lint/scripts/skills-lint.test.js"
+      ]
     }
   ],
   "approvedDirectives": [
@@ -657,28 +675,10 @@
       ]
     },
     {
-      "path": "tests/relay-ready/scripts/probe-readiness.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Proves readiness probing is deterministic and cannot mutate a run or legacy event journal.",
-      "invariantIds": [
-        "RR-01"
-      ]
-    },
-    {
       "path": "tests/relay-ready/scripts/request-store.test.js",
       "owner": "runtime-core-reset",
       "classification": "preserve-invariant",
       "rationale": "Proves relay-ready persists only a once-published immutable final bundle with safe identities, trusted paths, concurrent convergence, and fail-closed incomplete-crash handling; conversation state and event journals are absent.",
-      "invariantIds": [
-        "RR-01"
-      ]
-    },
-    {
-      "path": "tests/relay-ready/scripts/score-readiness.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
       "invariantIds": [
         "RR-01"
       ]

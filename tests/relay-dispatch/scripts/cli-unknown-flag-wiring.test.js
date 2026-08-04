@@ -25,8 +25,6 @@ const CLI_TARGETS = [
     ["--project-only", "--no-merge"], "--no-merge"],
   ["relay-ready", "skills/relay-ready/scripts/persist-request.js",
     ["--json", "--no-merge"], "--no-merge"],
-  ["relay-ready", "skills/relay-ready/scripts/probe-readiness.js",
-    ["--json", "--no-merge"], "--no-merge"],
 ];
 
 for (const [skill, scriptRel, args, unknownFlag] of CLI_TARGETS) {

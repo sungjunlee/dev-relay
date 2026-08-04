@@ -9,8 +9,12 @@ instructions that the skill follows without carrying route prose inline.
 Run:
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route --repo . --issue-number "$ISSUE_NUMBER" --branch "$BRANCH" --body-file "$ISSUE_BODY_FILE" --json
+node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route --repo . --issue-number "$ISSUE_NUMBER" --branch "$BRANCH" --json
 ```
+
+The route stage returns `{ok, stage, repo, inflight}` and nothing else. It
+carries no readiness key, no score, and no prompt state; readiness is an
+orchestrator judgment described in `../../relay-ready/SKILL.md`.
 
 ### In-flight PR/run guard
 
@@ -24,33 +28,31 @@ node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route 
   - `inflight-run`: `instruction` tells the operator to resume or inspect the existing run using its derived vNext action.
   - `continue`: `instruction` tells the operator to continue to readiness handling before planning or dispatch.
 
-### Readiness probe + chain prompt guard
+### Readiness judgment (orchestrator, not a guard)
 
-- Firing condition: Step 1 has task text and no prior relay-ready handoff with `readiness_score` plus frozen review anchor, no explicit `--bypass-readiness`, and no sprint-batch relay-ready handoff.
-- Signals read: deterministic output from `relay-ready/scripts/probe-readiness.js --json`; optional manifest/events path for the probe's own journal write; current TTY/non-interactive prompt allowance.
-- Events emitted:
-  - `readiness_probe`: emitted by `probe-readiness.js` when a manifest/events path is supplied.
-  - `bypass_override_by_user`: emitted by the skill decision layer for `chain-n`.
-  - `readiness_check_failed`: emitted by the skill decision layer for `chain-abort`.
-  - `readiness_check_failed_nontty`: emitted by the skill decision layer for `noninteractive-fail`.
-- Instruction fields: every `readiness.decision.branch_labels.<label>.instruction` is a one-sentence operator next action, and `readiness.decision.instruction` copies the selected branch instruction except for `recommended_branch == "prompt"`, where it emits the host-neutral readiness question because `prompt` is intentionally not a branch label.
-- Branch labels:
-  - `bypass`: route decision is `ready_single`; probe returns `bypass=true`; `instruction` names the `readiness_probe` event and tells the operator to proceed to Step 2.
-  - `ready-light`: route decision is `ready_light`; readiness returned `next_action=proceed` without a bypass anchor; `instruction` names the `readiness_probe` event and tells the operator to proceed to Step 2 using S-size quick planning and compact rubric guidance.
-  - `chain-y`: probe returns `bypass=false`, prompt is allowed, and the host should ask the operator in plain text to choose `y` to invoke relay-ready before Step 2, `n` to emit `bypass_override_by_user` and proceed to Step 2, or `abort` to emit `readiness_check_failed` and close the run after the `readiness_probe`.
-  - `proposal-first`: route decision is `needs_split`, prompt is allowed, and the request must go through relay-ready proposal-first shaping before Step 2. The JSON branch label includes `relay_ready_mode=proposal_first`, `requires_accepted_handoff=true`, and `source_of_truth=accepted_relay_ready_handoff`.
-  - `chain-n`: probe returns `bypass=false`, prompt is allowed, user explicitly bypasses relay-ready; emit `bypass_override_by_user` with the script's event payload and proceed to Step 2. For `needs_split`, this remains an explicit operator override, not the default route.
-  - `chain-abort`: probe returns `bypass=false`, prompt is allowed, user answers `abort`; `instruction` names `readiness_check_failed` and tells the operator to close the run with the script's event payload.
-  - `noninteractive-fail`: route decision is `readiness_prompt` or `needs_split` and no prompt is allowed; `instruction` names `readiness_check_failed_nontty` and tells the operator to close the run with the script's event payload.
+Readiness left the script layer with #1156. The preflight neither scores it, nor
+prompts for it, nor shells out to a probe, so it cannot fail open on a scoring
+error the way the retired probe did.
 
-Route decisions are non-binding labels, not lifecycle states:
+- Firing condition: `inflight.route == "continue"` and Step 1 has task text.
+- Signals read: the request text, plus any accepted relay-ready handoff under
+  `~/.relay/requests/<repo-slug>/`, which supersedes the issue's own criteria.
+- Events emitted: none.
+- Factors: clarity, granularity, verifiability, task shape, and risk, as defined
+  in `../../relay-ready/SKILL.md`.
 
-- `ready_single`: preserve the existing bypass fast path.
-- `ready_light`: keep the task on relay, but plan it as a small quick task with compact rubric guidance. This is only for non-bypass `next_action=proceed` results with no high-risk readiness signal.
-- `readiness_prompt`: preserve the existing `qa_needed` prompt or non-interactive failure behavior.
-- `needs_split`: strong task-shape signals indicate decomposition should be considered before dispatch. Prompt-allowed runs use `proposal-first`; non-interactive runs still fail closed before dispatch.
+Routes are non-binding labels applied by the orchestrator, not lifecycle states:
 
-The readiness prompt wording is host-neutral: `Readiness gaps detected: <summary>. Invoke relay-ready first? Answer y, n, or abort?`
+- `ready`: a Done Criteria heading, an observable assertion inside that section,
+  no high-risk keyword, single-leaf granularity, and no strong task shape.
+  Proceed to Step 2.
+- `needs_split`: a strong task shape. The default route is `proposal-first`
+  relay-ready shaping, which requires an accepted handoff and makes that handoff
+  the relay-plan source of truth before dispatch. Skipping it is an explicit
+  operator override, never the default route.
+- `escalate`: a high-risk keyword together with any low dimension. Confirm scope
+  with the operator before dispatch.
+- otherwise: ask bounded relay-ready questions until one of the routes holds.
 
 ## Review Stage
 

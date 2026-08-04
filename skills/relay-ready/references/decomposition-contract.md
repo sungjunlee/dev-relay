@@ -1,16 +1,16 @@
 # Relay-Ready Decomposition Contract
 
-This contract defines the boundary between deterministic readiness scripts, AI relay-ready shaping, and downstream planning for oversized or semantically ambiguous requests.
+This contract defines the boundary between the orchestrator's readiness judgment, AI relay-ready shaping, and downstream planning for oversized or semantically ambiguous requests.
 
 ## Boundary
 
-- Scripts emit deterministic signals and persist validated artifacts.
-- Scripts must not infer semantic leaf boundaries.
+- Scripts persist validated artifacts; the readiness judgment stays in prose.
+- Neither the judgment nor a script may infer semantic leaf boundaries.
 - AI relay-ready shaping decides whether the request is one high-risk leaf or multiple leaves.
 - `relay-plan` consumes the persisted `relay-ready/<leaf-id>.md` handoff and frozen Done Criteria for that leaf; it must not silently reinterpret the raw request after relay-ready has frozen a handoff.
 - #431 remains the older readiness epic for broader readiness-gate scope. Do not duplicate that scope here.
 
-The deterministic scripts may say "this looks multi-task" from text-shape signals such as a top-level `and`, a multi-verb opener, or bullets across modules. They may not decide that "auth setup", "billing gate", and "operator docs" are the correct leaves. That semantic boundary belongs to the AI shaping step and the operator/requester acceptance path.
+The readiness judgment may say "this looks multi-task" from text-shape signals such as a top-level `and`, a multi-verb opener, or bullets across modules. It may not decide that "auth setup", "billing gate", and "operator docs" are the correct leaves. That semantic boundary belongs to the AI shaping step and the operator/requester acceptance path.
 
 ## Proposal-First Shaping
 
@@ -48,7 +48,7 @@ Build the initial product foundation: tenant onboarding, billing gates,
 admin analytics, and operator documentation.
 ```
 
-Deterministic signals:
+Readiness signals:
 
 - multi-task granularity
 - cross-domain bullets or clauses
@@ -84,4 +84,4 @@ B. Onboarding then analytics, billing later
 C. Other + free text
 ```
 
-Once accepted, persist those AI-authored leaves through `handoffs[]`; do not ask `score-readiness.js` or `probe-readiness.js` to split the request.
+Once accepted, persist those AI-authored leaves through `handoffs[]`. No script splits the request: the readiness judgment in `SKILL.md` only reports decomposition pressure, and the persister only validates the shape the operator accepted.

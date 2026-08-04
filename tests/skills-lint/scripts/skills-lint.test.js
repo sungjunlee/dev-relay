@@ -402,12 +402,12 @@ function assertProjectDocsPreserveExplicitMergeBoundary(docs) {
 function assertNeedsSplitProposalFirstBoundary(docs) {
   assert.match(
     docs.relaySkill,
-    /route_decision == "needs_split"[\s\S]*proposal-first relay-ready shaping/i,
+    /judgment is `needs_split`[\s\S]*proposal-first relay-ready shaping/i,
     "relay skill must route needs_split to proposal-first relay-ready shaping",
   );
   assert.match(
     docs.preflightGuards,
-    /`proposal-first`[\s\S]*requires_accepted_handoff[\s\S]*`chain-n`[\s\S]*explicit operator override/i,
+    /`proposal-first`[\s\S]*requires an accepted handoff[\s\S]*explicit\s+operator override, never the default route/i,
     "preflight guard docs must expose the accepted-handoff default and explicit operator override for needs_split",
   );
   assert.match(

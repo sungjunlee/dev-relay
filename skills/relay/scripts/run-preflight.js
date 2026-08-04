@@ -12,13 +12,6 @@ const {
   resolveRunById,
 } = require("./relay-status");
 
-const EVENT_FIELD = "event";
-const EVENTS = Object.freeze({
-  READINESS_PROBE: "readiness_probe",
-  BYPASS_OVERRIDE_BY_USER: "bypass_override_by_user",
-  READINESS_CHECK_FAILED: "readiness_check_failed",
-  READINESS_CHECK_FAILED_NONTTY: "readiness_check_failed_nontty",
-});
 const INFLIGHT_ROUTE_INSTRUCTIONS = {
   "existing-open-pr": "Review the existing open PR instead of planning or dispatching a new run.",
   "existing-merged-pr": "Mark the sprint item done if present and stop because the PR is already merged.",
@@ -26,27 +19,11 @@ const INFLIGHT_ROUTE_INSTRUCTIONS = {
   attention: "Stop before planning or dispatch and inspect the inflight-run scanner failure.",
   continue: "Continue to readiness handling before planning or dispatch.",
 };
-const BRANCH_INSTRUCTIONS = {
-  bypass: "Proceed to Step 2 using the bypass route and keep the readiness_probe event as the readiness evidence.",
-  "ready-light": "Proceed to Step 2 with S-size quick planning and compact rubric guidance while preserving the readiness_probe event payload.",
-  "chain-y": "Ask the operator in plain text to choose y to invoke relay-ready before Step 2, n to emit bypass_override_by_user and proceed to Step 2, or abort to emit readiness_check_failed and close the run after the readiness_probe.",
-  "proposal-first": "Run proposal-first relay-ready shaping after the readiness_probe, require an accepted handoff, and use that handoff as the relay-plan source of truth before dispatch.",
-  "chain-n": "If the operator answers n, emit bypass_override_by_user with the supplied payload and proceed to Step 2.",
-  "chain-abort": "If the operator answers abort, emit readiness_check_failed with the supplied payload and close the run.",
-  "noninteractive-fail": "Emit readiness_check_failed_nontty with the supplied payload and close the run because no prompt is allowed.",
-};
-
-function buildPromptInstruction(summary) {
-  const detail = summary || "readiness gaps require operator choice";
-  return `Readiness gaps detected: ${detail}. Invoke relay-ready first? Answer y, n, or abort?`;
-}
 const KNOWN_FLAGS = [
   "--stage",
   "--repo",
   "--issue-number",
   "--branch",
-  "--body",
-  "--body-file",
   "--manifest",
   "--run-id",
   "--pr",
@@ -60,18 +37,14 @@ const KNOWN_FLAGS = [
   "--actor",
   "--verification-file",
   "--break-lock",
-  "--skip-readiness",
-  "--bypass-readiness",
-  "--skip-readiness-reason",
-  "--non-interactive",
   "--json",
   "--help",
   "-h",
 ];
 const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-  booleanFlags: ["--reconcile", "--recover", "--break-lock", "--skip-readiness", "--bypass-readiness", "--non-interactive", "--json", "--help", "-h"],
-  verbatimValueFlags: ["--repo", "--branch", "--body", "--body-file", "--manifest", "--skip-readiness-reason", "--reason", "--actor", "--verification-file"],
+  booleanFlags: ["--reconcile", "--recover", "--break-lock", "--json", "--help", "-h"],
+  verbatimValueFlags: ["--repo", "--branch", "--manifest", "--reason", "--actor", "--verification-file"],
 };
 function parseCli(argv) {
   const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_ARG_OPTIONS.booleanFlags), verbatim = new Set(CLI_ARG_OPTIONS.verbatimValueFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (flag, value) => value !== undefined && (verbatim.has(flag) || (!String(value).startsWith("--") && !known.has(String(value))));
@@ -88,13 +61,6 @@ function usage() {
     "  --repo <path>              Repository root, default .",
     "  --issue-number <n>         Issue number for issue-N PR/run checks",
     "  --branch <name>            Branch/head name, default issue-N when issue is set",
-    "  --body <text>              Issue/task text for probe-readiness.js",
-    "  --body-file <path>         Issue/task text file for probe-readiness.js",
-    "  --manifest <path>          Optional run manifest/events path passed to probe-readiness.js",
-    "  --skip-readiness           Do not run probe-readiness.js; emit a skipped readiness envelope",
-    "  --bypass-readiness         Alias for --skip-readiness",
-    "  --skip-readiness-reason <r> Reason for skipping readiness",
-    "  --non-interactive          Compute readiness prompt_allowed=false",
     "",
     "Review stage:",
     "  --repo <path>              Repository root, default .",
@@ -299,197 +265,10 @@ function routeFromInflight({ prCheck, runCheck }) {
   };
 }
 
-function runReadinessProbe({ issueNumber, body, bodyFile, manifestPath }) {
-  const probePath = path.resolve(__dirname, "..", "..", "relay-ready", "scripts", "probe-readiness.js");
-  const args = [probePath, "--json"];
-  if (bodyFile) {
-    args.push("--body-file", path.resolve(bodyFile));
-  } else {
-    args.push("--body", body || "");
-  }
-  if (manifestPath) args.push("--manifest", path.resolve(manifestPath));
-  if (issueNumber) args.push("--issue-number", String(issueNumber));
-
-  const raw = execFileSync(process.execPath, args, {
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return {
-    command: [process.execPath, ...args],
-    envelope: JSON.parse(raw),
-  };
-}
-
-function routeDecisionFromReadiness(envelope) {
-  if (!envelope) return "readiness_prompt";
-  if (envelope.bypass === true) return "ready_single";
-  if (envelope.task_shape?.strong === true) return "needs_split";
-  if (envelope.bypass === false && envelope.next_action === "proceed" && !hasHighRiskReadinessSignal(envelope)) return "ready_light";
-  return "readiness_prompt";
-}
-
-function hasHighRiskReadinessSignal(envelope) {
-  if (envelope?.risk?.high === true) return true;
-  if (Array.isArray(envelope?.risk?.signals) && envelope.risk.signals.includes("high_risk_keyword")) return true;
-  return /\bhigh-risk keyword\b/i.test(String(envelope?.signals_summary || ""));
-}
-
-function buildReadinessDecision(envelope, { promptAllowed }) {
-  const routeDecision = routeDecisionFromReadiness(envelope);
-  const score = envelope?.readiness_score || null;
-  const commonPayload = {
-    readiness_score: score,
-    bypass: envelope?.bypass ?? null,
-    next_action: envelope?.next_action || null,
-    route_decision: routeDecision,
-    task_shape: envelope?.task_shape || null,
-    risk: envelope?.risk || null,
-    signals_summary: envelope?.signals_summary || null,
-  };
-
-  let recommendedBranch = "bypass";
-  if (routeDecision === "ready_light") {
-    recommendedBranch = "ready-light";
-  } else if (routeDecision === "needs_split" && promptAllowed) {
-    recommendedBranch = "proposal-first";
-  } else if (routeDecision !== "ready_single") {
-    recommendedBranch = promptAllowed ? "prompt" : "noninteractive-fail";
-  }
-
-  const branchLabels = {
-    bypass: {
-      label: "bypass",
-      [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-      action: "proceed_to_step_2",
-      instruction: BRANCH_INSTRUCTIONS.bypass,
-    },
-    "ready-light": {
-      label: "ready-light",
-      [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-      action: "proceed_to_step_2_light_planning",
-      instruction: BRANCH_INSTRUCTIONS["ready-light"],
-      planning_profile: "ready_light",
-      event_payload: {
-        [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-        ...commonPayload,
-      },
-    },
-    "chain-y": {
-      label: "chain-y",
-      [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-      action: "invoke_relay_ready_then_resume_step_2",
-      instruction: BRANCH_INSTRUCTIONS["chain-y"],
-    },
-    "proposal-first": {
-      label: "proposal-first",
-      [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-      action: "invoke_relay_ready_proposal_first_then_resume_step_2",
-      instruction: BRANCH_INSTRUCTIONS["proposal-first"],
-      relay_ready_mode: "proposal_first",
-      requires_accepted_handoff: true,
-      source_of_truth: "accepted_relay_ready_handoff",
-    },
-    "chain-n": {
-      label: "chain-n",
-      [EVENT_FIELD]: EVENTS.BYPASS_OVERRIDE_BY_USER,
-      action: "proceed_to_step_2",
-      instruction: BRANCH_INSTRUCTIONS["chain-n"],
-      event_payload: {
-        [EVENT_FIELD]: EVENTS.BYPASS_OVERRIDE_BY_USER,
-        reason: "operator_bypass_after_readiness_prompt",
-        ...commonPayload,
-      },
-    },
-    "chain-abort": {
-      label: "chain-abort",
-      [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED,
-      action: "close_run",
-      instruction: BRANCH_INSTRUCTIONS["chain-abort"],
-      event_payload: {
-        [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED,
-        reason: "operator_aborted_after_readiness_prompt",
-        ...commonPayload,
-      },
-    },
-    "noninteractive-fail": {
-      label: "noninteractive-fail",
-      [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED_NONTTY,
-      action: "close_run",
-      instruction: BRANCH_INSTRUCTIONS["noninteractive-fail"],
-      event_payload: {
-        [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED_NONTTY,
-        reason: "readiness_gaps_without_prompt",
-        ...commonPayload,
-      },
-    },
-  };
-
-  return {
-    route_decision: routeDecision,
-    recommended_branch: recommendedBranch,
-    instruction: recommendedBranch === "prompt"
-      ? buildPromptInstruction(envelope?.signals_summary)
-      : branchLabels[recommendedBranch].instruction,
-    prompt_allowed: promptAllowed,
-    prompt_summary: ["readiness_prompt", "needs_split"].includes(routeDecision) && promptAllowed
-      ? envelope?.signals_summary || null
-      : null,
-    branch_labels: branchLabels,
-  };
-}
-
-function buildSkippedReadiness(reason, promptAllowed) {
-  const envelope = {
-    readiness_score: null,
-    bypass: true,
-    next_action: "proceed",
-    signals_summary: reason || "Readiness probe skipped by explicit preflight bypass.",
-    elapsed_ms: 0,
-  };
-  return {
-    skipped: true,
-    skip_reason: reason || "explicit_skip",
-    probe: null,
-    ...envelope,
-    decision: buildReadinessDecision(envelope, { promptAllowed }),
-  };
-}
-
-function buildUnevaluatedReadinessForInflightRoute(inflight) {
-  const route = inflight?.route || "unknown";
-  return {
-    skipped: true,
-    skip_reason: `inflight_route_${route}`,
-    probe: null,
-    readiness_score: null,
-    bypass: null,
-    next_action: "defer_to_inflight_route",
-    signals_summary: `Readiness probe skipped because inflight.route is ${route}.`,
-    elapsed_ms: 0,
-    decision: {
-      recommended_branch: "not-evaluated",
-      instruction: inflight?.instruction || `Follow the ${route} inflight route before readiness handling.`,
-      prompt_allowed: false,
-      prompt_summary: null,
-      branch_labels: {},
-    },
-  };
-}
-
-function promptAllowedForCurrentProcess({ nonInteractive }) {
-  // stdout is often captured by SKILL.md command substitution to read JSON.
-  return !nonInteractive && process.stdin.isTTY === true && process.stderr.isTTY === true;
-}
-
 async function runRouteStage(cliArgs) {
   const repoRoot = canonicalRepoRoot(cliArgs.getArg("--repo") || ".");
   const issueNumber = parsePositiveInteger(cliArgs.getArg("--issue-number"), "--issue-number");
   const branch = normalizeBlank(cliArgs.getArg("--branch")) || (issueNumber ? `issue-${issueNumber}` : null);
-  const body = cliArgs.getArg("--body");
-  const bodyFile = normalizeBlank(cliArgs.getArg("--body-file"));
-  const manifestPath = normalizeBlank(cliArgs.getArg("--manifest"));
-  const nonInteractive = cliArgs.hasFlag("--non-interactive");
-  const promptAllowed = promptAllowedForCurrentProcess({ nonInteractive });
 
   const prCheck = checkPullRequest(repoRoot, branch);
   const runCheck = await checkInflightRuns(repoRoot, issueNumber);
@@ -501,34 +280,11 @@ async function runRouteStage(cliArgs) {
     ...routeFromInflight({ prCheck, runCheck }),
   };
 
-  let readiness;
-  if (inflight.route !== "continue") {
-    readiness = buildUnevaluatedReadinessForInflightRoute(inflight);
-  } else if (cliArgs.hasFlag("--skip-readiness") || cliArgs.hasFlag("--bypass-readiness")) {
-    readiness = buildSkippedReadiness(
-      normalizeBlank(cliArgs.getArg("--skip-readiness-reason")) || "explicit_skip",
-      promptAllowed
-    );
-  } else {
-    const probe = runReadinessProbe({ issueNumber, body, bodyFile, manifestPath });
-    readiness = {
-      skipped: false,
-      skip_reason: null,
-      probe: {
-        command: probe.command,
-        [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-      },
-      ...probe.envelope,
-      decision: buildReadinessDecision(probe.envelope, { promptAllowed }),
-    };
-  }
-
   return {
     ok: inflight.route !== "attention",
     stage: "route",
     repo: repoRoot,
     inflight,
-    readiness,
   };
 }
 
@@ -747,13 +503,10 @@ if (require.main === module) {
 }
 
 module.exports = {
-  buildReadinessDecision,
   checkInflightRuns,
   checkPullRequest,
   compareReviewSnapshot,
-  hasHighRiskReadinessSignal,
   main,
-  routeDecisionFromReadiness,
   routeFromInflight,
   snapshotReview,
 };

@@ -453,6 +453,22 @@
       "removalIssue": "#1148",
       "replacement": "skills/relay-merge/scripts/sprint-state.js (byte-identical copy; relay-fleet now imports the relay-merge module).",
       "deletedEvidence": []
+    },
+    {
+      "path": "skills/relay-ready/scripts/probe-readiness.js",
+      "removalIssue": "#1156",
+      "replacement": "None. The route stage no longer shells out for readiness; the orchestrator judgment checklist lives in skills/relay-ready/SKILL.md.",
+      "deletedEvidence": [
+        "tests/relay-ready/scripts/probe-readiness.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-ready/scripts/score-readiness.js",
+      "removalIssue": "#1156",
+      "replacement": "None. Its clarity, granularity, verifiability, task-shape, and risk factors are prose in skills/relay-ready/SKILL.md.",
+      "deletedEvidence": [
+        "tests/relay-ready/scripts/score-readiness.test.js"
+      ]
     }
   ],
   "roleModel": {
@@ -749,28 +765,10 @@
           }
         },
         {
-          "path": "skills/relay-ready/scripts/probe-readiness.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
           "path": "skills/relay-ready/scripts/relay-request.js",
           "roles": {
             "detected": [
               "done-criteria:read",
-              "done-criteria:write"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-ready/scripts/score-readiness.js",
-          "roles": {
-            "detected": [
               "done-criteria:write"
             ],
             "reviewedSemantic": []
@@ -931,10 +929,6 @@
     {
       "from": "skills/relay-merge/scripts/run-full-gate.js",
       "to": "skills/relay-merge/scripts/run-full-gate.js"
-    },
-    {
-      "from": "skills/relay/scripts/run-preflight.js",
-      "to": "skills/relay-ready/scripts/probe-readiness.js"
     }
   ]
 }

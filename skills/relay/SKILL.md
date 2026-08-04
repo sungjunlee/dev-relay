@@ -9,7 +9,7 @@ metadata:
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; role overrides use `RELAY_ORCHESTRATOR`/`RELAY_REVIEWER`.
-- Files: task/issue text, optional sprint file, readiness probe inputs, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
+- Files: task/issue text, optional sprint file, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
 # Dev Relay
@@ -30,17 +30,16 @@ Run `git fetch origin`. Task evidence: collect the first available source—loca
 
 Before any sprint read, invoke the resolved dev-backlog `sprint-state.js --track <track> --json backlog` or `sprint-state.js --component <component> --json backlog` and use `active_sprint.path` as the owning sprint. With no handle, use `sprint-state.js --json backlog` only when exactly one sprint is active; if a selector lookup is unavailable or unresolved, allow that same fallback only when the single sprint's track/component matches. Never choose an arbitrary/global active sprint or parse sprint markdown in relay to resolve ownership. If no owner resolves, skip sprint tracking; otherwise re-read that sprint's Running Context, batch information, and completed/in-flight changes and apply previous-task context.
 
-Run the deterministic route preflight; if readiness is already covered by a prior relay-ready artifact, explicit `--bypass-readiness`, or sprint-batch handoff, add `--bypass-readiness --skip-readiness-reason <reason>`.
+Run the route preflight. It answers one question: does this issue already have a PR or an in-flight vNext run?
 
 ```bash
 PREFLIGHT=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
-  --stage route --repo . --issue-number "$ISSUE_NUMBER" --branch "$BRANCH" \
-  --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --json)
+  --stage route --repo . --issue-number "$ISSUE_NUMBER" --branch "$BRANCH" --json)
 ```
 
-Branch on the JSON: follow `inflight.instruction` when `inflight.route != "continue"`, otherwise follow `readiness.decision.instruction`. The full branch table lives in [preflight-guards.md](references/preflight-guards.md). When `readiness.decision.route_decision == "needs_split"`, the instruction routes through proposal-first relay-ready shaping; accepted handoffs become the relay-plan source of truth before any dispatch.
+Follow `inflight.instruction` whenever `inflight.route != "continue"`; that dedup guard is binding and the route table lives in [preflight-guards.md](references/preflight-guards.md). On `continue`, judge readiness yourself using the checklist in `../relay-ready/SKILL.md`; no script scores it. When that judgment is `needs_split`, route through proposal-first relay-ready shaping, and the accepted handoff becomes the relay-plan source of truth before any dispatch.
 
-Fast path: bypass relay-ready only for one relay-ready task with a stable review anchor and no clarification/decomposition needed. Otherwise run `relay-ready`; its handoff brief becomes the downstream source of truth.
+Fast path: skip relay-ready only for one ready leaf with a stable review anchor and no clarification or decomposition needed. Otherwise run `relay-ready`; its handoff brief becomes the downstream source of truth.
 
 ## Step 2: Plan
 
