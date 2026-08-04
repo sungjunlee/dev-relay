@@ -67,9 +67,13 @@ Route on that judgment:
   the operator instead of dispatching.
 - **Otherwise** — ask bounded questions until one of the routes above holds.
 
-An accepted relay-ready handoff supersedes the issue's own acceptance criteria.
-Before treating an issue body as ready, check `~/.relay/requests/<repo-slug>/`
-for a newer accepted handoff and use that handoff as the source of truth.
+An accepted relay-ready handoff supersedes the issue's own acceptance criteria
+only when the bundle's source identity matches the task in hand: the issue
+number or issue URL recorded under `source`, or, when neither was recorded, the
+`request_id` the operator was given. Before treating an issue body as ready,
+check `~/.relay/requests/<repo-slug>/` for such a bundle and use it as the
+source of truth. A newer bundle for a different issue is irrelevant — never let
+it override the current issue's criteria.
 
 ## Output Contract
 
