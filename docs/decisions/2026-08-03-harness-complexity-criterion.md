@@ -68,8 +68,8 @@ instrument. Each threshold says *investigate*, not *delete on sight*.
 
 | Tripwire | Reading (2026-08-03) | Threshold |
 | --- | ---: | --- |
-| **A. Accounting : runtime** — `tests/skills-lint/scripts` + `tests/ledger` over `skills/relay-dispatch/scripts` | 4,648 : 6,044 = **0.77** | > 0.5 — tripped |
-| **B. Transition share** — dispatch-runtime LOC that exists only to get from an old version to a new one | 0 : 6,044 = **0%** | > 15% — clear |
+| **A. Accounting : runtime** — `tests/skills-lint/scripts` + `tests/ledger` over `skills/relay-dispatch/scripts` | 4,649 : 6,050 = **0.77** | > 0.5 — tripped |
+| **B. Transition share** — dispatch-runtime LOC that exists only to get from an old version to a new one | 0 : 6,050 = **0%** | > 15% — clear |
 | **C. Recovery rate** — share of runs where recovery machinery did real work | **no instrument** | < 10% |
 
 State A's denominator whenever quoting it: against all of `skills/**/*.js`
@@ -78,8 +78,8 @@ accounting against the *dispatch runtime specifically*, which is what the ledger
 accounts for, so it is the right comparison — but the ratio moves with the
 denominator and must not be quoted bare.
 
-A went **up** when 2,218 lines of runtime were deleted, because the accounting
-shrank by only 65. That is not an artifact to explain away: it is the tripwire
+A went **up** when 2,212 lines of runtime were deleted, because the accounting
+shrank by only 64. That is not an artifact to explain away: it is the tripwire
 working. Ledgers that account for a smaller runtime should get smaller too, and
 this one barely did.
 

@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
   "evidence_status": "incomplete_non_release",
-  "generated_at": "2026-08-04T02:21:25.235Z",
+  "generated_at": "2026-08-04T03:55:41.420Z",
   "timeout_ms": 90000,
   "provenance": {
-    "git_head": "2545fe9a2ef269c4a7a7e46198dfa9cdc15b3fe7",
-    "git_tree": "be4242b39f37e88938d442641283af8b31e090a8",
-    "dirty_digest": "022a5c5404d96359a97f1723812cd84694fe7c75d68764a9c930be8c25a47d32",
+    "git_head": "14ea209b8ae836b65907bc9335388d9a514bd74b",
+    "git_tree": "046750e5c85b3c1b83d8270a56904bf5094760c9",
+    "dirty_digest": "be4f93f8dabce4e7f65521bba20952a636bc640917eb84375ad48b2f31a818e7",
     "runner_sha256": "ebc656934fbbda5c9cc7dbdc0db0fce2fffec0024b51b36d7beabc8d2a28310b",
     "runtime_sha256": {
       "skills/relay-dispatch/scripts/adapter-contract.js": "dc2fd530e40799944292857ae06871d0b57579a52343280a4cb3b148d4a38a23",
@@ -18,7 +18,7 @@
       "skills/relay-dispatch/scripts/adapters/index.js": "a4165613d3b30dc5d9509ad318c155302c1eaebbc75662be462a0aa1a282dbea",
       "skills/relay-dispatch/scripts/adapters/opencode.js": "b7b7e76f2f8d50a6ca078ccfa7951a8758bece37ae2543c60d22ed47e6bf8c57",
       "skills/relay-dispatch/scripts/adapters/pi.js": "7c13493742838bc26392592cd858130ad43b3444665099ac08777cd9c4e5b273",
-      "skills/relay-dispatch/scripts/dispatch.js": "3e7a55e08975e2d52cb757f77418b35314323eed99a4e254e729bf3093e3f907",
+      "skills/relay-dispatch/scripts/dispatch.js": "d48dd93502b9084631459b8c4a1524e6a4763172f6d30693075ce41a0d9b85a6",
       "skills/relay-dispatch/scripts/exec.js": "4b417fe959534b294f48ebd6e418605d4f0328af5095034064d405f5788448c0",
       "skills/relay-dispatch/scripts/facts.js": "605e1df2007d740c7f8c571054016fa4f303dbeb6c035523a00c83196474a845",
       "skills/relay-dispatch/scripts/host.js": "fecfa096081197cf2edf1c573392df94962d5d5fcf124a837cf7cbb2ae79a45e",
@@ -32,9 +32,9 @@
     "node": "v24.18.1"
   },
   "provenance_after": {
-    "git_head": "2545fe9a2ef269c4a7a7e46198dfa9cdc15b3fe7",
-    "git_tree": "be4242b39f37e88938d442641283af8b31e090a8",
-    "dirty_digest": "022a5c5404d96359a97f1723812cd84694fe7c75d68764a9c930be8c25a47d32",
+    "git_head": "14ea209b8ae836b65907bc9335388d9a514bd74b",
+    "git_tree": "046750e5c85b3c1b83d8270a56904bf5094760c9",
+    "dirty_digest": "be4f93f8dabce4e7f65521bba20952a636bc640917eb84375ad48b2f31a818e7",
     "runner_sha256": "ebc656934fbbda5c9cc7dbdc0db0fce2fffec0024b51b36d7beabc8d2a28310b",
     "runtime_sha256": {
       "skills/relay-dispatch/scripts/adapter-contract.js": "dc2fd530e40799944292857ae06871d0b57579a52343280a4cb3b148d4a38a23",
@@ -46,7 +46,7 @@
       "skills/relay-dispatch/scripts/adapters/index.js": "a4165613d3b30dc5d9509ad318c155302c1eaebbc75662be462a0aa1a282dbea",
       "skills/relay-dispatch/scripts/adapters/opencode.js": "b7b7e76f2f8d50a6ca078ccfa7951a8758bece37ae2543c60d22ed47e6bf8c57",
       "skills/relay-dispatch/scripts/adapters/pi.js": "7c13493742838bc26392592cd858130ad43b3444665099ac08777cd9c4e5b273",
-      "skills/relay-dispatch/scripts/dispatch.js": "3e7a55e08975e2d52cb757f77418b35314323eed99a4e254e729bf3093e3f907",
+      "skills/relay-dispatch/scripts/dispatch.js": "d48dd93502b9084631459b8c4a1524e6a4763172f6d30693075ce41a0d9b85a6",
       "skills/relay-dispatch/scripts/exec.js": "4b417fe959534b294f48ebd6e418605d4f0328af5095034064d405f5788448c0",
       "skills/relay-dispatch/scripts/facts.js": "605e1df2007d740c7f8c571054016fa4f303dbeb6c035523a00c83196474a845",
       "skills/relay-dispatch/scripts/host.js": "fecfa096081197cf2edf1c573392df94962d5d5fcf124a837cf7cbb2ae79a45e",
@@ -85,8 +85,8 @@
       "provider": "anthropic",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "394c9e1e638fb2c2104aaa805a411b90df434759ca94cf92f1ac116760d8916f",
-      "prompt_sha256": "1c30e84bb2102a657b1641be9f0c86c863932bfe4a986ce1ae6f4cf405bf60d6",
+      "nonce_sha256": "671a211d5e2fb9ccb508f1b7a2fb0364ff9183ef49cd1ad92de6df1dac78e0b4",
+      "prompt_sha256": "e91525eee40b6d7672ba5a9639e1dfb80f496ccef22c2fd93889576bbe5d1154",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -116,7 +116,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 4729
+        "elapsed_ms": 8541
       }
     },
     {
@@ -126,8 +126,8 @@
       "provider": "anthropic",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "3ccfd38834e684e3f3f0ac74fc9d652b5f09602d37a04fec8f9720bb44ef6c53",
-      "prompt_sha256": "74680806cb2a85b282a0f151fdf152da533a5b01fe5a696f341c61c2241d454e",
+      "nonce_sha256": "a704b2fbebeb53be0e9d3a854f75eb89e799d25e10bb2b149f5462069ccaf259",
+      "prompt_sha256": "e7a2b14213e9d98ae719ba0681eeb136e55853eb06fe4aad388ead8508ffbbbd",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -157,7 +157,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 5137
+        "elapsed_ms": 5820
       }
     },
     {
@@ -167,8 +167,8 @@
       "provider": "openai",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "d955649912aca45f7c0ddb43c12b216a50cedb1475994ba7de26d341ed4f13e3",
-      "prompt_sha256": "6f904985dfa9b0505b43811c86f9a660901b9f17f5d09225aa296bc09d654f9d",
+      "nonce_sha256": "2de109696d4e72efe19815a26762c7158b1d0e726d467490f7140c2a1b2ea619",
+      "prompt_sha256": "b6a8c55cf6af8628812f38fe951c43e229dac754a291df1feb46b5aa38ea7763",
       "status": "passed",
       "reason": "production_path_passed",
       "probe": {
@@ -199,14 +199,14 @@
           "sha256": "3302acbda5f53de1a71ebdb0c0f2aae0d47f9324aa9fb6b4e78a47014fd51c7d"
         }
       },
-      "invocation_sha256": "5dbdac24f55b37453da96acc2a3b6bd637f943568e30c805fe095249d7883438",
-      "output_sha256": "45138c8af5b8f8c84d68089cadece2eb4c436b77d4c87ef768932dde695f510c",
+      "invocation_sha256": "8d8cec7f85e29cf30bb3987f446f26c6f8287e33dd2088a0a26f5ccb7f44e843",
+      "output_sha256": "bd657b559c8520061c6141699dca0e3e5020f722e273eefa61683f0e4416a801",
       "checks": {
         "boundary": "passed",
         "nonce": "passed",
         "cleanup": "passed",
         "process_scope_absent": "passed",
-        "elapsed_ms": 26889
+        "elapsed_ms": 21587
       }
     },
     {
@@ -216,8 +216,8 @@
       "provider": "openai",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "35a9c562276070265c9f757f38c90a5b6bac1bc2dbe56fc03671d48fd2fe6007",
-      "prompt_sha256": "4f851316db51f28cb40af7878245fa2334b315549b1660b2bb2e4790d60e3402",
+      "nonce_sha256": "9b1d077012368e1ac41825d2f0a8e5f3de9df3663eb1167bb4d9d880584443de",
+      "prompt_sha256": "caa2c1844c90dc70cc6b339d68a9d99762421f0a783c2646206a7a51410e79c5",
       "status": "passed",
       "reason": "production_path_passed",
       "probe": {
@@ -248,14 +248,14 @@
           "sha256": "3302acbda5f53de1a71ebdb0c0f2aae0d47f9324aa9fb6b4e78a47014fd51c7d"
         }
       },
-      "invocation_sha256": "b80d4429c8f20812e6b7671cb88295c4057e048d317f9ea5952e3a8fd6624d38",
-      "output_sha256": "2c30ab4bc7085a49cc512c4f1a86e751ab2c99bb33418a49ab38e50d4c10c2a0",
+      "invocation_sha256": "25f58f4040d78ba30b5e56b6b8b6218a81114ca18861f38e653f12ce347281a6",
+      "output_sha256": "8a7c2eedd8bb0d70fdec2f7c4d6ddd6b4b572912d28099d00b0af6e8424f28e5",
       "checks": {
         "boundary": "passed",
         "nonce": "passed",
         "cleanup": "passed",
         "process_scope_absent": "passed",
-        "elapsed_ms": 14157
+        "elapsed_ms": 13979
       }
     },
     {
@@ -265,8 +265,8 @@
       "provider": "opencode-go",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "07b83f4fe4ae7390fbb0db7063657c5ac0981ffde77a628d4d44b22bd877e57d",
-      "prompt_sha256": "74acaf02eba71d25c7c5a1de960ac9aded6d6a8d8a09e420626d5ad26f16063d",
+      "nonce_sha256": "fb3d3adc251a83bba70472a66752158d1d7af436eafe36ad383dbc0a3bd4c1d3",
+      "prompt_sha256": "775e527a2fff2cbad64cd81c083f9b7a69d124a5390cd7410bf9a36f4f76da2b",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -297,7 +297,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 92099
+        "elapsed_ms": 92115
       }
     },
     {
@@ -307,8 +307,8 @@
       "provider": "opencode-go",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "f16bd8206a08d50715781ee93169c4a34651a6327637e873a2b727ce785992ee",
-      "prompt_sha256": "380e5ab97109932e32eae3bf092260cc24145d77fe54d0b007ca76acdda5f2fa",
+      "nonce_sha256": "e9192472babaa3dc3bf17a5f71fae93f255ba87c986693524a65b1f10910ac68",
+      "prompt_sha256": "8b88574201a8a7dda5b87c4b5833e6c73c82c1e5e8b8d2d74b07eb49f1cd37b8",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -339,7 +339,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 95087
+        "elapsed_ms": 93859
       }
     },
     {
@@ -349,8 +349,8 @@
       "provider": "qwen-token-plan",
       "tool_network_access": "disabled",
       "tool_network_enforcement": "native",
-      "nonce_sha256": "c87e594d9ed19f259644f8eda04a56c09293d9c6c22b0e9d253b00eb5ea85abe",
-      "prompt_sha256": "6710108a7d165c70203a02cbc8c77ef4efa98516cd6b02ccf548b3d0944a1afe",
+      "nonce_sha256": "8a1a4dec8d431a20c62f5d1b68499367ffb95c912d4e28eac0675b6059d17de7",
+      "prompt_sha256": "3a784b6d4e540b3b116e67a115f2a882948a945e46494956ae48774a0c19418b",
       "status": "failed",
       "reason": "sandbox_environment_failed",
       "failure": {
@@ -381,7 +381,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 3975
+        "elapsed_ms": 2577
       }
     },
     {
@@ -391,8 +391,8 @@
       "provider": "qwen-token-plan",
       "tool_network_access": "disabled",
       "tool_network_enforcement": "native",
-      "nonce_sha256": "12f7bce898bc73dfe904d4faf3f326310bf7c3e321550de3f0c1ccf05a51d1de",
-      "prompt_sha256": "64bc0ead28f6a97b05392574d602a3921b4f35f252184cc7b00936824e2e586f",
+      "nonce_sha256": "08ae32ab54433ab3d2c78a8977f0077beedc0e42f1c38451ad64fefccb2d68ae",
+      "prompt_sha256": "e749b0667b6c354be48a29638cb64c224752c426c95d4f07f6ba4b62ec48668d",
       "status": "failed",
       "reason": "sandbox_environment_failed",
       "failure": {
@@ -423,7 +423,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 3612
+        "elapsed_ms": 3136
       }
     },
     {
@@ -433,8 +433,8 @@
       "provider": "google",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "47f6f6de016de14af14e07b8639f2921f01e0fbd761a49a89e50eb2219bc1813",
-      "prompt_sha256": "72f0e0d24641f60524731d6fcc2e584b6d366965f3dba3d61f2ae5ca41bb9332",
+      "nonce_sha256": "a6b4ac098914afb5814e0c7de4deaa99b957e92a9eb5ff758f3f577a933c019e",
+      "prompt_sha256": "94b772832eeaf21758d6dc9c68a0825b9d42b76e0702495411c72b1c9289239c",
       "status": "failed",
       "reason": "invocation_timeout",
       "failure": {
@@ -464,7 +464,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 62687
+        "elapsed_ms": 62397
       }
     },
     {
@@ -474,8 +474,8 @@
       "provider": "google",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "619db158f983bcbb96b016c5c4c3cf13eb88b936987dab8010921b02da9f2b22",
-      "prompt_sha256": "ba4d4830eea12e5969bb869ae6acaaf574454418db40a366431d35b733496fb3",
+      "nonce_sha256": "cd324727f59574c33a6b35640d9da5bf01a38e0bd3b403364cce8d3068fb9fb1",
+      "prompt_sha256": "557dcfae0f305d940b1c6dd292b85ba1c86d0e9c5cde1b9608b8fb89bfdca856",
       "status": "failed",
       "reason": "credential_auth_failed",
       "failure": {
@@ -505,7 +505,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 3015
+        "elapsed_ms": 2808
       }
     },
     {
@@ -515,8 +515,8 @@
       "provider": "cursor",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "b1074e852849f30ddaa09916283c192d4c9561b3a58f1c2bafe134175ca12c69",
-      "prompt_sha256": "5fdfb4012d82c3bb2cc8aba6c340d0e8bdc56465d26fabe28571660a2964acb2",
+      "nonce_sha256": "19f0c65790b6d5a6ede793eea28df16afe15122153c3e15bda24cfce74a63d67",
+      "prompt_sha256": "8b150ab679e174c9b2434183922e84a48daadd0d0a80386b461824b677257322",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -545,7 +545,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 3434
+        "elapsed_ms": 2430
       }
     },
     {
@@ -555,8 +555,8 @@
       "provider": "cursor",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "1fb4622d1a74e83fb8ce8cbe6401f22935ee185d0ee765954dd0e39884534006",
-      "prompt_sha256": "3609afdfea506c1c243e2d976e0e31153c365cc6b5bc4c1abfdc06f2ddd5f694",
+      "nonce_sha256": "b222b9f5cf002dda7ddc98d7e80a4b5f28ce861d2e5477a75e17bba7814cb74e",
+      "prompt_sha256": "3780a4404936615eded46b03a8a8778036afc5c5b37a83b37c02d6a51f1abc05",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -585,7 +585,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 3598
+        "elapsed_ms": 2921
       }
     },
     {
@@ -595,8 +595,8 @@
       "provider": "cline-pass",
       "tool_network_access": "enabled",
       "tool_network_enforcement": "unsupported_explicit_enabled",
-      "nonce_sha256": "2905c80243aea51a6daddadaf0513dc3da7251dca265c4bab6f514f1caeedbba",
-      "prompt_sha256": "4c93e56f99b3877afcf49daf4983dca6ed392c64e06f91f3aaebeef19ffee02b",
+      "nonce_sha256": "eb5e546afc455c4a47d89d08ba2a23e23d9eeedf6afdc6aaa28c67b8a44a02fc",
+      "prompt_sha256": "34f4e321fd8ed1cd8ada3f88572a2f728027fdb9b5efe827b3754754c69bc6b4",
       "status": "failed",
       "reason": "invocation_failed",
       "failure": {
@@ -625,7 +625,7 @@
         "nonce": "failed",
         "cleanup": "unknown",
         "process_scope_absent": "unknown",
-        "elapsed_ms": 4555
+        "elapsed_ms": 3706
       }
     }
   ],

@@ -235,8 +235,10 @@ function createRetainedWorktree(identity, runId, branch) {
   // distinguishes ours from one a concurrent dispatch created a moment earlier. Probing with
   // `rev-parse` first would only move that race, not close it.
   git(identity.checkout, ["branch", branch, startSha]);
+  let registered = false;
   try {
     git(identity.checkout, ["worktree", "add", worktree, branch]);
+    registered = true;
     // Containment is validated inside this try so a rejected worktree unwinds like any other
     // failure. Validating it afterwards left an untrusted-path rejection holding both a registered
     // worktree and the branch.
@@ -244,7 +246,11 @@ function createRetainedWorktree(identity, runId, branch) {
     runStore.assertTrustedWorktree({ repoRoot: identity.repoRoot, activeCheckout: identity.checkout, relayWorktreeBase: canonicalBase, worktree: canonicalWorktree });
     return { worktree: canonicalWorktree, baseBranch, startSha, canonicalBase };
   } catch (error) {
-    try { git(identity.checkout, ["worktree", "remove", "--force", worktree]); } catch {}
+    // Remove the destination only when this invocation registered it. A failed `worktree add` may
+    // have failed precisely because a competing dispatch owns that path, and `--force` deletes a
+    // dirty worktree without asking — it would destroy that run's uncommitted executor work.
+    // `branch -D` needs no such test: the atomic create above proves the branch is ours.
+    if (registered) { try { git(identity.checkout, ["worktree", "remove", "--force", worktree]); } catch {} }
     try { git(identity.checkout, ["branch", "-D", branch]); } catch {}
     throw error;
   }

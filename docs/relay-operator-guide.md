@@ -169,7 +169,7 @@ fail-closed outcomes rather than silent, unbounded process leakage.
 ## Runtime size
 
 vNext is the only writer and there is no migration overlay. The installed
-package is 16 JS / 6,044 LOC, measured into
+package is 16 JS / 6,050 LOC, measured into
 `tests/ledger/vnext-baseline.generated.json` by the ledger generator.
 
 Pre-vNext manifests are not readable and `relay-recover` exposes only `inspect`

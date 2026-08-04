@@ -318,6 +318,35 @@ test("concurrent dispatches contending for one branch name leave no orphan branc
   assert.equal(holders.length, 1, `the surviving branch must be held by exactly one retained worktree, saw ${holders.length}`);
 });
 
+// `worktree remove --force` deletes a dirty worktree without asking, so the unwind must never run
+// it on a destination this invocation did not register. A `worktree add` that fails *because* a
+// competing dispatch owns that path would otherwise destroy that run's uncommitted executor work.
+test("a failed worktree add never removes a destination this dispatch did not register", () => {
+  const value = fixture("worktree-not-ours");
+  const runId = "not-ours-run";
+  const worktree = path.join(value.relayHome, "worktrees",
+    path.basename(fixtureRunsDir(value)), runId, path.basename(fs.realpathSync(value.repo)));
+
+  // A competing run already owns that destination, registered, with uncommitted executor work.
+  git(value.repo, ["branch", "winner-br"]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, "winner-br"]);
+  fs.writeFileSync(path.join(worktree, "executor-work.txt"), "uncommitted executor work\n");
+
+  const loser = run(value, ["--branch", "loser-br", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env,
+    RELAY_DISPATCH_INTERNAL_RUN_ID: runId,
+    RELAY_TEST_RACE_ABSENT_ONCE: worktree,
+    NODE_OPTIONS: [value.env.NODE_OPTIONS, `--require=${RUN_CLAIM_RACE}`].filter(Boolean).join(" "),
+  });
+  assert.notEqual(loser.status, 0);
+  assert.equal(fs.readFileSync(path.join(worktree, "executor-work.txt"), "utf8"), "uncommitted executor work\n",
+    "the competing run's uncommitted work must survive");
+  assert.match(git(value.repo, ["worktree", "list"]), new RegExp(`${runId}`),
+    "the competing run's worktree must stay registered");
+  assert.equal(git(value.repo, ["branch", "--list", "loser-br"]), "", "the loser must still clean up its own branch");
+});
+
 // Regression guard for the ordering of the run-directory claim. The claim happens after the retained
 // worktree exists, so a crash during `git worktree add` cannot strand an empty run directory that
 // afterwards rejects create, resume, inspect, and recover alike with no way to clear it.
