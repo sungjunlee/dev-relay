@@ -96,6 +96,7 @@ single primary-review path.
 | `relay-review/scripts/review-runner/evaluation-channels.js` | multi-channel evaluation/lane state and lane-field tests were deleted; the primary Done Criteria verdict is authoritative |
 | `relay-dispatch/scripts/runtime-generation.js` | writer-generation marker, admission capability, and the external-attestation cutover were removed; dispatch no longer consults a generation store and the run directory is claimed by an atomic mkdir |
 | `relay-dispatch/scripts/legacy-recovery-shim.js` | translated retired recovery argv into a runtime that cannot read legacy manifests; `relay-recover` exposes only `inspect` and `recover` |
+| `relay-fleet/scripts/sprint-state.js` | byte-identical duplicate of `relay-merge/scripts/sprint-state.js`; relay-fleet ownership validation now imports the relay-merge module (#1148) |
 
 The surviving precedence is intentionally closed: a new run binds explicit
 `--executor`/`--model` values (or the adapter defaults), and a resumed run uses

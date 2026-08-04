@@ -6,7 +6,7 @@ const {
   discoverSprintStateBin,
   invokeSprintState,
   normalizeRepoSprintPath,
-} = require("./sprint-state");
+} = require("../../relay-merge/scripts/sprint-state");
 
 const OWNERSHIP_FIELDS = Object.freeze(["sprint", "track", "component"]);
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
