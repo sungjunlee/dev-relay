@@ -228,7 +228,18 @@ function createRetainedWorktree(identity, runId, branch) {
   const worktree = path.join(canonicalBase, repoSlug(identity.repoRoot), runId, path.basename(identity.repoRoot));
   if (fs.existsSync(worktree)) fail(`retained worktree already exists: ${worktree}`);
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
-  git(identity.checkout, ["worktree", "add", "-b", branch, worktree, startSha]);
+  let branchExisted = true;
+  try { git(identity.checkout, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]); }
+  catch { branchExisted = false; }
+  try {
+    git(identity.checkout, ["worktree", "add", "-b", branch, worktree, startSha]);
+  } catch (error) {
+    // `git worktree add -b` creates the branch before it can reject an occupied destination, so a
+    // failure here leaves a branch this dispatch never got to use. Remove only what this call
+    // created: never a branch that already existed, and never another run's worktree.
+    if (!branchExisted) { try { git(identity.checkout, ["branch", "-D", branch]); } catch {} }
+    throw error;
+  }
   const canonicalWorktree = fs.realpathSync(worktree);
   runStore.assertTrustedWorktree({ repoRoot: identity.repoRoot, activeCheckout: identity.checkout, relayWorktreeBase: canonicalBase, worktree: canonicalWorktree });
   return { worktree: canonicalWorktree, baseBranch, startSha, canonicalBase };

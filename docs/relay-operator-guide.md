@@ -62,7 +62,8 @@ observation. It has no review or state bypass.
 
 ## Close a run
 
-Use the canonical recovery operation with an explicit operator and reason.
+Closing is not its own verb: use `relay-recover recover` — the only mutating
+operation — with an explicit operator and reason.
 Closing appends a `run_closed` fact and is idempotent only for the same intent;
 it cannot be applied to an already merged run.
 
@@ -168,7 +169,7 @@ fail-closed outcomes rather than silent, unbounded process leakage.
 ## Runtime size
 
 vNext is the only writer and there is no migration overlay. The installed
-package is 16 JS / 6,028 LOC, measured into
+package is 16 JS / 6,039 LOC, measured into
 `tests/ledger/vnext-baseline.generated.json` by the ledger generator.
 
 Pre-vNext manifests are not readable and `relay-recover` exposes only `inspect`

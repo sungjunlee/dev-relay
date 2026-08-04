@@ -76,7 +76,7 @@ retained worktree, the exact attempt result artifact, and attempt-private
 temp/HOME/XDG directories; read-only credential copies remain exact write denies. The exact `/dev/null` device is available only for descendant
 stdio, and `read-only` omits worktree writes. The `osascript` AppleEvent entry
 point, active checkouts, sibling
-worktrees, home, broad temp, and other paths are never writable. Unsupported platforms fail closed before migration,
+worktrees, home, broad temp, and other paths are never writable. Unsupported platforms fail closed before any
 run, prompt, or attempt state is written.
 
 Executor attempts intentionally cannot write linked-worktree Git administration,

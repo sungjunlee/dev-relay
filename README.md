@@ -72,7 +72,7 @@ node skills/relay-config/scripts/relay-config.js \
 ## Runtime size
 
 There is one runtime and no migration overlay. Current installed dispatch
-runtime: **16 JS files / 6,028 LOC**, measured by the ledger generator into
+runtime: **16 JS files / 6,039 LOC**, measured by the ledger generator into
 `tests/ledger/vnext-baseline.generated.json`. Refresh it with that generator
 rather than editing the figure by hand.
 

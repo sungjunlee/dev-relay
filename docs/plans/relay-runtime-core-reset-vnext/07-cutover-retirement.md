@@ -52,14 +52,16 @@ dispatch outright.
 - [x] Dispatch, review, recovery, and merge all consume the same derived
       lifecycle action.
 - [x] Old recovery implementations and mutable state transitions are deleted.
-- [x] Installed `relay-dispatch/scripts` is 16 JavaScript files and 6,028
-      production LOC, excluding tests, docs, and fixtures — inside the 14–18
-      file target, above the 4,000–6,000 LOC band because production CLI
-      isolation (#1141) added credential staging, the signed two-phase cleanup
-      lifecycle, and runtime-identity binding.
+- [ ] **NOT MET.** Installed `relay-dispatch/scripts` is 16 JavaScript files and
+      6,039 production LOC, excluding tests, docs, and fixtures. The 14–18 file
+      target is met; the 4,000–6,000 LOC band is exceeded by 39 lines. The
+      overrun is production CLI isolation (#1141) — credential staging, the
+      signed two-phase cleanup lifecycle, and runtime-identity binding — not
+      migration scaffolding, so no remaining deletion closes it. Left open
+      rather than waived: raising the band is a separate, explicit decision.
 - [x] All seven current executors remain registered and pass conformance.
 - [x] The full serialized relay suite and package-content checks pass.
-- [~] Migration choice, drain, dual-read, and rollback overlay: withdrawn. No
+- [ ] Migration choice, drain, dual-read, and rollback overlay: **withdrawn**. No
       migration is offered, so there is nothing to choose, drain, or roll back
       to.
 

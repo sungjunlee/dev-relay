@@ -20,7 +20,7 @@ Introduce the vNext immutable run record and append-only fact journal, with a pu
 - [ ] A partial final record is quarantined and reported; earlier valid facts remain readable.
 - [ ] The fold implements the precedence table in the parent spec and is deterministic under replay.
 - [ ] Shadow mode performs no vNext lifecycle writes other than comparison telemetry.
-- [~] Legacy/vNext shadow agreement: withdrawn with the migration on 2026-08-03. vNext is the only writer and no legacy reader remains to compare against.
+- [ ] Legacy/vNext shadow agreement: **withdrawn** with the migration on 2026-08-03. vNext is the only writer and no legacy reader remains to compare against.
 
 ## Verification
 

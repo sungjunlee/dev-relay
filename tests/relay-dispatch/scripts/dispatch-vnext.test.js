@@ -222,7 +222,7 @@ test("losing the run-directory claim race unwinds only the loser's own branch an
   const loser = run(value, ["--branch", "race-loser", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
     ...value.env,
     RELAY_DISPATCH_INTERNAL_RUN_ID: runId,
-    RELAY_TEST_RACE_RUN_DIR: runDir,
+    RELAY_TEST_RACE_ABSENT_ONCE: runDir,
     NODE_OPTIONS: [value.env.NODE_OPTIONS, `--require=${RUN_CLAIM_RACE}`].filter(Boolean).join(" "),
   });
   assert.notEqual(loser.status, 0);
@@ -230,6 +230,29 @@ test("losing the run-directory claim race unwinds only the loser's own branch an
   assert.deepEqual(fs.readdirSync(runDir), ["sentinel"], "the loser must not delete or add to the winner's run directory");
   assert.equal(fs.readFileSync(path.join(runDir, "sentinel"), "utf8"), "winner\n");
   assert.equal(git(value.repo, ["branch", "--list", "race-loser"]), "", "the loser must remove the branch it created");
+});
+
+// `git worktree add -b` creates the branch before it can reject an occupied destination, so a
+// dispatch that loses the retained-worktree race must delete the branch it just created. The
+// preload hides the worktree path from the pre-check exactly once, which is what the real race
+// looks like. A branch that already existed is never touched.
+test("losing the retained-worktree race deletes only the branch this dispatch created", () => {
+  const value = fixture("worktree-race");
+  const runId = "worktree-race-run";
+  const worktree = path.join(value.relayHome, "worktrees",
+    path.basename(fixtureRunsDir(value)), runId, path.basename(fs.realpathSync(value.repo)));
+  fs.mkdirSync(worktree, { recursive: true });
+  fs.writeFileSync(path.join(worktree, "winner"), "winner\n");
+
+  const loser = run(value, ["--branch", "wt-loser", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env,
+    RELAY_DISPATCH_INTERNAL_RUN_ID: runId,
+    RELAY_TEST_RACE_ABSENT_ONCE: worktree,
+    NODE_OPTIONS: [value.env.NODE_OPTIONS, `--require=${RUN_CLAIM_RACE}`].filter(Boolean).join(" "),
+  });
+  assert.notEqual(loser.status, 0);
+  assert.equal(git(value.repo, ["branch", "--list", "wt-loser"]), "", "the loser must delete the branch git created for it");
+  assert.equal(fs.readFileSync(path.join(worktree, "winner"), "utf8"), "winner\n", "the winner's worktree must survive");
 });
 
 // Regression guard for the ordering of the run-directory claim. The claim happens after the retained

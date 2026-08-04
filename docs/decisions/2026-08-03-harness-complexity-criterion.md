@@ -68,17 +68,17 @@ instrument. Each threshold says *investigate*, not *delete on sight*.
 
 | Tripwire | Reading (2026-08-03) | Threshold |
 | --- | ---: | --- |
-| **A. Accounting : runtime** — `tests/skills-lint/scripts` + `tests/ledger` over `skills/relay-dispatch/scripts` | 4,645 : 6,028 = **0.77** | > 0.5 — tripped |
-| **B. Transition share** — dispatch-runtime LOC that exists only to get from an old version to a new one | 0 : 6,028 = **0%** | > 15% — clear |
+| **A. Accounting : runtime** — `tests/skills-lint/scripts` + `tests/ledger` over `skills/relay-dispatch/scripts` | 4,645 : 6,039 = **0.77** | > 0.5 — tripped |
+| **B. Transition share** — dispatch-runtime LOC that exists only to get from an old version to a new one | 0 : 6,039 = **0%** | > 15% — clear |
 | **C. Recovery rate** — share of runs where recovery machinery did real work | **no instrument** | < 10% |
 
 State A's denominator whenever quoting it: against all of `skills/**/*.js`
-(14,398) the same numerator reads 0.32 and does not trip. The 0.77 reading is
+(14,409) the same numerator reads 0.32 and does not trip. The 0.77 reading is
 accounting against the *dispatch runtime specifically*, which is what the ledger
 accounts for, so it is the right comparison — but the ratio moves with the
 denominator and must not be quoted bare.
 
-A went **up** when 2,234 lines of runtime were deleted, because the accounting
+A went **up** when 2,223 lines of runtime were deleted, because the accounting
 shrank by only 68. That is not an artifact to explain away: it is the tripwire
 working. Ledgers that account for a smaller runtime should get smaller too, and
 this one barely did.
@@ -89,7 +89,7 @@ reach is "~39% of 301 dev-relay runs carry the misbehavior tax" from #1081
 produced it, `reliability-report.js`, was deleted by the vNext reset (#1140); the
 figure explicitly *excluded* 110 `state_recovery` runs, so it measures executor
 misbehavior rather than the crash/lease machinery this tripwire is about; and
-#1081's own Issue B shipped a fix aimed at driving it down, making it a pre-fix
+And #1081's own Issue B shipped a fix aimed at driving it down, making it a pre-fix
 baseline. Nor can it be re-derived from `~/.relay/runs` yet: there were **zero
 vNext `run.json` files machine-wide** when this was written, because the overlay
 had blocked every dispatch. That blocker is gone, so the numbers can now
