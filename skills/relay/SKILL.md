@@ -28,7 +28,7 @@ Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and review through `review
 
 Run `git fetch origin`. Task evidence: collect the first available source—local task file, `gh issue view <N>`, or user description—and use its `track:` or `component:` value as the sprint ownership handle. If no issue number, use a descriptive branch name and skip issue-close in merge.
 
-Before any sprint read, invoke the resolved dev-backlog `sprint-state.js --track <track> --json backlog` or `sprint-state.js --component <component> --json backlog` and use `active_sprint.path` as the owning sprint. With no handle, use `sprint-state.js --json backlog` only when exactly one sprint is active; if a selector lookup is unavailable or unresolved, allow that same fallback only when the single sprint's track/component matches. Never choose an arbitrary/global active sprint or parse sprint markdown in relay to resolve ownership. If no owner resolves, skip sprint tracking; otherwise re-read that sprint's Running Context, batch information, and completed/in-flight changes and apply previous-task context.
+Sprint tracking is optional; when in use, resolve ownership per [sprint-integration.md](references/sprint-integration.md).
 
 Run the route preflight. It answers one question: does this issue already have a PR or an in-flight vNext run?
 
@@ -71,7 +71,7 @@ Follow `inspection.recommended_action` exactly:
 - `redispatch` → call dispatch with the immutable `run_id`; all other resume attempts fail before writing.
 - `wait` → keep polling; `operator_attention` or `none` → stop and resolve the blocker.
 
-Capture `run_id`, `run_dir`, and the current action key. The immutable record is `~/.relay/runs/<repo-slug>/<run-id>/run.json`; lifecycle state is folded from `events.jsonl` plus live observations, not mutated in a manifest. Before an in-flight write, resolve the owner through the same dev-backlog `sprint-state.js --track/--component --json` contract and matching-selector N==1 failure fallback, then update only its `active_sprint.path`; skip when no owner resolves.
+Capture `run_id`, `run_dir`, and the current action key. The immutable record is `~/.relay/runs/<repo-slug>/<run-id>/run.json`; lifecycle state is folded from `events.jsonl` plus live observations, not mutated in a manifest. For in-flight writes, resolve ownership per the same [sprint-integration.md](references/sprint-integration.md) contract.
 
 ## Step 4: Review (relay-review)
 
@@ -97,4 +97,4 @@ If relay-review returns LGTM, the review runner should already have recorded `re
 When multiple independent tasks are ready, prepare a `relay-fleet` batch but preserve `/relay`'s `ready_to_merge` stop until the user explicitly authorizes landing it; after authorization, `relay-fleet` is the default parallel batch drive. See `references/batch-mode.md` for the remaining conflict-recovery note and the "when in doubt, run sequentially" principle.
 ## Summary Checklist
 
-Verify Done Criteria fully implemented, relay-review LGTM/audit comment, `ready_to_merge` state, and any sprint/follow-up updates.
+Verify Done Criteria fully implemented, relay-review LGTM/audit comment, `ready_to_merge` state, and any sprint/follow-up updates per [sprint-integration.md](references/sprint-integration.md).
