@@ -25,6 +25,7 @@ Optional Step 0a block to insert before the prerequisite gate only when any fact
 
 ```
   0a. TDD RED ANCHOR STEP:
+     Active anchors: `<tdd_anchor>` via `<resolved tdd_runner>`, one entry per factor carrying a non-empty `tdd_anchor`.
      a) Write failing test(s) targeting every factor's `tdd_anchor`, grouped into a SINGLE commit covering all anchors.
      b) The commit subject MUST start with the literal prefix `tdd: red — ` (lowercase `tdd`, lowercase `red`, em-dash U+2014 surrounded by single spaces).
      c) Run every `rubric.prerequisites[].command` with the executor's framework-native exclusion flag for every `tdd_anchor` path. Assert exit 0 on each.
