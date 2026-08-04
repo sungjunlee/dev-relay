@@ -159,6 +159,51 @@
       "replacementCoverage": [
         "tests/skills-lint/scripts/skills-lint.test.js"
       ]
+    },
+    {
+      "path": "tests/relay-plan/scripts/match-template.test.js",
+      "productionSurface": "skills/relay-plan/scripts/match-template.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1162",
+      "replacementCoverage": [
+        "tests/relay-plan/scripts/rubric-reference-contract.test.js"
+      ]
+    },
+    {
+      "path": "tests/relay-plan/scripts/tdd-flavor.test.js",
+      "productionSurface": "skills/relay-plan/scripts/tdd-flavor.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1162",
+      "replacementCoverage": [
+        "tests/relay-plan/scripts/dispatch-prompt-emit.test.js"
+      ]
+    },
+    {
+      "path": "tests/relay-plan/scripts/tdd-mode-integration.test.js",
+      "productionSurface": "skills/relay-plan/scripts/tdd-flavor.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1162",
+      "replacementCoverage": [
+        "tests/relay-plan/scripts/dispatch-prompt-emit.test.js"
+      ]
+    },
+    {
+      "path": "tests/relay-plan/scripts/tdd-runner-fallback.test.js",
+      "productionSurface": "skills/relay-plan/scripts/tdd-flavor.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1162",
+      "replacementCoverage": [
+        "tests/relay-plan/scripts/rubric-reference-contract.test.js"
+      ]
+    },
+    {
+      "path": "tests/relay-plan/scripts/tdd-suggestion.test.js",
+      "productionSurface": "skills/relay-plan/scripts/tdd-suggestion.js",
+      "classification": "obsolete-surface-delete",
+      "removalIssue": "#1162",
+      "replacementCoverage": [
+        "tests/relay-plan/scripts/rubric-reference-contract.test.js"
+      ]
     }
   ],
   "approvedDirectives": [
@@ -603,15 +648,6 @@
       ]
     },
     {
-      "path": "tests/relay-plan/scripts/match-template.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Exercises a replaceable helper boundary rather than an enduring product invariant.",
-      "invariantIds": [
-        "RR-01"
-      ]
-    },
-    {
       "path": "tests/relay-plan/scripts/persist-done-criteria.test.js",
       "owner": "runtime-core-reset",
       "classification": "preserve-invariant",
@@ -634,42 +670,6 @@
       "owner": "runtime-core-reset",
       "classification": "preserve-invariant",
       "rationale": "This registration directly exercises canonical invariant RR-02.",
-      "invariantIds": [
-        "RR-01"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/tdd-flavor.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-      "invariantIds": [
-        "RR-01"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/tdd-mode-integration.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-      "invariantIds": [
-        "RR-01"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/tdd-runner-fallback.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-      "invariantIds": [
-        "RR-01"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/tdd-suggestion.test.js",
-      "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
       "invariantIds": [
         "RR-01"
       ]

@@ -4,9 +4,9 @@
   "staticMetrics": {
     "relayDispatchRuntimeJavaScriptFiles": 16,
     "relayDispatchRuntimeJavaScriptLoc": 6050,
-    "relayTestFiles": 51,
-    "relayTestLoc": 13752,
-    "relayRegistrationSites": 532,
+    "relayTestFiles": 46,
+    "relayTestLoc": 13117,
+    "relayRegistrationSites": 507,
     "dynamicRegistrationSites": 4
   },
   "measuredRuntime": {

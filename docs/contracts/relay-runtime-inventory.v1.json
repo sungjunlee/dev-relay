@@ -469,6 +469,33 @@
       "deletedEvidence": [
         "tests/relay-ready/scripts/score-readiness.test.js"
       ]
+    },
+    {
+      "path": "skills/relay-plan/scripts/match-template.js",
+      "removalIssue": "#1162",
+      "replacement": "None. Template selection is planner judgment against skills/relay-plan/references/rubric-templates/_index.json, described in skills/relay-plan/SKILL.md.",
+      "deletedEvidence": [
+        "tests/relay-plan/scripts/match-template.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-plan/scripts/tdd-flavor.js",
+      "removalIssue": "#1162",
+      "replacement": "None. The Step 0a block and its fail-closed runner rule are prose in skills/relay-plan/references/iteration-protocol.md.",
+      "deletedEvidence": [
+        "tests/relay-plan/scripts/tdd-flavor.test.js",
+        "tests/relay-plan/scripts/tdd-mode-integration.test.js",
+        "tests/relay-plan/scripts/tdd-runner-fallback.test.js",
+        "tests/relay-plan/scripts/dispatch-prompt-emit.test.js"
+      ]
+    },
+    {
+      "path": "skills/relay-plan/scripts/tdd-suggestion.js",
+      "removalIssue": "#1162",
+      "replacement": "None. Suggesting a tdd_anchor is planner judgment in skills/relay-plan/SKILL.md and skills/relay-plan/references/rubric-patterns.md.",
+      "deletedEvidence": [
+        "tests/relay-plan/scripts/tdd-suggestion.test.js"
+      ]
     }
   ],
   "roleModel": {
@@ -711,15 +738,6 @@
           }
         },
         {
-          "path": "skills/relay-plan/scripts/match-template.js",
-          "roles": {
-            "detected": [
-              "cli-entry"
-            ],
-            "reviewedSemantic": []
-          }
-        },
-        {
           "path": "skills/relay-plan/scripts/persist-done-criteria.js",
           "roles": {
             "detected": [
@@ -736,20 +754,6 @@
             "detected": [
               "cli-entry"
             ],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-plan/scripts/tdd-flavor.js",
-          "roles": {
-            "detected": [],
-            "reviewedSemantic": []
-          }
-        },
-        {
-          "path": "skills/relay-plan/scripts/tdd-suggestion.js",
-          "roles": {
-            "detected": [],
             "reviewedSemantic": []
           }
         },

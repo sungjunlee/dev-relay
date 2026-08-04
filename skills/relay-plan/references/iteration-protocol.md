@@ -12,7 +12,9 @@ This compatibility-named reference defines the compact completion responsibiliti
 node skills/relay-plan/scripts/probe-executor-env.js . --project-only --json
 ```
 
-If the probe reports zero `test_infra` entries and `tdd_runner` is omitted on a factor with `tdd_anchor`, stop before Step 0a with a clear error.
+If that probe reports zero `test_infra` entries, fall back to the first `project_tools.frameworks` entry whose name is a known test framework (`jest`, `pytest`, `mocha`, `vitest`, `node:test`, `playwright`, `@playwright/test`).
+
+If neither source yields a runner for a factor that carries `tdd_anchor` and omits `tdd_runner`, stop before Step 0a with a clear error naming that factor. One unresolved factor stops the whole Step 0a block: no anchor runs under a guessed runner.
 
 | any factor has `tdd_anchor` | Behavior |
 |------|----------|
@@ -23,6 +25,7 @@ Optional Step 0a block to insert before the prerequisite gate only when any fact
 
 ```
   0a. TDD RED ANCHOR STEP:
+     Active anchors: `<tdd_anchor>` via `<resolved tdd_runner>`, one entry per factor carrying a non-empty `tdd_anchor`.
      a) Write failing test(s) targeting every factor's `tdd_anchor`, grouped into a SINGLE commit covering all anchors.
      b) The commit subject MUST start with the literal prefix `tdd: red — ` (lowercase `tdd`, lowercase `red`, em-dash U+2014 surrounded by single spaces).
      c) Run every `rubric.prerequisites[].command` with the executor's framework-native exclusion flag for every `tdd_anchor` path. Assert exit 0 on each.
