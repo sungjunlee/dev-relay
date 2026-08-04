@@ -12,7 +12,9 @@ This compatibility-named reference defines the compact completion responsibiliti
 node skills/relay-plan/scripts/probe-executor-env.js . --project-only --json
 ```
 
-If the probe reports zero `test_infra` entries and `tdd_runner` is omitted on a factor with `tdd_anchor`, stop before Step 0a with a clear error.
+If that probe reports zero `test_infra` entries, fall back to the first `project_tools.frameworks` entry whose name is a known test framework (`jest`, `pytest`, `mocha`, `vitest`, `node:test`, `playwright`, `@playwright/test`).
+
+If neither source yields a runner for a factor that carries `tdd_anchor` and omits `tdd_runner`, stop before Step 0a with a clear error naming that factor. One unresolved factor stops the whole Step 0a block: no anchor runs under a guessed runner.
 
 | any factor has `tdd_anchor` | Behavior |
 |------|----------|

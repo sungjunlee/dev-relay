@@ -3,8 +3,11 @@
 This is current planning guidance. Dated issue examples and retired manifest
 surfaces belong in `docs/archive/`; they are not a source of runtime commands.
 
-For an optional TDD-oriented planning hint, use `scripts/tdd-suggestion.js`.
-It is a planning helper, never a dispatch or review authority.
+A TDD-oriented planning hint is planner judgment, never a dispatch or review
+authority: consider `tdd_anchor` when the probe reports a usable test runner and
+an automated contract factor still has no anchor; skip the hint when the rubric
+already opts in or the repo reports no test infrastructure. See `SKILL.md` §
+Risk-Triggered Add-Ons and `rubric-design-guide.md`.
 
 ## Freeze the outcome, not a process script
 

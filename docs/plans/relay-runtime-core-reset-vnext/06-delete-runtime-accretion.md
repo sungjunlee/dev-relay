@@ -99,6 +99,9 @@ single primary-review path.
 | `relay-fleet/scripts/sprint-state.js` | byte-identical duplicate of `relay-merge/scripts/sprint-state.js`; relay-fleet ownership validation now imports the relay-merge module (#1148) |
 | `relay-ready/scripts/probe-readiness.js` | fail-open readiness probe and its probe test were deleted; the route stage no longer shells out and returns only the in-flight dedup guard (#1156) |
 | `relay-ready/scripts/score-readiness.js` | scored readiness heuristics and their unit test were deleted; the clarity, granularity, verifiability, task-shape, and risk factors are prose in `relay-ready/SKILL.md` (#1156) |
+| `relay-plan/scripts/match-template.js` | the mechanical template matcher and its unit test were deleted; the planner selects a scaffold from `relay-plan/references/rubric-templates/_index.json` by judgment and adapts it by hand (#1162) |
+| `relay-plan/scripts/tdd-flavor.js` | dispatch-prompt TDD rendering and its tests were deleted; the Step 0a block and the fail-closed `tdd_runner` resolution rule are prose in `relay-plan/references/iteration-protocol.md` (#1162) |
+| `relay-plan/scripts/tdd-suggestion.js` | the suggestion layer over the deleted matcher and its unit test were deleted; suggesting a `tdd_anchor` is planner judgment in `relay-plan/SKILL.md` (#1162) |
 
 The surviving precedence is intentionally closed: a new run binds explicit
 `--executor`/`--model` values (or the adapter defaults), and a resumed run uses

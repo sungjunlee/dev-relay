@@ -129,7 +129,8 @@ Do not run `relay-dispatch` from `relay-plan`.
 
 Use add-ons only when task evidence earns them; do not copy reference checklists into the prompt.
 
-- Probe template: `scripts/match-template.js` can suggest a scaffold; never auto-apply.
+- Rubric template scaffold: read `references/rubric-templates/_index.json`, then pick the template whose `signals` (`test_infra`, `type_check`, `lint_format`) overlap the Step 2 probe output; with no overlap, write the rubric from the task instead. A template is a starting scaffold to adapt by hand, never auto-applied and never the contract.
+- TDD-flavored factors: a factor carries `tdd_anchor: <test path>` (optional `tdd_runner`) only when red-first testing fits that factor — crisp behavior, one specific path, and a runner that can target it. Suggest it when the Step 2 probe reports a usable test runner and an automated contract factor has no anchor yet; leave documentation, prose, UI judgment, and broad design factors unanchored. A `tdd_anchor` factor with no resolvable runner fails closed before Step 0a: `references/iteration-protocol.md`.
 - `task_profile` or working guidance: `references/task-profile.md` and `references/guidance-packs.md`.
 - Domain rubric ideas: `references/rubric-domain-axes.md`.
 - Observation-first domain questions: `references/observation-lenses.md`.
