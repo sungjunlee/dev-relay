@@ -125,7 +125,7 @@ for the full contract.
 ## Runtime size
 
 There is one runtime. The installed dispatch package contains 16 JavaScript
-files and 6,050 production LOC, measured by the ledger generator into
+files and 6,099 production LOC, measured by the ledger generator into
 `tests/ledger/vnext-baseline.generated.json`; refresh it with that generator
 rather than editing the figure by hand.
 

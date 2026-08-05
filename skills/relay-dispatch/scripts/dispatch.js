@@ -37,6 +37,7 @@ const OPTIONS = Object.freeze({
   "issue-number": { type: "string" },
   "fleet-id": { type: "string" },
   "ownership-json": { type: "string" },
+  "allow-toolset-mismatch": { type: "boolean", default: false },
   detach: { type: "boolean", default: false },
   "dry-run": { type: "boolean", default: false },
   json: { type: "boolean", default: false },
@@ -54,6 +55,7 @@ function usage() {
     "  dispatch.js [<repo>] --run-id <id> (--prompt <text> | --prompt-file <path>) [options]",
     "",
     `Executors: ${listAdapters().join(", ")}`,
+    "A prompt demanding command execution is rejected for an executor whose dispatch toolset has no shell; override with --allow-toolset-mismatch.",
     "Dispatch never commits, pushes, opens a PR, or runs recovery. Use relay-recover for those actions.",
   ].join("\n");
 }
@@ -186,6 +188,45 @@ function parseCli(argv) {
   if (creating && !values["rubric-file"]) fail("new dispatch requires --rubric-file");
   const ownership = parseOwnership(values["ownership-json"], values["fleet-id"]);
   return { values, repo, runId, creating, issueNumber, timeoutSeconds, ownership };
+}
+
+// Evaluated in this order; the first hit is the reported evidence. Deliberately literal: the
+// false-positive escape hatch is --allow-toolset-mismatch, not a cleverer matcher.
+const COMMAND_DEMAND_PATTERNS = Object.freeze([
+  ["fenced_shell_block", /^[ \t]*(?:```|~~~)[ \t]*(?:bash|sh|shell|zsh)\b/m],
+  ["node_test", /\bnode\s+--test\b/],
+  ["npm_test", /\bnpm\s+test\b/],
+  ["npm_run", /\bnpm\s+run\s+[^\s`]+/],
+  ["npx", /\bnpx\s+[^\s`]+/],
+  ["git_write", /\bgit\s+(?:commit|push|rebase|merge)\b/],
+  ["imperative_backticked_command", /\b(?:run|runs|execute|executes)\b[^`\n]{0,40}`[^`\n]+`/i],
+]);
+
+function detectCommandExecutionDemand(prompt) {
+  const text = Buffer.isBuffer(prompt) ? prompt.toString("utf8") : typeof prompt === "string" ? prompt : "";
+  for (const [pattern, expression] of COMMAND_DEMAND_PATTERNS) {
+    const match = expression.exec(text);
+    if (match) return Object.freeze({ pattern, evidence: match[0].trim().slice(0, 120) });
+  }
+  return null;
+}
+
+// Runs before every entry state mutates anything: create, resume, and the detached parent all reach
+// it from main() ahead of worktree creation, the run-directory claim, and any appended fact.
+function assertDispatchToolset(cli) {
+  const adapter = getAdapter(cli.values.executor);
+  if (adapter.capabilities({ phase: "dispatch" }).commandExecution !== false) return null;
+  const bytes = cli.values["prompt-file"] === undefined
+    ? Buffer.from(cli.values.prompt, "utf8")
+    : secureBytes(cli.values["prompt-file"], "prompt").bytes;
+  const demand = detectCommandExecutionDemand(bytes);
+  if (!demand) return null;
+  const detail = `executor '${adapter.name}' has no command-execution tool in its dispatch toolset, but the prompt demands one (${demand.pattern}: ${JSON.stringify(demand.evidence)})`;
+  if (cli.values["allow-toolset-mismatch"]) {
+    console.error(`relay-dispatch: warning: toolset mismatch: ${detail}; proceeding because --allow-toolset-mismatch was supplied`);
+    return demand;
+  }
+  fail(`toolset mismatch: ${detail}. Dispatch to a shell-capable executor or pass --allow-toolset-mismatch.`, "TOOLSET_MISMATCH");
 }
 
 function validateCopyInputs(repoRoot, copyValue) {
@@ -613,6 +654,7 @@ async function main(argv = process.argv.slice(2)) {
   try {
     cli = parseCli(argv);
     if (cli.help) { console.log(usage()); return 0; }
+    assertDispatchToolset(cli);
     const result = cli.values.detach && !process.env.RELAY_DISPATCH_INTERNAL_RUN_ID
       ? await executeDetached(cli, argv)
       : await executeForeground(cli);
@@ -630,4 +672,4 @@ async function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main().then((code) => { process.exitCode = code; });
 
-module.exports = { assertResumeInspection, credentialRequest, dryRunInvocation, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, startAttempt, validateCopyInputs };
+module.exports = { assertDispatchToolset, assertResumeInspection, credentialRequest, detectCommandExecutionDemand, dryRunInvocation, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, startAttempt, validateCopyInputs };

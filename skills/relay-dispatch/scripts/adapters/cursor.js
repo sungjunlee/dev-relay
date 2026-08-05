@@ -32,7 +32,7 @@ module.exports = createNativeAdapter({
   },
   phases: {
     // Nested sandbox disabled only inside Relay's authoritative host boundary.
-    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "text" },
+    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "text", commandExecution: true },
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,

@@ -23,7 +23,8 @@ module.exports = createNativeAdapter({
       { id: "models", targetRoot: "home", targetRel: ".pi/agent/models.json", access: "read", recommendedSource: "~/.pi/agent/models.json" },
     ], envHints: ["QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_CN_API_KEY"] } },
   phases: {
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "native", cancellation: "process", structuredOutput: "text" },
+    // buildDispatch pins --tools read,grep,find,ls,write,edit: no shell, no command execution.
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "native", cancellation: "process", structuredOutput: "text", commandExecution: false },
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "native", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
