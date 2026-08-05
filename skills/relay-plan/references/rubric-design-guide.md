@@ -54,7 +54,7 @@ rubric:
 
 `tdd_anchor: <path-string>` is a per-factor opt-in. Its presence means the dispatch prompt inserts Step 0a for that factor. Do not add a top-level `tdd_mode`.
 
-`tdd_runner: <jest|pytest|mocha|vitest|...>` is an optional companion. If it is omitted, the executor falls back to the first `test_infra` entry from `probe-executor-env.js --project-only --json`. If no test infra is reported, the executor stops before Step 0a with a clear error.
+`tdd_runner: <jest|pytest|mocha|vitest|...>` is an optional companion. If it is omitted, the runner resolves per `iteration-protocol.md`: the first `test_infra` entry from `probe-executor-env.js --project-only --json`; when no source yields a runner, the executor stops before Step 0a with an error naming that factor, and one unresolved factor stops the whole Step 0a block.
 
 Use `tdd_anchor` only when red-first testing fits the factor's contract: crisp behavior, a specific path, and a runner that can target that path. Leave documentation, prose, UI judgment, and broad design factors without `tdd_anchor`.
 

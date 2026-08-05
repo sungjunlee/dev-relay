@@ -38,8 +38,9 @@ error the way the retired probe did.
 - Signals read: the request text, plus an accepted relay-ready handoff under
   `~/.relay/requests/<repo-slug>/` whose recorded source identity — the issue
   number, the issue URL, or the request id the operator was given — matches this
-  issue. Only such a matching handoff supersedes the issue's own criteria; a
-  newer bundle for a different issue is irrelevant.
+  issue. Only such a matching handoff supersedes the issue's own criteria
+  (canonical matching rule: `../../relay-ready/SKILL.md`); a newer bundle for a
+  different issue is irrelevant.
 - Events emitted: none.
 - Factors: clarity, granularity, verifiability, task shape, and risk, as defined
   in `../../relay-ready/SKILL.md`.
