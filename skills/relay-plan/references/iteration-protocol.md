@@ -1,6 +1,6 @@
 # Execution Contract
 
-This compatibility-named reference defines the compact completion responsibilities that every dispatch prompt must include. Take the base template at `../../relay/references/prompt-template.md` and append the sections listed in `SKILL.md` § 10. Relay specifies observable completion, not the executor's internal iteration strategy.
+This compatibility-named reference defines the compact completion responsibilities that every dispatch prompt must include. Take the base template at `../../relay/references/prompt-template.md` and append the sections named in the Default Path of `SKILL.md`: Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Relay specifies observable completion, not the executor's internal iteration strategy.
 
 ## Optional TDD Factor Flavor
 
