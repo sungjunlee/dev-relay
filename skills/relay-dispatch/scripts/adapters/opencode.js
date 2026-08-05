@@ -19,7 +19,7 @@ module.exports = createNativeAdapter({
       { id: "config_jsonc", targetRoot: "xdg_config", targetRel: "opencode/opencode.jsonc", access: "read", recommendedSource: "~/.config/opencode/opencode.jsonc" },
     ], envHints: [] } },
   phases: {
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" },
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text", commandExecution: true },
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,

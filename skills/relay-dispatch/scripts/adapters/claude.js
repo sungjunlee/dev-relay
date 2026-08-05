@@ -27,7 +27,8 @@ module.exports = createNativeAdapter({
     ], envHints: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
   },
   phases: {
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" },
+    // buildDispatch pins --disallowedTools Bash,...: no shell, no command execution.
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text", commandExecution: false },
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,

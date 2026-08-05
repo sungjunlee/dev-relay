@@ -282,6 +282,11 @@ function createNativeAdapter({
   if (!name || typeof buildDispatch !== "function" || typeof cliBinary !== "string") throw new Error("native adapter requires name, metadata.cliBinary, and buildDispatch");
   if (metadata.processContainment !== PROCESS_CONTAINMENT) throw new Error(`native adapter must declare ${PROCESS_CONTAINMENT} process containment`);
   if (metadata.providerTransport !== "remote_required") throw new Error("native adapter must declare remote_required provider transport");
+  // Declared, never inferred: dispatch.js rejects a command-demanding prompt for a toolset with no
+  // shell, and an adapter that forgot to say which it is would silently become shell-capable.
+  if (phaseMetadata.dispatch?.supported && typeof phaseMetadata.dispatch.commandExecution !== "boolean") {
+    throw new Error("native adapter dispatch phase must declare commandExecution");
+  }
   if (!new Set(["explicit_bundle", "unrepresentable"]).has(metadata.credentialTransport)) throw new Error("native adapter credential transport declaration is invalid");
   const runtimeDependencies = normalizeRuntimeDependencies(metadata.runtimeDependencies);
   const bindInvocationPolicy = (invocation, toolNetworkAccess) => Object.freeze({ ...invocation, networkAccess: "enabled", toolNetworkAccess, runtimeDependencies });

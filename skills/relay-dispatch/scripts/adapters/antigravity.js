@@ -29,7 +29,7 @@ module.exports = createNativeAdapter({
   ], envHints: [] } },
   phases: {
     // `agy --sandbox` does not provide a verifiable tool-network block.
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" },
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text", commandExecution: true },
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,

@@ -570,6 +570,16 @@
       ]
     },
     {
+      "path": "tests/relay-dispatch/scripts/toolset-mismatch.test.js",
+      "owner": "runtime-core-reset",
+      "classification": "preserve-invariant",
+      "rationale": "A command-demanding prompt aimed at a no-shell dispatch toolset must fail closed before any run directory, retained worktree, or attempt fact exists.",
+      "invariantIds": [
+        "RR-01",
+        "RR-05"
+      ]
+    },
+    {
       "path": "tests/relay-fleet/scripts/vnext-derived.test.js",
       "owner": "runtime-core-reset",
       "classification": "preserve-invariant",
