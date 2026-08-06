@@ -392,7 +392,7 @@ function attemptFact({ runId, attemptId, type, actor, payload }) {
   return { event_id: crypto.createHash("sha256").update(crypto.randomBytes(32)).digest("hex"), run_id: runId, attempt_id: attemptId, type, at: new Date().toISOString(), actor, payload };
 }
 
-async function startAttempt({ cli, identity, adapter, prompt, rubric, resumeInspection = null, inspectRun = recover.inspectProductionRun }) {
+async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, resumeInspection = null, inspectRun = recover.inspectProductionRun }) {
   const actor = process.env.RELAY_ORCHESTRATOR || "codex";
   let record;
   let runDir = runStore.resolveRunDirectory(identity.checkout, cli.runId);
@@ -416,7 +416,7 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, resumeInsp
         throw error;
       }
       claimed = true;
-      const criteriaSource = cli.values["done-criteria-file"] ? secureBytes(cli.values["done-criteria-file"], "Done Criteria") : rubric;
+      const criteriaSource = criteria || rubric;
       const stagedCriteria = path.join(runDir, ".done-criteria.source");
       immutableBytes(stagedCriteria, criteriaSource.bytes);
       const frozen = runStore.freezeDoneCriteria({ sourcePath: stagedCriteria, runDir });
@@ -585,8 +585,8 @@ function loadInputs(cli) {
   const prompt = cli.values["prompt-file"] ? secureBytes(cli.values["prompt-file"], "prompt") : { path: null, bytes: Buffer.from(cli.values.prompt, "utf8") };
   const rubric = cli.values["rubric-file"] ? secureBytes(cli.values["rubric-file"], "rubric") : null;
   if (cli.creating && !rubric) fail("new dispatch requires a readable --rubric-file");
-  if (cli.values["done-criteria-file"]) secureBytes(cli.values["done-criteria-file"], "Done Criteria");
-  return { prompt, rubric };
+  const criteria = cli.values["done-criteria-file"] ? secureBytes(cli.values["done-criteria-file"], "Done Criteria") : null;
+  return { prompt, rubric, criteria };
 }
 
 async function executeForeground(cli, overrides = {}) {
@@ -613,7 +613,7 @@ async function executeForeground(cli, overrides = {}) {
     const invocation = dryRunInvocation({ cli, identity, adapter, inputs });
     return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, credential_request: requestedCredentials.summary, durable_bytes_written: 0, invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
   }
-  const started = await startAttempt({ cli, identity, adapter, prompt: inputs.prompt, rubric: inputs.rubric, resumeInspection, inspectRun });
+  const started = await startAttempt({ cli, identity, adapter, prompt: inputs.prompt, rubric: inputs.rubric, criteria: inputs.criteria, resumeInspection, inspectRun });
   const launch = { status: "dispatched", run_id: cli.runId, run_dir: started.runDir, worktree: started.record.git.worktree, attempt_id: started.attemptId, host_handle: started.receipt.host_handle };
   if (process.env.RELAY_DISPATCH_NOTIFY_PATH) {
     const inspection = await recover.inspectProductionRun({ runDir: started.runDir });
