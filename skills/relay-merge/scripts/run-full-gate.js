@@ -371,6 +371,10 @@ function printHelp() {
   console.log("  --help, -h              Show this help");
 }
 
+function waitingMessage(owner) {
+  return `Waiting for full-gate lock owned by pid ${owner.pid ?? "unknown"} (pgid ${owner.pgid ?? "unknown"}, host ${owner.host ?? "unknown"})...`;
+}
+
 function waitForDetached(config) {
   let announcedState = null;
   while (true) {
@@ -383,13 +387,20 @@ function waitForDetached(config) {
       // announced waiting_for_lock but never announced running.
       if (!config.json && announcedState === "waiting_for_lock" && result.result !== "lock_timeout") {
         console.log("Full-gate lock acquired; running suites serially...");
+      } else if (!config.json && announcedState === null
+        && result.lock_wait?.did_wait && result.result !== "lock_timeout") {
+        // A loaded host can delay this poll loop past the waiting_for_lock
+        // status entirely, so neither announcement above ever fires and the
+        // invoker sees silence while it was in fact blocked. The sentinel is
+        // the durable record of that wait, so announce both from it.
+        console.log(waitingMessage(result.lock_wait.owner || {}));
+        console.log("Full-gate lock acquired; running suites serially...");
       }
       return result;
     }
     const status = readJson(config.statusPath);
     if (!config.json && status?.state === "waiting_for_lock" && announcedState !== status.state) {
-      const owner = status.lock_wait?.owner || {};
-      console.log(`Waiting for full-gate lock owned by pid ${owner.pid ?? "unknown"} (pgid ${owner.pgid ?? "unknown"}, host ${owner.host ?? "unknown"})...`);
+      console.log(waitingMessage(status.lock_wait?.owner || {}));
       announcedState = status.state;
     } else if (!config.json && status?.state === "running" && announcedState === "waiting_for_lock") {
       console.log("Full-gate lock acquired; running suites serially...");
