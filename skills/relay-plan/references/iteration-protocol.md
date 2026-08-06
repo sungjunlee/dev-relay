@@ -1,6 +1,8 @@
 # Execution Contract
 
-This compatibility-named reference defines the compact completion responsibilities that every dispatch prompt must include. Take the base template at `../../relay/references/prompt-template.md` and append the sections named in the Default Path of `SKILL.md`: Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Relay specifies observable completion, not the executor's internal iteration strategy.
+This compatibility-named reference defines the compact completion responsibilities that every dispatch prompt to a shell-capable executor must include. Take the base template at `../../relay/references/prompt-template.md` and append the sections named in the Default Path of `SKILL.md`: Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Relay specifies observable completion, not the executor's internal iteration strategy.
+
+When the target executor's dispatch toolset reports `capability.commandExecution: false`, neither this file's Completion Responsibilities nor its TDD flavor applies: `../../relay/references/prompt-template-shell-free.md` supplies the whole completion contract, and nothing here is appended to it. That contract's own wording clears the dispatch toolset gate, but this section's does not clear it in substance — a prerequisite gate, self-verification, and an executor-side commit are all unreachable without a terminal — so appending it anyway rebuilds the silent no-op the gate exists to remove.
 
 ## Optional TDD Factor Flavor
 

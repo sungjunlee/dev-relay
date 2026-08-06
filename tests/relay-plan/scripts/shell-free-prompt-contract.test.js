@@ -16,6 +16,12 @@ const BASE_TEMPLATE_PATH = path.join(REPO_ROOT, "skills", "relay", "references",
 const SHELL_FREE_TEMPLATE_PATH = path.join(REPO_ROOT, "skills", "relay", "references", "prompt-template-shell-free.md");
 const ASSEMBLED_SHELL_FREE_PATH = path.join(__dirname, "..", "fixtures", "dispatch-prompt-baseline", "shell-free.md");
 const SKILL_PATH = path.join(REPO_ROOT, "skills", "relay-plan", "SKILL.md");
+const ITERATION_PROTOCOL_PATH = path.join(REPO_ROOT, "skills", "relay-plan", "references", "iteration-protocol.md");
+// The detector is deliberately literal, so a reworded demand ("execute the project's verification
+// suite in full") clears it. This binds the class the detector cannot: an execution verb aimed at a
+// suite, check, or build. It is a bound and not a proof — arbitrary paraphrase stays undecidable,
+// which is why the frozen Done Criteria and independent review remain the durable guard.
+const EXECUTION_DEMAND = /\b(?:execute|executes|run|runs|re-?run|invoke|invokes)\b[^.\n]{0,80}\b(?:suite|suites|test|tests|check|checks|verification|build|lint|type-check|command|commands)\b/i;
 const TEMPLATE_SECTIONS = [
   "## Outcome Contract (Done Criteria)",
   "## Evaluation Channels",
@@ -108,6 +114,36 @@ test("both prompt contracts keep the base section anchors in order", () => {
   assert.match(base, /0\. PREREQUISITE GATE:/);
   assert.match(base, /Run relevant verification and fix failures found/);
   assert.match(base, /Do not run `git add`, `git commit`, `git push`/);
+});
+
+// The absence set in the substance test is lifted from the base template, so it proves "not the base
+// template" rather than "demands no execution": a reworded demand passed all of it. This binds the
+// class instead of the phrasing, with both contracts a shell-free prompt must never carry as the
+// positive controls.
+test("no contract reaching a shell-free executor asks it to execute anything", () => {
+  assert.doesNotMatch(promptBody(read(SHELL_FREE_TEMPLATE_PATH), "prompt-template-shell-free.md"), EXECUTION_DEMAND,
+    "the shell-free contract must not ask an executor with no terminal to execute anything");
+  assert.doesNotMatch(read(ASSEMBLED_SHELL_FREE_PATH), EXECUTION_DEMAND,
+    "the assembled shell-free prompt must not ask an executor with no terminal to execute anything");
+
+  const base = read(BASE_TEMPLATE_PATH);
+  assert.match(base.slice(base.indexOf("## Test-run Discipline")), EXECUTION_DEMAND,
+    "base completion contract must still demand execution, or this check proves nothing");
+  const compact = read(ITERATION_PROTOCOL_PATH);
+  assert.match(compact.slice(compact.indexOf("## Completion Responsibilities")), EXECUTION_DEMAND,
+    "the compact executor contract must still demand execution, or its exclusion below proves nothing");
+});
+
+// A planner reaches the compact contract from the same step 8 that selects the template, and its
+// Completion Responsibilities clear the detector while still demanding a gate, self-verification,
+// and an executor-side commit. Appending it to a shell-free prompt rebuilds the silent no-op.
+test("the compact executor contract excludes itself from a shell-free dispatch", () => {
+  const text = read(ITERATION_PROTOCOL_PATH);
+
+  assert.match(text, /every dispatch prompt to a shell-capable executor must include/);
+  assert.match(text, /`capability\.commandExecution: false`/);
+  assert.match(text, /prompt-template-shell-free\.md` supplies the whole completion contract/);
+  assert.match(text, /nothing here is appended to it/);
 });
 
 // DC3 + DC5-c: the selection rule is discoverable from the step that assembles the prompt.
