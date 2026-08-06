@@ -14,6 +14,7 @@ const host = require("../../../skills/relay-dispatch/scripts/host");
 const recovery = require("../../../skills/relay-dispatch/scripts/recover");
 const runtime = { ...recovery, inspectRun: recovery.inspectProductionRun };
 const { readRunRecord } = require("../../../skills/relay-dispatch/scripts/run-store");
+const { getAdapter } = require("../../../skills/relay-dispatch/scripts/adapters");
 
 const ROOT = path.resolve(__dirname, "../../..");
 const DISPATCH = path.join(ROOT, "skills/relay-dispatch/scripts/dispatch.js");
@@ -606,7 +607,9 @@ test("resume revalidates the exact action key under the acquired run lock before
   });
   try {
     const cli = dispatch.parseCli([value.repo, "--run-id", output.run_id, "--prompt", "retry", "--network-access", "enabled", "--json"]);
-    await assert.rejects(dispatch.executeForeground(cli, { inspectRun }), (error) => error.code === "RUN_ACTION_CHANGED");
+    const prompt = { path: null, bytes: Buffer.from("retry", "utf8") };
+    const adapter = getAdapter(cli.values.executor);
+    await assert.rejects(dispatch.executeForeground(cli, { inspectRun, prompt, adapter }), (error) => error.code === "RUN_ACTION_CHANGED");
   } finally {
     if (previousHome === undefined) delete process.env.RELAY_HOME; else process.env.RELAY_HOME = previousHome;
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
@@ -673,9 +676,15 @@ test("a denied resume writes no prompt, attempt, or fact before failing closed",
   const eventsPath = path.join(output.run_dir, "events.jsonl");
   const beforeFacts = facts.readFacts({ eventsPath }).facts;
 
-  const denied = run(value, ["--run-id", output.run_id, "--prompt-file", path.join(value.root, "missing-retry.md"), "--json"]);
+  // #1173: the prompt is read once, in main(), ahead of the resume inspection, so the denial needs a
+  // readable prompt to be the resume gate's rejection and not the reader's. An unreadable one is now
+  // rejected first for every executor, which is the shape the shell-less path already had.
+  const denied = run(value, ["--run-id", output.run_id, "--prompt-file", value.prompt, "--json"]);
   assert.notEqual(denied.status, 0);
   assert.equal(json(denied.stderr).code, "RUN_NOT_REDISPATCHABLE");
+  const unreadable = run(value, ["--run-id", output.run_id, "--prompt-file", path.join(value.root, "missing-retry.md"), "--json"]);
+  assert.notEqual(unreadable.status, 0);
+  assert.equal(json(unreadable.stderr).code, "RUN_ARTIFACT_MISSING");
   assert.deepEqual(fs.readdirSync(output.run_dir).sort(), beforeFiles);
   assert.deepEqual(facts.readFacts({ eventsPath }).facts, beforeFacts);
 });

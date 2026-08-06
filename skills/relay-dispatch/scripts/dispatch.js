@@ -211,15 +211,30 @@ function detectCommandExecutionDemand(prompt) {
   return null;
 }
 
+// Read once per process, in main(), and thread the same buffer to the gate and to loadInputs. Two
+// reads let a swap between them stamp bytes the gate never validated.
+function readPrompt(cli) {
+  return cli.values["prompt-file"] === undefined
+    ? { path: null, bytes: Buffer.from(cli.values.prompt, "utf8") }
+    : secureBytes(cli.values["prompt-file"], "prompt");
+}
+
 // Runs before every entry state mutates anything: create, resume, and the detached parent all reach
 // it from main() ahead of worktree creation, the run-directory claim, and any appended fact.
-function assertDispatchToolset(cli) {
-  const adapter = getAdapter(cli.values.executor);
-  if (adapter.capabilities({ phase: "dispatch" }).commandExecution !== false) return null;
-  const bytes = cli.values["prompt-file"] === undefined
-    ? Buffer.from(cli.values.prompt, "utf8")
-    : secureBytes(cli.values["prompt-file"], "prompt").bytes;
-  const demand = detectCommandExecutionDemand(bytes);
+function assertDispatchToolset(cli, prompt, adapter) {
+  const capability = adapter.capabilities({ phase: "dispatch" });
+  // Asserted here as well as in createNativeAdapter, which binds only adapters built through it.
+  // Unconditional: an object that never declared this cannot be trusted about `supported` either, and
+  // a request-dependent `supported` was measured to slip past a qualified assert. Read once into a
+  // local — an accessor answering the typeof check and the decision differently skips the detector.
+  // This enforces that a declaration is present, never that it is true; `adapter` is resolved once in
+  // main(), so the validated adapter is the one that dispatches, but misrouting is not addressed.
+  const declared = capability.commandExecution;
+  if (typeof declared !== "boolean") {
+    fail(`executor '${adapter.name}' does not declare commandExecution in its dispatch capability`, "TOOLSET_UNDECLARED");
+  }
+  if (declared !== false) return null;
+  const demand = detectCommandExecutionDemand(prompt.bytes);
   if (!demand) return null;
   const detail = `executor '${adapter.name}' has no command-execution tool in its dispatch toolset, but the prompt demands one (${demand.pattern}: ${JSON.stringify(demand.evidence)})`;
   if (cli.values["allow-toolset-mismatch"]) {
@@ -581,18 +596,20 @@ async function finishAttempt({ cli, adapter, started }) {
   return { terminal, parsed, status };
 }
 
-function loadInputs(cli) {
-  const prompt = cli.values["prompt-file"] ? secureBytes(cli.values["prompt-file"], "prompt") : { path: null, bytes: Buffer.from(cli.values.prompt, "utf8") };
+// `prompt` is the buffer main() already validated, threaded rather than re-read.
+function loadInputs(cli, prompt) {
   const rubric = cli.values["rubric-file"] ? secureBytes(cli.values["rubric-file"], "rubric") : null;
   if (cli.creating && !rubric) fail("new dispatch requires a readable --rubric-file");
   const criteria = cli.values["done-criteria-file"] ? secureBytes(cli.values["done-criteria-file"], "Done Criteria") : null;
   return { prompt, rubric, criteria };
 }
 
+// `adapter` and `prompt` are resolved once in main() and threaded here; re-deriving either is how the
+// gate and the dispatch drift apart.
 async function executeForeground(cli, overrides = {}) {
+  const { adapter, prompt } = overrides;
   const inspectRun = overrides.inspectRun || recover.inspectProductionRun;
   const identity = repositoryIdentity(canonicalCheckout(cli.repo));
-  const adapter = getAdapter(cli.values.executor);
   const requestedCredentials = credentialRequest(adapter, cli.values);
   validateCapabilities(adapter, "dispatch", { sandbox: cli.values.sandbox, readOnly: cli.values.sandbox === "read-only", networkAccess: cli.values["network-access"] });
   host.sandboxInvocation({
@@ -608,7 +625,7 @@ async function executeForeground(cli, overrides = {}) {
     const runDir = runStore.resolveRunDirectory(identity.checkout, cli.runId);
     resumeInspection = assertResumeInspection(await inspectRun({ runDir }));
   }
-  const inputs = loadInputs(cli);
+  const inputs = loadInputs(cli, prompt);
   if (cli.values["dry-run"]) {
     const invocation = dryRunInvocation({ cli, identity, adapter, inputs });
     return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, credential_request: requestedCredentials.summary, durable_bytes_written: 0, invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
@@ -654,10 +671,16 @@ async function main(argv = process.argv.slice(2)) {
   try {
     cli = parseCli(argv);
     if (cli.help) { console.log(usage()); return 0; }
-    assertDispatchToolset(cli);
+    // Resolve the executor once, before any filesystem read: an unknown one stays the argv error it
+    // is rather than a missing prompt file, and every later stage uses this exact descriptor.
+    const adapter = getAdapter(cli.values.executor);
+    const prompt = readPrompt(cli);
+    assertDispatchToolset(cli, prompt, adapter);
+    // The detached child is a separate process and resolves its own copy of both; there is nothing to
+    // hand across the boundary.
     const result = cli.values.detach && !process.env.RELAY_DISPATCH_INTERNAL_RUN_ID
       ? await executeDetached(cli, argv)
-      : await executeForeground(cli);
+      : await executeForeground(cli, { prompt, adapter });
     console.log(cli.values.json ? JSON.stringify(result, null, 2) : `${result.status}: ${result.run_id}`);
     return new Set(["failed", "cancelled", "timed_out", "spawn_error"]).has(result.status) ? 1 : 0;
   } catch (error) {
