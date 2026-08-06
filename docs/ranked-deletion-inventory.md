@@ -80,9 +80,11 @@ table.
 
 ## 3. Tests
 
-Ranked by LOC against the invariant IDs the ledger assigns:
+Ranked by LOC. The invariant column records the ids each file's ledger entry
+claimed before #1147 deleted that axis; it is what the reading below was made
+against, and nothing verified it:
 
-| Test block | LOC | Ledger invariants |
+| Test block | LOC | Ledger invariants (deleted #1147) |
 | --- | ---: | --- |
 | `host-supervisor.test.js` | 862 | RR-02, RR-03, RR-04 |
 | `inspect-recover-blackbox.test.js` | 857 | RR-05, RR-06 |
@@ -96,55 +98,83 @@ The `RR-*` ids are real and defined:
 `docs/contracts/relay-runtime-contracts.v1.json` names all twelve
 (`RR-01 worktree_containment`, `RR-06 exact_review_binding`,
 `RR-08 explicit_merge`, …) with a `vnext_test_path` each, and
-`tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js:6` consumes it.
-The ledger's checker does resolve them: `vnext-test-ledger.js:28` builds the
-frozen set `RR-01`…`RR-12` and line 223 does `CANONICAL_INVARIANTS.includes(id)`
-— a membership check against a set identical to the contract file's id set, so
-no accepted id can fail to resolve. An earlier draft of this document called
-that a pattern match and claimed a gap; there is none.
+`tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js` consumes it and
+enforces that every id resolves to a real, currently-named vNext test. That
+contract and that test are untouched by #1147. Until #1147 the ledger *also*
+carried a per-file `invariantIds` claim, and its checker did resolve those ids —
+by exact membership against a frozen `RR-01`…`RR-12` set identical to the
+contract file's id set, so no accepted id could fail to resolve. An earlier
+draft of this document called that a pattern match and claimed a gap; there was
+none. Resolving an id is not the same as verifying the file claiming it, which
+is the next paragraph's subject.
 
-**The `files[]` classification axis is degenerate.** All 53 entries are
-`preserve-invariant`, one of four defined values. But the same artifact's
-`retiredTestMappings` uses the other values for the retired entries
-(`implementation-detail-delete`, `obsolete-surface-delete`), and
-`REQUIRED_BY_CLASSIFICATION` enforces per-classification fields on them. So the
-field discriminates nothing *for currently existing tests* while remaining load
-bearing for retired ones — which narrows the available simplification.
+**The `files[]` ranking axes were degenerate, and the reason this document gave
+for keeping them was wrong.** Measured 2026-08-06 against the 48 entries then in
+the ledger: `classification` was `preserve-invariant` in 48/48; `siteRules` was
+used by 0 of 48; and 47 of 48 entries claimed `RR-*` ids that appear nowhere in
+their own source, 25 of them claiming `RR-01 worktree_containment` — including
+`relay-config.test.js`, `rubric-reference-contract.test.js`, and
+`shell-free-prompt-contract.test.js`.
+
+This paragraph previously argued that the other three `classification` values
+stayed load bearing because `retiredTestMappings` used them and
+`REQUIRED_BY_CLASSIFICATION` enforced per-classification fields on them. **That
+was false.** No JavaScript in the repo reads `retiredTestMappings`; it was inert
+JSON, so those three branches enforced nothing on anything. The contract above
+is real — but a real contract and a *verified per-file claim of it* are
+different things, and only the first existed. All three axes were deleted in
+#1147. What survives per file is `path`, `owner`, `rationale`, and the property
+the table actually holds is the identity contract in §4.
 
 ## 4. Test-accounting tooling
 
 | File | LOC | What it enforces |
 | --- | ---: | --- |
-| `skills-lint.test.js` | 683 | SKILL.md prose contracts and length limits |
-| `vnext-test-ledger.js` | 609 | Generates/checks the site table and dispositions |
+| `skills-lint.test.js` | 689 | SKILL.md prose contracts and length limits |
+| `vnext-test-ledger.js` | 530 | Generates/checks the site table and dispositions |
 | `vnext-runtime-inventory.js` | 438 | Regenerates the script inventory from the filesystem |
 | `script-reachability.test.js` | 307 | No unreachable scripts |
-| `vnext-test-ledger.test.js` | 292 | Tests the generator |
+| `vnext-test-ledger.test.js` | 283 | Tests the generator |
 | `pr-view-json-contract.js` + test | 267 | `gh pr view` JSON shape |
 | `ci-test-coverage.test.js` | 193 | CI runs every test file |
 | `vnext-runtime-inventory.test.js` | 193 | Tests the generator |
 | `ci-matrix-completeness.test.js` | 152 | CI matrix covers every platform cell |
 | `skill-inputs-drift.test.js` | 51 | Skill input drift |
 
-3,185 LOC plus 1,464 lines of ledger artifacts to account for a 6,050-LOC runtime
+3,103 LOC plus 979 lines of ledger artifacts to account for a 6,099-LOC runtime
 and its tests. The genuine property is *silent test loss*: the generated site
 table pins path + kind + lexical ordinal, so a deleted or renamed test shows up as
 a reviewable diff. That is worth having.
 
-This layer did **not** shrink when the runtime it accounts for lost 2,212 lines —
-the ledgers gave back 64. That is tripwire A in
-[the complexity criterion](decisions/2026-08-03-harness-complexity-criterion.md)
-moving the wrong way, and it makes this the highest-yield remaining layer by
-ratio rather than by raw size.
+Those two figures were 3,185 and 1,464 when this document ranked the layer. The
+argument for ranking it first was that it had **not** shrunk when the runtime it
+accounts for lost 2,212 lines — the ledgers gave back 64 — which read as tripwire
+A in [the complexity criterion](decisions/2026-08-03-harness-complexity-criterion.md)
+moving the wrong way. #1147 then took 485 lines out of the artifacts and 88 out
+of the tooling (`vnext-test-ledger.js` 609→530, its test 292→283), so that
+particular reading is spent. The table total moves by only 82 rather than 88
+because `skills-lint.test.js` had drifted 683→689 in rows #1147 never touched. Re-read the tripwire against the next candidate
+rather than treating it as settled in either direction.
+
+The §1 and §3 figures above are still the 2026-08-03 snapshot taken against
+`f4eba91` — they say 53 relay test files / 14,368 LOC where the generated
+baseline now reads 48 / 13,511. Re-measuring them is unfinished work, not a
+claim this document currently makes.
 
 ## Ranked candidates, highest yield first
 
-1. **Collapse the ledger's degenerate `files[]` classification** (#1147).
-   Smaller than it first appeared: `invariantIds` do resolve to a real contract,
-   and `classification` is still used by `retiredTestMappings`. Scope the issue
-   to the `files[]` axis and the dead `REQUIRED_BY_CLASSIFICATION` branches it
-   implies. Do **not** include "teach the checker to resolve invariant ids" —
-   it already does, by exact membership.
+1. **Collapse the ledger's degenerate `files[]` ranking axes** (#1147) — **done
+   2026-08-06.** The scoping note here called the change "smaller than it first
+   appeared" because `classification` was "still used by `retiredTestMappings`".
+   That premise was wrong — nothing reads `retiredTestMappings` — so the block
+   was larger, not smaller: `classification`, `invariantIds`, and `siteRules`
+   left `files[]` along with `CLASSIFICATIONS`, `REQUIRED_BY_CLASSIFICATION`,
+   `CANONICAL_INVARIANTS`, `siteRuleMatches`, `resolveSiteDecision`, and the
+   whole `retiredTestMappings` block. The note was right that the checker
+   resolved ids by exact membership; that membership test just never bound an id
+   to the file asserting it. `docs/contracts/relay-runtime-contracts.v1.json`
+   and `runtime-contract-blackbox.test.js` are untouched — the RR contract is
+   enforced there, not by the ledger.
 2. **Delete the duplicated `sprint-state.js`** (#1148).
    `skills/relay-merge/scripts/` and `skills/relay-fleet/scripts/` hold
    byte-identical 387-line copies (`md5 67a879fbd6684d77ac550fc111903834`).

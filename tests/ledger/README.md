@@ -1,11 +1,11 @@
 # Relay vNext test deletion ledger
 
-`vnext-test-ledger.json` gives every relay test file a default decision plus
-explicit site rules for mixed-purpose files. `vnext-test-sites.generated.json`
-records the fully resolved owner, classification, rationale, and
-classification-specific fields for every lexically registered `test`, `it`,
-`describe`, and `t.test` site. Preserved sites may reference only canonical
-`RR-01` through `RR-12` invariants.
+`vnext-test-ledger.json` gives every relay test file exactly one disposition,
+carrying exactly `path`, `owner`, and `rationale`. Any other key fails the check
+closed and names itself in the error, so a hand-edit cannot reintroduce a
+per-file claim that nothing verifies. `vnext-test-sites.generated.json` records
+that `owner` and `rationale` against every lexically registered `test`, `it`,
+`describe`, and `t.test` site.
 
 The stable identity contract is:
 
