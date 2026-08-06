@@ -151,8 +151,9 @@ argument for ranking it first was that it had **not** shrunk when the runtime it
 accounts for lost 2,212 lines — the ledgers gave back 64 — which read as tripwire
 A in [the complexity criterion](decisions/2026-08-03-harness-complexity-criterion.md)
 moving the wrong way. #1147 then took 485 lines out of the artifacts and 88 out
-of the tooling, so that particular reading is spent; the remaining table drift is
-in rows #1147 never touched. Re-read the tripwire against the next candidate
+of the tooling (`vnext-test-ledger.js` 609→530, its test 292→283), so that
+particular reading is spent. The table total moves by only 82 rather than 88
+because `skills-lint.test.js` had drifted 683→689 in rows #1147 never touched. Re-read the tripwire against the next candidate
 rather than treating it as settled in either direction.
 
 The §1 and §3 figures above are still the 2026-08-03 snapshot taken against

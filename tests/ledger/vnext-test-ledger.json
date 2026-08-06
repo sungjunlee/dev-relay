@@ -213,7 +213,7 @@
     {
       "path": "tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js",
       "owner": "runtime-core-reset",
-      "rationale": "This registration directly exercises canonical invariant RR-01."
+      "rationale": "Holds the runtime contract manifest to resolving every invariant id to a currently-named vNext test, so the manifest cannot drift from the suite it indexes."
     },
     {
       "path": "tests/relay-dispatch/scripts/runtime-contract-vnext-noop.test.js",
@@ -258,7 +258,7 @@
     {
       "path": "tests/relay-merge/scripts/run-full-gate.test.js",
       "owner": "runtime-core-reset",
-      "rationale": "This registration directly exercises canonical invariant RR-08."
+      "rationale": "Covers full-gate lock serialization: detached-runner ownership, the waiting invocation reporting the live owner, stale-lock reclamation, and sentinel-versus-status poll ordering."
     },
     {
       "path": "tests/relay-merge/scripts/sprint-owner.test.js",
@@ -283,7 +283,7 @@
     {
       "path": "tests/relay-plan/scripts/rubric-reference-contract.test.js",
       "owner": "runtime-core-reset",
-      "rationale": "This registration directly exercises canonical invariant RR-02."
+      "rationale": "Pins the rubric reference contract: domain references expose candidate axes without creating scored-factor minimums, and the design guide keeps its documented examples and boundaries."
     },
     {
       "path": "tests/relay-plan/scripts/shell-free-prompt-contract.test.js",
@@ -308,7 +308,7 @@
     {
       "path": "tests/relay/scripts/run-preflight.test.js",
       "owner": "runtime-core-reset",
-      "rationale": "This registration directly exercises canonical invariant RR-12."
+      "rationale": "Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."
     }
   ]
 }
