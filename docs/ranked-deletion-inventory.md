@@ -130,27 +130,35 @@ the table actually holds is the identity contract in §4.
 
 | File | LOC | What it enforces |
 | --- | ---: | --- |
-| `skills-lint.test.js` | 683 | SKILL.md prose contracts and length limits |
-| `vnext-test-ledger.js` | 609 | Generates/checks the site table and dispositions |
+| `skills-lint.test.js` | 689 | SKILL.md prose contracts and length limits |
+| `vnext-test-ledger.js` | 530 | Generates/checks the site table and dispositions |
 | `vnext-runtime-inventory.js` | 438 | Regenerates the script inventory from the filesystem |
 | `script-reachability.test.js` | 307 | No unreachable scripts |
-| `vnext-test-ledger.test.js` | 292 | Tests the generator |
+| `vnext-test-ledger.test.js` | 283 | Tests the generator |
 | `pr-view-json-contract.js` + test | 267 | `gh pr view` JSON shape |
 | `ci-test-coverage.test.js` | 193 | CI runs every test file |
 | `vnext-runtime-inventory.test.js` | 193 | Tests the generator |
 | `ci-matrix-completeness.test.js` | 152 | CI matrix covers every platform cell |
 | `skill-inputs-drift.test.js` | 51 | Skill input drift |
 
-3,185 LOC plus 1,464 lines of ledger artifacts to account for a 6,050-LOC runtime
+3,103 LOC plus 979 lines of ledger artifacts to account for a 6,099-LOC runtime
 and its tests. The genuine property is *silent test loss*: the generated site
 table pins path + kind + lexical ordinal, so a deleted or renamed test shows up as
 a reviewable diff. That is worth having.
 
-This layer did **not** shrink when the runtime it accounts for lost 2,212 lines —
-the ledgers gave back 64. That is tripwire A in
-[the complexity criterion](decisions/2026-08-03-harness-complexity-criterion.md)
-moving the wrong way, and it makes this the highest-yield remaining layer by
-ratio rather than by raw size.
+Those two figures were 3,185 and 1,464 when this document ranked the layer. The
+argument for ranking it first was that it had **not** shrunk when the runtime it
+accounts for lost 2,212 lines — the ledgers gave back 64 — which read as tripwire
+A in [the complexity criterion](decisions/2026-08-03-harness-complexity-criterion.md)
+moving the wrong way. #1147 then took 485 lines out of the artifacts and 88 out
+of the tooling, so that particular reading is spent; the remaining table drift is
+in rows #1147 never touched. Re-read the tripwire against the next candidate
+rather than treating it as settled in either direction.
+
+The §1 and §3 figures above are still the 2026-08-03 snapshot taken against
+`f4eba91` — they say 53 relay test files / 14,368 LOC where the generated
+baseline now reads 48 / 13,511. Re-measuring them is unfinished work, not a
+claim this document currently makes.
 
 ## Ranked candidates, highest yield first
 
