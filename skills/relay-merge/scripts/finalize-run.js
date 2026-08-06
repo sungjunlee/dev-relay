@@ -631,7 +631,10 @@ async function finalizeRun(cli, overrides = {}) {
   const actor = operatorName(record.repo.root, cli.values.actor);
   const observer = services.mergeObserver(record);
   return services.withRunLock(runDir, async (lockContext) => {
-    const fresh = await services.inspectRun({ runDir });
+    // Scope the re-inspection to this lock, as dispatch.js and recover.js do.
+    // Without it the observer probes the ownership ledger, finds the merge lock
+    // this process just took, and reports it as a live executor host.
+    const fresh = await services.inspectRun({ runDir, activeRunLock: lockContext });
     let freshBinding;
     if (hasAuthorization) {
       if (fresh.derived?.action === "merge") freshBinding = requireMergeAction(fresh, record);

@@ -10,6 +10,7 @@ const test = require("node:test");
 
 const facts = require("../../../skills/relay-dispatch/scripts/facts");
 const host = require("../../../skills/relay-dispatch/scripts/host");
+const recover = require("../../../skills/relay-dispatch/scripts/recover");
 const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
 const finalize = require("../../../skills/relay-merge/scripts/finalize-run");
 const runtime = { recordMerge: facts.recordMerge, withRunLock(runDir, callback) { const canonical = fs.realpathSync(runDir);
@@ -739,4 +740,55 @@ test("merge command error followed by external MERGED never records requested pr
   assert.equal(mergeFacts(value).length, 0);
   const log = fs.readFileSync(value.gh.logPath, "utf8");
   assert.equal((log.match(/^pr merge /gm) || []).length, 1);
+});
+
+// Regression for #1152: finalize-run re-inspects under the run lock, but it was
+// the only under-lock inspect in the runtime that omitted activeRunLock. Without
+// it the observer probes the ownership ledger, finds the merge lock this very
+// process just took, and folds it as a live executor host.
+test("the run's own merge lock is not observed as a live executor host", async () => {
+  const value = await fixture("lockobserve");
+  const unlocked = await withGh(value, () => recover.inspectProductionRun({ runDir: value.runDir }));
+  assert.equal(unlocked.observations.host.live, false, "a quiescent run has no live host before the lock");
+
+  let scoped;
+  let unscoped;
+  await withGh(value, () => runtime.withRunLock(value.runDir, async (lockContext) => {
+    scoped = await recover.inspectProductionRun({ runDir: value.runDir, activeRunLock: lockContext });
+    unscoped = await recover.inspectProductionRun({ runDir: value.runDir });
+  }));
+
+  // The semantic, not the digest: holding the lock must not manufacture a host.
+  assert.equal(scoped.observations.host.live, false, "the lock holder must not observe itself as a live host");
+  assert.equal(scoped.recommended_action.key, unlocked.recommended_action.key);
+
+  // Positive control. Without activeRunLock the observation really does change,
+  // so the equality above is a property of the scoping and not of a constant.
+  assert.equal(unscoped.observations.host.live, true);
+  assert.notEqual(unscoped.recommended_action.key, unlocked.recommended_action.key);
+});
+
+test("finalize-run scopes its under-lock re-inspection to the merge lock", async () => {
+  const value = await fixture("lockscope");
+  const seen = [];
+  const result = await withGh(value, () => finalize.finalizeRun(value.cli, services({
+    inspectRun(input) {
+      // Check the capability while the lock is still held; by the time the
+      // assertions below run, finalizeRun has released it. A truthy stub would
+      // record held:false here and never reach a real inspection.
+      let held = null;
+      if (input.activeRunLock != null) {
+        try {
+          host.assertRunLockHeld(input.activeRunLock, { runDir: fs.realpathSync(value.runDir) });
+          held = true;
+        } catch { held = false; }
+      }
+      seen.push({ scoped: input.activeRunLock != null, held });
+      return recover.inspectProductionRun(input);
+    },
+  })));
+  assert.equal(result.status, "merged");
+  assert.equal(seen.length, 2, "one inspect before the lock and one under it");
+  assert.deepEqual(seen[0], { scoped: false, held: null }, "the pre-lock inspect claims no lock");
+  assert.deepEqual(seen[1], { scoped: true, held: true }, "the under-lock inspect carries the genuinely held lock");
 });
