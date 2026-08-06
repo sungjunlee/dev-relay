@@ -35,9 +35,7 @@ function fixtureRepo(source = 'test("keeps invariant", () => {});\n') {
     files: [{
       path: relativePath,
       owner: "runtime-core-reset",
-      classification: "preserve-invariant",
       rationale: "A durable behavior.",
-      invariantIds: ["RR-10"],
     }],
   };
   write(
@@ -114,11 +112,32 @@ test("ledger fails closed on missing, stale, duplicate, and schema-invalid file 
       }, repoRoot),
       /stale: tests\/relay\/scripts\/stale\.test\.js/,
     );
-    const invalid = { ...ledger.files[0] };
-    delete invalid.invariantIds;
+    const withoutRationale = { ...ledger.files[0] };
+    delete withoutRationale.rationale;
     assert.throws(
-      () => validateDispositions({ ...ledger, files: [invalid] }, repoRoot),
-      /preserve-invariant requires invariantIds/,
+      () => validateDispositions({ ...ledger, files: [withoutRationale] }, repoRoot),
+      /missing non-empty rationale/,
+    );
+    assert.throws(
+      () => validateDispositions({
+        ...ledger,
+        files: [{ ...ledger.files[0], rationale: "   " }],
+      }, repoRoot),
+      /missing non-empty rationale/,
+    );
+    assert.throws(
+      () => validateDispositions({
+        ...ledger,
+        files: [{ ...ledger.files[0], classification: "preserve-invariant" }],
+      }, repoRoot),
+      /unexpected disposition field classification/,
+    );
+    assert.throws(
+      () => validateDispositions({
+        ...ledger,
+        files: [{ ...ledger.files[0], invariantIds: ["RR-01"] }],
+      }, repoRoot),
+      /unexpected disposition field invariantIds/,
     );
   } finally {
     fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -204,65 +223,37 @@ test("runtime measurement mode records dispatch/recovery latency and failure obs
   );
 });
 
-test("site rules classify mixed files per registration and emit complete site decisions", () => {
-  const source = [
-    'test("worktree containment remains enforced", () => {});',
-    'test("legacy route flag remains readable during migration", () => {});',
-    'test("parse helper formats output", () => {});',
-    'test("ordinary legacy transition", () => {});',
-    "",
-  ].join("\n");
-  const { repoRoot, ledger } = fixtureRepo(source);
+test("the site table still catches a dropped or fabricated relay test file", () => {
+  const { repoRoot, relativePath, ledger } = fixtureRepo();
+  const secondPath = "tests/relay-dispatch/scripts/second.test.js";
   try {
-    ledger.files[0].classification = "compatibility-migration";
-    ledger.files[0].rationale = "Default migration behavior.";
-    delete ledger.files[0].invariantIds;
-    ledger.files[0].migrationTarget = "vNext action fold";
-    ledger.files[0].removalGate = "Shadow parity.";
-    ledger.files[0].siteRules = [
-      {
-        match: { ordinals: [1], names: ["worktree containment remains enforced"] },
-        decision: {
-          owner: "runtime-core-reset",
-          classification: "preserve-invariant",
-          rationale: "Canonical containment.",
-          invariantIds: ["RR-01"],
-        },
-      },
-      {
-        match: { ordinals: [2] },
-        decision: {
-          owner: "runtime-core-reset",
-          classification: "obsolete-surface-delete",
-          rationale: "Routing is removed.",
-          surface: "legacy routing",
-          removalIssue: "#1134",
-        },
-      },
-      {
-        match: { ordinals: [3] },
-        decision: {
-          owner: "runtime-core-reset",
-          classification: "implementation-detail-delete",
-          rationale: "Formatting helper.",
-          replacementCoverage: "Public command contract.",
-        },
-      },
+    write(path.join(repoRoot, secondPath), 'test("second invariant", () => {});\n');
+    const entries = [
+      ledger.files[0],
+      { path: secondPath, owner: "runtime-core-reset", rationale: "Another durable behavior." },
     ];
-    const generated = buildGeneratedLedger(ledger, repoRoot);
-    assert.deepEqual(
-      generated.sites.map((site) => site.decision.classification),
-      [
-        "preserve-invariant",
-        "obsolete-surface-delete",
-        "implementation-detail-delete",
-        "compatibility-migration",
-      ],
+    const complete = buildGeneratedLedger({ ...ledger, files: entries }, repoRoot);
+    assert.equal(complete.files, 2);
+    assert.deepEqual(complete.sites.map((site) => site.path), [relativePath, secondPath]);
+
+    assert.throws(
+      () => buildGeneratedLedger({ ...ledger, files: [entries[0]] }, repoRoot),
+      new RegExp(`missing: ${secondPath.replace(/[.]/g, "\\.")}`),
     );
-    assert.deepEqual(generated.sites[0].decision.invariantIds, ["RR-01"]);
-    assert.equal(generated.sites[1].decision.removalIssue, "#1134");
-    assert.equal(generated.sites[2].decision.replacementCoverage, "Public command contract.");
-    assert.equal(generated.sites[3].decision.migrationTarget, "vNext action fold");
+    assert.throws(
+      () => buildGeneratedLedger({ ...ledger, files: [entries[1]] }, repoRoot),
+      new RegExp(`missing: ${relativePath.replace(/[.]/g, "\\.")}`),
+    );
+
+    const ghost = {
+      path: "tests/relay-dispatch/scripts/never-written.test.js",
+      owner: "runtime-core-reset",
+      rationale: "Nothing on disk.",
+    };
+    assert.throws(
+      () => buildGeneratedLedger({ ...ledger, files: [entries[0], ghost, entries[1]] }, repoRoot),
+      new RegExp(`stale: ${ghost.path.replace(/[.]/g, "\\.")}`),
+    );
   } finally {
     fs.rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -280,13 +271,13 @@ test("checked-in ledger and generated artifacts exactly cover the current relay 
     (site) => site.path === "tests/relay-dispatch/scripts/dispatch-vnext.test.js",
   );
   assert.ok(dispatchVnext.length > 0, "vNext dispatch must retain executable black-box coverage");
-  assert.ok(dispatchVnext.every((site) => site.decision.classification === "preserve-invariant"));
 
-  const preserved = result.generated.sites.filter(
-    (site) => site.decision.classification === "preserve-invariant",
-  );
-  assert.ok(preserved.length > 0);
-  for (const site of preserved) {
-    assert.ok(site.decision.invariantIds.every((id) => /^RR-(0[1-9]|1[0-2])$/.test(id)));
+  assert.ok(result.generated.sites.length > 0);
+  for (const site of result.generated.sites) {
+    assert.deepEqual(Object.keys(site.decision).sort(), ["owner", "rationale"]);
+    assert.equal(typeof site.decision.owner, "string");
+    assert.equal(typeof site.decision.rationale, "string");
+    assert.ok(site.decision.owner.trim() !== "");
+    assert.ok(site.decision.rationale.trim() !== "");
   }
 });

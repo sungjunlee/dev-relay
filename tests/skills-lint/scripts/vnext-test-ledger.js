@@ -12,22 +12,6 @@ const BASELINE_PATH = path.join(LEDGER_DIR, "vnext-baseline.generated.json");
 const MEASUREMENTS_PATH = path.join(LEDGER_DIR, "vnext-baseline-measurements.json");
 const WORKFLOW_PATH = path.join(REPO_ROOT, ".github", "workflows", "test.yml");
 
-const CLASSIFICATIONS = Object.freeze([
-  "preserve-invariant",
-  "compatibility-migration",
-  "implementation-detail-delete",
-  "obsolete-surface-delete",
-]);
-
-const REQUIRED_BY_CLASSIFICATION = Object.freeze({
-  "preserve-invariant": ["invariantIds"],
-  "compatibility-migration": ["migrationTarget", "removalGate"],
-  "implementation-detail-delete": ["replacementCoverage"],
-  "obsolete-surface-delete": ["surface", "removalIssue"],
-});
-const CANONICAL_INVARIANTS = Object.freeze(
-  Array.from({ length: 12 }, (_, index) => `RR-${String(index + 1).padStart(2, "0")}`),
-);
 const MIN_MEASUREMENT_SAMPLES = 10;
 
 function toPosix(value) {
@@ -207,58 +191,17 @@ function serializeGeneratedLedger(generated) {
 }
 
 function validateDisposition(entry) {
-  const common = ["path", "owner", "classification", "rationale"];
-  for (const field of common) {
+  const allowed = ["path", "owner", "rationale"];
+  for (const field of allowed) {
     if (typeof entry[field] !== "string" || entry[field].trim() === "") {
       throw new Error(`${entry.path || "<unknown>"}: missing non-empty ${field}`);
     }
   }
-  if (!CLASSIFICATIONS.includes(entry.classification)) {
-    throw new Error(`${entry.path}: unknown classification ${entry.classification}`);
-  }
-  for (const field of REQUIRED_BY_CLASSIFICATION[entry.classification]) {
-    const valid = field === "invariantIds"
-      ? Array.isArray(entry[field])
-        && entry[field].length > 0
-        && entry[field].every((id) => CANONICAL_INVARIANTS.includes(id))
-        && new Set(entry[field]).size === entry[field].length
-      : typeof entry[field] === "string" && entry[field].trim() !== "";
-    if (!valid) {
-      throw new Error(`${entry.path}: ${entry.classification} requires ${field}`);
+  for (const field of Object.keys(entry)) {
+    if (!allowed.includes(field)) {
+      throw new Error(`${entry.path}: unexpected disposition field ${field}`);
     }
   }
-  for (const [classification, fields] of Object.entries(REQUIRED_BY_CLASSIFICATION)) {
-    if (classification === entry.classification) continue;
-    for (const field of fields) {
-      if (Object.hasOwn(entry, field)) {
-        throw new Error(`${entry.path}: ${field} is invalid for ${entry.classification}`);
-      }
-    }
-  }
-}
-
-function siteRuleMatches(rule, site) {
-  if (!rule.match || typeof rule.match !== "object") throw new Error("site rule requires match");
-  const selectors = [];
-  if (Array.isArray(rule.match.ordinals)) selectors.push(rule.match.ordinals.includes(site.ordinal));
-  if (typeof rule.match.namePattern === "string") {
-    selectors.push(new RegExp(rule.match.namePattern, "i").test(site.name));
-  }
-  if (Array.isArray(rule.match.names)) selectors.push(rule.match.names.includes(site.name));
-  if (selectors.length === 0) throw new Error("site rule match requires ordinals, names, or namePattern");
-  return selectors.every(Boolean);
-}
-
-function resolveSiteDecision(fileDisposition, site) {
-  const rules = Array.isArray(fileDisposition.siteRules) ? fileDisposition.siteRules : [];
-  const matching = rules.filter((rule) => siteRuleMatches(rule, site));
-  if (matching.length > 1) throw new Error(`${site.id}: multiple site rules matched`);
-  const base = Object.fromEntries(Object.entries(fileDisposition).filter(([key]) => key !== "siteRules"));
-  const decision = matching.length === 0
-    ? base
-    : { path: fileDisposition.path, ...matching[0].decision };
-  validateDisposition(decision);
-  return { decision, matchedRule: matching[0] || null };
 }
 
 function validateDispositions(ledger, repoRoot = REPO_ROOT) {
@@ -298,30 +241,12 @@ function buildGeneratedLedger(ledger, repoRoot = REPO_ROOT) {
   for (const relativePath of discoverRelayTests(repoRoot)) {
     const source = fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
     const disposition = dispositionByPath.get(relativePath);
-    const rules = Array.isArray(disposition.siteRules) ? disposition.siteRules : [];
-    const matchCounts = rules.map(() => 0);
     for (const site of discoverRegistrationSites(source, relativePath)) {
-      const resolved = resolveSiteDecision(disposition, site);
-      if (resolved.matchedRule) matchCounts[rules.indexOf(resolved.matchedRule)] += 1;
-      const decision = {
-        owner: resolved.decision.owner,
-        classification: resolved.decision.classification,
-        rationale: resolved.decision.rationale,
-        ...Object.fromEntries(
-          REQUIRED_BY_CLASSIFICATION[resolved.decision.classification]
-            .map((field) => [field, resolved.decision[field]]),
-        ),
-      };
       sites.push({
         ...site,
-        decision,
+        decision: { owner: disposition.owner, rationale: disposition.rationale },
       });
     }
-    const staleRules = matchCounts
-      .map((count, index) => ({ count, index }))
-      .filter(({ count }) => count === 0)
-      .map(({ index }) => index + 1);
-    if (staleRules.length) throw new Error(`${relativePath}: stale site rules ${staleRules.join(", ")}`);
   }
 
   const ids = sites.map((site) => site.id);
@@ -588,10 +513,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  CANONICAL_INVARIANTS,
-  CLASSIFICATIONS,
   MIN_MEASUREMENT_SAMPLES,
-  REQUIRED_BY_CLASSIFICATION,
   buildBaseline,
   buildGeneratedLedger,
   check,
@@ -600,7 +522,6 @@ module.exports = {
   generate,
   measureRuntime,
   readMeasurements,
-  resolveSiteDecision,
   serializeGeneratedLedger,
   stableJson,
   validateDispositions,

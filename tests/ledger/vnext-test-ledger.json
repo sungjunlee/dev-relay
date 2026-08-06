@@ -1,211 +1,6 @@
 {
   "schemaVersion": 1,
   "accountingContract": "lexical-registration-site-v1",
-  "retiredTestMappings": [
-    {
-      "path": "tests/relay-dispatch/scripts/cli-schema.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/cli-schema.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1134",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/cli-args.test.js",
-        "tests/relay-dispatch/scripts/cli-unknown-flag-wiring.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/reliability-report.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/reliability-report.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1134",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/facts-vnext.test.js",
-        "tests/relay-dispatch/scripts/run-fold-vnext.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/publish-run.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/publish-run.js legacy implementation",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1135",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/rebrand-evidence.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/rebrand-evidence.js legacy implementation",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1135",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/reconcile-run.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/reconcile-run.js legacy implementation",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1135",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/recover-scenario-matrix.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/recover-commit.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/recover-commit.js legacy implementation",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1135",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js",
-        "tests/relay-dispatch/scripts/recover-scenario-matrix.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/recover-state.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/recover-state.js legacy implementation",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1135",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/run-fold-vnext.test.js",
-        "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/dispatch-marker-recovery.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/dispatch.js legacy coordination-marker and mutable-manifest retry implementation",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1136",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/dispatch-vnext.test.js",
-        "tests/relay-dispatch/scripts/host-crash-drills.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/dispatch-timeout-diagnostics.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/dispatch.js legacy inline timeout diagnostics",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1136",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/dispatch-vnext.test.js",
-        "tests/relay-dispatch/scripts/host-supervisor.test.js",
-        "tests/relay-dispatch/scripts/host-contract.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/dispatch.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/dispatch.js legacy manifest, publish, route, auto-recovery, and in-process lifecycle matrix",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1136",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/dispatch-vnext.test.js",
-        "tests/relay-dispatch/scripts/facts-vnext.test.js",
-        "tests/relay-dispatch/scripts/host-contract.test.js",
-        "tests/relay-dispatch/scripts/host-supervisor.test.js",
-        "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/fleet-admission.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/dispatch.js legacy per-issue mutable admission ledger",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1136",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/dispatch-vnext.test.js",
-        "tests/relay-dispatch/scripts/host-concurrency.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/run-observer.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/run-observer.js legacy manifest observer",
-      "classification": "implementation-detail-delete",
-      "removalIssue": "#1136",
-      "replacementCoverage": [
-        "tests/relay/scripts/relay-status-recover.test.js",
-        "tests/relay/scripts/run-preflight.test.js",
-        "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/runtime-generation.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/runtime-generation.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1129",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/dispatch-vnext.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-dispatch/scripts/legacy-recovery-shim.test.js",
-      "productionSurface": "skills/relay-dispatch/scripts/legacy-recovery-shim.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1129",
-      "replacementCoverage": [
-        "tests/relay-dispatch/scripts/relay-recover-cli.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-ready/scripts/probe-readiness.test.js",
-      "productionSurface": "skills/relay-ready/scripts/probe-readiness.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1156",
-      "replacementCoverage": [
-        "tests/relay/scripts/run-preflight.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-ready/scripts/score-readiness.test.js",
-      "productionSurface": "skills/relay-ready/scripts/score-readiness.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1156",
-      "replacementCoverage": [
-        "tests/skills-lint/scripts/skills-lint.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/match-template.test.js",
-      "productionSurface": "skills/relay-plan/scripts/match-template.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1162",
-      "replacementCoverage": [
-        "tests/relay-plan/scripts/rubric-reference-contract.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/tdd-flavor.test.js",
-      "productionSurface": "skills/relay-plan/scripts/tdd-flavor.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1162",
-      "replacementCoverage": [
-        "tests/relay-plan/scripts/dispatch-prompt-emit.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/tdd-mode-integration.test.js",
-      "productionSurface": "skills/relay-plan/scripts/tdd-flavor.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1162",
-      "replacementCoverage": [
-        "tests/relay-plan/scripts/dispatch-prompt-emit.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/tdd-runner-fallback.test.js",
-      "productionSurface": "skills/relay-plan/scripts/tdd-flavor.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1162",
-      "replacementCoverage": [
-        "tests/relay-plan/scripts/rubric-reference-contract.test.js"
-      ]
-    },
-    {
-      "path": "tests/relay-plan/scripts/tdd-suggestion.test.js",
-      "productionSurface": "skills/relay-plan/scripts/tdd-suggestion.js",
-      "classification": "obsolete-surface-delete",
-      "removalIssue": "#1162",
-      "replacementCoverage": [
-        "tests/relay-plan/scripts/rubric-reference-contract.test.js"
-      ]
-    }
-  ],
   "approvedDirectives": [
     {
       "id": "tests/relay-dispatch/scripts/adapter-live-canary.test.js::test::3",
@@ -278,458 +73,242 @@
     {
       "path": "tests/relay-config/scripts/relay-config.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Proves relay-config exposes only read-only doctor/check over all seven explicit adapters, and keeps executable operator docs free of mutable policy catalogs.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Proves relay-config exposes only read-only doctor/check over all seven explicit adapters, and keeps executable operator docs free of mutable policy catalogs."
     },
     {
       "path": "tests/relay-dispatch/scripts/adapter-contract.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects argv-only execution, capability fail-closed behavior, and independent reviewer isolation.",
-      "invariantIds": [
-        "RR-07"
-      ]
+      "rationale": "Protects argv-only execution, capability fail-closed behavior, and independent reviewer isolation."
     },
     {
       "path": "tests/relay-dispatch/scripts/adapter-live-canary.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects live adapter availability probes, minimal invocation evidence, and fail-closed canary result classification.",
-      "invariantIds": [
-        "RR-07"
-      ]
+      "rationale": "Protects live adapter availability probes, minimal invocation evidence, and fail-closed canary result classification."
     },
     {
       "path": "tests/relay-dispatch/scripts/agent-adapter-transport.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-07"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-dispatch/scripts/agent-adapters.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-07"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-dispatch/scripts/cli-help-smoke.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects fail-closed caller-local CLI taxonomies across every production entrypoint.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects fail-closed caller-local CLI taxonomies across every production entrypoint."
     },
     {
       "path": "tests/relay-dispatch/scripts/cli-unknown-flag-wiring.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-dispatch/scripts/dispatch-vnext.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Exercises the vNext-only dispatch boundary: closed CLI parsing, immutable run creation, retained worktree containment, durable host settlement, registration cleanup, and canonical inspect handoff.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Exercises the vNext-only dispatch boundary: closed CLI parsing, immutable run creation, retained worktree containment, durable host settlement, registration cleanup, and canonical inspect handoff."
     },
     {
       "path": "tests/relay-dispatch/scripts/docs-defaults.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-dispatch/scripts/evaluation-contract.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Proves the policy module remains deleted while direct review evaluation fails closed on malformed required channels.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Proves the policy module remains deleted while direct review evaluation fails closed on malformed required channels."
     },
     {
       "path": "tests/relay-dispatch/scripts/exec.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-dispatch/scripts/executors.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-dispatch/scripts/facts-vnext.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Exercises the append-only fact journal, exact bindings, provenance, recovery, and terminal contracts.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Exercises the append-only fact journal, exact bindings, provenance, recovery, and terminal contracts."
     },
     {
       "path": "tests/relay-dispatch/scripts/host-concurrency.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Proves exactly one mutating actor acquires a run lock under process contention.",
-      "invariantIds": [
-        "RR-02",
-        "RR-03",
-        "RR-04"
-      ]
+      "rationale": "Proves exactly one mutating actor acquires a run lock under process contention."
     },
     {
       "path": "tests/relay-dispatch/scripts/host-contract.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects trusted containment, exclusive mutation, crash recovery, and external revalidation.",
-      "invariantIds": [
-        "RR-02",
-        "RR-03",
-        "RR-04"
-      ]
+      "rationale": "Protects trusted containment, exclusive mutation, crash recovery, and external revalidation."
     },
     {
       "path": "tests/relay-dispatch/scripts/host-crash-drills.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Injects distinct crash boundaries and proves idempotent recovery and terminal monotonicity.",
-      "invariantIds": [
-        "RR-02",
-        "RR-03",
-        "RR-04"
-      ]
+      "rationale": "Injects distinct crash boundaries and proves idempotent recovery and terminal monotonicity."
     },
     {
       "path": "tests/relay-dispatch/scripts/host-supervisor.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Proves durable terminal results and bounded cancellation across supervisor failures.",
-      "invariantIds": [
-        "RR-02",
-        "RR-03",
-        "RR-04"
-      ]
+      "rationale": "Proves durable terminal results and bounded cancellation across supervisor failures."
     },
     {
       "path": "tests/relay-dispatch/scripts/host-survival.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Measures worker outcome survival after launcher exit.",
-      "invariantIds": [
-        "RR-02",
-        "RR-03",
-        "RR-04"
-      ]
+      "rationale": "Measures worker outcome survival after launcher exit."
     },
     {
       "path": "tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Black-box coverage for #1135 canonical inspect/recover invariants across exact repository, immutable fact, publication, verification, and terminal boundaries.",
-      "invariantIds": [
-        "RR-05",
-        "RR-06"
-      ]
+      "rationale": "Black-box coverage for #1135 canonical inspect/recover invariants across exact repository, immutable fact, publication, verification, and terminal boundaries."
     },
     {
       "path": "tests/relay-dispatch/scripts/opencode-live.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-dispatch/scripts/ownership.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-dispatch/scripts/pi-live.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-07"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-dispatch/scripts/recover-safe-staging.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Current vNext coverage is retained and mapped to the applicable immutable-run invariant.",
-      "invariantIds": [
-        "RR-05",
-        "RR-06"
-      ]
+      "rationale": "Current vNext coverage is retained and mapped to the applicable immutable-run invariant."
     },
     {
       "path": "tests/relay-dispatch/scripts/recover-scenario-matrix.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Scenario and crash-boundary coverage for #1135 convergent recovery and idempotent durable facts.",
-      "invariantIds": [
-        "RR-05",
-        "RR-06"
-      ]
+      "rationale": "Scenario and crash-boundary coverage for #1135 convergent recovery and idempotent durable facts."
     },
     {
       "path": "tests/relay-dispatch/scripts/recover-stale-owner.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Ownership and stale-actor recovery coverage for #1135 single-actor and authenticated terminal-proof invariants.",
-      "invariantIds": [
-        "RR-05",
-        "RR-06"
-      ]
+      "rationale": "Ownership and stale-actor recovery coverage for #1135 single-actor and authenticated terminal-proof invariants."
     },
     {
       "path": "tests/relay-dispatch/scripts/relay-recover-cli.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Production CLI coverage for #1135 read-only inspect, owned recover, exact publication, and terminal provenance invariants.",
-      "invariantIds": [
-        "RR-05",
-        "RR-06"
-      ]
+      "rationale": "Production CLI coverage for #1135 read-only inspect, owned recover, exact publication, and terminal provenance invariants."
     },
     {
       "path": "tests/relay-dispatch/scripts/run-fold-vnext.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects deterministic lifecycle derivation, review binding, explicit merge, recovery, and terminal precedence.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects deterministic lifecycle derivation, review binding, explicit merge, recovery, and terminal precedence."
     },
     {
       "path": "tests/relay-dispatch/scripts/run-store-vnext.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects frozen Done Criteria and immutable run identity.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects frozen Done Criteria and immutable run identity."
     },
     {
       "path": "tests/relay-dispatch/scripts/runtime-contract-blackbox.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration directly exercises canonical invariant RR-01.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "This registration directly exercises canonical invariant RR-01."
     },
     {
       "path": "tests/relay-dispatch/scripts/runtime-contract-vnext-noop.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Proves the executable vNext contract suite rejects an implementation that merely exports no-op functions.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Proves the executable vNext contract suite rejects an implementation that merely exports no-op functions."
     },
     {
       "path": "tests/relay-dispatch/scripts/runtime-contract-vnext.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Each gate is bound to its named canonical runtime invariant.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Each gate is bound to its named canonical runtime invariant."
     },
     {
       "path": "tests/relay-dispatch/scripts/toolset-mismatch.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "A command-demanding prompt aimed at a no-shell dispatch toolset must fail closed before any run directory, retained worktree, or attempt fact exists.",
-      "invariantIds": [
-        "RR-01",
-        "RR-05"
-      ]
+      "rationale": "A command-demanding prompt aimed at a no-shell dispatch toolset must fail closed before any run directory, retained worktree, or attempt fact exists."
     },
     {
       "path": "tests/relay-fleet/scripts/vnext-derived.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed."
     },
     {
       "path": "tests/relay-merge/scripts/append-learnings.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-      "invariantIds": [
-        "RR-10",
-        "RR-11"
-      ]
+      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant."
     },
     {
       "path": "tests/relay-merge/scripts/finalize-run.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-10",
-        "RR-11"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-merge/scripts/gate-check.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-10",
-        "RR-11"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-merge/scripts/review-gate-core.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects the single authorized primary-review merge gate after secondary review policy removal.",
-      "invariantIds": [
-        "RR-08",
-        "RR-09"
-      ]
+      "rationale": "Protects the single authorized primary-review merge gate after secondary review policy removal."
     },
     {
       "path": "tests/relay-merge/scripts/run-full-gate.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration directly exercises canonical invariant RR-08.",
-      "invariantIds": [
-        "RR-10",
-        "RR-11"
-      ]
+      "rationale": "This registration directly exercises canonical invariant RR-08."
     },
     {
       "path": "tests/relay-merge/scripts/sprint-owner.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-      "invariantIds": [
-        "RR-10",
-        "RR-11"
-      ]
+      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant."
     },
     {
       "path": "tests/relay-plan/scripts/dispatch-prompt-emit.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Protects legacy lifecycle behavior while the equivalent vNext fact/action contract is introduced."
     },
     {
       "path": "tests/relay-plan/scripts/persist-done-criteria.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Proves planner-authored Done Criteria publish immutably through a trusted existing parent, fsync their directory entry, and never pre-create a relay run.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Proves planner-authored Done Criteria publish immutably through a trusted existing parent, fsync their directory entry, and never pre-create a relay run."
     },
     {
       "path": "tests/relay-plan/scripts/probe-executor-env.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant."
     },
     {
       "path": "tests/relay-plan/scripts/rubric-reference-contract.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration directly exercises canonical invariant RR-02.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "This registration directly exercises canonical invariant RR-02."
     },
     {
       "path": "tests/relay-plan/scripts/shell-free-prompt-contract.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Binds the shell-free dispatch prompt contract to the real exported command-demand detector and to the base contract it must not silently gut.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Binds the shell-free dispatch prompt contract to the real exported command-demand detector and to the base contract it must not silently gut."
     },
     {
       "path": "tests/relay-ready/scripts/request-store.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Proves relay-ready persists only a once-published immutable final bundle with safe identities, trusted paths, concurrent convergence, and fail-closed incomplete-crash handling; conversation state and event journals are absent.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "Proves relay-ready persists only a once-published immutable final bundle with safe identities, trusted paths, concurrent convergence, and fail-closed incomplete-crash handling; conversation state and event journals are absent."
     },
     {
       "path": "tests/relay-review/scripts/review-runner-vnext.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Current vNext coverage is retained and mapped to the applicable immutable-run invariant.",
-      "invariantIds": [
-        "RR-08",
-        "RR-09"
-      ]
+      "rationale": "Current vNext coverage is retained and mapped to the applicable immutable-run invariant."
     },
     {
       "path": "tests/relay/scripts/relay-status-recover.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "Protects canonical vNext status derivation and fail-closed issue selection.",
-      "invariantIds": [
-        "RR-05",
-        "RR-06"
-      ]
+      "rationale": "Protects canonical vNext status derivation and fail-closed issue selection."
     },
     {
       "path": "tests/relay/scripts/run-preflight.test.js",
       "owner": "runtime-core-reset",
-      "classification": "preserve-invariant",
-      "rationale": "This registration directly exercises canonical invariant RR-12.",
-      "invariantIds": [
-        "RR-01"
-      ]
+      "rationale": "This registration directly exercises canonical invariant RR-12."
     }
   ]
 }
