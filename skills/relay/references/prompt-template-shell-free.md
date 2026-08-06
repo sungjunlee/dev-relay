@@ -1,7 +1,7 @@
 # Prompt Template (Shell-Free)
 
 > Variant of `prompt-template.md` for an executor whose dispatch toolset has no command-execution tool. Resolve that first with `node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" check --executor <name> --phase dispatch --json`: when `capability.commandExecution` is `false` — today Claude and Pi — emit this template instead of the base one.
-
+>
 > What differs is the completion contract, not its wording. The base contract makes the executor verify its own work (prerequisite gate, re-verify, fix failures); a toolset with no terminal cannot satisfy that, so here verification moves to the orchestrator, which already owns the commit. Do not instead strip command literals out of the base template: that silences the dispatch toolset gate while leaving the executor holding a contract it still cannot satisfy, which is the silent no-op class the gate exists to remove.
 
 ```markdown
