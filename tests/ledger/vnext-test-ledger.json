@@ -685,6 +685,15 @@
       ]
     },
     {
+      "path": "tests/relay-plan/scripts/shell-free-prompt-contract.test.js",
+      "owner": "runtime-core-reset",
+      "classification": "preserve-invariant",
+      "rationale": "Binds the shell-free dispatch prompt contract to the real exported command-demand detector and to the base contract it must not silently gut.",
+      "invariantIds": [
+        "RR-01"
+      ]
+    },
+    {
       "path": "tests/relay-ready/scripts/request-store.test.js",
       "owner": "runtime-core-reset",
       "classification": "preserve-invariant",
