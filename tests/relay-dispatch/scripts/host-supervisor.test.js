@@ -779,13 +779,31 @@ test("cleanup-incomplete recovery settles exact obligations and converges after 
     assert.ok(cleanup.obligation.processes.every((identity) => Number.isInteger(identity.pid) && identity.started_at));
     assert.equal(fs.existsSync(receipt.result_path), false);
     fs.rmSync(marker, { force: true });
-    const first = host.inspectOwnership({ runDir: value.runDir });
-    await assert.rejects(host.breakStaleRunLock({ inspection: first, reason: "recover cleanup", fault(stage) {
-      if (stage === "after_settled") throw new Error("crash after settled proof");
-    } }), /crash after settled proof/);
+    // The recorded supervisor/executor are short-lived; a same-second PID reuse (macOS lstart is
+    // second-resolution) can transiently make the exact reap look like a foreign unscoped process,
+    // which the host correctly refuses to signal (HOST_CLEANUP_INCOMPLETE, see the dedicated
+    // "a same-second PID reuse without the inherited scope token" test above). Production recovery
+    // re-observes and retries, so this test does too: the reused pid exits within a second and the
+    // retry converges. This is not a timeout widening; the transient bind failure is a first-class
+    // recovery-observable state and convergence is still asserted below.
+    const settleRetrying = async (fault) => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        try {
+          return await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "recover cleanup", ...(fault ? { fault } : {}) });
+        } catch (error) {
+          if (error.code === "HOST_CLEANUP_INCOMPLETE" && /could not be bound to the run process scope/.test(error.message)) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            continue;
+          }
+          throw error;
+        }
+      }
+      assert.fail("cleanup settle did not converge across 10 re-observations");
+    };
+    await assert.rejects(settleRetrying((stage) => { if (stage === "after_settled") throw new Error("crash after settled proof"); }), /crash after settled proof/);
     assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), true);
     assert.equal(fs.existsSync(receipt.result_path), false);
-    await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "retry exact cleanup" });
+    await settleRetrying();
     assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
     assert.equal((await host.waitForTerminalResult(receipt)).status, "failed");
     assert.equal(fs.existsSync(cleanup.obligation.credential_root.path), false);
