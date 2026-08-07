@@ -578,6 +578,18 @@ test("a narrow package root inside HOME is readable without exposing package sib
   (error) => error.code === "INVALID_INVOCATION");
 });
 
+test("a missing system CA bundle fails typed instead of raw ENOENT", () => {
+  const original = fs.realpathSync;
+  fs.realpathSync = function systemCaAbsent(target, ...args) {
+    if (target === "/etc/ssl/cert.pem") { const error = new Error(`ENOENT: no such file or directory, realpath '${target}'`); error.code = "ENOENT"; throw error; }
+    return original.call(this, target, ...args);
+  };
+  try {
+    assert.throws(() => host.sandboxInvocation({ role: "executor", command: process.execPath, networkAccess: "enabled" }),
+      (error) => error.code === "UNTRUSTED_SYSTEM_CA" && /absent/.test(error.message));
+  } finally { fs.realpathSync = original; }
+});
+
 test("network policy is explicit and grants only transport Mach services, never Keychain", () => {
   const value = roots("network-profile"), proof = path.join(value.runDir, "network-proof.json");
   const disabled = host.sandboxInvocation({ role: "executor", command: process.execPath, readRoots: [value.worktree], networkAccess: "disabled" }).args[1];

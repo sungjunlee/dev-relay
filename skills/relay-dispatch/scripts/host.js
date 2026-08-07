@@ -170,7 +170,15 @@ function regularFileBinding(filePath, label, { canonical = true } = {}) {
   } finally { fs.closeSync(fd); }
 }
 function trustedSystemCaFile() {
-  const canonical = fs.realpathSync("/etc/ssl/cert.pem"), fd = fs.openSync(canonical, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  let canonical;
+  try { canonical = fs.realpathSync("/etc/ssl/cert.pem"); }
+  catch (error) {
+    // A missing system CA bundle must fail typed like every other trust violation in this function,
+    // not surface as a raw ENOENT that callers cannot classify.
+    if (error.code === "ENOENT") fail("system CA bundle is absent: /etc/ssl/cert.pem", "UNTRUSTED_SYSTEM_CA");
+    throw error;
+  }
+  const fd = fs.openSync(canonical, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
   try {
     const stat = fs.fstatSync(fd), pathStat = fs.lstatSync(canonical);
     if (!stat.isFile() || pathStat.isSymbolicLink() || stat.dev !== pathStat.dev || stat.ino !== pathStat.ino
