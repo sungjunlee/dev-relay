@@ -90,3 +90,4 @@ gate documented in `CLAUDE.md`.
 ## License
 
 MIT
+probe
