@@ -19,6 +19,9 @@ const ROOT = path.resolve(__dirname, "../../..");
 const DISPATCH = path.join(ROOT, "skills/relay-dispatch/scripts/dispatch.js");
 const FAKE_CODEX = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-codex.js");
 const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-adapter-runtime-preload.js");
+const READ_ONCE_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-prompt-read-once-preload.js");
+const UNDECLARED_ADAPTER_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-undeclared-adapter-preload.js");
+const REGISTRY_DIVERGENCE_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-registry-divergence-preload.js");
 
 const COMMAND_PROMPT = "Fix the failing case, then run `node --test tests/relay-dispatch/scripts/*.test.js` before you finish.\n";
 const GIT_COMMAND_PROMPT = "Apply the fix, then git commit the result on the dispatch branch.\n";
@@ -61,9 +64,13 @@ function fixture(label) {
   return { root, repo, relayHome, rubric, commandPrompt, editPrompt, benignPrompt, env };
 }
 
-function run(value, args) {
+function run(value, args, extraEnv = {}) {
   return spawnSync(process.execPath, [DISPATCH, value.repo, ...args, "--network-access", "enabled", "--json"],
-    { encoding: "utf8", env: value.env, timeout: 60_000 });
+    { encoding: "utf8", env: { ...value.env, ...extraEnv }, timeout: 60_000 });
+}
+
+function preloadEnv(value, preload, extra = {}) {
+  return { NODE_OPTIONS: `${value.env.NODE_OPTIONS} --require=${preload}`, ...extra };
 }
 
 function json(text) { return JSON.parse(text); }
@@ -228,8 +235,169 @@ test("a mismatched resume is rejected with no attempt_started fact appended", ()
   assert.deepEqual(fs.readdirSync(output.run_dir).sort(), beforeFiles, "no prompt or attempt artifact may be written");
 });
 
+// #1173 DC1-f. The preload lets the prompt path be read exactly once; a shell-less executor is
+// required because a shell-capable one returns from the gate before reading anything. The observable
+// is the CLI's own exit status: a second read finds the file gone and the process fails.
+test("a shell-less dispatch validates and consumes the prompt in one read", () => {
+  const value = fixture("pi-read-once");
+  const result = run(value, ["--executor", "pi", "--branch", "pi-read-once", "--prompt-file", value.editPrompt,
+    "--rubric-file", value.rubric, "--dry-run"],
+  preloadEnv(value, READ_ONCE_PRELOAD, { RELAY_TEST_READ_ONCE_PATH: value.editPrompt }));
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(json(result.stdout).executor, "pi");
+  assert.equal(fs.existsSync(value.editPrompt), false, "the one allowed read must have happened");
+});
+
+// #1173 DC1-a. The create path stamps prompt-<attemptId>.md from the same buffer the gate validated,
+// so the one allowed read still has to carry the whole dispatch.
+test("the create path stamps its attempt prompt from that single read", () => {
+  const value = fixture("codex-read-once");
+  const result = run(value, ["--branch", "codex-read-once", "--prompt-file", value.benignPrompt, "--rubric-file", value.rubric],
+    preloadEnv(value, READ_ONCE_PRELOAD, { RELAY_TEST_READ_ONCE_PATH: value.benignPrompt }));
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(fs.existsSync(value.benignPrompt), false, "the one allowed read must have happened");
+  assert.equal(fs.readFileSync(path.join(output.run_dir, `prompt-${output.attempt_id}.md`), "utf8"),
+    "Implement the requested change.\n");
+});
+
+// #1173 DC2-d. createNativeAdapter's mandatory declaration only binds adapters built through it. An
+// adapter injected into the registry as a plain object arrives undeclared, and the gate used to read
+// that as shell-capable and fail open. Driven as a real dispatch: under --dry-run nothing durable is
+// written either way, so the state assertions would hold with the gate absent and prove nothing.
+test("an adapter that never passed createNativeAdapter is rejected as undeclared", () => {
+  const value = fixture("undeclared");
+  const env = preloadEnv(value, UNDECLARED_ADAPTER_PRELOAD);
+  const result = run(value, ["--executor", "pi", "--branch", "undeclared", "--prompt-file", value.benignPrompt,
+    "--rubric-file", value.rubric], env);
+  assert.notEqual(result.status, 0, result.stdout);
+  // State before code: a bypass reaches a real dispatch, which exits non-zero on its own and writes
+  // nothing to stderr, so parsing stderr first would abort the test before these ever ran.
+  assert.equal(fs.existsSync(fixtureRunsDir(value)), false, "no run directory may be claimed");
+  assert.equal(fs.existsSync(value.relayHome), false, "no relay home state may be created");
+  assert.equal(git(value.repo, ["branch", "--list", "undeclared"]), "", "no branch may be created");
+  assert.equal(json(result.stderr).code, "TOOLSET_UNDECLARED");
+  assert.match(json(result.stderr).error, /executor 'pi'/);
+  assert.match(json(result.stderr).error, /commandExecution/);
+  // The rogue is otherwise complete: with the assert removed this same shape reaches a built
+  // invocation and exits 0, so the guard flips a success into a rejection rather than trading one
+  // failure for another. No state assertions here — a dry run has none to make.
+  const dry = run(value, ["--executor", "pi", "--branch", "undeclared-dry", "--prompt-file", value.benignPrompt,
+    "--rubric-file", value.rubric, "--dry-run"], env);
+  assert.notEqual(dry.status, 0, dry.stdout);
+  assert.equal(json(dry.stderr).code, "TOOLSET_UNDECLARED");
+});
+
+// #1173 round 2. The gate's assert is unconditional. A capability that reports `supported` from the
+// request answers false here, where the gate passes none, and true to validateCapabilities, which
+// passes one — so qualifying the assert with `supported` let a command-demanding prompt through both
+// gates to a shell-less executor, claiming a run directory, branch, and worktree on the way.
+test("a request-dependent supported flag cannot smuggle an undeclared adapter past the gate", () => {
+  const value = fixture("request-dependent");
+  const result = run(value, ["--executor", "pi", "--branch", "request-dependent", "--prompt-file", value.commandPrompt,
+    "--rubric-file", value.rubric], preloadEnv(value, UNDECLARED_ADAPTER_PRELOAD, { RELAY_TEST_ROGUE_SUPPORTED: "request-dependent" }));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.equal(fs.existsSync(fixtureRunsDir(value)), false, "no run directory may be claimed");
+  assert.equal(fs.existsSync(value.relayHome), false, "no relay home state may be created");
+  assert.equal(git(value.repo, ["branch", "--list", "request-dependent"]), "", "no branch may be created");
+  assert.equal(json(result.stderr).code, "TOOLSET_UNDECLARED");
+});
+
+// #1173 round 3. The gate reads the declaration once. Reading the property twice let an accessor
+// answer false to the typeof check and true to the decision, skipping the demand detector entirely —
+// item 1's swap, reintroduced inside item 2's own guard.
+test("an alternating commandExecution accessor cannot skip the demand detector", () => {
+  const value = fixture("alternating");
+  const result = run(value, ["--executor", "pi", "--branch", "alternating", "--prompt-file", value.commandPrompt,
+    "--rubric-file", value.rubric], preloadEnv(value, UNDECLARED_ADAPTER_PRELOAD, { RELAY_TEST_ROGUE_ALTERNATING: "1" }));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.equal(fs.existsSync(fixtureRunsDir(value)), false, "no run directory may be claimed");
+  assert.equal(fs.existsSync(value.relayHome), false, "no relay home state may be created");
+  assert.equal(git(value.repo, ["branch", "--list", "alternating"]), "", "no branch may be created");
+  assert.equal(json(result.stderr).code, "TOOLSET_MISMATCH");
+});
+
+// #1173 round 2. An adapter that is both unsupported and undeclared is rejected here, not deferred to
+// validateCapabilities: this is what pins the absence of a `supported` qualifier on the assert.
+test("an unsupported dispatch phase does not exempt an adapter from declaring its toolset", () => {
+  const value = fixture("unsupported-undeclared");
+  const result = run(value, ["--executor", "pi", "--branch", "unsupported-undeclared", "--prompt-file", value.benignPrompt,
+    "--rubric-file", value.rubric], preloadEnv(value, UNDECLARED_ADAPTER_PRELOAD, { RELAY_TEST_ROGUE_SUPPORTED: "false" }));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.equal(fs.existsSync(value.relayHome), false, "no relay home state may be created");
+  assert.equal(json(result.stderr).code, "TOOLSET_UNDECLARED");
+  // Positive control for the knob itself: undeclared alone already fails above, so without this the
+  // test would pass unchanged if RELAY_TEST_ROGUE_SUPPORTED were silently misspelled and never took
+  // effect. Declaring commandExecution isolates `supported`, whose only remaining effect is the
+  // downstream validateCapabilities rejection.
+  const declaredToo = run(value, ["--executor", "pi", "--branch", "unsupported-declared", "--prompt-file", value.benignPrompt,
+    "--rubric-file", value.rubric, "--dry-run"], preloadEnv(value, UNDECLARED_ADAPTER_PRELOAD,
+    { RELAY_TEST_ROGUE_SUPPORTED: "false", RELAY_TEST_ROGUE_COMMAND_EXECUTION: "false" }));
+  assert.notEqual(declaredToo.status, 0, declaredToo.stdout);
+  assert.equal(json(declaredToo.stderr).code, "DISPATCH_FAILED");
+  assert.match(json(declaredToo.stderr).error, /phase is unsupported/);
+});
+
+// #1173 round 4. Three separate getAdapter calls let a rogue registry hand the gate one genuine
+// descriptor and the dispatch another: it validated shell-capable codex and then ran a
+// command-demanding prompt on shell-less claude, with no fabricated object and no false declaration
+// anywhere. Requesting claude is deliberate — if this fixture ever goes inert the real registry
+// answers claude, the gate rejects the prompt, and this test fails instead of quietly passing.
+test("a registry that answers each resolution differently cannot split the gate from the dispatch", () => {
+  const value = fixture("registry-divergence");
+  const result = run(value, ["--executor", "claude", "--branch", "registry-divergence",
+    "--prompt-file", value.commandPrompt, "--rubric-file", value.rubric], preloadEnv(value, REGISTRY_DIVERGENCE_PRELOAD));
+  // The gate cannot stop this run and is not meant to: it validated a genuinely shell-capable
+  // descriptor, so dispatch proceeds and durable state is produced. What one resolution buys is that
+  // the adapter the gate validated is the adapter that dispatched, which is why the recorded executor
+  // is the observable. A registry free to misroute claude to codex remains outside any toolset gate.
+  const runsDir = fixtureRunsDir(value);
+  assert.equal(fs.existsSync(runsDir), true, `${result.stderr}\n${result.stdout}`);
+  const runDir = path.join(runsDir, fs.readdirSync(runsDir)[0]);
+  const started = facts.readFacts({ eventsPath: path.join(runDir, "events.jsonl") }).facts
+    .find((fact) => fact.type === "attempt_started");
+  assert.equal(started?.payload.executor, "codex", "the executor that dispatched must be the one the gate validated");
+});
+
+// #1173 round 2. An unknown executor is an argv error; resolving the adapter before the prompt read
+// keeps it from being reported as a missing file.
+test("an unknown executor is reported before the prompt file is read", () => {
+  const value = fixture("unknown-executor");
+  const result = run(value, ["--executor", "nosuch", "--branch", "unknown-executor",
+    "--prompt-file", path.join(value.root, "absent.md"), "--rubric-file", value.rubric, "--dry-run"]);
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(json(result.stderr).error, /unknown adapter 'nosuch'/);
+});
+
+// #1173 DC2-d positive control: the same injection harness with the declaration present must behave
+// exactly like the real adapter, which is what makes the rejection above the declaration's absence
+// rather than an artefact of injecting a plain object.
+test("the same injected adapter with a declaration still gates on the prompt", () => {
+  const value = fixture("declared-injection");
+  const env = preloadEnv(value, UNDECLARED_ADAPTER_PRELOAD, { RELAY_TEST_ROGUE_COMMAND_EXECUTION: "false" });
+  const rejected = run(value, ["--executor", "pi", "--branch", "declared-command", "--prompt-file", value.commandPrompt,
+    "--rubric-file", value.rubric, "--dry-run"], env);
+  assert.notEqual(rejected.status, 0, rejected.stdout);
+  assert.equal(json(rejected.stderr).code, "TOOLSET_MISMATCH");
+  const accepted = run(value, ["--executor", "pi", "--branch", "declared-edit", "--prompt-file", value.editPrompt,
+    "--rubric-file", value.rubric, "--dry-run"], env);
+  assert.equal(accepted.status, 0, `${accepted.stderr}\n${accepted.stdout}`);
+  assert.equal(json(accepted.stdout).executor, "pi");
+});
+
 test("dispatch usage publishes the override flag", () => {
   const result = spawnSync(process.execPath, [DISPATCH, "--help"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /--allow-toolset-mismatch/);
+});
+
+// #1173 / CodeRabbit: executeForeground was exported with `overrides = {}`, so a caller that omitted
+// the overrides derived `undefined` adapter/prompt — an untyped crash at credentialRequest or a
+// silently-undefined prompt stamped downstream. The guard must fire before any filesystem read, so
+// this passes a repo that does not exist: reaching repositoryIdentity would fail differently.
+test("executeForeground fails typed when the gate-validated adapter or prompt is missing", async () => {
+  const cli = { repo: "/definitely/not/a/relay/repo", values: {} };
+  await assert.rejects(dispatch.executeForeground(cli, {}), (error) => error.code === "INVALID_INVOCATION");
+  await assert.rejects(dispatch.executeForeground(cli, { prompt: { path: null, bytes: Buffer.from("x") } }), (error) => error.code === "INVALID_INVOCATION");
+  await assert.rejects(dispatch.executeForeground(cli, { adapter: getAdapter("codex") }), (error) => error.code === "INVALID_INVOCATION");
 });
