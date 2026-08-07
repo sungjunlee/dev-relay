@@ -55,7 +55,7 @@ function usage() {
     "  dispatch.js [<repo>] --run-id <id> (--prompt <text> | --prompt-file <path>) [options]",
     "",
     `Executors: ${listAdapters().join(", ")}`,
-    "A prompt demanding command execution is rejected for an executor whose dispatch toolset has no shell; override with --allow-toolset-mismatch.",
+    "A prompt matching a known command-demand pattern is rejected when the executor's dispatch capability declares no command-execution tool; --allow-toolset-mismatch downgrades that rejection to a warning. Detection is literal pattern matching, not proof of intent.",
     "Dispatch never commits, pushes, opens a PR, or runs recovery. Use relay-recover for those actions.",
   ].join("\n");
 }

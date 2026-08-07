@@ -3,7 +3,7 @@
   "accountingContract": "lexical-registration-site-v1",
   "generatedBy": "node tests/skills-lint/scripts/vnext-test-ledger.js generate",
   "files": 48,
-  "registrationSites": 539,
+  "registrationSites": 540,
   "dynamicRegistrationSites": 4,
   "columns": ["path","kind","ordinal","name","line","dynamic","directive","decision"],
   "rows": [
@@ -323,6 +323,7 @@
     ["tests/relay-fleet/scripts/vnext-derived.test.js","test",7,"wait action never double-dispatches an existing child",142,false,null,{"owner":"runtime-core-reset","rationale":"An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed."}],
     ["tests/relay-fleet/scripts/vnext-derived.test.js","test",8,"--review drives exact review actions and serial merge actions through current CLIs",152,false,null,{"owner":"runtime-core-reset","rationale":"An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed."}],
     ["tests/relay-fleet/scripts/vnext-derived.test.js","test",9,"artifact drift is operator attention and dry-run publishes no cohort",169,false,null,{"owner":"runtime-core-reset","rationale":"An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed."}],
+    ["tests/relay-fleet/scripts/vnext-derived.test.js","test",10,"fleet leaf allow_toolset_mismatch threads the dispatch flag and rejects non-booleans",182,false,null,{"owner":"runtime-core-reset","rationale":"An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed."}],
     ["tests/relay-merge/scripts/append-learnings.test.js","describe",1,"parseArgs",76,false,null,{"owner":"runtime-core-reset","rationale":"This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant."}],
     ["tests/relay-merge/scripts/append-learnings.test.js","it",2,"requires --repo, --run-id, --pr",77,false,null,{"owner":"runtime-core-reset","rationale":"This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant."}],
     ["tests/relay-merge/scripts/append-learnings.test.js","it",3,"parses required + optional flags",83,false,null,{"owner":"runtime-core-reset","rationale":"This registration exercises replaceable helper or CLI formatting behavior rather than a canonical invariant."}],

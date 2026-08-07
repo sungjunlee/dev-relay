@@ -23,7 +23,7 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const LEAF_FIELDS = new Set([
   "leaf_ref", "issue_number", "branch", "prompt_file", "prompt_sha256", "rubric_file", "rubric_sha256",
   "done_criteria_file", "done_criteria_sha256", "ownership", "executor", "model", "sandbox",
-  "network_access", "timeout", "reasoning", "copy",
+  "network_access", "timeout", "reasoning", "copy", "allow_toolset_mismatch",
 ]);
 const OPTIONS = Object.freeze({
   repo: { type: "string", default: "." },
@@ -140,6 +140,8 @@ function normalizeLeaf(raw, index, base, freeze) {
     const value = raw[name] ?? (alias ? raw[alias] : undefined);
     return value == null ? null : requiredString(String(value), `leaves[${index}].${name}`);
   };
+  const allowMismatch = raw.allow_toolset_mismatch;
+  if (allowMismatch != null && typeof allowMismatch !== "boolean") fail(`leaves[${index}].allow_toolset_mismatch must be a boolean`);
   return Object.freeze({
     leaf_ref: leafRef,
     issue_number: issueNumber(raw.issue_number, `leaves[${index}].issue_number`),
@@ -152,6 +154,7 @@ function normalizeLeaf(raw, index, base, freeze) {
     network_access: optional("network_access"),
     timeout: raw.timeout == null ? null : String(issueNumber(raw.timeout, `leaves[${index}].timeout`)),
     reasoning: optional("reasoning"), copy: Array.isArray(raw.copy) ? raw.copy.join(",") : optional("copy"),
+    allow_toolset_mismatch: allowMismatch,
   });
 }
 function validateLeaves(repoRoot, leaves) {
@@ -342,6 +345,7 @@ function buildDispatchArgs({ repoRoot, fleetId, leaf, options, runId = null }) {
   push(args, "--executor", leaf.executor || options.executor); push(args, "--model", leaf.model || options.model);
   push(args, "--sandbox", leaf.sandbox || options.sandbox); push(args, "--network-access", leaf.network_access || options.networkAccess);
   push(args, "--timeout", leaf.timeout || options.timeout); push(args, "--reasoning", leaf.reasoning || options.reasoning); push(args, "--copy", leaf.copy || options.copy);
+  if (leaf.allow_toolset_mismatch) args.push("--allow-toolset-mismatch");
   if (options.dryRun) args.push("--dry-run");
   return args;
 }
