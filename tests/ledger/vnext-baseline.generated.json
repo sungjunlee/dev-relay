@@ -5,8 +5,8 @@
     "relayDispatchRuntimeJavaScriptFiles": 16,
     "relayDispatchRuntimeJavaScriptLoc": 6128,
     "relayTestFiles": 48,
-    "relayTestLoc": 13837,
-    "relayRegistrationSites": 539,
+    "relayTestLoc": 13854,
+    "relayRegistrationSites": 540,
     "dynamicRegistrationSites": 4
   },
   "measuredRuntime": {
