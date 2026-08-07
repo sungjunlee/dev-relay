@@ -390,3 +390,14 @@ test("dispatch usage publishes the override flag", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /--allow-toolset-mismatch/);
 });
+
+// #1173 / CodeRabbit: executeForeground was exported with `overrides = {}`, so a caller that omitted
+// the overrides derived `undefined` adapter/prompt — an untyped crash at credentialRequest or a
+// silently-undefined prompt stamped downstream. The guard must fire before any filesystem read, so
+// this passes a repo that does not exist: reaching repositoryIdentity would fail differently.
+test("executeForeground fails typed when the gate-validated adapter or prompt is missing", async () => {
+  const cli = { repo: "/definitely/not/a/relay/repo", values: {} };
+  await assert.rejects(dispatch.executeForeground(cli, {}), (error) => error.code === "INVALID_INVOCATION");
+  await assert.rejects(dispatch.executeForeground(cli, { prompt: { path: null, bytes: Buffer.from("x") } }), (error) => error.code === "INVALID_INVOCATION");
+  await assert.rejects(dispatch.executeForeground(cli, { adapter: getAdapter("codex") }), (error) => error.code === "INVALID_INVOCATION");
+});

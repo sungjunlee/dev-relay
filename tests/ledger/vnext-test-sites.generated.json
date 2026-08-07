@@ -3,7 +3,7 @@
   "accountingContract": "lexical-registration-site-v1",
   "generatedBy": "node tests/skills-lint/scripts/vnext-test-ledger.js generate",
   "files": 48,
-  "registrationSites": 538,
+  "registrationSites": 539,
   "dynamicRegistrationSites": 4,
   "columns": ["path","kind","ordinal","name","line","dynamic","directive","decision"],
   "rows": [
@@ -313,6 +313,7 @@
     ["tests/relay-dispatch/scripts/toolset-mismatch.test.js","test",18,"an unknown executor is reported before the prompt file is read",364,false,null,{"owner":"runtime-core-reset","rationale":"A command-demanding prompt aimed at a no-shell dispatch toolset must fail closed before any run directory, retained worktree, or attempt fact exists."}],
     ["tests/relay-dispatch/scripts/toolset-mismatch.test.js","test",19,"the same injected adapter with a declaration still gates on the prompt",375,false,null,{"owner":"runtime-core-reset","rationale":"A command-demanding prompt aimed at a no-shell dispatch toolset must fail closed before any run directory, retained worktree, or attempt fact exists."}],
     ["tests/relay-dispatch/scripts/toolset-mismatch.test.js","test",20,"dispatch usage publishes the override flag",388,false,null,{"owner":"runtime-core-reset","rationale":"A command-demanding prompt aimed at a no-shell dispatch toolset must fail closed before any run directory, retained worktree, or attempt fact exists."}],
+    ["tests/relay-dispatch/scripts/toolset-mismatch.test.js","test",21,"executeForeground fails typed when the gate-validated adapter or prompt is missing",398,false,null,{"owner":"runtime-core-reset","rationale":"A command-demanding prompt aimed at a no-shell dispatch toolset must fail closed before any run directory, retained worktree, or attempt fact exists."}],
     ["tests/relay-fleet/scripts/vnext-derived.test.js","test",1,"closed fleet CLI rejects removed child-dispatch flags",79,false,null,{"owner":"runtime-core-reset","rationale":"An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed."}],
     ["tests/relay-fleet/scripts/vnext-derived.test.js","test",2,"immutable leaf schema rejects retired lineage and policy fields",85,false,null,{"owner":"runtime-core-reset","rationale":"An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed."}],
     ["tests/relay-fleet/scripts/vnext-derived.test.js","test",3,"immutable cohort is byte-idempotent and derived status writes nothing",94,false,null,{"owner":"runtime-core-reset","rationale":"An immutable fleet cohort must remain byte-idempotent, status must not mutate it, and duplicate child identity matches must fail closed."}],

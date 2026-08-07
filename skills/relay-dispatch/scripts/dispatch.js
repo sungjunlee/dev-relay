@@ -608,6 +608,12 @@ function loadInputs(cli, prompt) {
 // gate and the dispatch drift apart.
 async function executeForeground(cli, overrides = {}) {
   const { adapter, prompt } = overrides;
+  // Both are the gate-validated values main() resolved once. Defaulting or re-deriving either here
+  // reintroduces the split between validated bytes and executed bytes; a caller that omits them gets
+  // a typed failure before any filesystem read instead of an undefined forwarded downstream.
+  if (adapter === undefined || prompt === undefined) {
+    fail("executeForeground requires the gate-validated adapter and prompt; re-deriving either would split validation from use", "INVALID_INVOCATION");
+  }
   const inspectRun = overrides.inspectRun || recover.inspectProductionRun;
   const identity = repositoryIdentity(canonicalCheckout(cli.repo));
   const requestedCredentials = credentialRequest(adapter, cli.values);
