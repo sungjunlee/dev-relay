@@ -283,6 +283,20 @@ function createRetainedWorktree(identity, runId, branch) {
   const canonicalBase = fs.realpathSync(base);
   const worktree = path.join(canonicalBase, repoSlug(identity.repoRoot), runId, path.basename(identity.repoRoot));
   if (fs.existsSync(worktree)) fail(`retained worktree already exists: ${worktree}`);
+  // Reject a pre-existing symlink in any destination component BEFORE mkdirSync or git can write
+  // through it. recursive mkdirSync follows an existing symlink at an intermediate component and
+  // would create the run-id directory at the untrusted target; git worktree add would do the same.
+  // assertTrustedWorktree still runs after `worktree add` and unwinds, but by then a write has
+  // already escaped the trusted relay base (#1154).
+  let cursor = canonicalBase;
+  for (const part of path.relative(canonicalBase, path.dirname(worktree)).split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, part);
+    let stat;
+    try { stat = fs.lstatSync(cursor); }
+    catch (error) { if (error.code === "ENOENT") break; throw error; }
+    if (stat.isSymbolicLink()) fail(`retained worktree destination contains a symlink: ${cursor}`);
+    if (!stat.isDirectory()) fail(`retained worktree destination component is not a directory: ${cursor}`);
+  }
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
   // Create the branch as its own step. `git branch` is an atomic exclusive ref creation: it fails
   // closed if the name is taken, so a successful create is an ownership token for this dispatch.
