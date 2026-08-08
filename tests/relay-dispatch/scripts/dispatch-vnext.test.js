@@ -415,6 +415,41 @@ test("a symlinked worktree destination is rejected before git materialises it", 
   assert.equal(git(value.repo, ["worktree", "list"]).includes("symlink-br"), false, "no worktree is registered");
 });
 
+// #1154 item 2, intermediate-component variant: the symlink sits at the deterministic repoSlug
+// component and the run-id leaf does NOT pre-exist. Without the pre-mkdir validation, recursive
+// mkdirSync would resolve the symlink and create the run-id directory at the untrusted target
+// before the loop runs. The validation must run before mkdirSync, so nothing is written anywhere.
+test("a symlinked repoSlug component is rejected before mkdirSync writes through it", () => {
+  const value = fixture("worktree-symlink");
+  const runId = "worktree-symlink-run2";
+  const slugDir = path.dirname(path.join(value.relayHome, "worktrees", path.basename(fixtureRunsDir(value)), runId));
+  const target = path.join(value.root, "symlink-target-2");
+  fs.rmSync(slugDir, { recursive: true, force: true });
+  fs.mkdirSync(target, { recursive: true });
+  fs.symlinkSync(target, slugDir, "dir");
+  const logPath = path.join(value.root, "git.log");
+  const gitStub = path.join(value.root, "log-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const fs = require("node:fs");',
+    'const args = process.argv.slice(2);',
+    `fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");`,
+    'execFileSync(REAL_GIT, args, { stdio: "inherit" });',
+  ].join("\n").replace("REAL_GIT", JSON.stringify(realGit())), { mode: 0o755 });
+
+  const result = run(value, ["--branch", "symlink-br2", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"],
+    { ...value.env, RELAY_GIT_BIN: gitStub, RELAY_DISPATCH_INTERNAL_RUN_ID: runId });
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /contains a symlink/, "the pre-validation names the symlink");
+  const invocations = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8").trim().split(/\r?\n/) : [];
+  assert.equal(invocations.some((line) => { try { const args = JSON.parse(line); return args[0] === "worktree" && args[1] === "add"; } catch { return false; } }), false,
+    "git worktree add must never run against a symlinked destination");
+  assert.equal(fs.readdirSync(target).length, 0, "mkdirSync wrote nothing through the symlink to the target");
+  assert.equal(git(value.repo, ["branch", "--list", "symlink-br2"]), "", "no branch is left behind");
+  assert.equal(git(value.repo, ["worktree", "list"]).includes("symlink-br2"), false, "no worktree is registered");
+});
+
 test("attempt_started is durable before executor gate launch, so a launch-window crash cannot orphan work", () => {
   const value = fixture("launch-window");
   const runId = "crash-start-run";
