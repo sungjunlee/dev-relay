@@ -75,7 +75,8 @@ test("two production phase cells pass only with explicit credentials and exact n
     assert.equal(result.status, "passed"); assert.equal(result.checks.nonce, "passed");
     assert.equal(result.tool_network_access, "enabled"); assert.equal(result.tool_network_enforcement, "unsupported_explicit_enabled");
     assert.match(result.invocation_sha256, /^[a-f0-9]{64}$/); assert.match(result.output_sha256, /^[a-f0-9]{64}$/); assert.match(result.executed_runtime.digest, /^[a-f0-9]{64}$/);
-    assert.match(result.executed_runtime.executable.sha256, /^[a-f0-9]{64}$/); assert.equal(typeof result.executed_runtime.executable.path, "string");
+    assert.match(result.executed_runtime.executable.sha256, /^[a-f0-9]{64}$/); assert.equal(typeof result.executed_runtime.executable.basename, "string");
+    assert.equal(/[\\/]/.test(result.executed_runtime.executable.basename), false);
     assert.deepEqual(result.credential_request, { env_names: ["TEST_CANARY_TOKEN"], file_ids: [] });
     assert.doesNotMatch(JSON.stringify(result), /unit-secret/);
   }
@@ -264,7 +265,7 @@ test("clean exit with a missing or wrong nonce artifact is output failure, not b
 test("report integrity rejects duplicate, missing, unknown status, and partial phase coverage", () => {
   const digest = "a".repeat(64), adapters = listAdapters().map((name) => ({ name, capabilities: ({ phase }) => ({ supported: phase === "primary_review" && name !== "cline" }) }));
   const required = requiredMatrix(adapters), cell = (key) => { const [adapter, phase] = key.split(":"); return { adapter, phase, status: "passed", nonce_sha256: digest, prompt_sha256: digest,
-    invocation_sha256: digest, output_sha256: digest, executed_runtime: { digest, executable: { path: "/bin/tool", dev: 1, ino: 2, size: 3, sha256: digest } }, tool_network_access: "enabled", tool_network_enforcement: "unsupported_explicit_enabled", probe: { status: "available" }, checks: { boundary: "passed", nonce: "passed", cleanup: "passed", process_scope_absent: "passed" } };
+    invocation_sha256: digest, output_sha256: digest, executed_runtime: { digest, executable: { basename: "tool", dev: 1, ino: 2, size: 3, sha256: digest } }, tool_network_access: "enabled", tool_network_enforcement: "unsupported_explicit_enabled", probe: { status: "available" }, checks: { boundary: "passed", nonce: "passed", cleanup: "passed", process_scope_absent: "passed" } };
   };
   const base = { schema_version: 2, evidence_status: "release_complete", provenance: { git_head: "a".repeat(40), git_tree: "b".repeat(40),
     dirty_digest: digest, runner_sha256: digest, runtime_sha256: Object.fromEntries(canonicalRuntimeSha256Keys().map((key) => [key, digest])), platform: "darwin", arch: "arm64", node: "v22" },
@@ -285,6 +286,8 @@ test("report integrity rejects duplicate, missing, unknown status, and partial p
     { ...base, results: [{ ...base.results[0], output_sha256: null }, ...base.results.slice(1)] },
     { ...base, results: [{ ...base.results[0], executed_runtime: null }, ...base.results.slice(1)] },
     { ...base, results: [{ ...base.results[0], executed_runtime: { ...base.results[0].executed_runtime, executable: { ...base.results[0].executed_runtime.executable, sha256: null } } }, ...base.results.slice(1)] },
+    { ...base, results: [{ ...base.results[0], executed_runtime: { ...base.results[0].executed_runtime, executable: { ...base.results[0].executed_runtime.executable, path: "/Users/leak/tool" } } }, ...base.results.slice(1)] },
+    { ...base, results: [{ ...base.results[0], executed_runtime: { ...base.results[0].executed_runtime, executable: { ...base.results[0].executed_runtime.executable, basename: "dir/tool" } } }, ...base.results.slice(1)] },
     { ...base, provenance: { ...base.provenance, runtime_sha256: Object.fromEntries(Object.entries(base.provenance.runtime_sha256).slice(1)) } },
     { ...base, provenance: { ...base.provenance, runtime_sha256: { ...base.provenance.runtime_sha256, "unexpected.js": digest } } },
     { ...base, provenance_after: { ...base.provenance_after, dirty_digest: "c".repeat(64) } },
@@ -325,13 +328,32 @@ test("canary runtime provenance follows the complete static production entrypoin
   ]);
 });
 
-test("checked-in current evidence is schema-valid and honestly non-release", () => {
-  const evidence = JSON.parse(fs.readFileSync(path.join(__dirname, "../../../docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-03.json"), "utf8"));
-  assert.equal(validateReport(evidence), evidence);
-  assert.equal(evidence.policy.required_cells.length, 13);
-  assert.equal(evidence.evidence_status, "incomplete_non_release");
-  assert.equal(canaryExitCode(evidence), 1);
-  assert.equal(JSON.stringify(evidence).includes("source_path"), false);
+test("current evidence is new-shape only: no checked-in cell leaks an absolute host path", () => {
+  const activeDir = path.join(__dirname, "../../../docs/plans/relay-runtime-core-reset-vnext");
+  // The old-format evidence (absolute executable paths) was archived as superseded rather than
+  // hand-edited (#1153); the next canary run regenerates new-shape evidence here. Any current file
+  // must validate under the new schema, stay honestly non-release, and carry basename identity only.
+  for (const name of fs.readdirSync(activeDir).filter((entry) => /^adapter-live-canary-.*\.json$/.test(entry))) {
+    const evidence = JSON.parse(fs.readFileSync(path.join(activeDir, name), "utf8"));
+    assert.equal(validateReport(evidence), evidence);
+    assert.equal(evidence.evidence_status, "incomplete_non_release");
+    assert.equal(canaryExitCode(evidence), 1);
+    for (const entry of evidence.results) {
+      const executable = entry.executed_runtime?.executable;
+      if (!executable) continue;
+      assert.equal(Object.hasOwn(executable, "path"), false, `absolute executable path leaked in ${name}`);
+      assert.equal(/[\\/]/.test(executable.basename || ""), false, `non-basename executable identity in ${name}`);
+    }
+  }
+  // The archived old-format files must fail the new validator: the shape change is enforced, so
+  // stale absolute-path evidence cannot be reintroduced as current.
+  const archivedDir = path.join(__dirname, "../../../docs/archive/plans/relay-runtime-core-reset-vnext");
+  for (const name of fs.readdirSync(archivedDir).filter((entry) => /^adapter-live-canary-.*\.json$/.test(entry))) {
+    const stale = JSON.parse(fs.readFileSync(path.join(archivedDir, name), "utf8"));
+    assert.throws(() => validateReport(stale), undefined, name);
+  }
+  const last = JSON.parse(fs.readFileSync(path.join(archivedDir, "adapter-live-canary-2026-08-03.json"), "utf8"));
+  assert.throws(() => validateReport(last), /passed-cell evidence invalid/, "the old absolute-path shape must be rejected");
 });
 
 test("credential CLI grammar is phase-explicit and retains no values in the public selector", () => {

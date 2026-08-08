@@ -127,9 +127,13 @@ function probeEvidence(adapter, probe) {
 function invocationDigest(invocation) { return sha(Buffer.from(JSON.stringify({ command: path.basename(invocation.command), args: invocation.args, stdin_sha256: invocation.stdinSha256 || null, private_env_paths: invocation.privateEnvPaths }))); }
 function executedRuntimeEvidence(files) {
   if (!Array.isArray(files) || !files.length) throw new Error("canary execution has no authoritative runtime binding");
-  const executable = files[0], fields = ["path", "dev", "ino", "size", "sha256"];
-  if (fields.some((key) => executable[key] === undefined) || !SHA256_RE.test(executable.sha256 || "")) throw new Error("canary executable runtime binding is invalid");
-  return { digest: sha(Buffer.from(JSON.stringify(files))), executable: Object.fromEntries(fields.map((key) => [key, executable[key]])) };
+  const binding = files[0];
+  // The runtime binding's path is an absolute host path; committing it leaks the local user and
+  // home layout into checked-in evidence (#1153). The executable is identified by dev/ino/size/
+  // sha256, and the human-readable identity is the basename only.
+  const executable = { basename: path.basename(binding.path), dev: binding.dev, ino: binding.ino, size: binding.size, sha256: binding.sha256 };
+  if (["basename", "dev", "ino", "size", "sha256"].some((key) => executable[key] === undefined) || !SHA256_RE.test(executable.sha256 || "")) throw new Error("canary executable runtime binding is invalid");
+  return { digest: sha(Buffer.from(JSON.stringify(files))), executable };
 }
 function credentialsFor(adapter, phase, selections) {
   const key = `${adapter.name}:${phase}`, selected = selections?.[key];
@@ -378,7 +382,9 @@ function validateReport(report, { requireCurrentSource = false } = {}) {
     }
     if (entry.status === "passed" && (!SHA256_RE.test(entry.invocation_sha256 || "") || !SHA256_RE.test(entry.output_sha256 || "")
       || !SHA256_RE.test(entry.executed_runtime?.digest || "") || !SHA256_RE.test(entry.executed_runtime?.executable?.sha256 || "")
-      || typeof entry.executed_runtime?.executable?.path !== "string" || !["dev", "ino", "size"].every((key) => Number.isInteger(entry.executed_runtime.executable[key]))
+      || Object.hasOwn(entry.executed_runtime?.executable || {}, "path") || typeof entry.executed_runtime?.executable?.basename !== "string"
+      || entry.executed_runtime.executable.basename === "" || /[\\/]/.test(entry.executed_runtime.executable.basename)
+      || !["dev", "ino", "size"].every((key) => Number.isInteger(entry.executed_runtime.executable[key]))
       || !["boundary", "nonce", "cleanup", "process_scope_absent"].every((key) => entry.checks?.[key] === "passed"))) throw new Error("canary report passed-cell evidence invalid");
     if (entry.failure?.type === "cleanup" && !(entry.failure.code === "HOST_CLEANUP_INCOMPLETE" && entry.checks?.cleanup === "failed"
       && entry.cleanup_proof?.reported === true && Object.hasOwn(entry.cleanup_proof, "terminal_status")

@@ -79,9 +79,11 @@ own contract tests, and the runner independently parses explicit
 Evidence records source-tree and dirty-state digests, runner/runtime hashes,
 platform, executable identity/version, credential environment names and file
 IDs, prompt/invocation/output digests, and boundary/cleanup/process audits. It
-never records credential values or credential source paths. The latest checked
-in run is `docs/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-03.json`;
-it is intentionally incomplete until operators provision every required cell.
+never records credential values or credential source paths, and the recorded
+executable identity is the basename only — the old absolute-path evidence was
+archived as superseded (2026-08-07, #1153) and the next canary run regenerates
+current evidence under `docs/plans/relay-runtime-core-reset-vnext/`; it is
+intentionally incomplete until operators provision every required cell.
 
 The outer host boundary permits the trusted CLI's remote provider control-plane
 transport. `networkAccess` separately describes model/tool networking and must
