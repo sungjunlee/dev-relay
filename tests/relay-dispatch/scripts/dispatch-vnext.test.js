@@ -424,6 +424,7 @@ test("a symlinked repoSlug component is rejected before mkdirSync writes through
   const runId = "worktree-symlink-run2";
   const slugDir = path.dirname(path.join(value.relayHome, "worktrees", path.basename(fixtureRunsDir(value)), runId));
   const target = path.join(value.root, "symlink-target-2");
+  fs.mkdirSync(path.dirname(slugDir), { recursive: true });
   fs.rmSync(slugDir, { recursive: true, force: true });
   fs.mkdirSync(target, { recursive: true });
   fs.symlinkSync(target, slugDir, "dir");
