@@ -18,6 +18,7 @@ const { getAdapter } = require("../../../skills/relay-dispatch/scripts/adapters"
 
 const ROOT = path.resolve(__dirname, "../../..");
 const DISPATCH = path.join(ROOT, "skills/relay-dispatch/scripts/dispatch.js");
+const RELAY_RECOVER = path.join(ROOT, "skills/relay/scripts/relay-recover.js");
 const FAKE_CODEX = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-codex.js");
 const FAKE_CURSOR = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-cursor.js");
 const FAKE_CLINE = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-cline.js");
@@ -377,6 +378,96 @@ test("a crash during retained-worktree creation strands no run directory", () =>
   const runsDir = fixtureRunsDir(value);
   const stranded = fs.existsSync(runsDir) ? fs.readdirSync(runsDir) : [];
   assert.deepEqual(stranded, [], "a mid-worktree crash must leave no claimed run directory behind");
+});
+
+// This is the actual #1190 window, rather than a synthetic branch/worktree fixture: the git wrapper
+// lets `worktree add` finish, records that fact, then blocks before dispatch can claim its run directory.
+// The next same-branch dispatch must only report the typed handoff; canonical recovery owns cleanup.
+test("a post-worktree-add kill is recovered through the typed repo-and-branch recovery form", { timeout: 120_000 }, (t) => {
+  const value = fixture("stranded-worktree");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const runId = "stranded-worktree-run";
+  const branch = "stranded-worktree";
+  const worktree = path.join(value.relayHome, "worktrees", path.basename(fixtureRunsDir(value)), runId, path.basename(fs.realpathSync(value.repo)));
+  const marker = path.join(value.root, "worktree-added.json");
+  const gitStub = path.join(value.root, "post-add-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const fs = require("node:fs");',
+    'const args = process.argv.slice(2);',
+    'fs.appendFileSync(`${process.env.RELAY_TEST_WORKTREE_ADDED_MARKER}.log`, JSON.stringify(args) + "\\n");',
+    'const at = args[0] === "-C" ? 2 : 0;',
+    'if (args[at] === "worktree" && args[at + 1] === "add") {',
+    '  execFileSync(REAL_GIT, args, { stdio: "inherit" });',
+    '  fs.writeFileSync(process.env.RELAY_TEST_WORKTREE_ADDED_MARKER, JSON.stringify({ pid: process.pid }));',
+    '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);',
+    '  process.exit(0);',
+    '}',
+    'execFileSync(REAL_GIT, args, { stdio: "inherit" });',
+  ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });
+
+  const child = spawn(process.execPath, [DISPATCH, value.repo, "--branch", branch, "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--network-access", "enabled", "--json"], {
+    env: { ...value.env, RELAY_DISPATCH_INTERNAL_RUN_ID: runId, RELAY_GIT_BIN: gitStub, RELAY_TEST_WORKTREE_ADDED_MARKER: marker },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let childStderr = "";
+  child.stderr.on("data", (chunk) => { childStderr += chunk; });
+  const deadline = Date.now() + 60_000;
+  while (!fs.existsSync(marker) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  if (!fs.existsSync(marker)) {
+    child.kill("SIGKILL");
+    const calls = fs.existsSync(`${marker}.log`) ? fs.readFileSync(`${marker}.log`, "utf8") : "(wrapper was never started)";
+    assert.fail(`git worktree add must complete before the dispatch is killed: ${childStderr}; git calls: ${calls}`);
+  }
+  const blockedGit = JSON.parse(fs.readFileSync(marker, "utf8"));
+  child.kill("SIGKILL");
+  try { process.kill(blockedGit.pid, "SIGKILL"); } catch {}
+
+  assert.equal(fs.existsSync(path.join(fixtureRunsDir(value), runId)), false, "the kill window has no readable run.json");
+  assert.equal(fs.existsSync(worktree), true, "the registered Relay worktree is stranded");
+  assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`branch refs/heads/${branch}`));
+
+  const collided = run(value, ["--branch", branch, "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.notEqual(collided.status, 0);
+  const collision = json(collided.stderr);
+  assert.equal(collision.code, "BRANCH_EXISTS");
+  assert.match(collision.error, new RegExp(`--repo ['"]?${value.repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(collision.error, new RegExp(`--branch ['"]?${branch}`));
+  assert.equal(fs.existsSync(worktree), true, "dispatch must not clean up a branch it did not create");
+
+  const recovered = spawnSync(process.execPath, [RELAY_RECOVER, "recover", "--repo", value.repo, "--branch", branch,
+    "--reason", "remove stranded Relay worktree", "--json"], { encoding: "utf8", env: value.env });
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.equal(json(recovered.stdout).status, "recovered");
+  assert.equal(git(value.repo, ["branch", "--list", branch]), "");
+  assert.equal(fs.existsSync(worktree), false);
+  assert.equal(fs.existsSync(path.dirname(worktree)), false, "empty Relay-owned run parent is removed");
+
+  const repeated = spawnSync(process.execPath, [RELAY_RECOVER, "recover", "--repo", value.repo, "--branch", branch,
+    "--reason", "confirm idempotence", "--json"], { encoding: "utf8", env: value.env });
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.equal(json(repeated.stdout).status, "already_recovered");
+});
+
+test("stranded-worktree recovery fails closed without deleting reviewable work", (t) => {
+  const value = fixture("stranded-worktree-dirty");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-dirty";
+  const worktree = path.join(value.relayHome, "worktrees", "manual-stranded");
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  fs.writeFileSync(path.join(worktree, "executor-change.txt"), "do not discard\n");
+
+  const result = spawnSync(process.execPath, [RELAY_RECOVER, "recover", "--repo", value.repo, "--branch", branch,
+    "--reason", "must preserve dirty worktree", "--json"], { encoding: "utf8", env: value.env });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /reviewable changes/);
+  assert.equal(fs.readFileSync(path.join(worktree, "executor-change.txt"), "utf8"), "do not discard\n");
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40);
+  assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`branch refs/heads/${branch}`));
 });
 
 // #1154 item 2: containment must be validated BEFORE `git worktree add`. A pre-existing symlink at the

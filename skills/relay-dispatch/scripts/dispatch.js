@@ -74,6 +74,28 @@ function git(repo, args, options = {}) {
   }).trim();
 }
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function branchExists(checkout, branch) {
+  try {
+    git(checkout, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+    return true;
+  } catch (error) {
+    if (error.status === 1) return false;
+    throw error;
+  }
+}
+
+function branchExistsMessage(checkout, branch) {
+  return [
+    `branch already exists: ${branch}`,
+    "If dispatch was killed after its worktree was added and before run.json was created, recover only that stranded Relay worktree with:",
+    `node skills/relay/scripts/relay-recover.js recover --repo ${shellQuote(checkout)} --branch ${shellQuote(branch)} --reason 'remove stranded Relay worktree'`,
+  ].join(". ");
+}
+
 function observeAttemptWorktree(worktree) {
   return {
     head_sha: git(worktree, ["rev-parse", "HEAD"]),
@@ -304,7 +326,15 @@ function createRetainedWorktree(identity, runId, branch) {
   // destination, so a rejected destination leaves the branch behind and nothing afterwards
   // distinguishes ours from one a concurrent dispatch created a moment earlier. Probing with
   // `rev-parse` first would only move that race, not close it.
-  git(identity.checkout, ["branch", branch, startSha]);
+  try {
+    git(identity.checkout, ["branch", branch, startSha]);
+  } catch (error) {
+    // The exclusive ref create is the branch-ownership boundary. Do not inspect or clean up here:
+    // recovery owns every mutation for an already-existing branch, including the add->run.json
+    // kill window. A second probe only translates Git's collision into an actionable typed error.
+    if (branchExists(identity.checkout, branch)) fail(branchExistsMessage(identity.checkout, branch), "BRANCH_EXISTS");
+    throw error;
+  }
   let registered = false;
   try {
     git(identity.checkout, ["worktree", "add", worktree, branch]);
@@ -375,7 +405,7 @@ function dryRunInvocation({ cli, identity, adapter, inputs }) {
   if (cli.creating) {
     git(identity.checkout, ["check-ref-format", "--branch", cli.values.branch]);
     const existing = git(identity.checkout, ["branch", "--list", cli.values.branch]);
-    if (existing) fail(`branch already exists: ${cli.values.branch}`, "BRANCH_EXISTS");
+    if (existing) fail(branchExistsMessage(identity.checkout, cli.values.branch), "BRANCH_EXISTS");
   }
   validateCopyInputs(identity.repoRoot, cli.values.copy);
   const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-")));

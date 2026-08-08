@@ -2,6 +2,7 @@
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const factsModule = require("./facts");
 const host = require("./host");
@@ -193,6 +194,188 @@ function gitBytes(repo, args) {
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 16 * 1024 * 1024,
   });
+}
+
+function recoveryFail(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  throw error;
+}
+
+function containedPath(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function canonicalRecoveryCheckout(repository) {
+  const checkout = fs.realpathSync(path.resolve(repository));
+  const topLevel = fs.realpathSync(execGit(checkout, ["rev-parse", "--show-toplevel"]));
+  if (checkout !== topLevel) recoveryFail("INVALID_REPOSITORY", `repo must be the canonical checkout root: ${topLevel}`);
+  return {
+    checkout,
+    repoRoot: runStore.canonicalRepository(checkout),
+  };
+}
+
+function localBranchRef(checkout, branch) {
+  if (typeof branch !== "string" || !branch) recoveryFail("INVALID_BRANCH", "branch is required");
+  try {
+    execGit(checkout, ["check-ref-format", "--branch", branch]);
+  } catch (error) {
+    recoveryFail("INVALID_BRANCH", `branch is invalid: ${branch}`);
+  }
+  return `refs/heads/${branch}`;
+}
+
+function parseWorktreeList(value) {
+  const entries = [];
+  let entry = null;
+  for (const line of String(value || "").split("\n")) {
+    if (!line) {
+      if (entry) { entries.push(entry); entry = null; }
+      continue;
+    }
+    const match = /^(worktree|HEAD|branch) (.+)$/.exec(line);
+    if (!match) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned an unsupported record");
+    if (match[1] === "worktree") {
+      if (entry) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list record is missing its separator");
+      entry = { worktree: match[2], head: null, branch: null };
+    } else if (!entry || entry[match[1].toLowerCase()] !== null) {
+      recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned a malformed record");
+    } else {
+      entry[match[1].toLowerCase()] = match[2];
+    }
+  }
+  if (entry) entries.push(entry);
+  return entries;
+}
+
+function branchExists(checkout, ref) {
+  try {
+    execGit(checkout, ["show-ref", "--verify", "--quiet", ref]);
+    return true;
+  } catch (error) {
+    if (error.status === 1) return false;
+    throw error;
+  }
+}
+
+function recoveryRunsBase() {
+  const configured = process.env.RELAY_RUNS_BASE || path.join(process.env.RELAY_HOME || path.join(os.homedir(), ".relay"), "runs");
+  if (!path.isAbsolute(configured)) recoveryFail("INVALID_RELAY_PATH", "RELAY_RUNS_BASE must be absolute");
+  return path.resolve(configured);
+}
+
+function validRunReferences({ repoRoot, branch, worktree }) {
+  const base = recoveryRunsBase();
+  let root;
+  try { root = fs.lstatSync(base); }
+  catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  if (!root.isDirectory() || root.isSymbolicLink()) recoveryFail("UNTRUSTED_RUNS_BASE", "Relay runs base must be a real directory");
+  const references = [];
+  for (const repositoryEntry of fs.readdirSync(base, { withFileTypes: true })) {
+    const repositoryDir = path.join(base, repositoryEntry.name);
+    const repositoryStat = fs.lstatSync(repositoryDir);
+    if (repositoryStat.isSymbolicLink()) recoveryFail("UNTRUSTED_RUNS_BASE", `Relay runs base contains a symlink: ${repositoryDir}`);
+    if (!repositoryStat.isDirectory()) continue;
+    for (const runEntry of fs.readdirSync(repositoryDir, { withFileTypes: true })) {
+      const runDir = path.join(repositoryDir, runEntry.name);
+      const runStat = fs.lstatSync(runDir);
+      if (runStat.isSymbolicLink()) recoveryFail("UNTRUSTED_RUNS_BASE", `Relay run directory is a symlink: ${runDir}`);
+      if (!runStat.isDirectory()) continue;
+      let record;
+      try { record = readRunRecord({ runDir }); }
+      catch { continue; }
+      let recordRepoRoot = null;
+      try { recordRepoRoot = fs.realpathSync(record.repo.root); } catch {}
+      let recordWorktree = path.resolve(record.git.worktree);
+      try { recordWorktree = fs.realpathSync(recordWorktree); } catch {}
+      const sameRepository = recordRepoRoot === repoRoot;
+      const sameBranch = sameRepository && record.git.branch === branch;
+      const sameWorktree = worktree !== null && recordWorktree === worktree;
+      if (sameBranch || sameWorktree) references.push({ run_id: record.run_id, run_dir: runDir, branch: record.git.branch, worktree: record.git.worktree });
+    }
+  }
+  return references;
+}
+
+function observeStrandedWorktree({ repository, branch, relayWorktreeBase = null }) {
+  const { checkout, repoRoot } = canonicalRecoveryCheckout(repository);
+  const ref = localBranchRef(checkout, branch);
+  const holders = parseWorktreeList(execGit(checkout, ["worktree", "list", "--porcelain"], { raw: true }))
+    .filter((entry) => entry.branch === ref);
+  const exists = branchExists(checkout, ref);
+  if (!exists) {
+    if (holders.length) recoveryFail("STRANDED_WORKTREE_AMBIGUOUS", `branch ${branch} is absent but still has registered worktrees`);
+    const references = validRunReferences({ repoRoot, branch, worktree: null });
+    if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references branch ${branch}: ${references.map((item) => item.run_id).join(", ")}`);
+    return { status: "already_recovered", checkout, repoRoot, branch, ref };
+  }
+  if (holders.length !== 1) recoveryFail(
+    holders.length ? "STRANDED_WORKTREE_AMBIGUOUS" : "STRANDED_WORKTREE_NOT_FOUND",
+    `branch ${branch} must be checked out by exactly one registered worktree; found ${holders.length}`,
+  );
+  const configuredBase = relayWorktreeBase || runStore.relayWorktreeBase();
+  let base;
+  try { base = fs.realpathSync(configuredBase); }
+  catch { recoveryFail("UNTRUSTED_WORKTREE", "Relay worktree base does not exist"); }
+  let worktree;
+  try { worktree = fs.realpathSync(holders[0].worktree); }
+  catch { recoveryFail("UNTRUSTED_WORKTREE", `registered worktree is unavailable: ${holders[0].worktree}`); }
+  try {
+    assertTrustedRecoveryWorktree({ repoRoot, activeCheckout: checkout, relayWorktreeBase: base, worktree });
+  } catch (error) {
+    recoveryFail("UNTRUSTED_WORKTREE", error.message);
+  }
+  const checkedOutBranch = execGit(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (checkedOutBranch !== branch) recoveryFail("STRANDED_WORKTREE_AMBIGUOUS", `registered worktree is not checked out on ${branch}`);
+  const head = execGit(worktree, ["rev-parse", "HEAD"]);
+  const branchHead = execGit(checkout, ["rev-parse", "--verify", `${ref}^{commit}`]);
+  if (head !== branchHead) recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${branch} changed while recovery was observing it`);
+  const status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  const dirt = classifyRepositoryDirt(status);
+  if (dirt.hasReviewableDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", `registered worktree has reviewable changes: ${reviewableStatusPaths(status).join(", ")}`);
+  if (dirt.hasDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", "registered worktree has runtime metadata changes; stranded-worktree recovery only removes a clean worktree");
+  const references = validRunReferences({ repoRoot, branch, worktree });
+  if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references this branch or worktree: ${references.map((item) => item.run_id).join(", ")}`);
+  return { status: "ready", checkout, repoRoot, branch, ref, base, worktree, branchHead };
+}
+
+function removeEmptyRelayParents(base, worktree) {
+  const removed = [];
+  for (let cursor = path.dirname(worktree); cursor !== base && containedPath(base, cursor); cursor = path.dirname(cursor)) {
+    try { fs.rmdirSync(cursor); removed.push(cursor); }
+    catch (error) { if (!["ENOENT", "ENOTEMPTY"].includes(error.code)) throw error; break; }
+  }
+  return removed;
+}
+
+function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null } = {}) {
+  const initial = observeStrandedWorktree({ repository, branch, relayWorktreeBase });
+  if (initial.status === "already_recovered") {
+    return { operation: "recover_stranded_worktree", status: "already_recovered", repo: initial.repoRoot, branch: initial.branch, removed_parent_directories: [] };
+  }
+  // The inspection is intentionally repeated immediately before the first destructive Git operation.
+  // There is no run lock in this pre-run-record window, so every ownership predicate is re-proven.
+  const current = observeStrandedWorktree({ repository, branch, relayWorktreeBase: initial.base });
+  if (current.status !== "ready" || current.worktree !== initial.worktree || current.branchHead !== initial.branchHead) {
+    recoveryFail("STRANDED_WORKTREE_CHANGED", "stranded worktree changed while recovery was revalidating it");
+  }
+  execGit(current.checkout, ["worktree", "remove", current.worktree]);
+  try {
+    execGit(current.checkout, ["update-ref", "-d", current.ref, current.branchHead]);
+  } catch (error) {
+    recoveryFail("STRANDED_BRANCH_NOT_REMOVED", `worktree was removed but branch ${current.branch} was not deleted safely: ${commandFailure(error)}`);
+  }
+  const removed = removeEmptyRelayParents(current.base, current.worktree);
+  return {
+    operation: "recover_stranded_worktree",
+    status: "recovered",
+    repo: current.repoRoot,
+    branch: current.branch,
+    worktree: current.worktree,
+    removed_parent_directories: removed,
+  };
 }
 
 function sameFingerprint(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
@@ -1465,6 +1648,7 @@ module.exports = {
   inspectProductionRun,
   recoverRun,
   recoverProductionRun,
+  recoverStrandedWorktree,
   observeProduction,
   __testing: {
     RUNTIME_METADATA_ROOTS,
@@ -1477,6 +1661,7 @@ module.exports = {
     deterministicEventId,
     recoveryAppliedFact,
     recoverySteps,
+    observeStrandedWorktree,
     parsePorcelainV1Z,
     reviewableStatusPaths,
     resolveGithubObserverToken,
