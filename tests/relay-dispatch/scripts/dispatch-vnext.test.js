@@ -589,7 +589,53 @@ test("worktree porcelain accepts standard unrelated record types and rejects mal
   );
 });
 
-test("stranded-worktree recovery preserves a branch checked out during cleanup", (t) => {
+test("stranded-worktree recovery preserves a ref moved immediately before atomic deletion", (t) => {
+  const value = fixture("stranded-worktree-ref-move-race");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-ref-move-race";
+  const worktree = path.join(value.relayHome, "worktrees", "stranded-ref-move-race");
+  git(value.repo, ["branch", branch]);
+  const savedHead = git(value.repo, ["rev-parse", "--verify", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  const gitStub = path.join(value.root, "ref-move-race-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const args = process.argv.slice(2);',
+    'const at = args[0] === "-C" ? 2 : 0;',
+    'if (args[at] === "update-ref" && args[at + 1] === "-d") {',
+    '  const repo = args[0] === "-C" ? args[1] : process.cwd();',
+    '  const tree = execFileSync(REAL_GIT, ["-C", repo, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();',
+    '  const moved = execFileSync(REAL_GIT, ["-C", repo, "commit-tree", tree, "-p", "HEAD", "-m", "concurrent branch move"], { encoding: "utf8" }).trim();',
+    '  execFileSync(REAL_GIT, ["-C", repo, "update-ref", args[at + 2], moved]);',
+    '}',
+    'execFileSync(REAL_GIT, args, { stdio: "inherit" });',
+  ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });
+
+  const previousGit = process.env.RELAY_GIT_BIN;
+  process.env.RELAY_GIT_BIN = gitStub;
+  try {
+    assert.throws(() => recovery.recoverStrandedWorktree({
+      repository: value.repo,
+      branch,
+      relayWorktreeBase: path.join(value.relayHome, "worktrees"),
+    }), (error) => error.code === "STRANDED_WORKTREE_CHANGED");
+  } finally {
+    if (previousGit === undefined) delete process.env.RELAY_GIT_BIN;
+    else process.env.RELAY_GIT_BIN = previousGit;
+  }
+
+  const movedHead = git(value.repo, ["rev-parse", "--verify", branch]);
+  assert.notEqual(movedHead, savedHead, "the concurrent ref move must be observable");
+  assert.equal(fs.existsSync(worktree), true, "the original Relay path must be restored");
+  assert.equal(git(worktree, ["rev-parse", "HEAD"]), savedHead, "the restored path keeps its saved checkout");
+  assert.throws(() => git(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"]), "the restored path must not attach to the moved ref");
+  assert.equal(git(value.repo, ["worktree", "list", "--porcelain"]).includes(`worktree ${worktree}`), true);
+  assert.equal(fs.readFileSync(path.join(worktree, "README.md"), "utf8"), "fixture\n", "compensation must not overwrite reviewable data");
+});
+
+test("stranded-worktree recovery preserves a branch checked out after atomic deletion", (t) => {
   const value = fixture("stranded-worktree-holder-race");
   t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
   const branch = "stranded-holder-race";
@@ -605,8 +651,9 @@ test("stranded-worktree recovery preserves a branch checked out during cleanup",
     'const args = process.argv.slice(2);',
     'const at = args[0] === "-C" ? 2 : 0;',
     'execFileSync(REAL_GIT, args, { stdio: "inherit" });',
-    'if (args[at] === "worktree" && args[at + 1] === "remove") {',
+    'if (args[at] === "update-ref" && args[at + 1] === "-d") {',
     '  const repo = args[0] === "-C" ? args[1] : process.cwd();',
+    '  execFileSync(REAL_GIT, ["-C", repo, "update-ref", args[at + 2], args[at + 3]], { stdio: "inherit" });',
     '  execFileSync(REAL_GIT, ["-C", repo, "worktree", "add", process.env.RELAY_TEST_HOLDER_WORKTREE, process.env.RELAY_TEST_HOLDER_BRANCH], { stdio: "inherit" });',
     '}',
   ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });

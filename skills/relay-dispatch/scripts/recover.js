@@ -452,6 +452,78 @@ function restoreRemovedStrandedWorktree(current) {
   }
 }
 
+const ZERO_OID = "0".repeat(40);
+
+function restoreMissingStrandedBranch(current) {
+  // Do not overwrite a ref a concurrent user recreated or moved.  The all-zero
+  // old value makes this creation conditional on the ref still being absent.
+  try {
+    execGit(current.checkout, ["update-ref", current.ref, current.branchHead, ZERO_OID]);
+  } catch (error) {
+    let observed;
+    try { observed = postRemoveBranchState(current); }
+    catch (observeError) {
+      recoveryFail(
+        "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+        `could not verify branch ${current.branch} after atomic ref compensation: ${commandFailure(observeError)}`,
+      );
+    }
+    if (observed.branchHead === null) {
+      recoveryFail(
+        "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+        `could not atomically restore missing branch ${current.branch} at ${current.branchHead}: ${commandFailure(error)}`,
+      );
+    }
+    return observed;
+  }
+  return postRemoveBranchState(current);
+}
+
+function restoreAndValidateRemovedStrandedWorktree(current, {
+  expectedBranchHead,
+  expectedHolders = [],
+  expectedReferences = [],
+  restoreBranchIfMissing = false,
+} = {}) {
+  if (restoreBranchIfMissing) restoreMissingStrandedBranch(current);
+  restoreRemovedStrandedWorktree(current);
+
+  let finalState;
+  let finalReferences;
+  try {
+    finalState = postRemoveBranchState(current);
+    finalReferences = validRunReferences({ repoRoot: current.repoRoot, branch: current.branch, worktree: current.worktree });
+  } catch (error) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `could not revalidate compensated state for ${current.branch}: ${commandFailure(error)}`,
+    );
+  }
+  if (expectedBranchHead !== undefined && finalState.branchHead !== expectedBranchHead) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `branch ${current.branch} changed while its original Relay worktree was being restored`,
+    );
+  }
+  for (const holder of expectedHolders) {
+    if (!finalState.holders.some((entry) => entry.worktree === holder.worktree && entry.head === holder.head)) {
+      recoveryFail(
+        "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+        `registered competing worktree ${holder.worktree} was not preserved while restoring ${current.worktree}`,
+      );
+    }
+  }
+  for (const reference of expectedReferences) {
+    if (!finalReferences.some((entry) => entry.run_id === reference.run_id && entry.run_dir === reference.run_dir)) {
+      recoveryFail(
+        "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+        `valid run reference ${reference.run_id} was not preserved while restoring ${current.worktree}`,
+      );
+    }
+  }
+  return { state: finalState, references: finalReferences };
+}
+
 function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null } = {}) {
   const initial = observeStrandedWorktree({ repository, branch, relayWorktreeBase });
   if (initial.status === "already_recovered") {
@@ -478,22 +550,85 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
     throw error;
   }
   if (afterRemove.branchHead !== current.branchHead) {
-    restoreRemovedStrandedWorktree(current);
+    restoreAndValidateRemovedStrandedWorktree(current, { expectedBranchHead: afterRemove.branchHead });
     recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${current.branch} changed after its worktree was removed`);
   }
   if (afterRemove.holders.length) {
-    restoreRemovedStrandedWorktree(current);
+    restoreAndValidateRemovedStrandedWorktree(current, {
+      expectedBranchHead: afterRemove.branchHead,
+      expectedHolders: afterRemove.holders,
+    });
     recoveryFail("STRANDED_WORKTREE_AMBIGUOUS", `branch ${current.branch} gained ${afterRemove.holders.length} registered worktree holder(s) after removal`);
   }
   if (references.length) {
-    restoreRemovedStrandedWorktree(current);
+    restoreAndValidateRemovedStrandedWorktree(current, {
+      expectedBranchHead: afterRemove.branchHead,
+      expectedReferences: references,
+    });
     recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references branch ${current.branch} after its worktree was removed: ${references.map((item) => item.run_id).join(", ")}`);
   }
   try {
-    execGit(current.checkout, ["branch", "-d", "--", current.branch]);
+    // A branch name can be deleted and recreated between the prior observation and
+    // this command.  Compare-and-delete prevents cleanup from deleting that new ref.
+    execGit(current.checkout, ["update-ref", "-d", current.ref, current.branchHead]);
   } catch (error) {
-    restoreRemovedStrandedWorktree(current);
-    recoveryFail("STRANDED_BRANCH_NOT_REMOVED", `branch ${current.branch} was not deleted safely after restoring its original worktree: ${commandFailure(error)}`);
+    let changed;
+    try { changed = postRemoveBranchState(current); }
+    catch (observeError) {
+      restoreAndValidateRemovedStrandedWorktree(current);
+      recoveryFail("STRANDED_BRANCH_NOT_REMOVED", `branch ${current.branch} could not be observed after atomic deletion failed: ${commandFailure(observeError)}`);
+    }
+    if (changed.branchHead !== current.branchHead) {
+      restoreAndValidateRemovedStrandedWorktree(current, { expectedBranchHead: changed.branchHead });
+      recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${current.branch} changed while recovery was deleting its saved ref`);
+    }
+    restoreAndValidateRemovedStrandedWorktree(current, { expectedBranchHead: changed.branchHead });
+    recoveryFail("STRANDED_BRANCH_NOT_REMOVED", `branch ${current.branch} was not atomically deleted after restoring its original worktree: ${commandFailure(error)}`);
+  }
+
+  // update-ref does not reject a ref that gained a worktree holder after the
+  // delete.  Re-observe immediately and recreate only a still-absent saved ref
+  // before restoring the original Relay path.  A different concurrent ref wins.
+  let afterDelete;
+  let afterDeleteReferences;
+  try {
+    afterDelete = postRemoveBranchState(current);
+    afterDeleteReferences = validRunReferences({ repoRoot: current.repoRoot, branch: current.branch, worktree: current.worktree });
+  } catch (error) {
+    restoreAndValidateRemovedStrandedWorktree(current, { restoreBranchIfMissing: true });
+    recoveryFail("STRANDED_WORKTREE_CLEANUP_INCOMPLETE", `could not observe ${current.branch} immediately after atomic deletion: ${commandFailure(error)}`);
+  }
+  if (afterDelete.branchHead !== null || afterDelete.holders.length || afterDeleteReferences.length) {
+    const compensated = restoreAndValidateRemovedStrandedWorktree(current, {
+      expectedBranchHead: afterDelete.branchHead || current.branchHead,
+      expectedHolders: afterDelete.holders,
+      expectedReferences: afterDeleteReferences,
+      restoreBranchIfMissing: true,
+    });
+    const failure = afterDelete.holders.length ? "STRANDED_WORKTREE_AMBIGUOUS"
+      : afterDeleteReferences.length ? "STRANDED_WORKTREE_REFERENCED" : "STRANDED_WORKTREE_CHANGED";
+    recoveryFail(failure, `branch ${current.branch} changed after atomic deletion; restored Relay worktree at ${current.branchHead} with ref ${compensated.state.branchHead || "absent"}`);
+  }
+
+  // Require the clean state to remain clean immediately before pruning Relay-only
+  // parent directories; if it no longer is, compensate instead of pruning.
+  let beforeParentRemoval;
+  let beforeParentReferences;
+  try {
+    beforeParentRemoval = postRemoveBranchState(current);
+    beforeParentReferences = validRunReferences({ repoRoot: current.repoRoot, branch: current.branch, worktree: current.worktree });
+  } catch (error) {
+    restoreAndValidateRemovedStrandedWorktree(current, { restoreBranchIfMissing: true });
+    recoveryFail("STRANDED_WORKTREE_CLEANUP_INCOMPLETE", `could not revalidate ${current.branch} before removing Relay parents: ${commandFailure(error)}`);
+  }
+  if (beforeParentRemoval.branchHead !== null || beforeParentRemoval.holders.length || beforeParentReferences.length) {
+    restoreAndValidateRemovedStrandedWorktree(current, {
+      expectedBranchHead: beforeParentRemoval.branchHead || current.branchHead,
+      expectedHolders: beforeParentRemoval.holders,
+      expectedReferences: beforeParentReferences,
+      restoreBranchIfMissing: true,
+    });
+    recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${current.branch} changed before Relay parent cleanup`);
   }
   const removed = removeEmptyRelayParents(current.base, current.worktree);
   return {
