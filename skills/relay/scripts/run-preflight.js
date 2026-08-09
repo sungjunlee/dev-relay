@@ -321,7 +321,7 @@ function snapshotReview(record, runDir, inspection) {
   const reviews = (inspection.facts || []).filter((fact) => fact.type === "review_recorded");
   const latest = reviews.at(-1) || null;
   const headSha = inspection.derived?.head_sha || null;
-  const lastReviewedSha = inspection.derived?.reviewed_sha || latest?.payload?.reviewed_sha || null;
+  const lastReviewedSha = inspection.derived?.reviewed_sha || null;
   let shaState = "missing_head_sha";
   if (headSha && lastReviewedSha && headSha === lastReviewedSha) {
     shaState = "reviewed_current_head";

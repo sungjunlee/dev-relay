@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
- * Shared sprint ownership seam for relay-merge (and future relay-fleet #957).
+ * Shared sprint ownership seam for relay-merge.
  *
  * Resolves which active sprint/track owns a merge so capability Learnings and
  * other per-track writers do not assume a global singleton.
  *
  * Precedence (first decisive win):
  *   1. Caller/CLI `--sprint` / `--track` / `--component` (operator override)
- *   2. Manifest/fleet owner object (no-flag default when #957 injects it)
- *   3. Structured issue `component:` metadata (standalone derivation)
- *   4. Exactly-one-active sprint fallback
+ *   2. Structured issue `component:` metadata (standalone derivation)
+ *   3. Exactly-one-active sprint fallback
  *
  * Within the winning source, contradictory fields are rejected. Losing-source
  * fields must not override or contradict the explicit choice.
@@ -41,7 +40,6 @@ const OWNER_SOURCES = Object.freeze({
   EXPLICIT_SPRINT: "explicit_sprint",
   EXPLICIT_TRACK: "explicit_track",
   EXPLICIT_COMPONENT: "explicit_component",
-  FLEET: "fleet",
   ISSUE_COMPONENT: "issue_component",
   SINGLE_ACTIVE: "single_active",
 });
@@ -116,29 +114,6 @@ function parseIssueComponent(issueBody) {
     }
   }
   return null;
-}
-
-/**
- * Manifest/call seam for fleet (#957): prefer `ownership`, accept the durable
- * fleet alias retained by existing manifests.
- * Returns a partial handle object or null.
- */
-function readManifestOwnership(manifest) {
-  if (!manifest || typeof manifest !== "object") return null;
-  const raw = manifest.ownership
-    || manifest.fleet_ownership
-    || null;
-  if (!raw || typeof raw !== "object") return null;
-  const sprint = raw.sprint || raw.sprint_path || raw.sprintPath || null;
-  const track = raw.track || raw.track_slug || null;
-  const component = raw.component || null;
-  if (!sprint && !track && !component) return null;
-  return {
-    sprint: sprint || null,
-    track: track || null,
-    component: component || null,
-    source: OWNER_SOURCES.FLEET,
-  };
 }
 
 function resolveFromSprintFile(sprintPath, {
@@ -259,7 +234,6 @@ function resolveSingleActiveFallback(repo, fsDeps = {}) {
  * @param {string|null} [options.sprint]
  * @param {string|null} [options.track]
  * @param {string|null} [options.component]
- * @param {object|null} [options.owner] pre-resolved / fleet partial handle
  * @param {string|null} [options.issueBody]
  * @param {Function|null} [options.sprintState] injectable sprint-state invoker
  */
@@ -268,7 +242,6 @@ function resolveSprintOwner({
   sprint = null,
   track = null,
   component = null,
-  owner = null,
   issueBody = null,
   sprintState = null,
   discoverBin = discoverSprintStateBin,
@@ -310,45 +283,21 @@ function resolveSprintOwner({
     });
   });
 
-  const injected = owner && typeof owner === "object" ? owner : null;
-  const hasCallerOverride = Boolean(sprint || track || component);
-
-  // Caller/CLI flags win wholesale over fleet/manifest. Do not merge fields
-  // across sources — a losing-source track must not contradict a CLI component.
-  let explicitSprint = null;
-  let explicitTrack = null;
-  let explicitComponent = null;
-  let winningSource = null;
-
-  if (hasCallerOverride) {
-    explicitSprint = sprint || null;
-    explicitTrack = track || null;
-    explicitComponent = component || null;
-    winningSource = "caller";
-  } else if (injected) {
-    explicitSprint = injected.sprint || injected.sprintPath || null;
-    explicitTrack = injected.track || null;
-    explicitComponent = injected.component || null;
-    winningSource = injected.source === OWNER_SOURCES.FLEET ? OWNER_SOURCES.FLEET : "injected";
-  }
+  const explicitSprint = sprint || null;
+  const explicitTrack = track || null;
+  const explicitComponent = component || null;
 
   if (explicitTrack && explicitComponent && !explicitSprint) {
-    // Within the winning source, track+component without a concrete sprint must
-    // agree after resolution. CLI also rejects both selectors (matches CLI UX).
-    if (winningSource === "caller") {
-      return buildFailure("contradictory_owner", {
-        detail: "Use only one of --track / --component on the CLI.",
-        track: explicitTrack,
-        component: explicitComponent,
-      });
-    }
+    return buildFailure("contradictory_owner", {
+      detail: "Use only one of --track / --component on the CLI.",
+      track: explicitTrack,
+      component: explicitComponent,
+    });
   }
 
   if (explicitSprint) {
     const fromFile = resolveFromSprintFile(explicitSprint, {
-      source: winningSource === OWNER_SOURCES.FLEET
-        ? OWNER_SOURCES.FLEET
-        : OWNER_SOURCES.EXPLICIT_SPRINT,
+      source: OWNER_SOURCES.EXPLICIT_SPRINT,
       repo,
       readFile,
       existsSync,
@@ -366,20 +315,6 @@ function resolveSprintOwner({
       : { track: explicitTrack };
     const resolved = runSprintState(selector);
     if (!resolved.ok) return resolved;
-    if (explicitTrack && explicitComponent) {
-      const trackOk = explicitTrack === resolved.track || explicitTrack === resolved.component;
-      if (!trackOk) {
-        return buildFailure("contradictory_owner", {
-          detail: `track '${explicitTrack}' does not match resolved sprint '${resolved.track}' for component '${explicitComponent}'`,
-          track: explicitTrack,
-          component: explicitComponent,
-          sprintPath: resolved.sprintPath,
-        });
-      }
-    }
-    if (winningSource === OWNER_SOURCES.FLEET) {
-      return { ...resolved, source: OWNER_SOURCES.FLEET };
-    }
     return {
       ...resolved,
       source: explicitComponent ? OWNER_SOURCES.EXPLICIT_COMPONENT : OWNER_SOURCES.EXPLICIT_TRACK,
@@ -422,7 +357,6 @@ module.exports = {
   OWNER_SOURCES,
   MIN_SCHEMA_VERSION,
   parseIssueComponent,
-  readManifestOwnership,
   listSprintStateCandidates,
   probeSprintStateBinary,
   discoverSprintStateBin,

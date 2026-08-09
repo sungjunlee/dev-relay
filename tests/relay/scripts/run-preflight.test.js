@@ -13,6 +13,7 @@ const dispatch = require("../../../skills/relay-dispatch/scripts/dispatch");
 const {
   checkInflightRuns,
   routeFromInflight,
+  snapshotReview,
 } = require("../../../skills/relay/scripts/run-preflight");
 
 const ROOT = path.resolve(__dirname, "../../..");
@@ -131,6 +132,23 @@ test("inflight scanner failures remain fail-closed", async () => {
   const route = routeFromInflight({ prCheck: { status: "not_found", pr: null }, runCheck });
   assert.equal(route.route, "attention");
   assert.equal(route.reason, "invalid Relay run ledger");
+});
+
+test("review snapshot trusts canonical derived reviewed_sha, not a raw fact fallback", () => {
+  const record = { run_id: "issue-1-20260809000000001", git: { branch: "issue-1" } };
+  const inspection = {
+    derived: { head_sha: "a".repeat(40), phase: "reviewable" },
+    facts: [{
+      type: "review_recorded",
+      payload: { verdict: "lgtm", reviewed_sha: "a".repeat(40) },
+    }],
+    recommended_action: { kind: "review", reason: "review required" },
+    blockers: [],
+  };
+
+  const snapshot = snapshotReview(record, "/tmp/run", inspection);
+  assert.equal(snapshot.last_reviewed_sha, null);
+  assert.equal(snapshot.sha_state, "not_reviewed");
 });
 
 test("review preflight black box consumes the same canonical inspect action", () => {

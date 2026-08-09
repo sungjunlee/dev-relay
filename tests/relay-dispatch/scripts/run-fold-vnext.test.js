@@ -228,6 +228,7 @@ test("exact criteria binding, external revalidation, and identity conflicts fail
   });
   assert.equal(unavailable.action, "none");
   assert.equal(unavailable.reason, "github_unavailable");
+  assert.equal(unavailable.reviewed_sha, HEAD);
 
   const conflict = foldRunFacts({
     runRecord: runRecord(),
@@ -248,6 +249,7 @@ test("exact criteria binding, external revalidation, and identity conflicts fail
     });
     assert.equal(result.action, "none", missing);
     assert.equal(result.reason, "github_unavailable", missing);
+    assert.equal(result.reviewed_sha, HEAD, missing);
   }
   const closedPr = foldRunFacts({
     runRecord: runRecord(),
@@ -256,6 +258,7 @@ test("exact criteria binding, external revalidation, and identity conflicts fail
   });
   assert.equal(closedPr.action, "none");
   assert.equal(closedPr.reason, "github_pr_closed_unmerged");
+  assert.equal(closedPr.reviewed_sha, HEAD);
 
   const branchConflict = foldRunFacts({
     runRecord: runRecord(),

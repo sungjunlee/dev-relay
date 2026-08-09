@@ -20,11 +20,11 @@ Remove vNext transition residue and unearned compatibility, recovery, and test-a
 
 ### Batch 2 — Independent correctness patch
 
-- [~] #1191 — validate worktree-base containment before creation side effects [branch:codex/1191-worktree-base-containment]
+- [x] #1191 — validate worktree-base containment before creation side effects [PR:#1199]
 
 ### Batch 3 — Measured compatibility retirement
 
-- [ ] #1194 — measure and retire unused legacy rubric, ownership, and lineage compatibility
+- [~] #1194 — measure and retire unused legacy rubric, ownership, and lineage compatibility [branch:codex/1194-retire-legacy-compat]
 
 ### Batch 4 — Recovery mechanism subtraction
 
@@ -55,3 +55,5 @@ Remove vNext transition residue and unearned compatibility, recovery, and test-a
 - 2026-08-09 — #1193 implementation complete on `codex/relay-runtime-slimming`: removed two zero-consumer compatibility selectors, replaced current vNext terminology with Relay terminology, and corrected the capability/docs contract. Runtime 6,906→6,900 LOC; tests 14,848→14,838 LOC. Full gate passed 623/625 with 2 expected live-canary skips; independent review reached LGTM after two P2 current-doc corrections.
 - 2026-08-09 — Merged #1198, completing #1193 and establishing the current Relay vocabulary before the remaining runtime-slimming batches.
 - 2026-08-09 — #1191 implementation complete on `codex/1191-worktree-base-containment`: canonicalized stable path prefixes while creating only the Relay-owned suffix component-by-component, so platform aliases remain valid and pre-existing Relay-home/worktree-base symlinks fail before writes. Runtime 6,900→6,938 LOC; tests 14,838→14,884 LOC. Full gate passed 626/628 with 2 expected live-canary skips; independent review reached LGTM after fixing two P2 compatibility/contract findings.
+- 2026-08-09 — Merged #1199, completing #1191. Started #1194 from measured callers and 12 anonymous local run records: removed zero-caller ownership aliases/injection and duplicate active-sprint helpers, kept the documented rubric-as-Done-Criteria path (1/10 schema-v3 consumers), and classified 2 versionless records as invalid historical input rather than adding a reader.
+- 2026-08-09 — #1194 implementation complete on `codex/1194-retire-legacy-compat`: target runtime 1,343→1,248 LOC (−95), Relay tests 14,884→14,672 LOC (−212), registration sites 566→555. Scoped relay-merge/relay 126/126 and cross-skill 93/93 passed; independent review reached LGTM after three evidence/contract corrections. Two local serialized full-gate attempts exposed three unrelated long-run timing failures; each failed test passed in isolation, so the PR skill matrix is the final full-gate authority.

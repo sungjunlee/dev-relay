@@ -8,16 +8,15 @@ The script is the only writer for that section (anti-adversarial-Goodhart struct
 
 ## Ownership resolution
 
-`sprint-owner.js` is the shared seam (`finalize-run` today; `relay-fleet` #957 later). Precedence:
+`sprint-owner.js` resolves the target for `append-learnings`. Precedence:
 
 1. Caller/CLI `--sprint <path>`, `--track <slug>`, or `--component <slug>` (operator override; mutually exclusive track/component on the CLI)
-2. Injected flat owner `{ sprint, track, component }` — no-flag default when #957 supplies it; never stronger than an explicit caller override
-3. Structured issue-body metadata line `component: <slug>` (leading `key: value` lines only; incidental prose is ignored)
-4. Exactly-one-active sprint fallback
+2. Structured issue-body metadata line `component: <slug>` (leading `key: value` lines only; incidental prose is ignored)
+3. Exactly-one-active sprint fallback
 
-Within the winning source, contradictory fields are rejected. Losing-source fields must not override or contradict the explicit choice (CLI `component` ignores a fleet `track`, and vice versa).
+Contradictory explicit selectors are rejected. Explicit CLI selectors take precedence over issue metadata.
 
-Every sprint path — explicit, injected, or returned by sprint-state — is normalized against the target repo and must resolve under that repo's `backlog/sprints/` (realpath/symlink containment). Relative paths such as `backlog/sprints/x.md` resolve against the repo root, not `process.cwd()`. Escaping `..` / absolute paths are rejected. A `--track` selector is validated against the returned track identity (slug / optional payload track / component alias), not assumed from basename alone.
+Every sprint path — explicit or returned by sprint-state — is normalized against the target repo and must resolve under that repo's `backlog/sprints/` (realpath/symlink containment). Relative paths such as `backlog/sprints/x.md` resolve against the repo root, not `process.cwd()`. Escaping `..` / absolute paths are rejected. A `--track` selector is validated against the returned track identity (slug / optional payload track / component alias), not assumed from basename alone.
 
 Track/component lookups call validated `dev-backlog` `sprint-state.js --track|--component --json` (`schema_version >= 2`). Set `RELAY_SPRINT_STATE_BIN` when the globally installed skill copy is older. Relay does not add a second multi-sprint markdown parser for those lookups.
 
