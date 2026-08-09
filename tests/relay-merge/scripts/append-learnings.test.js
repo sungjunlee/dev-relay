@@ -13,8 +13,6 @@ const {
   isValidCapabilityName,
   parseCapabilityHeading,
   isCapabilityBoundary,
-  resolveActiveSprint,
-  findActiveSprint,
   findCapabilityBlock,
   locateMarkers,
   buildEntry,
@@ -173,55 +171,6 @@ describe("capability heading grammar", () => {
     assert.equal(parseCapabilityHeading("## Capability: merge finalize"), null);
     assert.equal(parseCapabilityHeading("## Capability: Merge-Finalize"), null);
     assert.equal(isCapabilityBoundary("## Capability: merge finalize"), true);
-  });
-});
-
-describe("resolveActiveSprint / findActiveSprint", () => {
-  it("returns the one sprint with status: active", () => {
-    const repo = makeRepo();
-    try {
-      const dir = path.join(repo, "backlog", "sprints");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, "a.md"), "---\nstatus: completed\n---\n");
-      fs.writeFileSync(path.join(dir, "b.md"), "---\nstatus: active\n---\n");
-      const result = resolveActiveSprint(dir);
-      assert.ok(result);
-      assert.ok(result.file.endsWith("b.md"));
-    } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("returns null when no active sprint", () => {
-    const repo = makeRepo();
-    try {
-      const dir = path.join(repo, "backlog", "sprints");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, "a.md"), "---\nstatus: completed\n---\n");
-      assert.equal(resolveActiveSprint(dir), null);
-    } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("returns null when sprints dir is missing", () => {
-    assert.equal(findActiveSprint("/no/such/dir"), null);
-  });
-
-  it("fails loud when multiple active sprint files exist", () => {
-    const repo = makeRepo();
-    try {
-      const dir = path.join(repo, "backlog", "sprints");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, "a.md"), "---\nstatus: active\n---\n");
-      fs.writeFileSync(path.join(dir, "b.md"), "---\nstatus: active\n---\n");
-      const result = resolveActiveSprint(dir);
-      assert.equal(result.status, STATUS.FAILED);
-      assert.equal(result.reason, "multiple_active_sprints");
-      assert.deepEqual(result.sprintFiles.map((file) => path.basename(file)), ["a.md", "b.md"]);
-    } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
   });
 });
 
@@ -645,42 +594,6 @@ component: "billing"
       assert.equal(result.status, STATUS.APPENDED);
       assert.equal(result.owner.source, "issue_component");
       assert.equal(result.primaryComponent, "billing");
-    } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("fleet owner injection seam is honored", () => {
-    const repo = makeRepo();
-    try {
-      seedFixture(repo, { activeComponent: "auth" });
-      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-billing.md"), `---
-status: active
-component: "billing"
----
-
-# Billing
-`);
-      const result = appendLearnings({
-        repo,
-        runId: "rFleet",
-        pr: "703",
-        owner: {
-          component: "billing",
-          source: "fleet",
-        },
-        date: "2026-05-23",
-        sprintState: ({ component }) => ({
-          ok: true,
-          sprintPath: path.join(repo, "backlog", "sprints", "2026-05-billing.md"),
-          track: "2026-05-billing",
-          component,
-          source: "explicit_component",
-          schemaVersion: 2,
-        }),
-      });
-      assert.equal(result.status, STATUS.APPENDED);
-      assert.equal(result.owner.source, "fleet");
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

@@ -14,8 +14,8 @@
  *     [--synthesis "<one-line>"] [--date YYYY-MM-DD] [--dry-run] [--json]
  *
  * Ownership resolution (see sprint-owner.js):
- *   caller/CLI sprint|track|component → manifest/fleet owner →
- *   issue-body `component:` → exactly-one-active fallback.
+ *   caller/CLI sprint|track|component → issue-body `component:` →
+ *   exactly-one-active fallback.
  *   `multiple_active_sprints` only when N>1 and no owner resolves.
  *
  * Graceful no-ops (status: skipped, exit 0):
@@ -44,7 +44,6 @@ const {
   readFrontmatterField,
   parseComponents,
   isValidCapabilityName,
-  listActiveSprintFiles,
 } = require("./sprint-owner");
 
 const STATUS = Object.freeze({
@@ -145,30 +144,6 @@ function parseCapabilityHeading(line) {
 function isCapabilityBoundary(line) {
   return /^## Capability:\s+/.test(line);
 }
-
-/**
- * Legacy single-active discovery kept for N==1 fallback and tests.
- * Returns one active sprint, null, or a multiple_active_sprints failure.
- */
-function resolveActiveSprint(sprintsDir, { readdir = fs.readdirSync, readFile = fs.readFileSync, fileExists = fs.existsSync } = {}) {
-  const activeFiles = listActiveSprintFiles(sprintsDir, {
-    readdir,
-    readFile,
-    existsSync: fileExists,
-  });
-  if (activeFiles.length > 1) {
-    return buildFailure("multiple_active_sprints", {
-      sprintFiles: activeFiles,
-    });
-  }
-  if (activeFiles.length === 1) {
-    const file = activeFiles[0];
-    return { file, content: readFile(file, "utf-8") };
-  }
-  return null;
-}
-
-const findActiveSprint = resolveActiveSprint;
 
 function findCapabilityBlock(capabilitiesContent, name) {
   if (!isValidCapabilityName(name)) return null;
@@ -284,7 +259,6 @@ function appendLearnings({
   sprint = null,
   track = null,
   component = null,
-  owner = null,
   issueBody = null,
   resolveOwner = resolveSprintOwner,
   sprintState = null,
@@ -303,7 +277,6 @@ function appendLearnings({
     sprint,
     track,
     component,
-    owner,
     issueBody,
     sprintState,
     readFile,
@@ -394,8 +367,6 @@ module.exports = {
   isValidCapabilityName,
   parseCapabilityHeading,
   isCapabilityBoundary,
-  resolveActiveSprint,
-  findActiveSprint,
   findCapabilityBlock,
   locateMarkers,
   buildEntry,

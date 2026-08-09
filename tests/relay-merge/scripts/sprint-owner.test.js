@@ -7,7 +7,6 @@ const path = require("path");
 const {
   OWNER_SOURCES,
   parseIssueComponent,
-  readManifestOwnership,
   validateSprintStatePayload,
   invokeSprintState,
   normalizeRepoSprintPath,
@@ -62,22 +61,6 @@ describe("parseFrontmatter", () => {
     const fm = require("../../../skills/relay-merge/scripts/sprint-owner.js")
       .parseFrontmatter("\uFEFF---\nstatus: active\ncomponent: auth\n---\n");
     assert.match(fm, /status: active/);
-  });
-});
-
-describe("readManifestOwnership", () => {
-  it("reads the fleet ownership seam", () => {
-    assert.deepEqual(
-      readManifestOwnership({
-        ownership: { track: "auth-track", component: "auth" },
-      }),
-      {
-        sprint: null,
-        track: "auth-track",
-        component: "auth",
-        source: OWNER_SOURCES.FLEET,
-      }
-    );
   });
 });
 
@@ -353,7 +336,7 @@ component: "auth"
 `, "utf-8");
       const result = resolveSprintOwner({
         repo,
-        owner: { sprint, track: "canonical-track", component: "auth", source: OWNER_SOURCES.FLEET },
+        sprint,
       });
       assert.equal(result.ok, true);
       assert.equal(result.track, "canonical-track");
@@ -430,33 +413,6 @@ component: "auth"
     }
   });
 
-  it("accepts fleet ownership injection", () => {
-    const repo = makeRepo();
-    try {
-      writeSprint(repo, "2026-07-auth", { component: "auth" });
-      const result = resolveSprintOwner({
-        repo,
-        owner: {
-          component: "auth",
-          track: "2026-07-auth",
-          source: OWNER_SOURCES.FLEET,
-        },
-        sprintState: ({ component }) => ({
-          ok: true,
-          sprintPath: path.join(repo, "backlog", "sprints", "2026-07-auth.md"),
-          track: "2026-07-auth",
-          component,
-          source: OWNER_SOURCES.EXPLICIT_COMPONENT,
-          schemaVersion: 2,
-        }),
-      });
-      assert.equal(result.ok, true);
-      assert.equal(result.source, OWNER_SOURCES.FLEET);
-    } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
   it("keeps single-active fallback with no owner input", () => {
     const repo = makeRepo();
     try {
@@ -505,33 +461,6 @@ component: "auth"
     }
   });
 
-  it("rejects contradictory fleet track vs resolved component", () => {
-    const repo = makeRepo();
-    try {
-      writeSprint(repo, "2026-07-auth", { component: "auth" });
-      const result = resolveSprintOwner({
-        repo,
-        owner: {
-          component: "auth",
-          track: "wrong-track",
-          source: OWNER_SOURCES.FLEET,
-        },
-        sprintState: ({ component }) => ({
-          ok: true,
-          sprintPath: path.join(repo, "backlog", "sprints", "2026-07-auth.md"),
-          track: "2026-07-auth",
-          component,
-          source: OWNER_SOURCES.EXPLICIT_COMPONENT,
-          schemaVersion: 2,
-        }),
-      });
-      assert.equal(result.ok, false);
-      assert.equal(result.reason, "contradictory_owner");
-    } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
   it("surfaces sprint_state_unavailable from discovery", () => {
     const result = discoverSprintStateBin({
       env: {},
@@ -569,40 +498,6 @@ component: "auth"
       });
       assert.equal(result.ok, false);
       assert.equal(result.reason, "contradictory_owner");
-    } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("caller CLI component overrides a contradictory fleet owner wholesale", () => {
-    const repo = makeRepo();
-    try {
-      writeSprint(repo, "2026-07-auth", { component: "auth" });
-      writeSprint(repo, "2026-07-billing", { component: "billing" });
-      const result = resolveSprintOwner({
-        repo,
-        component: "billing",
-        owner: {
-          component: "auth",
-          track: "2026-07-auth",
-          source: OWNER_SOURCES.FLEET,
-        },
-        sprintState: ({ component, track }) => {
-          assert.equal(component, "billing");
-          assert.equal(track, undefined);
-          return {
-            ok: true,
-            sprintPath: path.join(repo, "backlog", "sprints", "2026-07-billing.md"),
-            track: "2026-07-billing",
-            component: "billing",
-            source: OWNER_SOURCES.EXPLICIT_COMPONENT,
-            schemaVersion: 2,
-          };
-        },
-      });
-      assert.equal(result.ok, true);
-      assert.equal(result.component, "billing");
-      assert.equal(result.source, OWNER_SOURCES.EXPLICIT_COMPONENT);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
