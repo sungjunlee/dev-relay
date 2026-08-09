@@ -500,6 +500,42 @@ function removeEmptyRelayParents(base, worktree) {
   return removed;
 }
 
+function restoreQuarantinedStrandedWorktree(current, quarantine) {
+  try {
+    if (fs.existsSync(current.worktree)) throw new Error(`original path was recreated; quarantined worktree is preserved at ${quarantine}`);
+    execGit(current.checkout, ["worktree", "move", quarantine, current.worktree]);
+    const restored = fs.realpathSync(current.worktree);
+    if (restored !== current.worktree) throw new Error("restored worktree canonical path changed");
+    assertTrustedRecoveryWorktree({ repoRoot: current.repoRoot, activeCheckout: current.checkout, relayWorktreeBase: current.base, worktree: restored });
+    if (execGit(restored, ["rev-parse", "HEAD"]) !== current.branchHead) throw new Error("restored worktree HEAD changed");
+  } catch (error) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `could not restore quarantined Relay worktree to ${current.worktree}; preserved quarantine ${quarantine}: ${commandFailure(error)}`,
+    );
+  }
+}
+
+function quarantineStrandedWorktree(current) {
+  const quarantine = `${current.worktree}.relay-recovery-${crypto.randomBytes(12).toString("hex")}`;
+  if (fs.existsSync(quarantine)) recoveryFail("STRANDED_WORKTREE_CHANGED", `quarantine path already exists: ${quarantine}`);
+  try {
+    execGit(current.checkout, ["worktree", "move", current.worktree, quarantine]);
+    const moved = fs.realpathSync(quarantine);
+    if (moved !== quarantine) throw new Error("quarantined worktree canonical path changed");
+    assertTrustedRecoveryWorktree({ repoRoot: current.repoRoot, activeCheckout: current.checkout, relayWorktreeBase: current.base, worktree: moved });
+    const registrations = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
+      .filter((entry) => entry.worktree === moved);
+    if (registrations.length !== 1 || registrations[0].branch !== current.ref || registrations[0].head !== current.branchHead) {
+      throw new Error("quarantined worktree registration changed");
+    }
+    return moved;
+  } catch (error) {
+    if (fs.existsSync(quarantine)) restoreQuarantinedStrandedWorktree(current, quarantine);
+    recoveryFail("STRANDED_WORKTREE_CHANGED", `could not quarantine stranded worktree before removal: ${commandFailure(error)}`);
+  }
+}
+
 function postRemoveBranchState(current) {
   let branchHead = null;
   try {
@@ -632,12 +668,36 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
     || current.retainingRef.oid !== initial.retainingRef.oid) {
     recoveryFail("STRANDED_WORKTREE_CHANGED", "stranded worktree changed while recovery was revalidating it");
   }
-  // `observeStrandedWorktree` scans every candidate run record after its safety
-  // proof. Repeat the hidden-content proof at the destructive boundary so that
-  // ignored bytes or index flags introduced during that scan fail closed. Git's
-  // own non-force remove supplies the final ordinary tracked/untracked dirt check.
-  strandedWorktreeSafetyProof(current.worktree);
-  execGit(current.checkout, ["worktree", "remove", current.worktree]);
+  // Atomically move the registered worktree away from its published path before
+  // the final proof. A path-based writer racing the proof can only recreate the
+  // original path, whose bytes recovery never removes. The pre-run window has no
+  // executor, so there is no legitimate process holding the moved directory open.
+  const quarantine = quarantineStrandedWorktree(current);
+  try {
+    strandedWorktreeSafetyProof(quarantine);
+  } catch (error) {
+    restoreQuarantinedStrandedWorktree(current, quarantine);
+    throw error;
+  }
+  if (fs.existsSync(current.worktree)) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `original Relay path was recreated during recovery; preserved quarantined worktree ${quarantine} and new bytes at ${current.worktree}`,
+    );
+  }
+  try {
+    execGit(current.checkout, ["worktree", "remove", quarantine]);
+  } catch (error) {
+    restoreQuarantinedStrandedWorktree(current, quarantine);
+    recoveryFail("STRANDED_WORKTREE_CHANGED", `stranded worktree changed at the remove boundary: ${commandFailure(error)}`);
+  }
+  if (fs.existsSync(current.worktree)) {
+    restoreRemovedStrandedWorktree({ ...current, worktree: quarantine });
+    recoveryFail(
+      "STRANDED_WORKTREE_CHANGED",
+      `original Relay path was recreated during removal; preserved replacement bytes at ${current.worktree} and restored the Relay worktree at ${quarantine}`,
+    );
+  }
   let afterRemove;
   let references;
   try {

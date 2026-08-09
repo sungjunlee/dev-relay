@@ -947,7 +947,7 @@ test("stranded-worktree recovery refuses ignored user content hidden from porcel
   assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`worktree ${worktree}`));
 });
 
-test("stranded-worktree recovery revalidates hidden content at the remove boundary", (t) => {
+test("stranded-worktree recovery quarantines before the final hidden-content proof", (t) => {
   const value = fixture("stranded-worktree-late-ignored-content");
   t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
   const branch = "stranded-late-ignored-content";
@@ -974,7 +974,7 @@ test("stranded-worktree recovery revalidates hidden content at the remove bounda
     '  try { count = Number(fs.readFileSync(process.env.RELAY_TEST_PROOF_COUNTER, "utf8")); } catch {}',
     '  count += 1;',
     '  fs.writeFileSync(process.env.RELAY_TEST_PROOF_COUNTER, String(count));',
-    '  if (count === 2) {',
+    '  if (count === 3) {',
     '    fs.mkdirSync(path.dirname(process.env.RELAY_TEST_LATE_IGNORED), { recursive: true });',
     '    fs.writeFileSync(process.env.RELAY_TEST_LATE_IGNORED, "late bytes must survive\\n");',
     '  }',
@@ -991,7 +991,7 @@ test("stranded-worktree recovery revalidates hidden content at the remove bounda
   try {
     assert.throws(() => recovery.recoverStrandedWorktree({
       repository: value.repo, branch, relayWorktreeBase: path.join(value.relayHome, "worktrees"),
-    }), (error) => error.code === "STRANDED_WORKTREE_IGNORED_CONTENT");
+    }), (error) => error.code === "STRANDED_WORKTREE_CLEANUP_INCOMPLETE");
   } finally {
     if (previousGit === undefined) delete process.env.RELAY_GIT_BIN;
     else process.env.RELAY_GIT_BIN = previousGit;
@@ -1003,7 +1003,11 @@ test("stranded-worktree recovery revalidates hidden content at the remove bounda
 
   assert.equal(fs.readFileSync(ignoredPath, "utf8"), "late bytes must survive\n");
   assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40, "the branch must survive");
-  assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`worktree ${worktree}`));
+  assert.match(
+    git(value.repo, ["worktree", "list", "--porcelain"]),
+    new RegExp(`worktree ${worktree}\\.relay-recovery-[0-9a-f]+`),
+    "the clean registered worktree must be preserved at its quarantine path",
+  );
 });
 
 test("stranded-worktree recovery refuses tracked changes hidden by index visibility flags", (t) => {
