@@ -47,6 +47,9 @@ function walk(dir) {
     let record;
     try { record = JSON.parse(fs.readFileSync(file, "utf8")); }
     catch { counts.runJson.malformed += 1; continue; }
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      counts.runJson.malformed += 1; continue;
+    }
     if (record.version === 3) counts.versions.v3 += 1;
     else if (record.version == null) { counts.versions.versionless += 1; continue; }
     else { counts.versions.other += 1; continue; }
