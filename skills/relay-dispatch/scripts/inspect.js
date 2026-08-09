@@ -375,6 +375,8 @@ function foldRunFacts({
     && latestReview.payload.verdict === "changes_requested"
     && reviewBindingMatches
   ) {
+    // A completed review correction must return to recover, the sole commit/push owner;
+    // redispatch here would strand corrected bytes. #1191 worktree-base validation is untouched.
     const latestPostReviewTerminal = known
       .slice(known.indexOf(latestReview) + 1)
       .filter((fact) => fact.type === "attempt_finished" || fact.type === "attempt_interrupted")

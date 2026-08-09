@@ -163,7 +163,7 @@ test("fold implements active, publication, review, stale, changes, and ready pre
   assert.equal(ready.reason, "ready_to_merge");
 });
 
-test("changes-requested reaches canonical publication recovery only after completed review work", () => {
+test("#1190 review corrections reach canonical publication recovery only after completed work", () => {
   const beforeReview = [started(), finished(), pr(3), verification(4), review("changes_requested", 5)];
   const observation = {
     gitFacts: { head_sha: HEAD, tree_sha: TREE, reviewable_work: true, reviewable_dirty: true },
