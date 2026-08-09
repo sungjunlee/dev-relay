@@ -260,6 +260,16 @@ function branchExists(checkout, ref) {
   }
 }
 
+function isAncestor(checkout, older, newer) {
+  try {
+    execGit(checkout, ["--no-optional-locks", "merge-base", "--is-ancestor", older, newer]);
+    return true;
+  } catch (error) {
+    if (error.status === 1) return false;
+    throw error;
+  }
+}
+
 function recoveryRunsBase() {
   const configured = process.env.RELAY_RUNS_BASE || path.join(process.env.RELAY_HOME || path.join(os.homedir(), ".relay"), "runs");
   if (!path.isAbsolute(configured)) recoveryFail("INVALID_RELAY_PATH", "RELAY_RUNS_BASE must be absolute");
@@ -332,13 +342,17 @@ function observeStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   const head = execGit(worktree, ["rev-parse", "HEAD"]);
   const branchHead = execGit(checkout, ["rev-parse", "--verify", `${ref}^{commit}`]);
   if (head !== branchHead) recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${branch} changed while recovery was observing it`);
+  const canonicalHead = execGit(checkout, ["rev-parse", "HEAD"]);
+  if (!isAncestor(checkout, branchHead, canonicalHead)) {
+    recoveryFail("STRANDED_WORKTREE_UNMERGED", `branch ${branch} has committed work that is not reachable from the canonical checkout HEAD`);
+  }
   const status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   const dirt = classifyRepositoryDirt(status);
   if (dirt.hasReviewableDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", `registered worktree has reviewable changes: ${reviewableStatusPaths(status).join(", ")}`);
   if (dirt.hasDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", "registered worktree has runtime metadata changes; stranded-worktree recovery only removes a clean worktree");
   const references = validRunReferences({ repoRoot, branch, worktree });
   if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references this branch or worktree: ${references.map((item) => item.run_id).join(", ")}`);
-  return { status: "ready", checkout, repoRoot, branch, ref, base, worktree, branchHead };
+  return { status: "ready", checkout, repoRoot, branch, ref, base, worktree, branchHead, canonicalHead };
 }
 
 function removeEmptyRelayParents(base, worktree) {
@@ -358,7 +372,8 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   // The inspection is intentionally repeated immediately before the first destructive Git operation.
   // There is no run lock in this pre-run-record window, so every ownership predicate is re-proven.
   const current = observeStrandedWorktree({ repository, branch, relayWorktreeBase: initial.base });
-  if (current.status !== "ready" || current.worktree !== initial.worktree || current.branchHead !== initial.branchHead) {
+  if (current.status !== "ready" || current.worktree !== initial.worktree
+    || current.branchHead !== initial.branchHead || current.canonicalHead !== initial.canonicalHead) {
     recoveryFail("STRANDED_WORKTREE_CHANGED", "stranded worktree changed while recovery was revalidating it");
   }
   execGit(current.checkout, ["worktree", "remove", current.worktree]);

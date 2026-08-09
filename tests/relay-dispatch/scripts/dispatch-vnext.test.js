@@ -470,6 +470,29 @@ test("stranded-worktree recovery fails closed without deleting reviewable work",
   assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`branch refs/heads/${branch}`));
 });
 
+test("stranded-worktree recovery preserves a clean branch with unique committed work", (t) => {
+  const value = fixture("stranded-worktree-committed");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-committed";
+  const worktree = path.join(value.relayHome, "worktrees", "manual-stranded-committed");
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  fs.writeFileSync(path.join(worktree, "committed-executor-change.txt"), "do not discard\n");
+  git(worktree, ["add", "committed-executor-change.txt"]);
+  git(worktree, ["commit", "-m", "executor work awaiting review"]);
+  const committedHead = git(worktree, ["rev-parse", "HEAD"]);
+
+  const result = spawnSync(process.execPath, [RELAY_RECOVER, "recover", "--repo", value.repo, "--branch", branch,
+    "--reason", "must preserve unique committed work", "--json"], { encoding: "utf8", env: value.env });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /STRANDED_WORKTREE_UNMERGED|not reachable from the canonical checkout HEAD/);
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]), committedHead, "the unique commit must survive");
+  assert.equal(git(worktree, ["rev-parse", "HEAD"]), committedHead, "the registered worktree must survive");
+  assert.equal(git(worktree, ["status", "--porcelain"]), "", "the preserved worktree is clean");
+  assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`branch refs/heads/${branch}`));
+});
+
 // #1154 item 2: containment must be validated BEFORE `git worktree add`. A pre-existing symlink at the
 // run-id component previously let git materialise the worktree at the symlink target first; the
 // rejection unwound it, but git had already written outside the trusted base. The pre-validation

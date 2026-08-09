@@ -3,10 +3,10 @@
   "generatedBy": "node tests/skills-lint/scripts/vnext-test-ledger.js generate",
   "staticMetrics": {
     "relayDispatchRuntimeJavaScriptFiles": 16,
-    "relayDispatchRuntimeJavaScriptLoc": 6365,
+    "relayDispatchRuntimeJavaScriptLoc": 6396,
     "relayTestFiles": 48,
-    "relayTestLoc": 14071,
-    "relayRegistrationSites": 545,
+    "relayTestLoc": 14150,
+    "relayRegistrationSites": 547,
     "dynamicRegistrationSites": 4
   },
   "measuredRuntime": {
