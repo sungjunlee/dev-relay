@@ -18,12 +18,12 @@ const { getAdapter } = require("../../../skills/relay-dispatch/scripts/adapters"
 
 const ROOT = path.resolve(__dirname, "../../..");
 const DISPATCH = path.join(ROOT, "skills/relay-dispatch/scripts/dispatch.js");
-const FAKE_CODEX = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-codex.js");
-const FAKE_CURSOR = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-cursor.js");
-const FAKE_CLINE = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-cline.js");
+const FAKE_CODEX = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-codex.js");
+const FAKE_CURSOR = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-cursor.js");
+const FAKE_CLINE = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-cline.js");
 const CRASH_AFTER_START = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-crash-after-start-preload.js");
-const WRITE_CONTAINMENT_EXECUTOR = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-write-containment-executor.js");
-const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-adapter-runtime-preload.js");
+const WRITE_CONTAINMENT_EXECUTOR = path.join(ROOT, "tests/relay-dispatch/fixtures/write-containment-executor.js");
+const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/adapter-runtime-preload.js");
 const RUN_CLAIM_RACE = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-run-claim-race-preload.js");
 
 function git(repo, args) {
@@ -46,7 +46,7 @@ function installNodeFixture(source, target) {
 }
 
 function fixture(label, { objectFormat = "sha1" } = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-dispatch-vnext-${label}-`)));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-dispatch-${label}-`)));
   const repo = path.join(root, "repo");
   const remote = path.join(root, "remote.git");
   const relayHome = path.join(root, "relay-home");
@@ -107,7 +107,7 @@ test("cleanup recovery refuses to release an owner without a signed exact obliga
   }
 });
 
-test("dry-run validates the closed vNext surface while writing zero durable bytes", () => {
+test("dry-run validates the closed Relay surface while writing zero durable bytes", () => {
   const value = fixture("dry");
   const stateDir = path.join(value.repo, ".git", "relay-runtime-vnext");
   const result = run(value, ["--branch", "dry-run", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--dry-run", "--json"]);

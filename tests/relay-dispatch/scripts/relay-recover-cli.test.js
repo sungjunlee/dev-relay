@@ -155,7 +155,7 @@ function ownerCloseArtifacts(runDir) {
   return fs.readdirSync(ownership).filter((name) => name.endsWith(".closed.json")).sort();
 }
 
-test("canonical inspect CLI reads a vNext run without changing durable bytes", (t) => {
+test("canonical inspect CLI reads a Relay run without changing durable bytes", (t) => {
   const f = fixture();
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   const before = durableSnapshot(f.runDir);

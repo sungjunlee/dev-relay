@@ -399,7 +399,7 @@ test("merge recording converges after fact append but before receipt", async () 
     args: [
       {
         kind: "staged_file",
-        value: path.resolve(__dirname, "../fixtures/vnext-json-observer.js"),
+        value: path.resolve(__dirname, "../fixtures/json-observer.js"),
       },
       { kind: "literal", value: "--observe" },
     ],

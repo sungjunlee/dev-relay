@@ -20,7 +20,7 @@ function git(repo, args) {
 }
 
 function fixture() {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-status-vnext-")));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-status-")));
   const repo = path.join(root, "repo");
   const remote = path.join(root, "remote.git");
   const relayHome = path.join(root, "relay-home");
@@ -48,7 +48,7 @@ function createRun(value, issue, suffix) {
   fs.mkdirSync(runDir, { recursive: true });
   execFileSync("git", ["-C", value.repo, "worktree", "add", "-b", `issue-${issue}-${suffix}`, worktree, "main"], { stdio: "ignore" });
   const criteria = path.join(runDir, "criteria-source.md");
-  fs.writeFileSync(criteria, "- status is derived from vNext\n");
+  fs.writeFileSync(criteria, "- status is derived from Relay\n");
   const frozen = runStore.freezeDoneCriteria({ sourcePath: criteria, runDir });
   fs.unlinkSync(criteria);
   const startSha = git(worktree, ["rev-parse", "HEAD"]);
@@ -74,7 +74,7 @@ function inspection(terminal = false) {
   };
 }
 
-test("issue selection uses only validated vNext run.json records and fails closed on active ambiguity", async () => {
+test("issue selection uses only validated Relay run.json records and fails closed on active ambiguity", async () => {
   const value = fixture();
   const previousRelayHome = process.env.RELAY_HOME;
   process.env.RELAY_HOME = value.relayHome;

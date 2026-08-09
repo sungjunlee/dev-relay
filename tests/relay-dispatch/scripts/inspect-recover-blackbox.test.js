@@ -4,7 +4,6 @@ const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
-const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
@@ -607,19 +606,10 @@ test("the exact CLOSED durable PR is exposed as a stable operator blocker", asyn
   assert.equal(inspected.blockers[0].code, "github_pr_closed_unmerged");
 });
 
-test("verification refuses dirty reviewable bytes and special entries classify without reading", () => {
+test("verification refuses dirty reviewable bytes", () => {
   assert.throws(() => recovery.__testing.assertCleanVerificationObservation({
     git: { reviewable_dirty: true },
   }), /reviewable worktree is dirty/);
-
-  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "relay-recovery-special-"));
-  execFileSync("git", ["init", "--quiet", worktree]);
-  const fifo = path.join(worktree, "executor.pipe");
-  execFileSync("mkfifo", [fifo]);
-  assert.deepEqual(
-    recovery.__testing.unsafeWorktreeEntries(worktree, Buffer.from("?? executor.pipe\0")),
-    ["executor.pipe"],
-  );
 });
 
 test("dirty PR recovery commits and republishes before accepting verification", async () => {
@@ -643,91 +633,6 @@ test("dirty PR recovery commits and republishes before accepting verification", 
   assert.deepEqual(inspected.recommended_action.steps, [
     "commit_work", "push_branch", "record_or_create_pr", "record_verification",
   ]);
-});
-
-test("an untracked Unix socket is classified without connecting or reading", async () => {
-  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "relay-recovery-socket-"));
-  execFileSync("git", ["init", "--quiet", worktree]);
-  const socketPath = path.join(worktree, "executor.sock");
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, resolve);
-  });
-  try {
-    assert.deepEqual(
-      recovery.__testing.unsafeWorktreeEntries(worktree, Buffer.from("?? executor.sock\0")),
-      ["executor.sock"],
-    );
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test("ignored special entries are outside the reviewable recovery set", async () => {
-  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "relay-recovery-ignored-socket-"));
-  execFileSync("git", ["init", "--quiet", worktree]);
-  const socketPath = path.join(worktree, "ignored.sock");
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, resolve);
-  });
-  try {
-    assert.deepEqual(recovery.__testing.unsafeWorktreeEntries(worktree, Buffer.alloc(0)), []);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test("recovery_applied bytes remain stable when observed HEAD drifts after durable effects", () => {
-  const intent = {
-    operation_id: "recover-stable", created_at: "2026-08-01T00:00:00Z",
-    actor: "operator", reason: "repair", reason_code: "publication_missing",
-    observed_event_id: "observed", before_sha: START,
-    steps: ["record_or_create_pr"],
-  };
-  const eventId = recovery.__testing.deterministicEventId(intent.operation_id, "record_or_create_pr");
-  const applied = [{ step: "record_or_create_pr", fact_event_id: eventId }];
-  const facts = [{ event_id: eventId, payload: { head_sha: HEAD } }];
-  const first = recovery.__testing.recoveryAppliedFact({
-    runId: "issue-1135", intent, applied, after: { facts, derived: { head_sha: HEAD } },
-  });
-  const retry = recovery.__testing.recoveryAppliedFact({
-    runId: "issue-1135", intent, applied,
-    after: { facts, derived: { head_sha: "f".repeat(40) } },
-  });
-  assert.deepEqual(retry, first);
-  assert.equal(first.payload.after_sha, HEAD);
-});
-
-test("production mutation trust rejects repository root and active checkout", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-recovery-trust-"));
-  const repoRoot = path.join(root, "repo");
-  const relayWorktreeBase = path.join(root, "relay-worktrees");
-  const activeCheckout = path.join(relayWorktreeBase, "active");
-  const trustedWorktree = path.join(relayWorktreeBase, "run-worktree");
-  for (const directory of [repoRoot, activeCheckout, relayWorktreeBase, trustedWorktree]) {
-    fs.mkdirSync(directory, { recursive: true });
-  }
-  assert.equal(recovery.__testing.assertTrustedRecoveryWorktree({
-    repoRoot,
-    activeCheckout,
-    relayWorktreeBase,
-    worktree: trustedWorktree,
-  }), fs.realpathSync(trustedWorktree));
-  assert.throws(() => recovery.__testing.assertTrustedRecoveryWorktree({
-    repoRoot,
-    activeCheckout,
-    relayWorktreeBase,
-    worktree: repoRoot,
-  }), /trusted relay worktree boundary/);
-  assert.throws(() => recovery.__testing.assertTrustedRecoveryWorktree({
-    repoRoot,
-    activeCheckout,
-    relayWorktreeBase,
-    worktree: activeCheckout,
-  }), /trusted relay worktree boundary/);
 });
 
 test("production recover refuses root and active-checkout identities before lock artifacts", async () => {

@@ -4,13 +4,13 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const repoRoot = path.resolve(__dirname, "../../..");
-const contractTest = path.join(__dirname, "runtime-contract-vnext.test.js");
+const contractTest = path.join(__dirname, "runtime-contract.test.js");
 const noopRuntime = path.join(
   repoRoot,
-  "tests/relay-dispatch/fixtures/runtime-contract-vnext-noop.js",
+  "tests/relay-dispatch/fixtures/runtime-contract-noop.js",
 );
 
-test("vNext contract suite rejects a runtime missing retained createRunRecord behavior", () => {
+test("Relay contract suite rejects a runtime missing retained createRunRecord behavior", () => {
   const childEnv = { ...process.env };
   delete childEnv.NODE_TEST_CONTEXT;
   const result = spawnSync(
@@ -21,8 +21,7 @@ test("vNext contract suite rejects a runtime missing retained createRunRecord be
       encoding: "utf-8",
       env: {
         ...childEnv,
-        RELAY_VNEXT_CONTRACTS: "1",
-        RELAY_VNEXT_RUNTIME_PATH: noopRuntime,
+        RELAY_RUNTIME_PATH: noopRuntime,
       },
       timeout: 30_000,
     },

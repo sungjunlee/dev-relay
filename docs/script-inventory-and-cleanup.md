@@ -5,44 +5,23 @@ runtime. Historical cleanup rationale remains under [`docs/archive/`](archive/).
 
 ## Installed dispatch package
 
-Relay production currently installs **16 JavaScript files / 6,900 production
-LOC** under `skills/relay-dispatch/scripts/`.
+Relay production installs the JavaScript files currently present under
+`skills/relay-dispatch/scripts/`.
 
-| Group | Files | LOC | Purpose |
-| --- | ---: | ---: | --- |
-| Core | 8 | 6,540 | `dispatch`, `inspect`, `recover`, `run-store`, `facts`, `host`, `exec`, and `adapter-contract`. |
-| Universal adapters | 8 | 360 | Registry and the seven retained native executor descriptors. |
+| Group | Files | Purpose |
+| --- | ---: | --- |
+| Core | 8 | `dispatch`, `inspect`, `recover`, `run-store`, `facts`, `host`, `exec`, and `adapter-contract`. |
+| Universal adapters | 8 | Registry and the seven retained native executor descriptors. |
 
 That is the whole installed runtime: the core plus all seven executors. There
 is no migration overlay and no pending retirement, so there is no second figure
 to reconcile against.
 
-These counts are measurements, not goals. The installed file and LOC totals are
-generated into `tests/ledger/vnext-baseline.generated.json` by the ledger
-generator; the per-group rows are arithmetic on those same per-file counts.
-Refresh them by regenerating, never by editing the numbers. The core is larger
-than the figure published at the runtime reset because production CLI isolation
-(#1141) added credential staging, the signed two-phase cleanup lifecycle, and
-runtime-identity binding to `host` and `facts`.
-
-The inventory checker is authoritative for all relay skill scripts, including
-cross-skill imports and dynamic entry-point edges:
-
-```bash
-node tests/skills-lint/scripts/vnext-runtime-inventory.js .
-```
-
-It must report no unknown or missing scripts and no unaccounted edges. The
-test-site ledger independently accounts for every currently existing relay test:
-
-```bash
-node tests/skills-lint/scripts/vnext-test-ledger.js generate
-node tests/skills-lint/scripts/vnext-test-ledger.js check
-```
-
-Generation observes the filesystem; it never executes the flake benchmarks.
-Use the explicit measurement command only when refreshing the checked-in,
-repeat-based E2E observation.
+There is no generated inventory or test-site ledger. Filesystem-to-CI coverage,
+test layout, exact runners, and execution flags are checked directly by
+`tests/skills-lint/scripts/ci-relay-matrix.test.js`. Installed skill scripts
+remain protected independently by `script-reachability.test.js`, which rejects
+orphan scripts rather than reproducing a second inventory.
 
 ## Relay runtime ownership
 

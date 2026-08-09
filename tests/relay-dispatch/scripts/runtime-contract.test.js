@@ -24,12 +24,12 @@ const productionRuntime = {
   repairTornTail({ eventsPath, at }) { const runDir = fs.realpathSync(path.dirname(eventsPath));
     return withRunLock(lockOptions(runDir, "repair-tail"), (lockContext) => facts.repairTornTail({ eventsPath, at, lockContext })); },
 };
-const runtime = process.env.RELAY_VNEXT_RUNTIME_PATH
-  ? require(path.resolve(process.env.RELAY_VNEXT_RUNTIME_PATH))
+const runtime = process.env.RELAY_RUNTIME_PATH
+  ? require(path.resolve(process.env.RELAY_RUNTIME_PATH))
   : productionRuntime;
 
 function tempRoot(label) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `relay-vnext-${label}-`));
+  return fs.mkdtempSync(path.join(os.tmpdir(), `relay-runtime-${label}-`));
 }
 
 function shaFile(filePath) {
@@ -72,7 +72,7 @@ function gate(assertions) {
   };
 }
 
-test("RR-01 vNext worktree containment", gate(async (runtime) => {
+test("RR-01 Relay worktree containment", gate(async (runtime) => {
   const root = tempRoot("containment");
   const repoRoot = path.join(root, "repo");
   const activeCheckout = path.join(repoRoot, "active");
@@ -99,7 +99,7 @@ test("RR-01 vNext worktree containment", gate(async (runtime) => {
   assert.throws(() => runtime.assertTrustedWorktree({ repoRoot, activeCheckout, relayWorktreeBase: relayBase, worktree: symlink }));
 }));
 
-test("RR-02 vNext frozen outcome contract", gate(async (runtime) => {
+test("RR-02 Relay frozen outcome contract", gate(async (runtime) => {
   const root = tempRoot("criteria");
   const sourcePath = path.join(root, "criteria.md");
   const runDir = path.join(root, "run");
@@ -135,7 +135,7 @@ test("RR-02b independent artifact hashing rejects a FIFO without blocking", gate
   assert.ok(Date.now() - started < 1000, "FIFO rejection must not wait for a writer");
 }));
 
-test("RR-03 vNext immutable identity", gate(async (runtime) => {
+test("RR-03 Relay immutable identity", gate(async (runtime) => {
   const root = fs.realpathSync(tempRoot("identity"));
   const runDir = path.join(root, "run-1");
   fs.mkdirSync(runDir);
@@ -170,7 +170,7 @@ test("RR-03 vNext immutable identity", gate(async (runtime) => {
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runDir, "run.json"), "utf-8")), record);
 }));
 
-test("RR-04 vNext single actor", gate(async (runtime) => {
+test("RR-04 Relay single actor", gate(async (runtime) => {
   const runDir = tempRoot("lock");
   let release;
   let entered = false;
@@ -187,7 +187,7 @@ test("RR-04 vNext single actor", gate(async (runtime) => {
   assert.equal(await runtime.withRunLock(runDir, async () => "after release"), "after release");
 }));
 
-test("RR-05 vNext append-only attempts", gate(async (runtime) => {
+test("RR-05 Relay append-only attempts", gate(async (runtime) => {
   const { runDir } = createIdentity(runtime, "events");
   const eventsPath = path.join(runDir, "events.jsonl");
   const first = {
@@ -242,14 +242,14 @@ test("RR-05 vNext append-only attempts", gate(async (runtime) => {
   assert.equal(fs.readFileSync(eventsPath, "utf-8"), prefix);
 }));
 
-test("RR-06 vNext exact review binding", gate(async (runtime) => {
+test("RR-06 Relay exact review binding", gate(async (runtime) => {
   const verdict = { reviewed_sha: "a".repeat(40), done_criteria_sha256: "b".repeat(64), verdict: "lgtm" };
   assert.equal(runtime.validateReviewBinding({ verdict, currentSha: verdict.reviewed_sha, doneCriteriaSha256: verdict.done_criteria_sha256 }).valid, true);
   assert.equal(runtime.validateReviewBinding({ verdict, currentSha: "c".repeat(40), doneCriteriaSha256: verdict.done_criteria_sha256 }).valid, false);
   assert.equal(runtime.validateReviewBinding({ verdict, currentSha: verdict.reviewed_sha, doneCriteriaSha256: "d".repeat(64) }).valid, false);
 }));
 
-test("RR-07 vNext independent review", gate(async (runtime) => {
+test("RR-07 Relay independent review", gate(async (runtime) => {
   const { runDir, record } = createIdentity(runtime, "review");
   const diffPath = path.join(runDir, "review.diff");
   const promptPath = path.join(runDir, "review.prompt.md");
@@ -466,7 +466,7 @@ test("RR-07 Node 18 capability simulation fails closed without isolation", gate(
   }), /macOS sandbox-exec is required/);
 }));
 
-test("RR-08 vNext explicit merge", gate(async (runtime) => {
+test("RR-08 Relay explicit merge", gate(async (runtime) => {
   const { runDir, record } = createIdentity(runtime, "merge-plan");
   const head = "a".repeat(40);
   const verdict = { verdict: "lgtm", reviewed_sha: head, done_criteria_sha256: record.contract.done_criteria_sha256 };
@@ -485,7 +485,7 @@ test("RR-08 vNext explicit merge", gate(async (runtime) => {
       observer: {
         command: process.execPath,
         args: [
-          { kind: "staged_file", value: path.resolve(__dirname, "../fixtures/vnext-json-observer.js") },
+          { kind: "staged_file", value: path.resolve(__dirname, "../fixtures/json-observer.js") },
           { kind: "literal", value: "--observe" },
         ],
       },
@@ -529,7 +529,7 @@ test("RR-08 vNext explicit merge", gate(async (runtime) => {
   });
 }));
 
-test("RR-09 vNext merge provenance", gate(async (runtime) => {
+test("RR-09 Relay merge provenance", gate(async (runtime) => {
   const { runDir, record } = createIdentity(runtime, "merge");
   const eventsPath = path.join(runDir, "events.jsonl");
   const at = "2026-07-31T00:00:00Z";
@@ -546,7 +546,7 @@ test("RR-09 vNext merge provenance", gate(async (runtime) => {
     const observer = {
       command: process.execPath,
       args: [
-        { kind: "staged_file", value: path.resolve(__dirname, "../fixtures/vnext-json-observer.js") },
+        { kind: "staged_file", value: path.resolve(__dirname, "../fixtures/json-observer.js") },
         { kind: "literal", value: "--observe" },
       ],
     };
@@ -613,7 +613,7 @@ test("RR-09 vNext merge provenance", gate(async (runtime) => {
   assert.deepEqual(persisted.payload, fact.payload);
 }));
 
-test("RR-11 vNext terminal irreversibility", gate(async (runtime) => {
+test("RR-11 Relay terminal irreversibility", gate(async (runtime) => {
   const startedPayload = {
     executor: "codex",
     model: null,
@@ -638,7 +638,7 @@ test("RR-11 vNext terminal irreversibility", gate(async (runtime) => {
   assert.equal(folded.action, "none");
 }));
 
-test("RR-12 vNext external revalidation", gate(async (runtime) => {
+test("RR-12 Relay external revalidation", gate(async (runtime) => {
   const { runDir } = createIdentity(runtime, "revalidate");
   const result = await runtime.withRunLock({
     runDir,
@@ -653,7 +653,7 @@ test("RR-12 vNext external revalidation", gate(async (runtime) => {
     observer: {
       command: process.execPath,
       args: [
-        { kind: "staged_file", value: path.resolve(__dirname, "../fixtures/vnext-json-observer.js") },
+        { kind: "staged_file", value: path.resolve(__dirname, "../fixtures/json-observer.js") },
         { kind: "literal", value: "--observe" },
       ],
     },

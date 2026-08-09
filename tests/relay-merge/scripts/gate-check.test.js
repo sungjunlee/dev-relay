@@ -5,7 +5,7 @@ const test = require("node:test");
 
 const gate = require("../../../skills/relay-merge/scripts/gate-check");
 
-test("gate-check CLI is closed over the vNext run selector", () => {
+test("gate-check CLI is closed over the Relay run selector", () => {
   const parsed = gate.parseCli(["--repo", "/tmp/repo", "--run-id", "run-1", "--json"]);
   assert.equal(parsed.values["run-id"], "run-1");
   assert.equal(parsed.values.json, true);

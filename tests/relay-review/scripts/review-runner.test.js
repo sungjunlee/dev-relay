@@ -39,7 +39,7 @@ function reviewerSuccess(input, output) {
 }
 
 async function fixture(label) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-review-vnext-${label}-`)));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-review-${label}-`)));
   const repo = path.join(root, "repo");
   const runId = `review-${label}`;
   const runDir = path.join(root, runId);
@@ -105,7 +105,7 @@ async function fixture(label) {
   return { root, repo, runDir, record, head, criteriaHash, eventsPath, inspectRun, cli };
 }
 
-test("vNext runner records one exact-SHA pass and the derived action advances to merge", async () => {
+test("Relay runner records one exact-SHA pass and the derived action advances to merge", async () => {
   const value = await fixture("pass");
   let calls = 0;
   let captured;

@@ -19,7 +19,7 @@ const bodySnapshotResponse = (fixture) => ({
   closingIssuesReferences: fixture.closingIssuesReferences || [],
 });
 
-const vnextFinalizeResponse = (fixture) => ({
+const finalizeResponse = (fixture) => ({
   number: fixture.number || 123,
   state: fixture.state || "OPEN",
   headRefName: fixture.headRefName || "fixture-branch",
@@ -60,7 +60,7 @@ const PR_VIEW_JSON_REGISTRY = Object.freeze({
     const state = loadState();
     return { state: state.state, mergeCommit: state.mergeCommit };
   },
-  "number,state,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus": vnextFinalizeResponse,
+  "number,state,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus": finalizeResponse,
   "comments,commits,mergeable,statusCheckRollup": mergeGateResponse,
   "baseRefName,comments,commits,mergeable,statusCheckRollup": mergeGateResponse,
   "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid": mergeGateResponse,
@@ -140,7 +140,7 @@ function saveChecksIndex(next) {
   }
 }
 const mergeGateResponse = ${mergeGateResponse.toString()};
-const vnextFinalizeResponse = ${vnextFinalizeResponse.toString()};
+const finalizeResponse = ${finalizeResponse.toString()};
 const prViewJsonRegistry = {
 ${serializedPrViewRegistry}
 };

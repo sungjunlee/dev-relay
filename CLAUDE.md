@@ -24,9 +24,8 @@ skills/relay-dispatch/scripts/
   adapters/                registry + seven retained native executors
 ```
 
-Installed: 16 JS / 6,900 LOC. The figure is generated into
-`tests/ledger/vnext-baseline.generated.json`; refresh it with the ledger
-generator rather than editing it by hand.
+The installed package is the current filesystem below this directory. There is
+no checked-in generated runtime or test ledger.
 
 The Relay runtime is the only writer. There is no migration overlay, no writer generation,
 no admission capability, and no retirement gate; a run directory is claimed by a
@@ -64,15 +63,6 @@ node --test --test-concurrency=1 \
   tests/relay-merge/scripts/*.test.js tests/relay/scripts/*.test.js \
   tests/relay-config/scripts/*.test.js tests/relay-fleet/scripts/*.test.js \
   tests/skills-lint/scripts/*.test.js
-```
-
-Regenerate/check inventories from the real filesystem; never hand-edit a green
-result without running its generator:
-
-```bash
-node tests/skills-lint/scripts/vnext-test-ledger.js generate
-node tests/skills-lint/scripts/vnext-test-ledger.js check
-node tests/skills-lint/scripts/vnext-runtime-inventory.js .
 ```
 
 Test files and fixtures belong under `tests/<skill>/`, not `skills/`. Keep each
