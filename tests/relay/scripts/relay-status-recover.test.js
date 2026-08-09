@@ -13,6 +13,7 @@ const { selectIssueRuns } = require("../../../skills/relay/scripts/relay-status"
 
 const ROOT = path.resolve(__dirname, "../../..");
 const SCRIPT = path.join(ROOT, "skills/relay/scripts/relay-status.js");
+const RECOVER_SCRIPT = path.join(ROOT, "skills/relay/scripts/relay-recover.js");
 
 function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -111,4 +112,13 @@ test("relay-status black box derives phase, action, blockers, and PR from canoni
   assert.equal(payload.row.pr_number, null);
   assert.ok(Array.isArray(payload.row.blockers));
   assert.match(payload.row.run_path, /run\.json$/);
+});
+
+test("relay-recover rejects the retired pre-run --branch surface", () => {
+  const result = spawnSync(process.execPath, [
+    RECOVER_SCRIPT, "recover", "--repo", ".", "--branch", "legacy-pre-run",
+    "--reason", "must not be accepted", "--json",
+  ], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /unknown flags: --branch/);
 });

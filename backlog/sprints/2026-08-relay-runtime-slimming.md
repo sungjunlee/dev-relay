@@ -24,11 +24,11 @@ Remove vNext transition residue and unearned compatibility, recovery, and test-a
 
 ### Batch 3 — Measured compatibility retirement
 
-- [~] #1194 — measure and retire unused legacy rubric, ownership, and lineage compatibility [branch:codex/1194-retire-legacy-compat]
+- [x] #1194 — measure and retire unused legacy rubric, ownership, and lineage compatibility [PR:#1200]
 
 ### Batch 4 — Recovery mechanism subtraction
 
-- [ ] #1195 — shrink or remove special pre-run stranded-worktree recovery
+- [~] #1195 — shrink or remove special pre-run stranded-worktree recovery [branch:codex/1195-remove-pre-run-recovery]
 
 ### Batch 5 — Test-accounting and seam simplification
 
@@ -57,3 +57,4 @@ Remove vNext transition residue and unearned compatibility, recovery, and test-a
 - 2026-08-09 — #1191 implementation complete on `codex/1191-worktree-base-containment`: canonicalized stable path prefixes while creating only the Relay-owned suffix component-by-component, so platform aliases remain valid and pre-existing Relay-home/worktree-base symlinks fail before writes. Runtime 6,900→6,938 LOC; tests 14,838→14,884 LOC. Full gate passed 626/628 with 2 expected live-canary skips; independent review reached LGTM after fixing two P2 compatibility/contract findings.
 - 2026-08-09 — Merged #1199, completing #1191. Started #1194 from measured callers and 12 anonymous local run records: removed zero-caller ownership aliases/injection and duplicate active-sprint helpers, kept the documented rubric-as-Done-Criteria path (1/10 schema-v3 consumers), and classified 2 versionless records as invalid historical input rather than adding a reader.
 - 2026-08-09 — #1194 implementation complete on `codex/1194-retire-legacy-compat`: target runtime 1,343→1,248 LOC (−95), Relay tests 14,884→14,672 LOC (−212), registration sites 566→555. Scoped relay-merge/relay 126/126 and cross-skill 93/93 passed; independent review reached LGTM after three evidence/contract corrections. Two local serialized full-gate attempts exposed three unrelated long-run timing failures; each failed test passed in isolation, so the PR skill matrix is the final full-gate authority.
+- 2026-08-09 — Merged #1200, completing #1194. #1195 REMOVE implementation complete on `codex/1195-remove-pre-run-recovery`: deleted the unauthenticated pre-run branch recovery route and 699 lines from `recover.js`; caught failures still unwind, while a post-add kill and same-branch retry preserve the branch/worktree pair with typed `BRANCH_EXISTS` guidance. Generated totals are runtime 6,941→6,238 LOC (−703), tests 14,675→14,009 LOC (−666), and registration sites 555→539. Scoped relay-dispatch/relay passed 353/355 with 2 expected live-canary skips; the full serialized gate passed 601/603 with the same 2 expected skips; independent review reached LGTM with no P1/P2 findings.
