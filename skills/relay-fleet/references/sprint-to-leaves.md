@@ -118,7 +118,7 @@ multi-worktree source-of-truth hazard.
 
 ## Legacy fleet boundary
 
-relay-fleet is vNext-only. A historical fleet without an immutable cohort, or
+relay-fleet supports only immutable Relay runs. A historical fleet without an immutable cohort, or
 with only legacy manifests, is not adopted or backfilled. There is no historical
 runtime left to drain it with — the legacy manifest reader was deleted — so the
 only path forward is a new fleet id from a newly validated leaves file.

@@ -1,4 +1,4 @@
-# vNext Done Criteria and Rubric Patterns
+# Relay Done Criteria and Rubric Patterns
 
 This is current planning guidance. Dated issue examples and retired manifest
 surfaces belong in `docs/archive/`; they are not a source of runtime commands.
@@ -53,7 +53,7 @@ See `rubric-trust-model.md` for the audit template.
 
 Prefer deterministic project commands and exact expected outcomes. State the
 scope of a measurement honestly: a focused E2E repetition is not a full-suite
-flake claim. New tests must be registered in the generated vNext test ledger;
+flake claim. New tests must be registered in the generated test ledger;
 runtime scripts and cross-skill imports must appear in the generated runtime
 inventory.
 

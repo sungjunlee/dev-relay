@@ -1,6 +1,6 @@
-# Relay Operator Guide (vNext)
+# Relay Operator Guide
 
-Relay vNext stores an immutable run record and folds append-only facts into one
+Relay stores an immutable run record and folds append-only facts into one
 derived action. The action returned by inspection is the authority; do not infer
 state from a PR comment, a legacy manifest, or an executor transcript.
 
@@ -168,10 +168,10 @@ fail-closed outcomes rather than silent, unbounded process leakage.
 
 ## Runtime size
 
-vNext is the only writer and there is no migration overlay. The installed
-package is 16 JS / 6,050 LOC, measured into
+The Relay runtime is the only writer and there is no migration overlay. The installed
+package is 16 JS / 6,900 LOC, measured into
 `tests/ledger/vnext-baseline.generated.json` by the ledger generator.
 
-Pre-vNext manifests are not readable and `relay-recover` exposes only `inspect`
-and `recover`. A repository holding pre-vNext state does not migrate: its
-historical runs stay unreadable, and new work starts as a vNext run.
+Retired legacy manifests are not readable and `relay-recover` exposes only
+`inspect` and `recover`. A repository holding legacy state does not migrate: its
+historical runs stay unreadable, and new work starts as a Relay run.

@@ -1,7 +1,7 @@
 ---
 name: relay-review
 argument-hint: "[run-id]"
-description: Use when a recovered vNext relay run has an exact PR head and verification proof ready for independent review.
+description: Use when a recovered Relay run has an exact PR head and verification proof ready for independent review.
 context: fork
 compatibility: Requires git, gh CLI, and Node.js 22+; macOS sandbox-exec is required for direct reviewer CLI isolation.
 metadata:
@@ -31,7 +31,7 @@ node skills/relay-review/scripts/review-runner.js \
 Optional inputs are `--model <opaque-model>`, `--timeout <seconds>`, repeated
 `--credential-env NAME`, and repeated declared
 `--credential-file ID=/absolute/source`. `--reviewer` may only repeat the
-immutable `run.json` reviewer binding; vNext does not implement mutable
+immutable `run.json` reviewer binding; Relay does not implement mutable
 reviewer swaps or routing precedence.
 
 Supported primary-review bindings are Codex, Claude, OpenCode, Pi, Antigravity, and Cursor. Cline remains dispatch-only until its strict review canary is proven. The same flat adapter descriptor used for dispatch declares this capability.
@@ -42,7 +42,7 @@ The immutable binding can be repeated explicitly as `--reviewer codex`, `--revie
 
 The runner:
 
-1. Reads the immutable vNext `run.json` and frozen Done Criteria.
+1. Reads the immutable Relay `run.json` and frozen Done Criteria.
 2. Calls canonical `inspect` and requires the derived action `review`.
 3. Requires an exact durable/live PR identity, PR head, and passed verification proof for the frozen Done Criteria hash.
 4. Builds one review bundle containing only the immutable contract, exact diff, PR identity, and verification fact. It never includes the dispatch prompt, executor transcript, session id, or mutable manifest state.

@@ -29,10 +29,10 @@ function usage() {
   return [
     "Usage: relay-status.js --repo <path> (--run-id <id> | --issue <number>) [--json]",
     "",
-    "Inspect the canonical vNext run ledger without mutating it.",
+    "Inspect the canonical Relay run ledger without mutating it.",
     "",
     `  --repo <path>  ${modeLabel("--repo", CLI_OPTIONS)} Repository checkout (default: .)`,
-    `  --run-id <id>  ${modeLabel("--run-id", CLI_OPTIONS)} vNext run identifier`,
+    `  --run-id <id>  ${modeLabel("--run-id", CLI_OPTIONS)} Relay run identifier`,
     `  --issue <n>    ${modeLabel("--issue", CLI_OPTIONS)} Select an unambiguous issue run`,
     `  --json         ${modeLabel("--json", CLI_OPTIONS)} Output JSON`,
   ].join("\n");
@@ -115,7 +115,7 @@ async function selectIssueRuns(repoRoot, issueNumber, inspect = inspectProductio
 
 function resolveRunById(repoRoot, runId) {
   const matches = readRunCandidates(repoRoot).filter(({ record }) => record.run_id === runId);
-  if (matches.length !== 1) throw new Error(matches.length ? `run id is ambiguous: ${runId}` : `vNext run not found: ${runId}`);
+  if (matches.length !== 1) throw new Error(matches.length ? `run id is ambiguous: ${runId}` : `Relay run not found: ${runId}`);
   return matches[0];
 }
 

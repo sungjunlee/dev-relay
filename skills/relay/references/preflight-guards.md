@@ -19,13 +19,13 @@ orchestrator judgment described in `../../relay-ready/SKILL.md`.
 ### In-flight PR/run guard
 
 - Firing condition: an issue-numbered task is entering Step 1 routing.
-- Signals read: `gh pr list --head <branch> --state all --json number,state,mergedAt,headRefName,url`; validated vNext `run.json` records and canonical `runtime.inspectRun` actions for issue-matching runs.
+- Signals read: `gh pr list --head <branch> --state all --json number,state,mergedAt,headRefName,url`; validated Relay `run.json` records and canonical `runtime.inspectRun` actions for issue-matching runs.
 - Events emitted: none by this guard.
 - Instruction field: every in-flight route includes `inflight.instruction`, a one-sentence operator next action.
 - Branch labels:
   - `existing-open-pr`: `instruction` tells the operator to review the existing open PR instead of planning or dispatching a new run.
   - `existing-merged-pr`: `instruction` tells the operator to mark the sprint item done if present and stop because the PR is already merged.
-  - `inflight-run`: `instruction` tells the operator to resume or inspect the existing run using its derived vNext action.
+  - `inflight-run`: `instruction` tells the operator to resume or inspect the existing run using its derived Relay action.
   - `continue`: `instruction` tells the operator to continue to readiness handling before planning or dispatch.
 
 ### Readiness judgment (orchestrator, not a guard)

@@ -1,4 +1,4 @@
-# relay-fleet vNext design
+# relay-fleet design
 
 ## Contract
 
@@ -17,7 +17,7 @@ frozen prompt/rubric/Done Criteria files.
 
 ## Derived view
 
-For each leaf, relay-fleet scans vNext child records. The `run.json` fleet
+For each leaf, relay-fleet scans Relay child records. The `run.json` fleet
 parent and ownership digest are authoritative; legacy manifests are never
 read. A candidate must also match issue number, branch, and Done Criteria hash.
 Exactly one candidate is a child; zero is

@@ -127,10 +127,10 @@ test("route stage no longer shells out to any readiness probe", () => {
 });
 
 test("inflight scanner failures remain fail-closed", async () => {
-  const runCheck = await checkInflightRuns("/repo", 404, async () => { throw new Error("invalid vNext ledger"); });
+  const runCheck = await checkInflightRuns("/repo", 404, async () => { throw new Error("invalid Relay run ledger"); });
   const route = routeFromInflight({ prCheck: { status: "not_found", pr: null }, runCheck });
   assert.equal(route.route, "attention");
-  assert.equal(route.reason, "invalid vNext ledger");
+  assert.equal(route.reason, "invalid Relay run ledger");
 });
 
 test("review preflight black box consumes the same canonical inspect action", () => {
@@ -155,16 +155,6 @@ test("merge preflight consumes the identical canonical inspect action", () => {
   assert.equal(payload.stage, "merge");
   assert.equal(payload.snapshot.action, payload.inspection.action.kind);
   assert.deepEqual(payload.snapshot.blockers, payload.inspection.blockers);
-});
-
-test("legacy manifest paths are explicitly retired", () => {
-  const value = fixture();
-  createRun(value);
-  const legacy = path.join(value.root, "run.md");
-  fs.writeFileSync(legacy, "---\nstate: dispatched\n---\n");
-  const result = run(value, ["--stage", "review", "--repo", value.repo, "--manifest", legacy]);
-  assert.equal(result.status, 1);
-  assert.match(JSON.parse(result.stdout).error, /--manifest is retired/);
 });
 
 test("reconcile and recover require an explicit audit reason before mutation", () => {

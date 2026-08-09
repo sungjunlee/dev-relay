@@ -1,17 +1,17 @@
 # Relay Runtime Inventory
 
-This is the current vNext inventory, not a history of the legacy manifest
+This is the current Relay runtime inventory, not a history of the legacy manifest
 runtime. Historical cleanup rationale remains under [`docs/archive/`](archive/).
 
 ## Installed dispatch package
 
-vNext production currently installs **16 JavaScript files / 6,050 production
+Relay production currently installs **16 JavaScript files / 6,900 production
 LOC** under `skills/relay-dispatch/scripts/`.
 
 | Group | Files | LOC | Purpose |
 | --- | ---: | ---: | --- |
-| Core | 8 | 5,692 | `dispatch`, `inspect`, `recover`, `run-store`, `facts`, `host`, `exec`, and `adapter-contract`. |
-| Universal adapters | 8 | 358 | Registry and the seven retained native executor descriptors. |
+| Core | 8 | 6,540 | `dispatch`, `inspect`, `recover`, `run-store`, `facts`, `host`, `exec`, and `adapter-contract`. |
+| Universal adapters | 8 | 360 | Registry and the seven retained native executor descriptors. |
 
 That is the whole installed runtime: the core plus all seven executors. There
 is no migration overlay and no pending retirement, so there is no second figure
@@ -21,7 +21,7 @@ These counts are measurements, not goals. The installed file and LOC totals are
 generated into `tests/ledger/vnext-baseline.generated.json` by the ledger
 generator; the per-group rows are arithmetic on those same per-file counts.
 Refresh them by regenerating, never by editing the numbers. The core is larger
-than the figure published at the vNext reset because production CLI isolation
+than the figure published at the runtime reset because production CLI isolation
 (#1141) added credential staging, the signed two-phase cleanup lifecycle, and
 runtime-identity binding to `host` and `facts`.
 
@@ -44,7 +44,7 @@ Generation observes the filesystem; it never executes the flake benchmarks.
 Use the explicit measurement command only when refreshing the checked-in,
 repeat-based E2E observation.
 
-## vNext ownership
+## Relay runtime ownership
 
 | Surface | Single owner |
 | --- | --- |
@@ -62,7 +62,7 @@ second lifecycle state or app-registration protocol.
 ## Removed runtime accretion
 
 The following categories have been removed from the installed runtime and their
-tests deleted or replaced with vNext coverage: mutable manifest slices and
+tests deleted or replaced with current Relay coverage: mutable manifest slices and
 facades, relay event helpers, resolver/observer folds, execution-evidence
 sidecars, publish/rebrand/reconcile/recover command family, worktree create and
 cleanup utilities, app registration, executor transport duplicates, live
@@ -75,11 +75,10 @@ recovery argv shim were deleted with the rest, and `relay-recover` exposes only
 
 ## No migration path
 
-vNext is the only writer. Nothing admits a run, records a writer generation, or
+The Relay runtime is the only writer. Nothing admits a run, records a writer generation, or
 translates retired argv, and the legacy manifest reader went with the runtime
-reset — so a pre-vNext run is not readable by any installed script and cannot be
-migrated. A repository holding pre-vNext state simply starts its next run as a
-vNext run.
+reset — so a legacy run is not readable by any installed script and cannot be
+migrated. A repository holding legacy state simply starts its next Relay run.
 
 Do not reintroduce a generation marker, a cutover ceremony, or a retirement
 gate to soften that. The mechanism was measured before it was removed: every

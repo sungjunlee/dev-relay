@@ -2,7 +2,6 @@
 "use strict";
 
 const { execFileSync } = require("child_process");
-const fs = require("fs");
 const path = require("path");
 
 const { inspectProductionRun, recoverProductionRun } = require("../../relay-dispatch/scripts/recover");
@@ -24,7 +23,6 @@ const KNOWN_FLAGS = [
   "--repo",
   "--issue-number",
   "--branch",
-  "--manifest",
   "--run-id",
   "--pr",
   "--previous-rounds",
@@ -44,7 +42,7 @@ const KNOWN_FLAGS = [
 const CLI_ARG_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
   booleanFlags: ["--reconcile", "--recover", "--break-lock", "--json", "--help", "-h"],
-  verbatimValueFlags: ["--repo", "--branch", "--manifest", "--reason", "--actor", "--verification-file"],
+  verbatimValueFlags: ["--repo", "--branch", "--reason", "--actor", "--verification-file"],
 };
 function parseCli(argv) {
   const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_ARG_OPTIONS.booleanFlags), verbatim = new Set(CLI_ARG_OPTIONS.verbatimValueFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (flag, value) => value !== undefined && (verbatim.has(flag) || (!String(value).startsWith("--") && !known.has(String(value))));
@@ -64,10 +62,9 @@ function usage() {
     "",
     "Review stage:",
     "  --repo <path>              Repository root, default .",
-    "  --run-id <id>              Resolve a validated vNext run.json by run id",
-    "  --manifest <path>          Compatibility name for a vNext run.json path",
-    "  --branch <name>            Resolve an unambiguous vNext run by branch",
-    "  --pr <n>                   Resolve an unambiguous vNext run by observed PR number",
+    "  --run-id <id>              Resolve a validated Relay run.json by run id",
+    "  --branch <name>            Resolve an unambiguous Relay run by branch",
+    "  --pr <n>                   Resolve an unambiguous Relay run by observed PR number",
     "  --previous-rounds <n>      Previous review.rounds snapshot for comparison",
     "  --previous-verdict <name>  Previous review.latest_verdict snapshot for comparison",
     "  --reconcile, --recover     Apply the canonical inspected recovery action",
@@ -167,7 +164,7 @@ function checkPullRequest(repoRoot, branch) {
   }
 }
 
-async function scanInflightVnextRuns(repoRoot, issueNumber) {
+async function scanInflightRuns(repoRoot, issueNumber) {
   const prefix = `issue-${issueNumber}`;
   const candidates = readRunCandidates(repoRoot).filter(({ record }) => (
     record.run_id === prefix
@@ -193,7 +190,7 @@ async function scanInflightVnextRuns(repoRoot, issueNumber) {
     }));
 }
 
-async function checkInflightRuns(repoRoot, issueNumber, scanner = scanInflightVnextRuns) {
+async function checkInflightRuns(repoRoot, issueNumber, scanner = scanInflightRuns) {
   if (!issueNumber) {
     return {
       status: "skipped",
@@ -289,34 +286,23 @@ async function runRouteStage(cliArgs) {
 }
 
 async function resolveReviewRun(cliArgs, repoRoot) {
-  const runPath = normalizeBlank(cliArgs.getArg("--manifest"));
   const runId = normalizeBlank(cliArgs.getArg("--run-id"));
   const branch = normalizeBlank(cliArgs.getArg("--branch"));
   const prNumber = parsePositiveInteger(cliArgs.getArg("--pr"), "--pr");
-  const selectors = [runPath, runId, branch, prNumber].filter((value) => value !== null && value !== undefined);
-  if (selectors.length === 0) throw new Error("review stage requires --run-id, --manifest, --branch, or --pr");
+  const selectors = [runId, branch, prNumber].filter((value) => value !== null && value !== undefined);
+  if (selectors.length === 0) throw new Error("review stage requires --run-id, --branch, or --pr");
   const candidates = readRunCandidates(repoRoot);
   let selected = runId ? resolveRunById(repoRoot, runId) : null;
-  if (runPath) {
-    const resolved = fs.realpathSync(path.resolve(runPath));
-    if (path.basename(resolved) !== "run.json") {
-      throw new Error("--manifest is retired; pass the canonical vNext run.json path");
-    }
-    const matches = candidates.filter(({ runDir }) => path.join(runDir, "run.json") === resolved);
-    if (matches.length !== 1) throw new Error("vNext run.json does not belong to this repository");
-    if (selected && selected.runDir !== matches[0].runDir) throw new Error("run selectors identify different vNext runs");
-    selected = matches[0];
-  }
   if (branch) {
     const matches = candidates.filter(({ record }) => record.git.branch === branch);
-    if (matches.length !== 1) throw new Error(matches.length ? `branch is ambiguous: ${branch}` : `vNext run not found for branch: ${branch}`);
-    if (selected && selected.runDir !== matches[0].runDir) throw new Error("run selectors identify different vNext runs");
+    if (matches.length !== 1) throw new Error(matches.length ? `branch is ambiguous: ${branch}` : `Relay run not found for branch: ${branch}`);
+    if (selected && selected.runDir !== matches[0].runDir) throw new Error("run selectors identify different Relay runs");
     selected = matches[0];
   }
   if (prNumber !== null) {
     if (selected) {
       const inspection = await inspectProductionRun({ runDir: selected.runDir });
-      if (inspection.derived?.pr_number !== prNumber) throw new Error("run selectors identify different vNext runs");
+      if (inspection.derived?.pr_number !== prNumber) throw new Error("run selectors identify different Relay runs");
       selected = { ...selected, inspection };
     } else {
       const inspected = await Promise.all(candidates.map(async (candidate) => ({
@@ -324,7 +310,7 @@ async function resolveReviewRun(cliArgs, repoRoot) {
         inspection: await inspectProductionRun({ runDir: candidate.runDir }),
       })));
       const matches = inspected.filter(({ inspection }) => inspection.derived?.pr_number === prNumber);
-      if (matches.length !== 1) throw new Error(matches.length ? `PR is ambiguous: #${prNumber}` : `vNext run not found for PR: #${prNumber}`);
+      if (matches.length !== 1) throw new Error(matches.length ? `PR is ambiguous: #${prNumber}` : `Relay run not found for PR: #${prNumber}`);
       selected = matches[0];
     }
   }

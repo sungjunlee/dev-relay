@@ -1,6 +1,6 @@
-# vNext Review Runner Notes
+# Relay Review Runner Notes
 
-`scripts/review-runner.js` is a single vNext path. It does not read a relay manifest, legacy lifecycle events, rubric snapshots, PR-body score logs, execution-evidence sidecars, review budgets, or mutable round state.
+`scripts/review-runner.js` is a single Relay path. It does not read a relay manifest, legacy lifecycle events, rubric snapshots, PR-body score logs, execution-evidence sidecars, review budgets, or mutable round state.
 
 ## Resolution
 
@@ -56,4 +56,4 @@ An unavailable credential remains a blocking invocation failure.
 
 ## Removed options
 
-Unknown options fail through `util.parseArgs`. In particular, vNext has no `--review-file`, `--reviewer-script`, `--prepare-only`, `--detach`, `--wait-for-checks`, `--no-comment`, `--pr`, `--branch`, review-budget, assurance, or reviewer-swap flags.
+Unknown options fail through `util.parseArgs`. In particular, Relay has no `--review-file`, `--reviewer-script`, `--prepare-only`, `--detach`, `--wait-for-checks`, `--no-comment`, `--pr`, `--branch`, review-budget, assurance, or reviewer-swap flags.

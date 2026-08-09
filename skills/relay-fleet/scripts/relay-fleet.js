@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-/** Fleet vNext: one immutable cohort plus a read-only view of child runs. */
+/** Relay fleet: one immutable cohort plus a read-only view of child runs. */
 
 const crypto = require("node:crypto");
 const { execFileSync, spawn } = require("node:child_process");

@@ -18,7 +18,7 @@ general validation factor.
 
 ### 2. Where is the exact gate?
 
-Name the current `file:function` that rejects the claim. Typical vNext sites are:
+Name the current `file:function` that rejects the claim. Typical Relay sites are:
 
 - `skills/relay-dispatch/scripts/run-store.js:readRunRecord` for immutable run
   identity and frozen Done Criteria;

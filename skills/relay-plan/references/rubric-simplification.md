@@ -1,4 +1,4 @@
-# Rubric Simplification (vNext)
+# Rubric Simplification
 
 Prefer the smallest set of independent Done Criteria that proves the requested
 outcome. Remove criteria that merely restate another criterion, prescribe an

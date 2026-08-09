@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-/** vNext-only dispatch: immutable run -> durable host attempt -> derived action. */
+/** Relay dispatch: immutable run -> durable host attempt -> derived action. */
 
 const crypto = require("crypto");
 const { execFileSync, spawn } = require("child_process");

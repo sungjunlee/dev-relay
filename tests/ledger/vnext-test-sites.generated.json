@@ -3,7 +3,7 @@
   "accountingContract": "lexical-registration-site-v1",
   "generatedBy": "node tests/skills-lint/scripts/vnext-test-ledger.js generate",
   "files": 48,
-  "registrationSites": 564,
+  "registrationSites": 563,
   "dynamicRegistrationSites": 4,
   "columns": ["path","kind","ordinal","name","line","dynamic","directive","decision"],
   "rows": [
@@ -567,9 +567,8 @@
     ["tests/relay/scripts/run-preflight.test.js","test",5,"inflight scanner failures remain fail-closed",129,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}],
     ["tests/relay/scripts/run-preflight.test.js","test",6,"review preflight black box consumes the same canonical inspect action",136,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}],
     ["tests/relay/scripts/run-preflight.test.js","test",7,"merge preflight consumes the identical canonical inspect action",149,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}],
-    ["tests/relay/scripts/run-preflight.test.js","test",8,"legacy manifest paths are explicitly retired",160,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}],
-    ["tests/relay/scripts/run-preflight.test.js","test",9,"reconcile and recover require an explicit audit reason before mutation",170,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}],
-    ["tests/relay/scripts/run-preflight.test.js","test",10,"recover delegates to canonical runtime recovery with the inspected action key",180,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}],
-    ["tests/relay/scripts/run-preflight.test.js","test",11,"production sources no longer import legacy observation or mutation modules",194,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}]
+    ["tests/relay/scripts/run-preflight.test.js","test",8,"reconcile and recover require an explicit audit reason before mutation",160,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}],
+    ["tests/relay/scripts/run-preflight.test.js","test",9,"recover delegates to canonical runtime recovery with the inspected action key",170,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}],
+    ["tests/relay/scripts/run-preflight.test.js","test",10,"production sources no longer import legacy observation or mutation modules",184,false,null,{"owner":"runtime-core-reset","rationale":"Pins the run-preflight route stage to emitting only the inflight dedup guard, with retired readiness route flags failing closed rather than being silently ignored."}]
   ]
 }
