@@ -536,14 +536,29 @@ function quarantineStrandedWorktree(current) {
   }
 }
 
+function strandedRecoveryEvidenceBase(current) {
+  // Evidence must not keep the run/repository parents below the worktree base
+  // alive.  A sibling also keeps the preservation rename on the same filesystem.
+  const evidenceBase = `${current.base}.recovery-evidence`;
+  try { fs.mkdirSync(evidenceBase, { mode: 0o700 }); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  const stat = fs.lstatSync(evidenceBase);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(evidenceBase) !== path.resolve(evidenceBase)) {
+    recoveryFail("UNTRUSTED_WORKTREE", `Relay recovery evidence base is not a trusted directory: ${evidenceBase}`);
+  }
+  return evidenceBase;
+}
+
 function preserveAndUnregisterQuarantinedWorktree(current, quarantine) {
-  const evidence = `${quarantine}.preserved`;
+  const evidenceBase = strandedRecoveryEvidenceBase(current);
+  const evidence = path.join(evidenceBase, `stranded-${crypto.randomBytes(12).toString("hex")}.preserved`);
   try {
     if (fs.existsSync(evidence)) throw new Error(`preservation path already exists: ${evidence}`);
     fs.renameSync(quarantine, evidence);
     fs.mkdirSync(quarantine);
     fs.copyFileSync(path.join(evidence, ".git"), path.join(quarantine, ".git"), fs.constants.COPYFILE_EXCL);
-    // The filesystem tree has been atomically preserved under `evidence`; force
+    // The filesystem tree has been atomically preserved outside the worktree
+    // base under `evidence`; force
     // applies only to a fresh unpredictable replacement pathname containing the
     // registration link and no user files. Existing handles still reference the
     // preserved evidence inode, never this replacement directory.
@@ -724,11 +739,11 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
       `original Relay path was recreated during recovery; preserved quarantined worktree ${quarantine} and new bytes at ${current.worktree}`,
     );
   }
-  const preservedWorktree = preserveAndUnregisterQuarantinedWorktree(current, quarantine);
+  const recoveryEvidence = preserveAndUnregisterQuarantinedWorktree(current, quarantine);
   if (fs.existsSync(current.worktree)) {
     recoveryFail(
       "STRANDED_WORKTREE_CHANGED",
-      `original Relay path was recreated during unregister; preserved replacement bytes at ${current.worktree} and worktree evidence at ${preservedWorktree}`,
+      `original Relay path was recreated during unregister; preserved replacement bytes at ${current.worktree} and recovery evidence at ${recoveryEvidence}`,
     );
   }
   let afterRemove;
@@ -838,7 +853,7 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
     repo: current.repoRoot,
     branch: current.branch,
     worktree: current.worktree,
-    preserved_worktree: preservedWorktree,
+    recovery_evidence: recoveryEvidence,
     removed_parent_directories: removed,
   };
 }

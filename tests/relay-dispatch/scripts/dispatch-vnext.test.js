@@ -511,8 +511,10 @@ test("a post-worktree-add kill is recovered through the typed repo-and-branch re
   assert.equal(recoveryResult.status, "recovered");
   assert.equal(git(value.repo, ["branch", "--list", branch]), "");
   assert.equal(fs.existsSync(worktree), false);
-  assert.equal(fs.existsSync(recoveryResult.preserved_worktree), true, "unregistered worktree bytes are preserved as recovery evidence");
-  assert.equal(fs.existsSync(path.dirname(worktree)), true, "the evidence keeps its Relay-owned parent non-empty");
+  assert.equal(fs.existsSync(recoveryResult.recovery_evidence), true, "unregistered bytes are preserved as recovery evidence");
+  assert.equal(fs.existsSync(path.dirname(worktree)), false, "empty Relay-owned run parents are removed");
+  assert.equal(path.relative(path.join(value.relayHome, "worktrees"), recoveryResult.recovery_evidence).startsWith(".."), true,
+    "recovery evidence lives outside the trusted worktree base");
 
   const repeated = spawnSync(process.execPath, [RELAY_RECOVER, "recover", "--repo", value.repo, "--branch", branch,
     "--reason", "confirm idempotence", "--json"], { encoding: "utf8", env: value.env });
@@ -953,7 +955,8 @@ test("stranded-worktree recovery quarantines before the final hidden-content pro
   const value = fixture("stranded-worktree-late-ignored-content");
   t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
   const branch = "stranded-late-ignored-content";
-  const worktree = path.join(value.relayHome, "worktrees", "stranded-late-ignored-content");
+  const relayWorktreeBase = path.join(value.relayHome, "worktrees");
+  const worktree = path.join(relayWorktreeBase, "runs", "late-ignored-content", "repo");
   const counterPath = path.join(value.root, "safety-proof-count");
   fs.writeFileSync(path.join(value.repo, ".gitignore"), "private/\n");
   git(value.repo, ["add", ".gitignore"]);
@@ -965,11 +968,12 @@ test("stranded-worktree recovery quarantines before the final hidden-content pro
   const holderSource = [
     'const fs = require("node:fs");',
     'const path = require("node:path");',
-    'const [ready, done, evidence] = process.argv.slice(1);',
+    'const [ready, done, evidenceRoot] = process.argv.slice(1);',
     'fs.writeFileSync(ready, "ready");',
     'const deadline = Date.now() + 60_000;',
-    'while (!fs.existsSync(evidence) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);',
-    'if (!fs.existsSync(evidence)) process.exit(2);',
+    'const hasEvidence = () => { try { return fs.readdirSync(evidenceRoot).length > 0; } catch { return false; } };',
+    'while (!hasEvidence() && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);',
+    'if (!hasEvidence()) process.exit(2);',
     'const lateIgnored = path.join("private", "late-operator-notes.txt");',
     'fs.mkdirSync(path.dirname(lateIgnored), { recursive: true });',
     'fs.writeFileSync(lateIgnored, "late bytes must survive\\n");',
@@ -992,7 +996,7 @@ test("stranded-worktree recovery quarantines before the final hidden-content pro
     '    const proofWorktree = args[0] === "-C" ? args[1] : process.cwd();',
     '    const ready = `${process.env.RELAY_TEST_PROOF_COUNTER}.holder-ready`;',
     '    const done = `${process.env.RELAY_TEST_PROOF_COUNTER}.holder-done`;',
-    `    const holder = spawn(process.execPath, ["-e", ${JSON.stringify(holderSource)}, ready, done, \`${"${proofWorktree}"}.preserved\`],`,
+    `    const holder = spawn(process.execPath, ["-e", ${JSON.stringify(holderSource)}, ready, done, process.env.RELAY_TEST_EVIDENCE_ROOT],`,
     '      { cwd: proofWorktree, detached: true, stdio: "ignore" });',
     '    holder.unref();',
     '    const deadline = Date.now() + 60_000;',
@@ -1005,28 +1009,38 @@ test("stranded-worktree recovery quarantines before the final hidden-content pro
 
   const previousGit = process.env.RELAY_GIT_BIN;
   const previousCounter = process.env.RELAY_TEST_PROOF_COUNTER;
+  const previousEvidenceRoot = process.env.RELAY_TEST_EVIDENCE_ROOT;
   process.env.RELAY_GIT_BIN = gitStub;
   process.env.RELAY_TEST_PROOF_COUNTER = counterPath;
+  process.env.RELAY_TEST_EVIDENCE_ROOT = `${relayWorktreeBase}.recovery-evidence`;
   let result;
   try {
     result = recovery.recoverStrandedWorktree({
-      repository: value.repo, branch, relayWorktreeBase: path.join(value.relayHome, "worktrees"),
+      repository: value.repo, branch, relayWorktreeBase,
     });
   } finally {
     if (previousGit === undefined) delete process.env.RELAY_GIT_BIN;
     else process.env.RELAY_GIT_BIN = previousGit;
     if (previousCounter === undefined) delete process.env.RELAY_TEST_PROOF_COUNTER;
     else process.env.RELAY_TEST_PROOF_COUNTER = previousCounter;
+    if (previousEvidenceRoot === undefined) delete process.env.RELAY_TEST_EVIDENCE_ROOT;
+    else process.env.RELAY_TEST_EVIDENCE_ROOT = previousEvidenceRoot;
   }
 
   const holderDeadline = Date.now() + 60_000;
   while (!fs.existsSync(`${counterPath}.holder-done`) && Date.now() < holderDeadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   assert.equal(fs.existsSync(`${counterPath}.holder-done`), true, "the open-directory holder writes after the preservation rename");
   assert.equal(result.status, "recovered");
-  assert.equal(fs.readFileSync(path.join(result.preserved_worktree, "private", "late-operator-notes.txt"), "utf8"), "late bytes must survive\n");
+  assert.equal(fs.readFileSync(path.join(result.recovery_evidence, "private", "late-operator-notes.txt"), "utf8"), "late bytes must survive\n");
+  assert.equal(path.relative(relayWorktreeBase, result.recovery_evidence).startsWith(".."), true,
+    "bytes written through the open directory handle are preserved outside the Relay worktree base");
   assert.equal(fs.existsSync(worktree), false, "the published worktree path is removed");
   assert.throws(() => git(value.repo, ["rev-parse", "--verify", branch]), "the stranded branch is removed");
-  assert.doesNotMatch(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`branch refs/heads/${branch}`));
+  const registry = git(value.repo, ["worktree", "list", "--porcelain"]);
+  assert.equal(registry.includes(`worktree ${worktree}`), false, "the stranded worktree is unregistered");
+  assert.doesNotMatch(registry, new RegExp(`branch refs/heads/${branch}`));
+  assert.equal(fs.existsSync(path.dirname(worktree)), false, "empty Relay-owned worktree parents are removed");
+  assert.equal(fs.existsSync(path.join(relayWorktreeBase, "runs")), false, "all empty Relay-owned worktree parents are removed");
 });
 
 test("stranded-worktree recovery refuses tracked changes hidden by index visibility flags", (t) => {
