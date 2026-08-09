@@ -1,6 +1,6 @@
 ---
 milestone: relay-runtime-slimming
-status: active
+status: complete
 started: 2026-08-09
 due: TBD
 component: "dispatch-execution"
@@ -32,11 +32,11 @@ Remove vNext transition residue and unearned compatibility, recovery, and test-a
 
 ### Batch 5 — Test-accounting and seam simplification
 
-- [~] #1196 — simplify Relay test accounting and narrow internal testing seams [branch:codex/1196-simplify-test-accounting]
+- [x] #1196 — simplify Relay test accounting and narrow internal testing seams [PR:#1202]
 
 ### Batch 6 — Program closure
 
-- [ ] #1197 — verify the final runtime baseline, reconcile docs/issues, and close the epic
+- [x] #1197 — verify the final runtime baseline, reconcile docs/issues, and close the epic
 
 ## Running Context
 
@@ -60,3 +60,4 @@ Remove vNext transition residue and unearned compatibility, recovery, and test-a
 - 2026-08-09 — Merged #1200, completing #1194. #1195 REMOVE implementation complete on `codex/1195-remove-pre-run-recovery`: deleted the unauthenticated pre-run branch recovery route and 699 lines from `recover.js`; caught failures still unwind, while a post-add kill and same-branch retry preserve the branch/worktree pair with typed `BRANCH_EXISTS` guidance. Generated totals are runtime 6,941→6,238 LOC (−703), tests 14,675→14,009 LOC (−666), and registration sites 555→539. Scoped relay-dispatch/relay passed 353/355 with 2 expected live-canary skips; the full serialized gate passed 601/603 with the same 2 expected skips; independent review reached LGTM with no P1/P2 findings.
 - 2026-08-09 — Merged #1201, completing #1195. Started #1196 by deleting the generated test ledger/runtime inventory layers and zero-caller parity corpus, consolidating direct CI checks, and narrowing `recover.__testing` to five security/selection seams.
 - 2026-08-10 — #1196 implementation complete on `codex/1196-simplify-test-accounting`: accounting machinery 4,345→498 LOC (−3,847), dispatch runtime 6,238→6,226 LOC (−12), and Relay tests 14,009→13,985 LOC (−24). The full serialized gate passed 583/585 with 2 expected live-canary skips. Independent adversarial review reached LGTM after the CI job/runner envelope, directive closed surface, RR top-level anchor, and FIFO staging proof were made fail-closed with negative tests.
+- 2026-08-10 — Merged #1202, completing #1196. Closed #1197 at 16 runtime JS / 6,226 LOC, 48 Relay tests / 13,985 LOC, and `recover.js` 1,476 LOC. The 226 LOC above the aspirational target is explicitly retained because every remaining runtime block owns a reviewed live invariant or one of the seven required executor descriptors; see `docs/relay-runtime-slimming-1197.md`.
