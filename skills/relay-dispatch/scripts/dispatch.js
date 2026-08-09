@@ -74,10 +74,6 @@ function git(repo, args, options = {}) {
   }).trim();
 }
 
-function shellQuote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
 function branchExists(checkout, branch) {
   try {
     git(checkout, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
@@ -88,11 +84,11 @@ function branchExists(checkout, branch) {
   }
 }
 
-function branchExistsMessage(checkout, branch) {
+function branchExistsMessage(branch) {
   return [
     `branch already exists: ${branch}`,
-    "If dispatch was killed after its worktree was added and before run.json was created, recover only that stranded Relay worktree with:",
-    `node skills/relay/scripts/relay-recover.js recover --repo ${shellQuote(checkout)} --branch ${shellQuote(branch)} --reason 'remove stranded Relay worktree'`,
+    "Relay cannot prove ownership of pre-run Git state, so it preserves the existing branch and any registered worktree",
+    "inspect it with `git worktree list --porcelain`, or dispatch with a new branch and run",
   ].join(". ");
 }
 
@@ -378,7 +374,7 @@ function createRetainedWorktree(identity, runId, branch) {
     // did not acquire the requested branch, even if another actor removes that ref before this
     // process can observe it. Do not re-probe or clean up mutable branch state here.
     if (isExclusiveBranchCollision(error)) {
-      fail(branchExistsMessage(identity.checkout, branch), "BRANCH_EXISTS");
+      fail(branchExistsMessage(branch), "BRANCH_EXISTS");
     }
     throw error;
   }
@@ -452,7 +448,7 @@ function dryRunInvocation({ cli, identity, adapter, inputs }) {
   if (cli.creating) {
     git(identity.checkout, ["check-ref-format", "--branch", cli.values.branch]);
     const existing = git(identity.checkout, ["branch", "--list", cli.values.branch]);
-    if (existing) fail(branchExistsMessage(identity.checkout, cli.values.branch), "BRANCH_EXISTS");
+    if (existing) fail(branchExistsMessage(cli.values.branch), "BRANCH_EXISTS");
   }
   validateCopyInputs(identity.repoRoot, cli.values.copy);
   const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-")));

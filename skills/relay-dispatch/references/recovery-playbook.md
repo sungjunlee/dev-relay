@@ -14,21 +14,19 @@ node skills/relay/scripts/relay-recover.js recover \
   --reason "operator explanation" --json
 ```
 
-If dispatch was killed after `git worktree add` completed but before its run
-directory and immutable `run.json` were created, a same-branch dispatch reports
-the following separate, pre-run-record cleanup form:
+Dispatch unwinds a branch/worktree pair when a caught failure occurs during
+creation. A `SIGKILL` after `git worktree add` but before immutable `run.json`
+creation cannot run that unwind, so the branch and registered worktree remain.
+A same-branch retry returns typed `BRANCH_EXISTS` and preserves both.
 
 ```bash
-node skills/relay/scripts/relay-recover.js recover \
-  --repo <canonical-checkout> --branch <branch> \
-  --reason "remove stranded Relay worktree" --json
+git worktree list --porcelain
 ```
 
-This form does not inspect or mutate a run. It removes a target only after
-proving that exactly one registered worktree checks out the branch, that it is
-inside Relay's trusted worktree base, that no valid Relay `run.json` references
-the branch or worktree, and that there are no reviewable changes. Ambiguous,
-foreign, referenced, dirty, or untrusted targets fail closed.
+Relay cannot prove ownership of Git state created before `run.json`, so it does
+not automatically remove that pair. Inspect the registry and retained checkout,
+or dispatch with a new branch and run. `relay-recover` accepts only run selectors;
+`--branch` is not a recovery surface.
 
 Use `--run-dir <absolute-run-dir>` instead of `--repo` and `--run-id` only when
 the canonical run directory is already known. Supply `--verification-file`
