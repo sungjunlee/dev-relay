@@ -307,6 +307,8 @@ function localBranchRef(checkout, branch) {
 }
 
 function parseWorktreeList(value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value || ""), "utf8");
+  if (bytes.length === 0) return [];
   const entries = [];
   let entry = null;
   const finish = () => {
@@ -318,14 +320,26 @@ function parseWorktreeList(value) {
     entries.push(entry);
     entry = null;
   };
-  for (const line of String(value || "").split("\n")) {
-    if (!line) {
+  let offset = 0;
+  while (offset < bytes.length) {
+    const end = bytes.indexOf(0, offset);
+    if (end < 0) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned an unterminated field");
+    const token = bytes.subarray(offset, end);
+    offset = end + 1;
+    if (token.length === 0) {
       finish();
       continue;
     }
-    const match = /^(worktree|HEAD|branch) (.+)$/.exec(line);
-    const flag = /^(detached|bare)$/.exec(line);
-    const annotation = /^(locked|prunable)(?: (.+))?$/.exec(line);
+    let line;
+    try { line = decodeGitPath(token); }
+    catch { recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned a field that is not valid UTF-8"); }
+    const separator = line.indexOf(" ");
+    const name = separator < 0 ? line : line.slice(0, separator);
+    const value = separator < 0 ? null : line.slice(separator + 1);
+    const match = ["worktree", "HEAD", "branch"].includes(name) && value ? [line, name, value] : null;
+    const flag = ["detached", "bare"].includes(name) && value === null ? [line, name] : null;
+    const annotation = ["locked", "prunable"].includes(name) && (value === null || value.length > 0)
+      ? [line, name, value] : null;
     if (!match && !flag && !annotation) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned an unsupported record");
     const field = match?.[1] || flag?.[1] || annotation?.[1];
     const payload = match?.[2] || annotation?.[2] || null;
@@ -351,7 +365,7 @@ function parseWorktreeList(value) {
       entry._order = order[field];
     }
   }
-  finish();
+  if (entry) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list record is missing its NUL separator");
   return entries.map(({ _order, ...value }) => value);
 }
 
@@ -365,14 +379,24 @@ function branchExists(checkout, ref) {
   }
 }
 
-function isAncestor(checkout, older, newer) {
-  try {
-    execGit(checkout, ["--no-optional-locks", "merge-base", "--is-ancestor", older, newer]);
-    return true;
-  } catch (error) {
-    if (error.status === 1) return false;
-    throw error;
+function independentRetainingRef(checkout, branchRef, commit) {
+  const output = decodeGitPath(gitBytes(checkout, [
+    "--no-optional-locks", "for-each-ref", "--contains", commit,
+    "--format=%(objectname)%09%(refname)%09%(symref)",
+    "refs/heads", "refs/remotes", "refs/tags",
+  ]));
+  const candidates = [];
+  for (const line of output.split("\n")) {
+    if (!line) continue;
+    const match = /^([0-9a-f]{40}|[0-9a-f]{64})\t(refs\/.+)\t(.*)$/.exec(line);
+    if (!match) recoveryFail("INVALID_GIT_REFS", "git for-each-ref returned a malformed retaining ref");
+    const [, oid, ref, symref] = match;
+    try { execGit(checkout, ["check-ref-format", ref]); }
+    catch { recoveryFail("INVALID_GIT_REFS", "git for-each-ref returned an invalid retaining ref"); }
+    if (ref !== branchRef && !symref) candidates.push({ ref, oid });
   }
+  candidates.sort((left, right) => left.ref.localeCompare(right.ref));
+  return candidates[0] || null;
 }
 
 function recoveryRunsBase() {
@@ -423,7 +447,7 @@ function validRunReferences({ repoRoot, branch, worktree }) {
 function observeStrandedWorktree({ repository, branch, relayWorktreeBase = null }) {
   const { checkout, repoRoot } = canonicalRecoveryCheckout(repository);
   const ref = localBranchRef(checkout, branch);
-  const holders = parseWorktreeList(execGit(checkout, ["worktree", "list", "--porcelain"], { raw: true }))
+  const holders = parseWorktreeList(gitBytes(checkout, ["worktree", "list", "--porcelain", "-z"]))
     .filter((entry) => entry.branch === ref);
   const exists = branchExists(checkout, ref);
   if (!exists) {
@@ -453,17 +477,18 @@ function observeStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   const head = execGit(worktree, ["rev-parse", "HEAD"]);
   const branchHead = execGit(checkout, ["rev-parse", "--verify", `${ref}^{commit}`]);
   if (head !== branchHead) recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${branch} changed while recovery was observing it`);
-  const canonicalHead = execGit(checkout, ["rev-parse", "HEAD"]);
-  if (!isAncestor(checkout, branchHead, canonicalHead)) {
-    recoveryFail("STRANDED_WORKTREE_UNMERGED", `branch ${branch} has committed work that is not reachable from the canonical checkout HEAD`);
-  }
+  const retainingRef = independentRetainingRef(checkout, ref, branchHead);
+  if (!retainingRef) recoveryFail(
+    "STRANDED_WORKTREE_UNMERGED",
+    `branch ${branch} has committed work that is not retained by an independent Git ref`,
+  );
   // Porcelain, ignored paths, and index visibility flags together are the pre-remove
   // safety proof.  This is deliberately re-run by recoverStrandedWorktree immediately
   // before `worktree remove`; ordinary porcelain alone can conceal user bytes.
   strandedWorktreeSafetyProof(worktree);
   const references = validRunReferences({ repoRoot, branch, worktree });
   if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references this branch or worktree: ${references.map((item) => item.run_id).join(", ")}`);
-  return { status: "ready", checkout, repoRoot, branch, ref, base, worktree, branchHead, canonicalHead };
+  return { status: "ready", checkout, repoRoot, branch, ref, base, worktree, branchHead, retainingRef };
 }
 
 function removeEmptyRelayParents(base, worktree) {
@@ -483,7 +508,7 @@ function postRemoveBranchState(current) {
     // `rev-parse --verify` reports a missing ref with either status depending on Git version.
     if (![1, 128].includes(error.status)) throw error;
   }
-  const holders = parseWorktreeList(execGit(current.checkout, ["worktree", "list", "--porcelain"], { raw: true }))
+  const holders = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
     .filter((entry) => entry.branch === current.ref);
   return { branchHead, holders };
 }
@@ -510,7 +535,7 @@ function restoreRemovedStrandedWorktree(current) {
     if (restored !== current.worktree) throw new Error("restored worktree canonical path changed");
     assertTrustedRecoveryWorktree({ repoRoot: current.repoRoot, activeCheckout: current.checkout, relayWorktreeBase: current.base, worktree: restored });
     if (execGit(restored, ["rev-parse", "HEAD"]) !== current.branchHead) throw new Error("restored worktree HEAD does not match the saved branch head");
-    const registrations = parseWorktreeList(execGit(current.checkout, ["worktree", "list", "--porcelain"], { raw: true }))
+    const registrations = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
       .filter((entry) => entry.worktree === restored);
     if (registrations.length !== 1 || registrations[0].head !== current.branchHead) throw new Error("restored worktree registration is not exact");
     const dirt = gitBytes(restored, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
@@ -604,7 +629,9 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   // There is no run lock in this pre-run-record window, so every ownership predicate is re-proven.
   const current = observeStrandedWorktree({ repository, branch, relayWorktreeBase: initial.base });
   if (current.status !== "ready" || current.worktree !== initial.worktree
-    || current.branchHead !== initial.branchHead || current.canonicalHead !== initial.canonicalHead) {
+    || current.branchHead !== initial.branchHead
+    || current.retainingRef.ref !== initial.retainingRef.ref
+    || current.retainingRef.oid !== initial.retainingRef.oid) {
     recoveryFail("STRANDED_WORKTREE_CHANGED", "stranded worktree changed while recovery was revalidating it");
   }
   execGit(current.checkout, ["worktree", "remove", current.worktree]);
@@ -641,7 +668,14 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   try {
     // A branch name can be deleted and recreated between the prior observation and
     // this command.  Compare-and-delete prevents cleanup from deleting that new ref.
-    execGit(current.checkout, ["update-ref", "-d", current.ref, current.branchHead]);
+    execGit(current.checkout, ["update-ref", "--stdin"], { input: [
+      "start",
+      `verify ${current.retainingRef.ref} ${current.retainingRef.oid}`,
+      `delete ${current.ref} ${current.branchHead}`,
+      "prepare",
+      "commit",
+      "",
+    ].join("\n") });
   } catch (error) {
     let changed;
     try { changed = postRemoveBranchState(current); }
