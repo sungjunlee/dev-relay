@@ -548,13 +548,11 @@ function restoreRemovedStrandedWorktree(current) {
   }
 }
 
-const ZERO_OID = "0".repeat(40);
-
 function restoreMissingStrandedBranch(current) {
   // Do not overwrite a ref a concurrent user recreated or moved.  The all-zero
   // old value makes this creation conditional on the ref still being absent.
   try {
-    execGit(current.checkout, ["update-ref", current.ref, current.branchHead, ZERO_OID]);
+    execGit(current.checkout, ["update-ref", current.ref, current.branchHead, "0".repeat(current.branchHead.length)]);
   } catch (error) {
     let observed;
     try { observed = postRemoveBranchState(current); }

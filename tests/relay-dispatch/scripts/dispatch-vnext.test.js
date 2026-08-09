@@ -46,7 +46,7 @@ function installNodeFixture(source, target) {
   fs.writeFileSync(target, bytes, { mode: 0o755 });
 }
 
-function fixture(label) {
+function fixture(label, { objectFormat = "sha1" } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-dispatch-vnext-${label}-`)));
   const repo = path.join(root, "repo");
   const remote = path.join(root, "remote.git");
@@ -54,8 +54,9 @@ function fixture(label) {
   const bin = path.join(root, "bin");
   fs.mkdirSync(repo);
   fs.mkdirSync(bin);
-  execFileSync("git", ["init", "--bare", remote], { stdio: "ignore" });
-  execFileSync("git", ["init", "-b", "main", repo], { stdio: "ignore" });
+  const format = objectFormat === "sha1" ? [] : [`--object-format=${objectFormat}`];
+  execFileSync("git", ["init", ...format, "--bare", remote], { stdio: "ignore" });
+  execFileSync("git", ["init", ...format, "-b", "main", repo], { stdio: "ignore" });
   git(repo, ["config", "user.email", "relay@example.test"]);
   git(repo, ["config", "user.name", "Relay Test"]);
   fs.writeFileSync(path.join(repo, "README.md"), "fixture\n");
@@ -781,6 +782,57 @@ test("stranded-worktree recovery preserves a branch checked out after atomic del
   assert.throws(() => git(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"]), "the restored path must not steal the competing holder's branch");
   assert.equal(git(value.repo, ["worktree", "list", "--porcelain"]).includes(`worktree ${holder}`), true);
   assert.equal(git(value.repo, ["worktree", "list", "--porcelain"]).includes(`worktree ${worktree}`), true);
+});
+
+test("stranded-worktree compensation restores a SHA-256 branch after post-delete observation failure", (t) => {
+  const value = fixture("stranded-sha256-compensation", { objectFormat: "sha256" });
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-sha256-compensation";
+  const worktree = path.join(value.relayHome, "worktrees", "stranded-sha256-compensation");
+  const marker = path.join(value.root, "fail-next-worktree-list");
+  git(value.repo, ["branch", branch]);
+  const savedHead = git(value.repo, ["rev-parse", "--verify", branch]);
+  assert.equal(savedHead.length, 64);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  const gitStub = path.join(value.root, "sha256-compensation-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const fs = require("node:fs");',
+    'const args = process.argv.slice(2);',
+    'const at = args[0] === "-C" ? 2 : 0;',
+    'if (args[at] === "worktree" && args[at + 1] === "list" && fs.existsSync(process.env.RELAY_TEST_FAIL_MARKER)) {',
+    '  fs.unlinkSync(process.env.RELAY_TEST_FAIL_MARKER);',
+    '  process.stderr.write("injected post-delete worktree-list failure\\n");',
+    '  process.exit(75);',
+    '}',
+    'const input = args[at] === "update-ref" && args[at + 1] === "--stdin" ? fs.readFileSync(0) : null;',
+    'execFileSync(REAL_GIT, args, input ? { input, stdio: ["pipe", "inherit", "inherit"] } : { stdio: "inherit" });',
+    'if (input) fs.writeFileSync(process.env.RELAY_TEST_FAIL_MARKER, "fail once\\n");',
+  ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });
+
+  const previousGit = process.env.RELAY_GIT_BIN;
+  const previousMarker = process.env.RELAY_TEST_FAIL_MARKER;
+  process.env.RELAY_GIT_BIN = gitStub;
+  process.env.RELAY_TEST_FAIL_MARKER = marker;
+  try {
+    assert.throws(() => recovery.recoverStrandedWorktree({
+      repository: value.repo,
+      branch,
+      relayWorktreeBase: path.join(value.relayHome, "worktrees"),
+    }), (error) => error.code === "STRANDED_WORKTREE_CLEANUP_INCOMPLETE");
+  } finally {
+    if (previousGit === undefined) delete process.env.RELAY_GIT_BIN;
+    else process.env.RELAY_GIT_BIN = previousGit;
+    if (previousMarker === undefined) delete process.env.RELAY_TEST_FAIL_MARKER;
+    else process.env.RELAY_TEST_FAIL_MARKER = previousMarker;
+  }
+
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]), savedHead, "the 64-digit branch ref must be recreated");
+  assert.equal(fs.existsSync(worktree), true, "the original Relay path must be restored");
+  assert.equal(git(worktree, ["rev-parse", "HEAD"]), savedHead);
+  assert.equal(git(worktree, ["symbolic-ref", "--short", "HEAD"]), branch);
 });
 
 test("stranded-worktree recovery restores the original path when a valid run reference appears after removal", (t) => {
