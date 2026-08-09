@@ -451,6 +451,56 @@ test("a post-worktree-add kill is recovered through the typed repo-and-branch re
   assert.equal(json(repeated.stdout).status, "already_recovered");
 });
 
+test("stranded-worktree recovery preserves a branch checked out during cleanup", (t) => {
+  const value = fixture("stranded-worktree-holder-race");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-holder-race";
+  const worktree = path.join(value.relayHome, "worktrees", "stranded-holder-race");
+  const holder = path.join(value.root, "concurrent-holder");
+  const gitStub = path.join(value.root, "holder-race-git.js");
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const args = process.argv.slice(2);',
+    'const at = args[0] === "-C" ? 2 : 0;',
+    'execFileSync(REAL_GIT, args, { stdio: "inherit" });',
+    'if (args[at] === "worktree" && args[at + 1] === "remove") {',
+    '  const repo = args[0] === "-C" ? args[1] : process.cwd();',
+    '  execFileSync(REAL_GIT, ["-C", repo, "worktree", "add", process.env.RELAY_TEST_HOLDER_WORKTREE, process.env.RELAY_TEST_HOLDER_BRANCH], { stdio: "inherit" });',
+    '}',
+  ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });
+
+  const previousGit = process.env.RELAY_GIT_BIN;
+  const previousHolderWorktree = process.env.RELAY_TEST_HOLDER_WORKTREE;
+  const previousHolderBranch = process.env.RELAY_TEST_HOLDER_BRANCH;
+  process.env.RELAY_GIT_BIN = gitStub;
+  process.env.RELAY_TEST_HOLDER_WORKTREE = holder;
+  process.env.RELAY_TEST_HOLDER_BRANCH = branch;
+  try {
+    assert.throws(() => recovery.recoverStrandedWorktree({
+      repository: value.repo,
+      branch,
+      relayWorktreeBase: path.join(value.relayHome, "worktrees"),
+    }),
+      (error) => error.code === "STRANDED_BRANCH_NOT_REMOVED");
+  } finally {
+    if (previousGit === undefined) delete process.env.RELAY_GIT_BIN;
+    else process.env.RELAY_GIT_BIN = previousGit;
+    if (previousHolderWorktree === undefined) delete process.env.RELAY_TEST_HOLDER_WORKTREE;
+    else process.env.RELAY_TEST_HOLDER_WORKTREE = previousHolderWorktree;
+    if (previousHolderBranch === undefined) delete process.env.RELAY_TEST_HOLDER_BRANCH;
+    else process.env.RELAY_TEST_HOLDER_BRANCH = previousHolderBranch;
+  }
+
+  assert.equal(fs.existsSync(worktree), false, "the observed stranded worktree was removed before the competing checkout");
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40, "the competing holder keeps the branch ref");
+  assert.equal(git(holder, ["symbolic-ref", "--short", "HEAD"]), branch);
+  assert.equal(git(value.repo, ["worktree", "list", "--porcelain"]).includes(`worktree ${holder}`), true);
+});
+
 test("stranded-worktree recovery fails closed without deleting reviewable work", (t) => {
   const value = fixture("stranded-worktree-dirty");
   t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));

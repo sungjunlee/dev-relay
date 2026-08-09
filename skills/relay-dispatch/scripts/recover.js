@@ -378,7 +378,7 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   }
   execGit(current.checkout, ["worktree", "remove", current.worktree]);
   try {
-    execGit(current.checkout, ["update-ref", "-d", current.ref, current.branchHead]);
+    execGit(current.checkout, ["branch", "-d", "--", current.branch]);
   } catch (error) {
     recoveryFail("STRANDED_BRANCH_NOT_REMOVED", `worktree was removed but branch ${current.branch} was not deleted safely: ${commandFailure(error)}`);
   }
