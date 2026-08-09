@@ -1,7 +1,7 @@
 ---
 name: relay-merge
 argument-hint: "[run-id]"
-description: Explicitly merge a vNext run after exact-SHA independent review, record provenance, and clean up its retained worktree.
+description: Explicitly merge a Relay run after exact-SHA independent review, record provenance, and clean up its retained worktree.
 compatibility: Requires gh CLI, git, and Node.js 22+; macOS sandbox-exec is required for isolated external merge observation.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-review, dev-backlog"
@@ -12,11 +12,11 @@ metadata:
 
 Use only after `relay-review` records a passing verdict. Merge remains an
 explicit operator action; review bypasses and mutable-state overrides are not
-part of the vNext contract.
+part of the Relay contract.
 
 ## Inputs
 
-- An immutable vNext `run.json` and append-only `events.jsonl`.
+- An immutable Relay `run.json` and append-only `events.jsonl`.
 - The retained run worktree and its exact open PR.
 - `--run-id` or an explicit `--run-dir`.
 - Optional opaque operator identity, merge method, and operation id.
@@ -31,7 +31,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js" \
   --repo . --run-id "$RUN_ID" --json
 ```
 
-The gate calls canonical vNext `inspect` and fails closed unless all of these
+The gate calls canonical Relay `inspect` and fails closed unless all of these
 identify the same commit:
 
 - live GitHub PR head and remote branch;

@@ -1,5 +1,9 @@
 # Relay Intake Routing and Handoff Design
 
+> Historical design record (2026-04). Its manifest-era lifecycle descriptions
+> are superseded by the current contract in
+> [references/architecture.md](../references/architecture.md).
+>
 > Drafted 2026-04-09 to lock the implementation contract for #127, #128, #130, and #132 before coding begins.
 
 ## Summary

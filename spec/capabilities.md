@@ -31,7 +31,7 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 ### Expected Behaviors
 - When `/relay` cannot safely bypass readiness and prompts are allowed, it asks exactly one bounded readiness question using the probe's `signals_summary`; it does not silently proceed.
 - A non-interactive readiness failure emits `readiness_check_failed_nontty` and stops instead of falling through to planning.
-- A persisted relay-ready handoff used by dispatch is represented in the run manifest as `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path`.
+- A persisted relay-ready handoff used by dispatch is frozen into the run-local Done Criteria; `run.json` anchors its exact path and digest under `contract.*`.
 
 ### Hard Constraints
 - Never bypass readiness without an explicit skip reason from the operator or a pre-existing trusted handoff.
@@ -83,11 +83,11 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 
 ## Capability: dispatch-execution
 
-**Goal:** A planned task runs in worktree isolation with a chosen executor, and the manifest records the branch, worktree, PR handoff data, and execution evidence needed for review.
+**Goal:** A planned task runs in worktree isolation with a chosen executor, while immutable run identity and append-only attempt facts preserve the evidence needed for recovery and review.
 
 **In-scope:**
-- `skills/relay-dispatch/` worktree creation, executor invocation, manifest creation/update, recovery utilities, and execution evidence.
-- `skills/relay-fleet/` parent/child fan-out dispatch and crashed-fleet resume.
+- `skills/relay-dispatch/` worktree creation, immutable `run.json` creation, executor invocation, and attempt artifact publication.
+- `skills/relay-fleet/` immutable cohort fan-out and derived child-run status.
 - Executor adapters under `skills/relay-dispatch/scripts/adapters/`.
 
 **Out-of-scope:**
@@ -96,13 +96,15 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 - Merging or cleanup finalization, which belongs to `merge-finalize`.
 
 ### Expected Behaviors
-- A dispatch that advances to `review_pending` has a retained worktree path and branch metadata recorded in the manifest.
+- A new dispatch records repository, branch, retained worktree, frozen Done Criteria digest, and immutable role bindings in `run.json` before it starts the executor attempt.
+- Attempt start and completion evidence is appended to `events.jsonl`; dispatch does not encode a mutable lifecycle state.
 - Executor-specific code is isolated behind the executor adapter contract instead of branching throughout `dispatch.js`.
-- Fleet parent and child manifests reference each other so status can be recovered from either side after interruption.
+- A fleet stores one immutable cohort, and each child run may carry an immutable `parent` pointer so status can be derived again after interruption.
 
 ### Hard Constraints
 - Never write executor output directly into the user's active repo checkout; dispatch work happens in retained relay worktrees.
-- Never mutate manifest state by direct assignment; transitions go through the lifecycle validation helpers.
+- Never commit, push, publish a PR, invoke recovery, or rewrite `run.json` from dispatch.
+- Never append facts except through `facts.appendFact`.
 
 ### Learnings
 <!-- LEARN:BEGIN -->
@@ -137,9 +139,8 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 **Goal:** A PR is scored in a fresh context against frozen Done Criteria and rubric anchors, and the merge gate is tied to the exact commit SHA that was reviewed.
 
 **In-scope:**
-- `skills/relay-review/` review runner, reviewer adapters, prompt construction, PR comments, re-dispatch prompts, and verdict application.
+- `skills/relay-review/` review runner, immutable review-bundle construction, reviewer invocation, and verdict fact append.
 - Fresh-context review using `context: fork` semantics from the skill contract.
-- Advisory review reports that do not gate merge.
 
 **Out-of-scope:**
 - Writing implementation code, which remains the executor's job.
@@ -147,13 +148,13 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 - Merging the PR, which belongs to `merge-finalize`.
 
 ### Expected Behaviors
-- The reviewer loads file-backed Done Criteria from `anchor.done_criteria_path` before GitHub issue or PR body fallbacks.
-- A passing review records `review.last_reviewed_sha`; merge-time gate checks reject a later HEAD advance as stale.
-- `CHANGES_REQUESTED` produces a targeted re-dispatch prompt that preserves the original Done Criteria and carries prior review feedback forward.
+- The reviewer loads file-backed Done Criteria from `run.contract.done_criteria_path` and verifies the immutable digest before use.
+- A passing review appends one `review_recorded` fact bound to the exact PR head and Done Criteria digest; merge-time inspection rejects a later HEAD advance as stale.
+- `changes_requested` derives `redispatch`; the next executor attempt preserves the same immutable run identity and frozen Done Criteria.
 
 ### Hard Constraints
 - Never invoke the reviewer with planner session memory; review must run in a fresh process/context anchored to persisted artifacts.
-- Never let advisory review output change the merge-gating verdict field.
+- Never post comments, mutate the worktree, or record a review from a stale PR head, missing verification, or changed derived action.
 
 ### Learnings
 <!-- LEARN:BEGIN -->
@@ -169,10 +170,10 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 
 ## Capability: merge-finalize
 
-**Goal:** A reviewed PR lands, the manifest reaches `merged`, cleanup is attempted, and any matching capability learning is written durably or surfaced as an explicit manual action.
+**Goal:** A reviewed PR lands, one `merge_recorded` fact makes the derived run terminal, cleanup is attempted, and any matching capability learning is written durably or surfaced as an explicit manual action.
 
 **In-scope:**
-- `skills/relay-merge/` gate-check, review gate validation, PR merge, issue close, branch/worktree cleanup, and learning append.
+- `skills/relay-merge/` read-only gate-check, exact-SHA PR merge, `merge_recorded` fact append, and branch/worktree cleanup.
 - `skills/relay-merge/scripts/append-learnings.js` marker-bounded updates to `<repo>/spec/capabilities.md`.
 - Cleanup status and learning result reporting in `finalize-run.js` JSON output.
 
@@ -182,12 +183,12 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 - Rewriting sprint files outside the existing merge/progress conventions.
 
 ### Expected Behaviors
-- `finalize-run.js` advances to `merged` only after GitHub reports the PR as `MERGED`; otherwise it leaves the run safe to retry.
+- `finalize-run.js` appends `merge_recorded` only after GitHub reports the exact reviewed PR head as `MERGED`; otherwise it leaves the run safe to retry.
 - Learning append first resolves exactly one active sprint and one kebab-case capability target; ambiguity fails loud before writing.
 - A successful learning append is committed and pushed from the target repo's base branch when safe; if not safe, the result reports a manual action instead of pretending durability happened.
 
 ### Hard Constraints
-- Never merge a PR whose `review.last_reviewed_sha` does not match current PR HEAD unless an explicit audited review bypass is used.
+- Never merge a PR whose latest passing `review_recorded.reviewed_sha` does not match current PR HEAD; there is no review bypass.
 - Never write outside the matching capability's LEARN BEGIN/END comment markers.
 
 ### Learnings
@@ -203,27 +204,33 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 
 ---
 
-## Capability: manifest-lifecycle
+## Capability: run-lifecycle
 
-**Goal:** Every relay run is auditable from its manifest and event journal: role bindings, state transitions, policy decisions, anchors, and cleanup state stay observable after interruption.
+**Goal:** Every Relay run remains auditable and recoverable from immutable `run.json`, frozen Done Criteria, append-only facts, and fresh external observations without a mutable lifecycle state.
 
 **In-scope:**
-- `~/.relay/runs/<repo-slug>/<run-id>.md` manifest schema and run directory layout.
-- State transitions and validation helpers in `skills/relay-dispatch/scripts/manifest/`.
-- Event journal entries under the run directory.
+- `skills/relay-dispatch/scripts/run-store.js` immutable run and artifact trust boundary.
+- `skills/relay-dispatch/scripts/facts.js` append-only `events.jsonl` validation and merge authorization.
+- `skills/relay-dispatch/scripts/inspect.js` pure fact fold into one typed derived action.
+- `skills/relay-dispatch/scripts/recover.js` production observation and the sole general recovery/close writer.
+- `skills/relay-dispatch/scripts/host.js` per-run lock capability and host audit facts.
 
 **Out-of-scope:**
 - The specific implementation work done by executors in retained worktrees.
-- Human sprint planning choices outside the relay manifest.
+- Human sprint planning choices outside the Relay run.
+- Independent review scoring and explicit merge authorization, which belong to `review-cycle` and `merge-finalize`.
 
 ### Expected Behaviors
-- Role bindings under `roles.*` are immutable once assigned; acting reviewer overrides are recorded separately under review fields and events.
-- Terminal states such as `merged` and `closed` are not reopened into active workflow states.
-- Path trust checks reject manifest repo roots and worktree paths that escape the expected relay directories.
+- Run creation claims a run directory once and writes one validated version-3 `run.json`; identity, role bindings, branch/worktree, and Done Criteria anchor never change afterward.
+- Facts validate before append and `inspect` derives one action from their durable order plus fresh Git, GitHub, host, and verification observations.
+- Every lifecycle write re-inspects under the run lock and requires the same action key; `recover` is the only general writer that may converge attempts, publication, verification, or close.
+- `merge_recorded` and `run_closed` facts derive terminal outcomes that later active facts cannot reopen.
+- Regular-file and containment checks reject run identity, Done Criteria, facts, and artifact paths that escape their trusted boundaries.
 
 ### Hard Constraints
-- Never mutate `roles.{orchestrator,executor,reviewer}` as a shortcut for per-round acting-role metadata.
-- Never bypass `validateTransition()` or lifecycle helper enforcement when changing `manifest.state`.
+- Never rewrite `run.json` or `events.jsonl`; append durable facts only through `facts.appendFact`.
+- Never introduce mutable manifests, transition tables, execution-evidence sidecars, or a second recovery path.
+- Never write from a stale inspection or bypass `host.withRunLock` for a lifecycle mutation.
 
 ### Learnings
 <!-- LEARN:BEGIN -->

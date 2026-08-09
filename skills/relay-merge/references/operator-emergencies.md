@@ -1,6 +1,6 @@
 # Operator recovery
 
-vNext merge has no `--skip-review`, `--force-finalize-nonready`, manifest-state
+Relay merge has no `--skip-review`, `--force-finalize-nonready`, manifest-state
 override, or bootstrap artifact exemption. Missing or stale evidence changes the
 derived action; it does not create an emergency merge path.
 
@@ -47,5 +47,5 @@ node skills/relay/scripts/relay-recover.js recover --repo . --run-id "$RUN_ID" \
   --expected-action-key "$ACTION_KEY" --reason "reconcile operator-confirmed external merge" --json
 ```
 
-The legacy-manifest bootstrap artifact utility was removed. vNext recovery
+The legacy-manifest bootstrap artifact utility was removed. Relay recovery
 derives and records reconciliation through this single canonical command.

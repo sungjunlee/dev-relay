@@ -1,7 +1,7 @@
-# Cross-Skill Install Graph (vNext)
+# Cross-Skill Install Graph
 
 Install the complete bundle; individual relay skill installs are not supported
-because the small phase commands import the shared vNext core.
+because the small phase commands import the shared Relay core.
 
 ```bash
 npx skills add sungjunlee/dev-relay

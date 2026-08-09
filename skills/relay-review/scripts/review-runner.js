@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-/** vNext review: immutable inputs -> one independent verdict -> one durable fact. */
+/** Relay review: immutable inputs -> one independent verdict -> one durable fact. */
 
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
@@ -339,7 +339,7 @@ async function runReview(cli, overrides = {}) {
   const { runDir, record } = resolveRun(cli);
   const reviewer = cli.values.reviewer || record.roles.reviewer;
   if (reviewer !== record.roles.reviewer) {
-    fail(`reviewer override is not part of the vNext contract; immutable binding is '${record.roles.reviewer}'`, "REVIEWER_BINDING_MISMATCH");
+    fail(`reviewer override is not part of the Relay contract; immutable binding is '${record.roles.reviewer}'`, "REVIEWER_BINDING_MISMATCH");
   }
   const adapter = getAdapter(reviewer);
   validateCapabilities(adapter, "primary_review", { readOnly: true, networkAccess: cli.values["network-access"] });

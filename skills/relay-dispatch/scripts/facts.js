@@ -645,7 +645,7 @@ async function revalidateExternalFacts({ runDir, lockContext, observer, request,
   const input = Object.freeze({ schema_version: 1, run_id: readRunRecord({ runDir: canonical }).run_id, nonce: crypto.randomUUID(), request });
   const observed = invokeExternalObserver({ observer, request: input, timeoutMs: observer.timeoutMs });
   if (!observed || typeof observed !== "object" || observed.nonce !== input.nonce) throw new Error("fresh external observer nonce does not match its immutable request");
-  const observationCapability = Object.freeze({ kind: "relay-vnext-fresh-observation", nonce: input.nonce,
+  const observationCapability = Object.freeze({ kind: "relay-fresh-observation", nonce: input.nonce,
     facts: Object.freeze({ ...observed }), runDir: canonical, lockContext });
   issuedObservations.add(observationCapability);
   return { decision: await authorize(observed, { lockContext, request: input }), facts: observed, observationCapability };
@@ -656,7 +656,7 @@ function requireObservation(runDir, lockContext, fresh) {
   return canonical;
 }
 function issueAuthorization(canonical, lockContext, fresh, durable) {
-  const authorization = Object.freeze({ kind: "relay-vnext-merge-authorization", authorized: true, actor: durable.operator,
+  const authorization = Object.freeze({ kind: "relay-merge-authorization", authorized: true, actor: durable.operator,
     method: durable.method, headSha: durable.pr_head_sha, doneCriteriaSha256: durable.done_criteria_sha256,
     prNumber: durable.pr_number, operationId: durable.operation_id, observationNonce: fresh.nonce, runDir: canonical,
     lockContext, authorizationId: durable.authorization_id, githubLogin: durable.github_login,

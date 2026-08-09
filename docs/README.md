@@ -28,7 +28,7 @@ Specialized ledgers (not ADRs): [rubric-fail-closed-history.md](./rubric-fail-cl
 
 | Doc | Purpose |
 | --- | --- |
-| [references/architecture.md](../references/architecture.md) | **Canonical** manifest schema, state machine, events (prefer over legacy design draft) |
+| [references/architecture.md](../references/architecture.md) | **Canonical** immutable run schema, append-only facts, derived actions, and recovery model |
 | [relay-lifecycle-manifest-design.md](./relay-lifecycle-manifest-design.md) | 2026-04 design history (#34–#46); superseded for runtime paths |
 | [relay-ready-routing-and-handoff-design.md](./relay-ready-routing-and-handoff-design.md) | relay-ready intake routing (#127–#132) |
 | [relay-scenario-tests.md](./relay-scenario-tests.md) | Scenario-test matrix for lifecycle and reporting |

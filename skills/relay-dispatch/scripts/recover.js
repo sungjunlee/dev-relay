@@ -29,7 +29,7 @@ const RUNTIME_METADATA_ROOTS = Object.freeze([
 ]);
 const RUNTIME_METADATA_COMPONENTS = new Set(RUNTIME_METADATA_ROOTS);
 // These are the only candidate records that are positively known not to be a
-// usable vNext ownership claim. All read/trust failures fail closed instead.
+// usable Relay run ownership claim. All read/trust failures fail closed instead.
 const IGNORABLE_RUN_RECORD_CODES = new Set([
   "RUN_RECORD_MISSING",
   "INVALID_RUN_RECORD",
@@ -453,7 +453,7 @@ function observeStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   if (!exists) {
     if (holders.length) recoveryFail("STRANDED_WORKTREE_AMBIGUOUS", `branch ${branch} is absent but still has registered worktrees`);
     const references = validRunReferences({ repoRoot, branch, worktree: null });
-    if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references branch ${branch}: ${references.map((item) => item.run_id).join(", ")}`);
+    if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid Relay run references branch ${branch}: ${references.map((item) => item.run_id).join(", ")}`);
     return { status: "already_recovered", checkout, repoRoot, branch, ref };
   }
   if (holders.length !== 1) recoveryFail(
@@ -487,7 +487,7 @@ function observeStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   // before `worktree remove`; ordinary porcelain alone can conceal user bytes.
   strandedWorktreeSafetyProof(worktree);
   const references = validRunReferences({ repoRoot, branch, worktree });
-  if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references this branch or worktree: ${references.map((item) => item.run_id).join(", ")}`);
+  if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid Relay run references this branch or worktree: ${references.map((item) => item.run_id).join(", ")}`);
   return { status: "ready", checkout, repoRoot, branch, ref, base, worktree, branchHead, retainingRef };
 }
 
@@ -804,7 +804,7 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
       expectedBranchHead: afterRemove.branchHead,
       expectedReferences: references,
     });
-    recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references branch ${current.branch} after its worktree was removed: ${references.map((item) => item.run_id).join(", ")}`);
+    recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid Relay run references branch ${current.branch} after its worktree was removed: ${references.map((item) => item.run_id).join(", ")}`);
   }
   try {
     // A branch name can be deleted and recreated between the prior observation and

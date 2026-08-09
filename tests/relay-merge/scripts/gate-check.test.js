@@ -16,5 +16,5 @@ test("gate-check CLI is closed over the vNext run selector", () => {
 test("gate-check help describes a read-only exact-SHA gate", () => {
   assert.match(gate.usage(), /read-only/i);
   assert.match(gate.usage(), /exact-SHA/i);
-  assert.match(gate.usage(), /not part of the vNext merge contract/i);
+  assert.match(gate.usage(), /not part of the Relay merge contract/i);
 });

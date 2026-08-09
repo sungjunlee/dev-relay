@@ -1,11 +1,11 @@
-# Relay vNext Architecture
+# Relay Runtime Architecture
 
-Relay vNext is an immutable-run system. It deliberately replaces the legacy
+The Relay runtime is an immutable-run system. It deliberately replaces the legacy
 Markdown manifest, mutable lifecycle state, event journal vocabulary, rubric
 sidecars, and executor-specific registration layer with one small durable
 contract and a derived action.
 
-This document describes the shipped vNext runtime. Files under
+This document describes the shipped Relay runtime. Files under
 [`docs/archive/`](../docs/archive/) and dated plans are historical evidence,
 not operator instructions.
 
@@ -41,7 +41,7 @@ relay-review
 
 ## Durable layout
 
-Each vNext run is a directory below `~/.relay/runs/<repo-slug>/<run-id>/`:
+Each Relay run is a directory below `~/.relay/runs/<repo-slug>/<run-id>/`:
 
 | Artifact | Contract |
 | --- | --- |
@@ -125,15 +125,15 @@ for the full contract.
 ## Runtime size
 
 There is one runtime. The installed dispatch package contains 16 JavaScript
-files and 6,122 production LOC, measured by the ledger generator into
+files and 6,900 production LOC, measured by the ledger generator into
 `tests/ledger/vnext-baseline.generated.json`; refresh it with that generator
 rather than editing the figure by hand.
 
-vNext is the only writer. Nothing admits a run, stamps a writer generation, or
-translates retired argv, and pre-vNext manifests are not readable — the legacy
+The Relay runtime is the only writer. Nothing admits a run, stamps a writer generation, or
+translates retired argv, and retired manifests are not readable — the legacy
 manifest reader went with the runtime reset. A repository that still holds
-pre-vNext state does not migrate; its historical runs stay unreadable and new
-work starts as a vNext run.
+legacy state does not migrate; its historical runs stay unreadable and new
+work starts as a Relay run.
 
 ## Trust boundaries
 
@@ -150,7 +150,7 @@ work starts as a vNext run.
   revalidation; a swapped path is preserved as evidence, never deleted.
 - External GitHub and merge observations use a fresh nonce-bound observer.
 - PR comments, mutable files, prior prompts, executor transcripts, and legacy
-  state are not authorities for vNext actions.
+  state are not authorities for Relay actions.
 
 For command-level guidance see the [operator guide](../docs/relay-operator-guide.md),
 the [adapter platform](../skills/relay-dispatch/references/agent-adapter-platform.md),

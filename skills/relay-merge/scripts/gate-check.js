@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-/** Read-only vNext merge gate. It never records an override or mutates a run. */
+/** Read-only Relay merge gate. It never records an override or mutates a run. */
 
 const { parseArgs } = require("util");
 
@@ -20,8 +20,8 @@ function usage() {
   return [
     "Usage: gate-check.js --repo <path> (--run-id <id> | --run-dir <path>) [--json]",
     "",
-    "Read the canonical vNext inspection and require an exact-SHA passing review.",
-    "This command is read-only. Review bypasses are not part of the vNext merge contract.",
+    "Read the canonical Relay inspection and require an exact-SHA passing review.",
+    "This command is read-only. Review bypasses are not part of the Relay merge contract.",
   ].join("\n");
 }
 

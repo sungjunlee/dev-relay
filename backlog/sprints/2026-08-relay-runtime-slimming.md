@@ -1,0 +1,55 @@
+---
+milestone: relay-runtime-slimming
+status: active
+started: 2026-08-09
+due: TBD
+component: "dispatch-execution"
+---
+
+# Relay Runtime Slimming
+
+## Goal
+
+Remove vNext transition residue and unearned compatibility, recovery, and test-accounting machinery so the single Relay runtime is accurately documented, smaller, and fully verified.
+
+## Plan
+
+### Batch 1 — Canonical vocabulary and contract
+
+- [~] #1193 — retire vNext transition vocabulary and dead compatibility selectors [branch:codex/relay-runtime-slimming]
+
+### Batch 2 — Independent correctness patch
+
+- [ ] #1191 — validate worktree-base containment before creation side effects
+
+### Batch 3 — Measured compatibility retirement
+
+- [ ] #1194 — measure and retire unused legacy rubric, ownership, and lineage compatibility
+
+### Batch 4 — Recovery mechanism subtraction
+
+- [ ] #1195 — shrink or remove special pre-run stranded-worktree recovery
+
+### Batch 5 — Test-accounting and seam simplification
+
+- [ ] #1196 — simplify Relay test accounting and narrow internal testing seams
+
+### Batch 6 — Program closure
+
+- [ ] #1197 — verify the final runtime baseline, reconcile docs/issues, and close the epic
+
+## Running Context
+
+- GitHub epic #1197 is canonical; child Issues own acceptance criteria and lifecycle.
+- The current runtime is the Relay runtime. `vNext` is retained only where dated historical evidence requires it.
+- Deletion is judged by the module deletion test: if complexity vanishes, delete it; if it spreads to callers, retain the smallest deep interface that contains it.
+- Historical artifacts do not authorize permanent runtime compatibility. Every retained compatibility branch needs a measured current consumer and retirement condition.
+- Do not introduce a migration overlay, intent sidecar, mutable lifecycle, second recovery writer, cleanup daemon, or dispatch-side recovery.
+- Preserve all seven executor adapters; executor diversity is not a simplification target.
+- Do not spend rename churn on ledger/test artifacts until #1196 decides which ones survive.
+- Baseline at epic creation: 16 relay-dispatch JS files / 6,906 LOC; 48 Relay test files / 14,848 LOC; `recover.js` 2,187 LOC.
+
+## Progress
+
+- 2026-08-09 — Closed the stale core-reset sprint after reconciling GitHub #1129–#1136. Created epic #1197 and children #1193–#1196, retained #1191 as the independent correctness item, closed completed #1190 with PR #1192 evidence, and admitted this ordered cleanup sprint.
+- 2026-08-09 — #1193 implementation complete on `codex/relay-runtime-slimming`: removed two zero-consumer compatibility selectors, replaced current vNext terminology with Relay terminology, and corrected the capability/docs contract. Runtime 6,906→6,900 LOC; tests 14,848→14,838 LOC. Full gate passed 623/625 with 2 expected live-canary skips; independent review reached LGTM after two P2 current-doc corrections.

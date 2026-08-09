@@ -1,6 +1,6 @@
 ---
 milestone: relay-runtime-core-reset-vnext
-status: active
+status: completed
 started: 2026-07-31
 due: TBD
 component: "dispatch-execution"
@@ -27,15 +27,15 @@ Complete GitHub epic #1129 end to end without using Relay orchestration: preserv
 
 ### Batch 3 — Recovery convergence
 
-- [ ] #1135 — read-only `inspect` and idempotent `recover` (4–6 days; depends on #1131 and #1132)
+- [x] #1135 — read-only `inspect` and idempotent `recover` (4–6 days; depends on #1131 and #1132)
 
 ### Batch 4 — Dispatch rewrite and legacy runtime deletion
 
-- [ ] #1136 — dispatch rewrite and legacy runtime deletion (5–8 days; depends on #1131–#1135). The cutover half was withdrawn on 2026-08-03: the migration overlay was deleted rather than exercised, so there is no cutover to perform and no retirement gate to satisfy.
+- [x] #1136 — dispatch rewrite and legacy runtime deletion (5–8 days; depends on #1131–#1135). The cutover half was withdrawn on 2026-08-03: the migration overlay was deleted rather than exercised, so there is no cutover to perform and no retirement gate to satisfy.
 
 ### Batch 5 — Program closure
 
-- [ ] #1129 — full serialized verification, issue closure evidence, sprint close, and Relay-versus-direct-orchestration retrospective
+- [x] #1129 — full serialized verification, issue closure evidence, sprint close, and Relay-versus-direct-orchestration retrospective
 
 ## Direct Orchestration Protocol
 
@@ -94,3 +94,5 @@ For each issue, append:
 - 2026-08-01 — #1132 reached LGTM after four adversarial review rounds closed run/journal identity gaps, stale criteria and merge authorization, reviewer filesystem leakage, crash convergence, live shadow wiring, and fd-based TOCTOU reads. #1133 reached LGTM with all seven dispatch executors retained, descriptor-driven capability checks, fail-closed live canary exits, and reproducible raw canary evidence.
 - 2026-08-01 — #1134 reached LGTM after deleting 43 production scripts and their installed policy surfaces: routing/catalog precedence, assurance/advisory lanes, mutable fleet state, runtime analytics, and central CLI-schema indirection. Final production residue search was empty, all seven executors remained registered, and inventory/ledger/reachability passed 23/23. Cross-model review found and closed run.json/facts fail-open paths, fleet redispatch and publication gaps, an admission-generation ABA race, parent-symlink escape, and partial issue-lock publication poisoning; the final independent rereview passed 79 focused checks.
 - 2026-08-03 — Deleted the migration overlay (`runtime-generation.js`, `legacy-recovery-shim.js`, their tests and fixtures; about −4,300 lines, runtime 8,262 → 6,050 LOC across 18 → 16 files). Decided on measurement, not cost: every path to a dispatchable vNext marker required an external Ed25519 attestation whose file and every parent directory up to `/` had to be owned by a different UID and be non-writable by the operator, which on a single-operator machine is satisfiable only by becoming root and signing to yourself. The overlay was blocking dispatch outright. Earlier the same day a narrower 766-line deletion of the overlay's retirement-gate layer was refuted by four independent reviewers and reverted in full; that lesson is recorded in `docs/decisions/2026-08-03-migration-overlay-disposition.md`. The repository-wide generation lock was replaced by a non-recursive `mkdir` claim on the run directory.
+- 2026-08-09 — Reconciled the stale sprint projection with GitHub: epic #1129 and children #1130–#1136 are all closed. The runtime reset is complete; follow-up terminology, compatibility, recovery-size, and test-accounting simplification will proceed in a separate admitted sprint.
+- 2026-08-09: Sprint closed. 8/8 tasks completed.

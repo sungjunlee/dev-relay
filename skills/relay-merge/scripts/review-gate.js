@@ -84,7 +84,7 @@ function latestFact(facts, type) {
 
 function requireMergeAction(inspection, record) {
   if (!inspection || inspection.operation !== "inspect") {
-    fail("merge requires a canonical vNext inspection", "MERGE_INSPECTION_INVALID");
+    fail("merge requires a canonical Relay inspection", "MERGE_INSPECTION_INVALID");
   }
   if (inspection.blockers?.length) {
     fail(`merge is blocked: ${inspection.blockers[0].code}`, "MERGE_BLOCKED");

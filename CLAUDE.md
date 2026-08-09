@@ -1,6 +1,6 @@
 # dev-relay contributor guide
 
-dev-relay is an orchestrator-agnostic vNext relay runtime. The current model is
+dev-relay is an orchestrator-agnostic Relay runtime. The current model is
 an immutable `run.json`, frozen Done Criteria, append-only facts, and a derived
 action. Do not reintroduce mutable manifests, lifecycle transition tables,
 execution-evidence sidecars, route catalogs, app registration, or a second
@@ -24,13 +24,13 @@ skills/relay-dispatch/scripts/
   adapters/                registry + seven retained native executors
 ```
 
-Installed: 16 JS / 6,122 LOC. The figure is generated into
+Installed: 16 JS / 6,900 LOC. The figure is generated into
 `tests/ledger/vnext-baseline.generated.json`; refresh it with the ledger
 generator rather than editing it by hand.
 
-vNext is the only writer. There is no migration overlay, no writer generation,
+The Relay runtime is the only writer. There is no migration overlay, no writer generation,
 no admission capability, and no retirement gate; a run directory is claimed by a
-non-recursive `mkdir`. Pre-vNext manifests are unreadable and `relay-recover`
+non-recursive `mkdir`. Retired legacy manifests are unreadable and `relay-recover`
 exposes only `inspect` and `recover`. Do not reintroduce any of it.
 
 The seven executors are Claude, Codex, OpenCode, Pi, Antigravity, Cursor, and

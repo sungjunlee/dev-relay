@@ -30,7 +30,7 @@ Run `git fetch origin`. Task evidence: collect the first available source—loca
 
 Sprint tracking is optional; when in use, resolve ownership per [sprint-integration.md](references/sprint-integration.md).
 
-Run the route preflight. It answers one question: does this issue already have a PR or an in-flight vNext run?
+Run the route preflight. It answers one question: does this issue already have a PR or an in-flight Relay run?
 
 ```bash
 PREFLIGHT=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \

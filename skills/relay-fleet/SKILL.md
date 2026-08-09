@@ -28,7 +28,7 @@ metadata:
 - Dispatching a single task or run — use `relay-dispatch`
 - Reviewing one standalone child PR — use `relay-review`
 
-Run multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. A fleet stores only one immutable cohort. Status is derived afresh from vNext `run.json` records and canonical `inspect` results; it never owns child state, retry history, or a cache. Legacy manifests are not read.
+Run multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. A fleet stores only one immutable cohort. Status is derived afresh from Relay `run.json` records and canonical `inspect` results; it never owns child state, retry history, or a cache. Legacy manifests are not read.
 
 Design rationale, rejected alternatives, non-goals, and the Phase 2/3 roadmap: [references/design.md](references/design.md).
 

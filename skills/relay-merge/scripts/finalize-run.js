@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-/** Explicit vNext merge: inspect, authorize, merge, record provenance, clean up. */
+/** Explicit Relay merge: inspect, authorize, merge, record provenance, clean up. */
 
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");

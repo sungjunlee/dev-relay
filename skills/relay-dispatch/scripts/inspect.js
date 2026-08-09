@@ -73,7 +73,6 @@ function verificationGate({
   prHead,
   treeSha,
   doneCriteriaSha256,
-  allowMissingVerificationForLegacyProjection = false,
 }) {
   const latest = facts.filter((fact) => fact.type === "verification_recorded").at(-1) || null;
   if (!latest) {
@@ -84,9 +83,6 @@ function verificationGate({
         && fact.payload.verification_status !== "not_declared"
       ))
       .at(-1) || null;
-    if (!applicableAttempt && allowMissingVerificationForLegacyProjection) {
-      return { ready: true, latest: null };
-    }
     if (!applicableAttempt) {
       return {
         ready: false,
@@ -155,7 +151,6 @@ function foldRunFacts({
   gitFacts = {},
   githubFacts = {},
   hostFacts = {},
-  allowMissingVerificationForLegacyProjection = false,
 }) {
   if (!runRecord || typeof runRecord.run_id !== "string") {
     throw new Error("runRecord.run_id is required");
@@ -406,7 +401,6 @@ function foldRunFacts({
       prHead,
       treeSha: currentTreeSha,
       doneCriteriaSha256: criteriaHash,
-      allowMissingVerificationForLegacyProjection,
     });
     if (!verification.ready) {
       return withGithubAvailability(result("recover", verification.reason, {

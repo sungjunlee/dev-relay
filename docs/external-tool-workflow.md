@@ -58,7 +58,7 @@ CE is most useful here as **specialist review** and **structured learning captur
 
 ## Tool Independence Statement
 
-dev-relay's contract surface — manifest schema, state machine, event journal, review verdict shape, merge gate — is internal to dev-relay. None of it imports from gstack, superpowers, or CE. Removing any of those tools breaks no relay scripts and no relay tests.
+dev-relay's contract surface — immutable run schema, append-only facts, derived actions, review verdict shape, and merge gate — is internal to dev-relay. None of it imports from gstack, superpowers, or CE. Removing any of those tools breaks no relay scripts and no relay tests.
 
 This is intentional. The lifecycle contract has to outlive any one tool's UX choices.
 

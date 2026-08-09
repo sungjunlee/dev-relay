@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "purpose": "Current vNext runtime inventory. Every shipped relay script and cross-skill runtime edge is enumerated from the filesystem.",
+  "purpose": "Current Relay runtime inventory. Every shipped relay script and cross-skill runtime edge is enumerated from the filesystem.",
   "scope": {
     "skills": [
       "relay",
@@ -385,7 +385,7 @@
     {
       "path": "skills/relay-dispatch/scripts/cli-args.js",
       "removalIssue": "#1136",
-      "replacement": "Closed parsers local to their public vNext command surfaces",
+      "replacement": "Closed parsers local to their public Relay command surfaces",
       "deletedEvidence": [
         "tests/relay-dispatch/scripts/cli-args.test.js"
       ]
@@ -499,13 +499,13 @@
     }
   ],
   "roleModel": {
-    "detected": "Conservative lexical signals for direct vNext CLI, Done Criteria, and host access.",
+    "detected": "Conservative lexical signals for direct Relay CLI, Done Criteria, and host access.",
     "reviewedSemantic": "No handwritten semantic seeds are needed after legacy manifest and execution-evidence paths were removed."
   },
   "roleVocabulary": {
     "cli-entry": "Executable CLI surface detected from direct process.argv/main-module access.",
     "manifest:*": "Legacy manifest create/read/write access.",
-    "run-record:*": "Conceptual run-record create/read/write responsibility carried into vNext migration.",
+    "run-record:*": "Conceptual run-record create/read/write responsibility carried into the Relay runtime reset.",
     "event:*": "Event journal read or append access.",
     "evidence:*": "Execution evidence read or write access.",
     "done-criteria:*": "Frozen Done Criteria read or write access.",

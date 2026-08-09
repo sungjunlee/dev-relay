@@ -6,7 +6,7 @@
 **Dispatch an AI executor, independently review the exact result, and keep the
 merge decision explicit.**
 
-dev-relay is an orchestrator-agnostic vNext runtime. Each run has one immutable
+dev-relay is an orchestrator-agnostic Relay runtime. Each run has one immutable
 `run.json`, frozen Done Criteria, append-only facts, and a read-only derived
 action. It does not keep a mutable manifest state machine, an execution-evidence
 sidecar, route catalog, or app-registration layer.
@@ -72,7 +72,7 @@ node skills/relay-config/scripts/relay-config.js \
 ## Runtime size
 
 There is one runtime and no migration overlay. Current installed dispatch
-runtime: **16 JS files / 6,122 LOC**, measured by the ledger generator into
+runtime: **16 JS files / 6,900 LOC**, measured by the ledger generator into
 `tests/ledger/vnext-baseline.generated.json`. Refresh it with that generator
 rather than editing the figure by hand.
 

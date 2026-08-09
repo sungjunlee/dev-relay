@@ -1,6 +1,6 @@
 # Recovery Playbook
 
-Relay vNext has one recovery surface. `inspect` is byte-read-only and derives one
+Relay has one recovery surface. `inspect` is byte-read-only and derives one
 typed next action from immutable run facts plus live Git/GitHub observation.
 `recover` re-observes under the run lock and converges that action idempotently.
 
@@ -26,7 +26,7 @@ node skills/relay/scripts/relay-recover.js recover \
 
 This form does not inspect or mutate a run. It removes a target only after
 proving that exactly one registered worktree checks out the branch, that it is
-inside Relay's trusted worktree base, that no valid vNext `run.json` references
+inside Relay's trusted worktree base, that no valid Relay `run.json` references
 the branch or worktree, and that there are no reviewable changes. Ambiguous,
 foreign, referenced, dirty, or untrusted targets fail closed.
 
