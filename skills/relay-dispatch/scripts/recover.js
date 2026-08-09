@@ -89,6 +89,77 @@ function classifyRepositoryDirt(value) {
 function reviewableStatusPaths(value) {
   return [...new Set(classifyRepositoryDirt(value).reviewableStatus.flatMap(recordPaths))];
 }
+function parseNulGitPaths(value, source) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value || ""), "utf8");
+  if (bytes.length === 0) return [];
+  const paths = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    const end = bytes.indexOf(0, offset);
+    if (end < 0) throw Object.assign(new Error(`${source} did not return NUL-terminated paths`), { code: "INVALID_GIT_PATH_LIST" });
+    const relative = decodeGitPath(bytes.subarray(offset, end));
+    if (!relative) throw Object.assign(new Error(`${source} returned an empty path`), { code: "INVALID_GIT_PATH_LIST" });
+    paths.push(relative);
+    offset = end + 1;
+  }
+  return paths;
+}
+function safeWorktreeEvidencePaths(worktree, paths, source) {
+  const root = fs.realpathSync(worktree);
+  return paths.map((relative) => {
+    const candidate = path.resolve(root, relative);
+    const relation = path.relative(root, candidate);
+    if (path.isAbsolute(relative) || !relation || relation === ".." || relation.startsWith(`..${path.sep}`) || path.isAbsolute(relation)) {
+      throw Object.assign(new Error(`${source} returned a path outside the registered worktree`), { code: "UNSAFE_WORKTREE_ENTRY" });
+    }
+    return relative;
+  });
+}
+function pathEvidence(paths) { return paths.map((relative) => JSON.stringify(relative)).join(", "); }
+function parseIndexFlagEntries(value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value || ""), "utf8");
+  if (bytes.length === 0) return [];
+  const entries = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    const end = bytes.indexOf(0, offset);
+    if (end < 0) throw Object.assign(new Error("git ls-files -v did not return NUL-terminated entries"), { code: "INVALID_GIT_INDEX_FLAGS" });
+    const entry = bytes.subarray(offset, end);
+    if (entry.length < 3 || entry[1] !== 0x20) {
+      throw Object.assign(new Error("git ls-files -v returned a malformed entry"), { code: "INVALID_GIT_INDEX_FLAGS" });
+    }
+    const tag = String.fromCharCode(entry[0]);
+    const relative = decodeGitPath(entry.subarray(2));
+    if (!relative) throw Object.assign(new Error("git ls-files -v returned an empty path"), { code: "INVALID_GIT_INDEX_FLAGS" });
+    entries.push({ tag, relative });
+    offset = end + 1;
+  }
+  return entries;
+}
+function strandedWorktreeSafetyProof(worktree) {
+  let status;
+  let ignored;
+  let indexFlags;
+  let dirt;
+  try {
+    status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    dirt = classifyRepositoryDirt(status);
+    safeWorktreeEvidencePaths(worktree, dirt.records.flatMap(recordPaths), "git status");
+    ignored = safeWorktreeEvidencePaths(worktree,
+      parseNulGitPaths(gitBytes(worktree, ["--no-optional-locks", "ls-files", "--others", "--ignored", "--exclude-standard", "-z"]), "git ls-files --ignored"),
+      "git ls-files --ignored");
+    indexFlags = parseIndexFlagEntries(gitBytes(worktree, ["--no-optional-locks", "ls-files", "-v", "-z"]));
+    safeWorktreeEvidencePaths(worktree, indexFlags.map((entry) => entry.relative), "git ls-files -v");
+  } catch (error) {
+    recoveryFail("STRANDED_WORKTREE_SAFETY_PROOF_FAILED", `could not prove stranded worktree is safe to remove: ${commandFailure(error)}`);
+  }
+  const hiddenIndexFlags = indexFlags.filter((entry) => entry.tag === "S" || /^[a-z]$/.test(entry.tag));
+  if (dirt.hasReviewableDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", `registered worktree has reviewable changes: ${reviewableStatusPaths(status).join(", ")}`);
+  if (dirt.hasDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", "registered worktree has runtime metadata changes; stranded-worktree recovery only removes a clean worktree");
+  if (ignored.length) recoveryFail("STRANDED_WORKTREE_IGNORED_CONTENT", `registered worktree has ignored content that would be lost: ${pathEvidence(ignored)}`);
+  if (hiddenIndexFlags.length) recoveryFail("STRANDED_WORKTREE_INDEX_FLAGS", `registered worktree has index flags that can hide changes: ${pathEvidence(hiddenIndexFlags.map((entry) => entry.relative))}`);
+  return { status, ignored, indexFlags };
+}
 function artifactDigest(filePath) { return readArtifact(filePath, path.basename(filePath), { optional: true })?.sha256 || sha256(Buffer.alloc(0)); }
 function commandFailure(error) {
   return String(error?.stderr || error?.stdout || error?.message || error).trim().split(/\r?\n/)[0];
@@ -386,10 +457,10 @@ function observeStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   if (!isAncestor(checkout, branchHead, canonicalHead)) {
     recoveryFail("STRANDED_WORKTREE_UNMERGED", `branch ${branch} has committed work that is not reachable from the canonical checkout HEAD`);
   }
-  const status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
-  const dirt = classifyRepositoryDirt(status);
-  if (dirt.hasReviewableDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", `registered worktree has reviewable changes: ${reviewableStatusPaths(status).join(", ")}`);
-  if (dirt.hasDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", "registered worktree has runtime metadata changes; stranded-worktree recovery only removes a clean worktree");
+  // Porcelain, ignored paths, and index visibility flags together are the pre-remove
+  // safety proof.  This is deliberately re-run by recoverStrandedWorktree immediately
+  // before `worktree remove`; ordinary porcelain alone can conceal user bytes.
+  strandedWorktreeSafetyProof(worktree);
   const references = validRunReferences({ repoRoot, branch, worktree });
   if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references this branch or worktree: ${references.map((item) => item.run_id).join(", ")}`);
   return { status: "ready", checkout, repoRoot, branch, ref, base, worktree, branchHead, canonicalHead };
@@ -1928,10 +1999,13 @@ module.exports = {
     parsePorcelainV1Z,
     parseWorktreeList,
     reviewableStatusPaths,
+    parseIndexFlagEntries,
+    parseNulGitPaths,
     resolveGithubObserverToken,
     selectGithubPr,
     stable,
     stageReviewableWork,
+    strandedWorktreeSafetyProof,
     unsafeWorktreeEntries,
   },
 };

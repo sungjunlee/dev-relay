@@ -777,6 +777,57 @@ test("stranded-worktree recovery fails closed without deleting reviewable work",
   assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`branch refs/heads/${branch}`));
 });
 
+test("stranded-worktree recovery refuses ignored user content hidden from porcelain", (t) => {
+  const value = fixture("stranded-worktree-ignored-content");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-ignored-content";
+  const worktree = path.join(value.relayHome, "worktrees", "stranded-ignored-content");
+  fs.writeFileSync(path.join(value.repo, ".gitignore"), "private/\n");
+  git(value.repo, ["add", ".gitignore"]);
+  git(value.repo, ["commit", "-m", "ignore private executor files"]);
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  const ignoredPath = path.join(worktree, "private", "operator-notes.txt");
+  fs.mkdirSync(path.dirname(ignoredPath));
+  fs.writeFileSync(ignoredPath, "private bytes must survive\n");
+
+  assert.equal(git(worktree, ["status", "--porcelain"]), "", "ordinary porcelain must not reveal the ignored file");
+  assert.throws(() => recovery.recoverStrandedWorktree({
+    repository: value.repo, branch, relayWorktreeBase: path.join(value.relayHome, "worktrees"),
+  }), (error) => error.code === "STRANDED_WORKTREE_IGNORED_CONTENT" && /private\//.test(error.message));
+  assert.equal(fs.readFileSync(ignoredPath, "utf8"), "private bytes must survive\n");
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40, "the branch must survive");
+  assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`worktree ${worktree}`));
+});
+
+test("stranded-worktree recovery refuses tracked changes hidden by index visibility flags", (t) => {
+  for (const { flag, marker } of [
+    { flag: "--assume-unchanged", marker: "h" },
+    { flag: "--skip-worktree", marker: "S" },
+  ]) {
+    const value = fixture(`stranded-worktree-${marker}-flag`);
+    t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+    const branch = `stranded-${marker}-flag`;
+    const worktree = path.join(value.relayHome, "worktrees", `stranded-${marker}-flag`);
+    git(value.repo, ["branch", branch]);
+    fs.mkdirSync(path.dirname(worktree), { recursive: true });
+    git(value.repo, ["worktree", "add", worktree, branch]);
+    fs.writeFileSync(path.join(worktree, "README.md"), `${marker} hidden modified bytes\n`);
+    git(worktree, ["update-index", flag, "README.md"]);
+
+    assert.equal(git(worktree, ["status", "--porcelain"]), "", `${flag} must hide the modification from ordinary porcelain`);
+    assert.match(git(worktree, ["ls-files", "-v", "README.md"]), new RegExp(`^${marker} README\\.md$`));
+    assert.throws(() => recovery.recoverStrandedWorktree({
+      repository: value.repo, branch, relayWorktreeBase: path.join(value.relayHome, "worktrees"),
+    }), (error) => error.code === "STRANDED_WORKTREE_INDEX_FLAGS" && /README\.md/.test(error.message), `${flag} must stop recovery`);
+    assert.equal(fs.readFileSync(path.join(worktree, "README.md"), "utf8"), `${marker} hidden modified bytes\n`);
+    assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40, "the branch must survive");
+    assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`worktree ${worktree}`));
+    assert.match(git(worktree, ["ls-files", "-v", "README.md"]), new RegExp(`^${marker} README\\.md$`), "the index flag must survive");
+  }
+});
+
 test("stranded-worktree recovery preserves a clean branch with unique committed work", (t) => {
   const value = fixture("stranded-worktree-committed");
   t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
