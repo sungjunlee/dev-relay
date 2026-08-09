@@ -142,7 +142,7 @@ function strandedWorktreeSafetyProof(worktree) {
   let indexFlags;
   let dirt;
   try {
-    status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"]);
     dirt = classifyRepositoryDirt(status);
     safeWorktreeEvidencePaths(worktree, dirt.records.flatMap(recordPaths), "git status");
     ignored = safeWorktreeEvidencePaths(worktree,

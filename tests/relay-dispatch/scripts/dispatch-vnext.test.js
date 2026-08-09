@@ -1131,6 +1131,43 @@ test("stranded-worktree recovery refuses tracked changes hidden by index visibil
   }
 });
 
+test("stranded-worktree recovery refuses dirty submodules hidden by ignore configuration", (t) => {
+  const value = fixture("stranded-worktree-ignored-dirty-submodule");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const submodule = path.join(value.root, "submodule-source");
+  fs.mkdirSync(submodule);
+  git(submodule, ["init", "-b", "main"]);
+  git(submodule, ["config", "user.email", "test@example.com"]);
+  git(submodule, ["config", "user.name", "Test"]);
+  fs.writeFileSync(path.join(submodule, "tracked.txt"), "submodule fixture\n");
+  git(submodule, ["add", "tracked.txt"]);
+  git(submodule, ["commit", "-m", "seed submodule"]);
+  git(value.repo, ["-c", "protocol.file.allow=always", "submodule", "add", submodule, "nested"]);
+  git(value.repo, ["commit", "-am", "add nested submodule"]);
+
+  const branch = "stranded-ignored-dirty-submodule";
+  const relayWorktreeBase = path.join(value.relayHome, "worktrees");
+  const worktree = path.join(relayWorktreeBase, "stranded-ignored-dirty-submodule");
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  git(worktree, ["-c", "protocol.file.allow=always", "submodule", "update", "--init"]);
+  git(worktree, ["config", "submodule.nested.ignore", "all"]);
+  const hiddenTracked = path.join(worktree, "nested", "tracked.txt");
+  const hiddenUntracked = path.join(worktree, "nested", "operator-notes.txt");
+  fs.writeFileSync(hiddenTracked, "modified submodule bytes survive\n");
+  fs.writeFileSync(hiddenUntracked, "untracked submodule bytes survive\n");
+
+  assert.equal(git(worktree, ["status", "--porcelain"]), "", "ordinary status honors ignore=all and hides the dirty submodule");
+  assert.throws(() => recovery.recoverStrandedWorktree({ repository: value.repo, branch, relayWorktreeBase }),
+    (error) => error.code === "STRANDED_WORKTREE_DIRTY" && /nested/.test(error.message));
+  assert.equal(fs.readFileSync(hiddenTracked, "utf8"), "modified submodule bytes survive\n");
+  assert.equal(fs.readFileSync(hiddenUntracked, "utf8"), "untracked submodule bytes survive\n");
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40, "the branch survives the failed proof");
+  assert.equal(git(value.repo, ["worktree", "list", "--porcelain"]).includes(`worktree ${worktree}`), true,
+    "the dirty submodule worktree remains registered");
+});
+
 test("stranded-worktree recovery preserves a clean branch with unique committed work", (t) => {
   const value = fixture("stranded-worktree-committed");
   t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
