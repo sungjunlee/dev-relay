@@ -2,6 +2,7 @@
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const factsModule = require("./facts");
 const host = require("./host");
@@ -27,6 +28,14 @@ const RUNTIME_METADATA_ROOTS = Object.freeze([
   ".antigravity", ".antigravitycli", ".cline",
 ]);
 const RUNTIME_METADATA_COMPONENTS = new Set(RUNTIME_METADATA_ROOTS);
+// These are the only candidate records that are positively known not to be a
+// usable vNext ownership claim. All read/trust failures fail closed instead.
+const IGNORABLE_RUN_RECORD_CODES = new Set([
+  "RUN_RECORD_MISSING",
+  "INVALID_RUN_RECORD",
+  "UNSUPPORTED_RUN_VERSION",
+  "RUN_ID_PATH_MISMATCH",
+]);
 function decodeGitPath(bytes) {
   const value = bytes.toString("utf8");
   if (!Buffer.from(value, "utf8").equals(bytes)) {
@@ -79,6 +88,77 @@ function classifyRepositoryDirt(value) {
 }
 function reviewableStatusPaths(value) {
   return [...new Set(classifyRepositoryDirt(value).reviewableStatus.flatMap(recordPaths))];
+}
+function parseNulGitPaths(value, source) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value || ""), "utf8");
+  if (bytes.length === 0) return [];
+  const paths = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    const end = bytes.indexOf(0, offset);
+    if (end < 0) throw Object.assign(new Error(`${source} did not return NUL-terminated paths`), { code: "INVALID_GIT_PATH_LIST" });
+    const relative = decodeGitPath(bytes.subarray(offset, end));
+    if (!relative) throw Object.assign(new Error(`${source} returned an empty path`), { code: "INVALID_GIT_PATH_LIST" });
+    paths.push(relative);
+    offset = end + 1;
+  }
+  return paths;
+}
+function safeWorktreeEvidencePaths(worktree, paths, source) {
+  const root = fs.realpathSync(worktree);
+  return paths.map((relative) => {
+    const candidate = path.resolve(root, relative);
+    const relation = path.relative(root, candidate);
+    if (path.isAbsolute(relative) || !relation || relation === ".." || relation.startsWith(`..${path.sep}`) || path.isAbsolute(relation)) {
+      throw Object.assign(new Error(`${source} returned a path outside the registered worktree`), { code: "UNSAFE_WORKTREE_ENTRY" });
+    }
+    return relative;
+  });
+}
+function pathEvidence(paths) { return paths.map((relative) => JSON.stringify(relative)).join(", "); }
+function parseIndexFlagEntries(value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value || ""), "utf8");
+  if (bytes.length === 0) return [];
+  const entries = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    const end = bytes.indexOf(0, offset);
+    if (end < 0) throw Object.assign(new Error("git ls-files -v did not return NUL-terminated entries"), { code: "INVALID_GIT_INDEX_FLAGS" });
+    const entry = bytes.subarray(offset, end);
+    if (entry.length < 3 || entry[1] !== 0x20) {
+      throw Object.assign(new Error("git ls-files -v returned a malformed entry"), { code: "INVALID_GIT_INDEX_FLAGS" });
+    }
+    const tag = String.fromCharCode(entry[0]);
+    const relative = decodeGitPath(entry.subarray(2));
+    if (!relative) throw Object.assign(new Error("git ls-files -v returned an empty path"), { code: "INVALID_GIT_INDEX_FLAGS" });
+    entries.push({ tag, relative });
+    offset = end + 1;
+  }
+  return entries;
+}
+function strandedWorktreeSafetyProof(worktree) {
+  let status;
+  let ignored;
+  let indexFlags;
+  let dirt;
+  try {
+    status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"]);
+    dirt = classifyRepositoryDirt(status);
+    safeWorktreeEvidencePaths(worktree, dirt.records.flatMap(recordPaths), "git status");
+    ignored = safeWorktreeEvidencePaths(worktree,
+      parseNulGitPaths(gitBytes(worktree, ["--no-optional-locks", "ls-files", "--others", "--ignored", "--exclude-standard", "-z"]), "git ls-files --ignored"),
+      "git ls-files --ignored");
+    indexFlags = parseIndexFlagEntries(gitBytes(worktree, ["--no-optional-locks", "ls-files", "-v", "-z"]));
+    safeWorktreeEvidencePaths(worktree, indexFlags.map((entry) => entry.relative), "git ls-files -v");
+  } catch (error) {
+    recoveryFail("STRANDED_WORKTREE_SAFETY_PROOF_FAILED", `could not prove stranded worktree is safe to remove: ${commandFailure(error)}`);
+  }
+  const hiddenIndexFlags = indexFlags.filter((entry) => entry.tag === "S" || /^[a-z]$/.test(entry.tag));
+  if (dirt.hasReviewableDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", `registered worktree has reviewable changes: ${reviewableStatusPaths(status).join(", ")}`);
+  if (dirt.hasDirt) recoveryFail("STRANDED_WORKTREE_DIRTY", "registered worktree has runtime metadata changes; stranded-worktree recovery only removes a clean worktree");
+  if (ignored.length) recoveryFail("STRANDED_WORKTREE_IGNORED_CONTENT", `registered worktree has ignored content that would be lost: ${pathEvidence(ignored)}`);
+  if (hiddenIndexFlags.length) recoveryFail("STRANDED_WORKTREE_INDEX_FLAGS", `registered worktree has index flags that can hide changes: ${pathEvidence(hiddenIndexFlags.map((entry) => entry.relative))}`);
+  return { status, ignored, indexFlags };
 }
 function artifactDigest(filePath) { return readArtifact(filePath, path.basename(filePath), { optional: true })?.sha256 || sha256(Buffer.alloc(0)); }
 function commandFailure(error) {
@@ -193,6 +273,619 @@ function gitBytes(repo, args) {
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 16 * 1024 * 1024,
   });
+}
+
+function recoveryFail(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  throw error;
+}
+
+function containedPath(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function canonicalRecoveryCheckout(repository) {
+  const checkout = fs.realpathSync(path.resolve(repository));
+  const topLevel = fs.realpathSync(execGit(checkout, ["rev-parse", "--show-toplevel"]));
+  if (checkout !== topLevel) recoveryFail("INVALID_REPOSITORY", `repo must be the canonical checkout root: ${topLevel}`);
+  return {
+    checkout,
+    repoRoot: runStore.canonicalRepository(checkout),
+  };
+}
+
+function localBranchRef(checkout, branch) {
+  if (typeof branch !== "string" || !branch) recoveryFail("INVALID_BRANCH", "branch is required");
+  try {
+    execGit(checkout, ["check-ref-format", "--branch", branch]);
+  } catch (error) {
+    recoveryFail("INVALID_BRANCH", `branch is invalid: ${branch}`);
+  }
+  return `refs/heads/${branch}`;
+}
+
+function parseWorktreeList(value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value || ""), "utf8");
+  if (bytes.length === 0) return [];
+  const entries = [];
+  let entry = null;
+  const finish = () => {
+    if (!entry) return;
+    const identities = [entry.branch !== null, entry.detached, entry.bare].filter(Boolean).length;
+    if (identities !== 1 || (entry.bare && entry.head !== null) || (!entry.bare && entry.head === null)) {
+      recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned conflicting worktree identities");
+    }
+    entries.push(entry);
+    entry = null;
+  };
+  let offset = 0;
+  while (offset < bytes.length) {
+    const end = bytes.indexOf(0, offset);
+    if (end < 0) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned an unterminated field");
+    const token = bytes.subarray(offset, end);
+    offset = end + 1;
+    if (token.length === 0) {
+      finish();
+      continue;
+    }
+    let line;
+    try { line = decodeGitPath(token); }
+    catch { recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned a field that is not valid UTF-8"); }
+    const separator = line.indexOf(" ");
+    const name = separator < 0 ? line : line.slice(0, separator);
+    const value = separator < 0 ? null : line.slice(separator + 1);
+    const match = ["worktree", "HEAD", "branch"].includes(name) && value ? [line, name, value] : null;
+    const flag = ["detached", "bare"].includes(name) && value === null ? [line, name] : null;
+    const annotation = ["locked", "prunable"].includes(name) && (value === null || value.length > 0)
+      ? [line, name, value] : null;
+    if (!match && !flag && !annotation) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned an unsupported record");
+    const field = match?.[1] || flag?.[1] || annotation?.[1];
+    const payload = match?.[2] || annotation?.[2] || null;
+    if (field === "worktree") {
+      if (entry) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list record is missing its separator");
+      entry = { worktree: payload, head: null, branch: null, detached: false, bare: false, locked: null, prunable: null };
+    } else if (!entry) {
+      recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned a malformed record");
+    } else {
+      const order = { HEAD: 1, branch: 2, detached: 2, bare: 2, locked: 3, prunable: 4 };
+      const prior = entry._order || 0;
+      if (entry[field.toLowerCase()] !== null && entry[field.toLowerCase()] !== false) {
+        recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned a duplicate singleton field");
+      }
+      if (order[field] < prior || (order[field] === prior && ["branch", "detached", "bare"].includes(field))) {
+        recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned fields in an invalid order");
+      }
+      if (field === "HEAD") entry.head = payload;
+      else if (field === "branch") entry.branch = payload;
+      else if (field === "detached") entry.detached = true;
+      else if (field === "bare") entry.bare = true;
+      else entry[field] = payload || "";
+      entry._order = order[field];
+    }
+  }
+  if (entry) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list record is missing its NUL separator");
+  return entries.map(({ _order, ...value }) => value);
+}
+
+function branchExists(checkout, ref) {
+  try {
+    execGit(checkout, ["show-ref", "--verify", "--quiet", ref]);
+    return true;
+  } catch (error) {
+    if (error.status === 1) return false;
+    throw error;
+  }
+}
+
+function independentRetainingRef(checkout, branchRef, commit) {
+  const output = decodeGitPath(gitBytes(checkout, [
+    "--no-optional-locks", "for-each-ref", "--contains", commit,
+    "--format=%(objectname)%09%(refname)%09%(symref)",
+    "refs/heads", "refs/remotes", "refs/tags",
+  ]));
+  const candidates = [];
+  for (const line of output.split("\n")) {
+    if (!line) continue;
+    const match = /^([0-9a-f]{40}|[0-9a-f]{64})\t(refs\/.+)\t(.*)$/.exec(line);
+    if (!match) recoveryFail("INVALID_GIT_REFS", "git for-each-ref returned a malformed retaining ref");
+    const [, oid, ref, symref] = match;
+    try { execGit(checkout, ["check-ref-format", ref]); }
+    catch { recoveryFail("INVALID_GIT_REFS", "git for-each-ref returned an invalid retaining ref"); }
+    if (ref !== branchRef && !symref) candidates.push({ ref, oid });
+  }
+  candidates.sort((left, right) => left.ref.localeCompare(right.ref));
+  return candidates[0] || null;
+}
+
+function recoveryRunsBase() {
+  const configured = process.env.RELAY_RUNS_BASE || path.join(process.env.RELAY_HOME || path.join(os.homedir(), ".relay"), "runs");
+  if (!path.isAbsolute(configured)) recoveryFail("INVALID_RELAY_PATH", "RELAY_RUNS_BASE must be absolute");
+  return path.resolve(configured);
+}
+
+function validRunReferences({ repoRoot, branch, worktree }) {
+  const base = recoveryRunsBase();
+  let root;
+  try { root = fs.lstatSync(base); }
+  catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  if (!root.isDirectory() || root.isSymbolicLink()) recoveryFail("UNTRUSTED_RUNS_BASE", "Relay runs base must be a real directory");
+  const references = [];
+  for (const repositoryEntry of fs.readdirSync(base, { withFileTypes: true })) {
+    const repositoryDir = path.join(base, repositoryEntry.name);
+    const repositoryStat = fs.lstatSync(repositoryDir);
+    if (repositoryStat.isSymbolicLink()) recoveryFail("UNTRUSTED_RUNS_BASE", `Relay runs base contains a symlink: ${repositoryDir}`);
+    if (!repositoryStat.isDirectory()) continue;
+    for (const runEntry of fs.readdirSync(repositoryDir, { withFileTypes: true })) {
+      const runDir = path.join(repositoryDir, runEntry.name);
+      const runStat = fs.lstatSync(runDir);
+      if (runStat.isSymbolicLink()) recoveryFail("UNTRUSTED_RUNS_BASE", `Relay run directory is a symlink: ${runDir}`);
+      if (!runStat.isDirectory()) continue;
+      let record;
+      try { record = readRunRecord({ runDir }); }
+      catch (error) {
+        // An unclaimed directory or an old/structurally-invalid record cannot own this
+        // stranded worktree. Everything else is an inspection failure, not evidence of
+        // absence, and must stop recovery before it deletes Git state.
+        if (IGNORABLE_RUN_RECORD_CODES.has(error?.code)) continue;
+        recoveryFail("UNREADABLE_RUN_RECORD", `cannot safely inspect candidate run record ${runDir}: ${error?.code || error?.message || "unknown read failure"}`);
+      }
+      let recordRepoRoot = null;
+      try { recordRepoRoot = fs.realpathSync(record.repo.root); } catch {}
+      let recordWorktree = path.resolve(record.git.worktree);
+      try { recordWorktree = fs.realpathSync(recordWorktree); } catch {}
+      const sameRepository = recordRepoRoot === repoRoot;
+      const sameBranch = sameRepository && record.git.branch === branch;
+      const sameWorktree = worktree !== null && recordWorktree === worktree;
+      if (sameBranch || sameWorktree) references.push({ run_id: record.run_id, run_dir: runDir, branch: record.git.branch, worktree: record.git.worktree });
+    }
+  }
+  return references;
+}
+
+function observeStrandedWorktree({ repository, branch, relayWorktreeBase = null }) {
+  const { checkout, repoRoot } = canonicalRecoveryCheckout(repository);
+  const ref = localBranchRef(checkout, branch);
+  const holders = parseWorktreeList(gitBytes(checkout, ["worktree", "list", "--porcelain", "-z"]))
+    .filter((entry) => entry.branch === ref);
+  const exists = branchExists(checkout, ref);
+  if (!exists) {
+    if (holders.length) recoveryFail("STRANDED_WORKTREE_AMBIGUOUS", `branch ${branch} is absent but still has registered worktrees`);
+    const references = validRunReferences({ repoRoot, branch, worktree: null });
+    if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references branch ${branch}: ${references.map((item) => item.run_id).join(", ")}`);
+    return { status: "already_recovered", checkout, repoRoot, branch, ref };
+  }
+  if (holders.length !== 1) recoveryFail(
+    holders.length ? "STRANDED_WORKTREE_AMBIGUOUS" : "STRANDED_WORKTREE_NOT_FOUND",
+    `branch ${branch} must be checked out by exactly one registered worktree; found ${holders.length}`,
+  );
+  const configuredBase = relayWorktreeBase || runStore.relayWorktreeBase();
+  let base;
+  try { base = fs.realpathSync(configuredBase); }
+  catch { recoveryFail("UNTRUSTED_WORKTREE", "Relay worktree base does not exist"); }
+  let worktree;
+  try { worktree = fs.realpathSync(holders[0].worktree); }
+  catch { recoveryFail("UNTRUSTED_WORKTREE", `registered worktree is unavailable: ${holders[0].worktree}`); }
+  try {
+    assertTrustedRecoveryWorktree({ repoRoot, activeCheckout: checkout, relayWorktreeBase: base, worktree });
+  } catch (error) {
+    recoveryFail("UNTRUSTED_WORKTREE", error.message);
+  }
+  const checkedOutBranch = execGit(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (checkedOutBranch !== branch) recoveryFail("STRANDED_WORKTREE_AMBIGUOUS", `registered worktree is not checked out on ${branch}`);
+  const head = execGit(worktree, ["rev-parse", "HEAD"]);
+  const branchHead = execGit(checkout, ["rev-parse", "--verify", `${ref}^{commit}`]);
+  if (head !== branchHead) recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${branch} changed while recovery was observing it`);
+  const retainingRef = independentRetainingRef(checkout, ref, branchHead);
+  if (!retainingRef) recoveryFail(
+    "STRANDED_WORKTREE_UNMERGED",
+    `branch ${branch} has committed work that is not retained by an independent Git ref`,
+  );
+  // Porcelain, ignored paths, and index visibility flags together are the pre-remove
+  // safety proof.  This is deliberately re-run by recoverStrandedWorktree immediately
+  // before `worktree remove`; ordinary porcelain alone can conceal user bytes.
+  strandedWorktreeSafetyProof(worktree);
+  const references = validRunReferences({ repoRoot, branch, worktree });
+  if (references.length) recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references this branch or worktree: ${references.map((item) => item.run_id).join(", ")}`);
+  return { status: "ready", checkout, repoRoot, branch, ref, base, worktree, branchHead, retainingRef };
+}
+
+function removeEmptyRelayParents(base, worktree) {
+  const removed = [];
+  for (let cursor = path.dirname(worktree); cursor !== base && containedPath(base, cursor); cursor = path.dirname(cursor)) {
+    try { fs.rmdirSync(cursor); removed.push(cursor); }
+    catch (error) { if (!["ENOENT", "ENOTEMPTY"].includes(error.code)) throw error; break; }
+  }
+  return removed;
+}
+
+function restoreQuarantinedStrandedWorktree(current, quarantine) {
+  try {
+    if (fs.existsSync(current.worktree)) throw new Error(`original path was recreated; quarantined worktree is preserved at ${quarantine}`);
+    execGit(current.checkout, ["worktree", "move", quarantine, current.worktree]);
+    const restored = fs.realpathSync(current.worktree);
+    if (restored !== current.worktree) throw new Error("restored worktree canonical path changed");
+    assertTrustedRecoveryWorktree({ repoRoot: current.repoRoot, activeCheckout: current.checkout, relayWorktreeBase: current.base, worktree: restored });
+    if (execGit(restored, ["rev-parse", "HEAD"]) !== current.branchHead) throw new Error("restored worktree HEAD changed");
+  } catch (error) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `could not restore quarantined Relay worktree to ${current.worktree}; preserved quarantine ${quarantine}: ${commandFailure(error)}`,
+    );
+  }
+}
+
+function quarantineStrandedWorktree(current) {
+  const quarantine = `${current.worktree}.relay-recovery-${crypto.randomBytes(12).toString("hex")}`;
+  if (fs.existsSync(quarantine)) recoveryFail("STRANDED_WORKTREE_CHANGED", `quarantine path already exists: ${quarantine}`);
+  try {
+    execGit(current.checkout, ["worktree", "move", current.worktree, quarantine]);
+    const moved = fs.realpathSync(quarantine);
+    if (moved !== quarantine) throw new Error("quarantined worktree canonical path changed");
+    assertTrustedRecoveryWorktree({ repoRoot: current.repoRoot, activeCheckout: current.checkout, relayWorktreeBase: current.base, worktree: moved });
+    const registrations = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
+      .filter((entry) => entry.worktree === moved);
+    if (registrations.length !== 1 || registrations[0].branch !== current.ref || registrations[0].head !== current.branchHead) {
+      throw new Error("quarantined worktree registration changed");
+    }
+    return moved;
+  } catch (error) {
+    if (fs.existsSync(quarantine)) restoreQuarantinedStrandedWorktree(current, quarantine);
+    recoveryFail("STRANDED_WORKTREE_CHANGED", `could not quarantine stranded worktree before removal: ${commandFailure(error)}`);
+  }
+}
+
+function strandedRecoveryEvidenceBase(current) {
+  // Evidence must not keep the run/repository parents below the worktree base
+  // alive.  A sibling also keeps the preservation rename on the same filesystem.
+  const evidenceBase = `${current.base}.recovery-evidence`;
+  try { fs.mkdirSync(evidenceBase, { mode: 0o700 }); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  const stat = fs.lstatSync(evidenceBase);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(evidenceBase) !== path.resolve(evidenceBase)) {
+    recoveryFail("UNTRUSTED_WORKTREE", `Relay recovery evidence base is not a trusted directory: ${evidenceBase}`);
+  }
+  return evidenceBase;
+}
+
+function preserveAndUnregisterQuarantinedWorktree(current, quarantine) {
+  const evidenceBase = strandedRecoveryEvidenceBase(current);
+  const evidence = path.join(evidenceBase, `stranded-${crypto.randomBytes(12).toString("hex")}.preserved`);
+  try {
+    if (fs.existsSync(evidence)) throw new Error(`preservation path already exists: ${evidence}`);
+    fs.renameSync(quarantine, evidence);
+    fs.mkdirSync(quarantine);
+    fs.copyFileSync(path.join(evidence, ".git"), path.join(quarantine, ".git"), fs.constants.COPYFILE_EXCL);
+    // The filesystem tree has been atomically preserved outside the worktree
+    // base under `evidence`; force
+    // applies only to a fresh unpredictable replacement pathname containing the
+    // registration link and no user files. Existing handles still reference the
+    // preserved evidence inode, never this replacement directory.
+    execGit(current.checkout, ["worktree", "remove", "--force", quarantine]);
+    if (fs.existsSync(quarantine)) throw new Error("quarantine path appeared during unregister");
+    const registrations = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
+      .filter((entry) => entry.worktree === quarantine);
+    if (registrations.length) throw new Error("quarantined worktree registration survived unregister");
+  } catch (error) {
+    if (fs.existsSync(evidence) && fs.existsSync(quarantine)) {
+      try {
+        const replacementGit = path.join(quarantine, ".git");
+        const evidenceGit = path.join(evidence, ".git");
+        const stat = fs.lstatSync(replacementGit);
+        if (stat.isFile() && !stat.isSymbolicLink()
+          && fs.readFileSync(replacementGit).equals(fs.readFileSync(evidenceGit))) fs.unlinkSync(replacementGit);
+      } catch {}
+      try { fs.rmdirSync(quarantine); } catch {}
+    }
+    if (fs.existsSync(evidence) && !fs.existsSync(quarantine)) {
+      try { fs.renameSync(evidence, quarantine); } catch {}
+    }
+    if (fs.existsSync(quarantine) && !fs.existsSync(evidence)) restoreQuarantinedStrandedWorktree(current, quarantine);
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `could not preserve and unregister quarantined Relay worktree ${quarantine}: ${commandFailure(error)}`,
+    );
+  }
+  return evidence;
+}
+
+function restoreRegisteredHolderAfterPathRace(current, quarantine, evidence) {
+  try {
+    if (!fs.existsSync(evidence)) throw new Error(`recovery evidence disappeared: ${evidence}`);
+    if (fs.existsSync(quarantine)) throw new Error(`safe restoration path was recreated: ${quarantine}`);
+    const state = postRemoveBranchState(current);
+    if (state.branchHead !== current.branchHead || state.holders.length) {
+      throw new Error(`branch changed before holder restoration (head ${state.branchHead || "absent"}, holders ${state.holders.length})`);
+    }
+    execGit(current.checkout, ["worktree", "add", quarantine, current.branch]);
+    const restored = fs.realpathSync(quarantine);
+    if (restored !== quarantine) throw new Error("restored holder canonical path changed");
+    assertTrustedRecoveryWorktree({ repoRoot: current.repoRoot, activeCheckout: current.checkout, relayWorktreeBase: current.base, worktree: restored });
+    if (execGit(restored, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== current.branch) throw new Error("restored holder is detached or on another branch");
+    if (execGit(restored, ["rev-parse", "HEAD"]) !== current.branchHead) throw new Error("restored holder HEAD changed");
+    const registrations = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
+      .filter((entry) => entry.worktree === restored);
+    if (registrations.length !== 1 || registrations[0].branch !== current.ref || registrations[0].head !== current.branchHead) {
+      throw new Error("restored holder registration is not exact");
+    }
+    strandedWorktreeSafetyProof(restored);
+  } catch (error) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `original path raced unregister and the saved branch holder could not be restored at ${quarantine}; preserved evidence ${evidence}: ${commandFailure(error)}`,
+    );
+  }
+  return quarantine;
+}
+
+function postRemoveBranchState(current) {
+  let branchHead = null;
+  try {
+    branchHead = execGit(current.checkout, ["rev-parse", "--verify", `${current.ref}^{commit}`]);
+  } catch (error) {
+    // `rev-parse --verify` reports a missing ref with either status depending on Git version.
+    if (![1, 128].includes(error.status)) throw error;
+  }
+  const holders = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
+    .filter((entry) => entry.branch === current.ref);
+  return { branchHead, holders };
+}
+
+function restoreRemovedStrandedWorktree(current) {
+  try {
+    // Recheck immediately before restore. Attaching is safe only while the saved ref is still
+    // exact and nobody holds it; otherwise preserve the original path detached at its saved SHA.
+    const beforeRestore = postRemoveBranchState(current);
+    const attach = beforeRestore.branchHead === current.branchHead && beforeRestore.holders.length === 0;
+    if (attach) {
+      try {
+        execGit(current.checkout, ["worktree", "add", current.worktree, current.branch]);
+      } catch (error) {
+        // A holder may have appeared between the check and add. Do not disturb it; retry only a
+        // detached restoration of the removed Relay path.
+        execGit(current.checkout, ["worktree", "add", "--detach", current.worktree, current.branchHead]);
+      }
+    } else {
+      execGit(current.checkout, ["worktree", "add", "--detach", current.worktree, current.branchHead]);
+    }
+
+    const restored = fs.realpathSync(current.worktree);
+    if (restored !== current.worktree) throw new Error("restored worktree canonical path changed");
+    assertTrustedRecoveryWorktree({ repoRoot: current.repoRoot, activeCheckout: current.checkout, relayWorktreeBase: current.base, worktree: restored });
+    if (execGit(restored, ["rev-parse", "HEAD"]) !== current.branchHead) throw new Error("restored worktree HEAD does not match the saved branch head");
+    const registrations = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
+      .filter((entry) => entry.worktree === restored);
+    if (registrations.length !== 1 || registrations[0].head !== current.branchHead) throw new Error("restored worktree registration is not exact");
+    const dirt = gitBytes(restored, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    if (dirt.length) throw new Error("restored worktree is not clean");
+  } catch (error) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `could not restore original Relay worktree ${current.worktree}; saved branch ${current.branch} at ${current.branchHead} is preserved: ${commandFailure(error)}`,
+    );
+  }
+}
+
+function restoreMissingStrandedBranch(current) {
+  // Do not overwrite a ref a concurrent user recreated or moved.  The all-zero
+  // old value makes this creation conditional on the ref still being absent.
+  try {
+    execGit(current.checkout, ["update-ref", current.ref, current.branchHead, "0".repeat(current.branchHead.length)]);
+  } catch (error) {
+    let observed;
+    try { observed = postRemoveBranchState(current); }
+    catch (observeError) {
+      recoveryFail(
+        "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+        `could not verify branch ${current.branch} after atomic ref compensation: ${commandFailure(observeError)}`,
+      );
+    }
+    if (observed.branchHead === null) {
+      recoveryFail(
+        "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+        `could not atomically restore missing branch ${current.branch} at ${current.branchHead}: ${commandFailure(error)}`,
+      );
+    }
+    return observed;
+  }
+  return postRemoveBranchState(current);
+}
+
+function restoreAndValidateRemovedStrandedWorktree(current, {
+  expectedBranchHead,
+  expectedHolders = [],
+  expectedReferences = [],
+  restoreBranchIfMissing = false,
+} = {}) {
+  if (restoreBranchIfMissing) restoreMissingStrandedBranch(current);
+  restoreRemovedStrandedWorktree(current);
+
+  let finalState;
+  let finalReferences;
+  try {
+    finalState = postRemoveBranchState(current);
+    finalReferences = validRunReferences({ repoRoot: current.repoRoot, branch: current.branch, worktree: current.worktree });
+  } catch (error) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `could not revalidate compensated state for ${current.branch}: ${commandFailure(error)}`,
+    );
+  }
+  if (expectedBranchHead !== undefined && finalState.branchHead !== expectedBranchHead) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `branch ${current.branch} changed while its original Relay worktree was being restored`,
+    );
+  }
+  for (const holder of expectedHolders) {
+    if (!finalState.holders.some((entry) => entry.worktree === holder.worktree && entry.head === holder.head)) {
+      recoveryFail(
+        "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+        `registered competing worktree ${holder.worktree} was not preserved while restoring ${current.worktree}`,
+      );
+    }
+  }
+  for (const reference of expectedReferences) {
+    if (!finalReferences.some((entry) => entry.run_id === reference.run_id && entry.run_dir === reference.run_dir)) {
+      recoveryFail(
+        "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+        `valid run reference ${reference.run_id} was not preserved while restoring ${current.worktree}`,
+      );
+    }
+  }
+  return { state: finalState, references: finalReferences };
+}
+
+function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null } = {}) {
+  const initial = observeStrandedWorktree({ repository, branch, relayWorktreeBase });
+  if (initial.status === "already_recovered") {
+    return { operation: "recover_stranded_worktree", status: "already_recovered", repo: initial.repoRoot, branch: initial.branch, removed_parent_directories: [] };
+  }
+  // The inspection is intentionally repeated immediately before the first destructive Git operation.
+  // There is no run lock in this pre-run-record window, so every ownership predicate is re-proven.
+  const current = observeStrandedWorktree({ repository, branch, relayWorktreeBase: initial.base });
+  if (current.status !== "ready" || current.worktree !== initial.worktree
+    || current.branchHead !== initial.branchHead
+    || current.retainingRef.ref !== initial.retainingRef.ref
+    || current.retainingRef.oid !== initial.retainingRef.oid) {
+    recoveryFail("STRANDED_WORKTREE_CHANGED", "stranded worktree changed while recovery was revalidating it");
+  }
+  // Atomically move the registered worktree away from its published path before
+  // the final proof. A path-based writer racing the proof can only recreate the
+  // original path, whose bytes recovery never removes. The pre-run window has no
+  // executor, so there is no legitimate process holding the moved directory open.
+  const quarantine = quarantineStrandedWorktree(current);
+  try {
+    strandedWorktreeSafetyProof(quarantine);
+  } catch (error) {
+    restoreQuarantinedStrandedWorktree(current, quarantine);
+    throw error;
+  }
+  if (fs.existsSync(current.worktree)) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `original Relay path was recreated during recovery; preserved quarantined worktree ${quarantine} and new bytes at ${current.worktree}`,
+    );
+  }
+  const recoveryEvidence = preserveAndUnregisterQuarantinedWorktree(current, quarantine);
+  if (fs.existsSync(current.worktree)) {
+    const restoredHolder = restoreRegisteredHolderAfterPathRace(current, quarantine, recoveryEvidence);
+    recoveryFail(
+      "STRANDED_WORKTREE_CHANGED",
+      `original Relay path was recreated during unregister; preserved replacement bytes at ${current.worktree}, recovery evidence at ${recoveryEvidence}, and registered branch holder at ${restoredHolder}`,
+    );
+  }
+  let afterRemove;
+  let references;
+  try {
+    afterRemove = postRemoveBranchState(current);
+    references = validRunReferences({ repoRoot: current.repoRoot, branch: current.branch, worktree: current.worktree });
+  } catch (error) {
+    // Every post-remove observation failure is fail-closed only after the original user path has
+    // been restored. A failed compensation has its own actionable error above.
+    if (error.code === "STRANDED_WORKTREE_CLEANUP_INCOMPLETE") throw error;
+    restoreRemovedStrandedWorktree(current);
+    throw error;
+  }
+  if (afterRemove.branchHead !== current.branchHead) {
+    restoreAndValidateRemovedStrandedWorktree(current, { expectedBranchHead: afterRemove.branchHead });
+    recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${current.branch} changed after its worktree was removed`);
+  }
+  if (afterRemove.holders.length) {
+    restoreAndValidateRemovedStrandedWorktree(current, {
+      expectedBranchHead: afterRemove.branchHead,
+      expectedHolders: afterRemove.holders,
+    });
+    recoveryFail("STRANDED_WORKTREE_AMBIGUOUS", `branch ${current.branch} gained ${afterRemove.holders.length} registered worktree holder(s) after removal`);
+  }
+  if (references.length) {
+    restoreAndValidateRemovedStrandedWorktree(current, {
+      expectedBranchHead: afterRemove.branchHead,
+      expectedReferences: references,
+    });
+    recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references branch ${current.branch} after its worktree was removed: ${references.map((item) => item.run_id).join(", ")}`);
+  }
+  try {
+    // A branch name can be deleted and recreated between the prior observation and
+    // this command.  Compare-and-delete prevents cleanup from deleting that new ref.
+    execGit(current.checkout, ["update-ref", "--stdin"], { input: [
+      "start",
+      `verify ${current.retainingRef.ref} ${current.retainingRef.oid}`,
+      `delete ${current.ref} ${current.branchHead}`,
+      "prepare",
+      "commit",
+      "",
+    ].join("\n") });
+  } catch (error) {
+    let changed;
+    try { changed = postRemoveBranchState(current); }
+    catch (observeError) {
+      restoreAndValidateRemovedStrandedWorktree(current);
+      recoveryFail("STRANDED_BRANCH_NOT_REMOVED", `branch ${current.branch} could not be observed after atomic deletion failed: ${commandFailure(observeError)}`);
+    }
+    if (changed.branchHead !== current.branchHead) {
+      restoreAndValidateRemovedStrandedWorktree(current, { expectedBranchHead: changed.branchHead });
+      recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${current.branch} changed while recovery was deleting its saved ref`);
+    }
+    restoreAndValidateRemovedStrandedWorktree(current, { expectedBranchHead: changed.branchHead });
+    recoveryFail("STRANDED_BRANCH_NOT_REMOVED", `branch ${current.branch} was not atomically deleted after restoring its original worktree: ${commandFailure(error)}`);
+  }
+
+  // update-ref does not reject a ref that gained a worktree holder after the
+  // delete.  Re-observe immediately and recreate only a still-absent saved ref
+  // before restoring the original Relay path.  A different concurrent ref wins.
+  let afterDelete;
+  let afterDeleteReferences;
+  try {
+    afterDelete = postRemoveBranchState(current);
+    afterDeleteReferences = validRunReferences({ repoRoot: current.repoRoot, branch: current.branch, worktree: current.worktree });
+  } catch (error) {
+    restoreAndValidateRemovedStrandedWorktree(current, { restoreBranchIfMissing: true });
+    recoveryFail("STRANDED_WORKTREE_CLEANUP_INCOMPLETE", `could not observe ${current.branch} immediately after atomic deletion: ${commandFailure(error)}`);
+  }
+  if (afterDelete.branchHead !== null || afterDelete.holders.length || afterDeleteReferences.length) {
+    const compensated = restoreAndValidateRemovedStrandedWorktree(current, {
+      expectedBranchHead: afterDelete.branchHead || current.branchHead,
+      expectedHolders: afterDelete.holders,
+      expectedReferences: afterDeleteReferences,
+      restoreBranchIfMissing: true,
+    });
+    const failure = afterDelete.holders.length ? "STRANDED_WORKTREE_AMBIGUOUS"
+      : afterDeleteReferences.length ? "STRANDED_WORKTREE_REFERENCED" : "STRANDED_WORKTREE_CHANGED";
+    recoveryFail(failure, `branch ${current.branch} changed after atomic deletion; restored Relay worktree at ${current.branchHead} with ref ${compensated.state.branchHead || "absent"}`);
+  }
+
+  // Require the clean state to remain clean immediately before pruning Relay-only
+  // parent directories; if it no longer is, compensate instead of pruning.
+  let beforeParentRemoval;
+  let beforeParentReferences;
+  try {
+    beforeParentRemoval = postRemoveBranchState(current);
+    beforeParentReferences = validRunReferences({ repoRoot: current.repoRoot, branch: current.branch, worktree: current.worktree });
+  } catch (error) {
+    restoreAndValidateRemovedStrandedWorktree(current, { restoreBranchIfMissing: true });
+    recoveryFail("STRANDED_WORKTREE_CLEANUP_INCOMPLETE", `could not revalidate ${current.branch} before removing Relay parents: ${commandFailure(error)}`);
+  }
+  if (beforeParentRemoval.branchHead !== null || beforeParentRemoval.holders.length || beforeParentReferences.length) {
+    restoreAndValidateRemovedStrandedWorktree(current, {
+      expectedBranchHead: beforeParentRemoval.branchHead || current.branchHead,
+      expectedHolders: beforeParentRemoval.holders,
+      expectedReferences: beforeParentReferences,
+      restoreBranchIfMissing: true,
+    });
+    recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${current.branch} changed before Relay parent cleanup`);
+  }
+  const removed = removeEmptyRelayParents(current.base, current.worktree);
+  return {
+    operation: "recover_stranded_worktree",
+    status: "recovered",
+    repo: current.repoRoot,
+    branch: current.branch,
+    worktree: current.worktree,
+    recovery_evidence: recoveryEvidence,
+    removed_parent_directories: removed,
+  };
 }
 
 function sameFingerprint(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
@@ -1465,6 +2158,7 @@ module.exports = {
   inspectProductionRun,
   recoverRun,
   recoverProductionRun,
+  recoverStrandedWorktree,
   observeProduction,
   __testing: {
     RUNTIME_METADATA_ROOTS,
@@ -1477,12 +2171,17 @@ module.exports = {
     deterministicEventId,
     recoveryAppliedFact,
     recoverySteps,
+    observeStrandedWorktree,
     parsePorcelainV1Z,
+    parseWorktreeList,
     reviewableStatusPaths,
+    parseIndexFlagEntries,
+    parseNulGitPaths,
     resolveGithubObserverToken,
     selectGithubPr,
     stable,
     stageReviewableWork,
+    strandedWorktreeSafetyProof,
     unsafeWorktreeEntries,
   },
 };

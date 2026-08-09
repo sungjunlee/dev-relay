@@ -375,6 +375,24 @@ function foldRunFacts({
     && latestReview.payload.verdict === "changes_requested"
     && reviewBindingMatches
   ) {
+    // A completed review correction must return to recover, the sole commit/push owner;
+    // redispatch here would strand corrected bytes. #1191 worktree-base validation is untouched.
+    const latestPostReviewTerminal = known
+      .slice(known.indexOf(latestReview) + 1)
+      .filter((fact) => fact.type === "attempt_finished" || fact.type === "attempt_interrupted")
+      .at(-1) || null;
+    if (
+      latestPostReviewTerminal?.type === "attempt_finished"
+      && latestPostReviewTerminal.payload.status === "completed"
+      && hasReviewableWork(gitFacts)
+    ) {
+      return withGithubAvailability(result("recover", "publication_incomplete", {
+        head_sha: headSha,
+        reviewed_sha: latestReview.payload.reviewed_sha,
+        pr_number: prNumber,
+        diagnostics,
+      }), githubFacts);
+    }
     return result("redispatch", "changes_requested", {
       head_sha: headSha,
       reviewed_sha: latestReview.payload.reviewed_sha,

@@ -7,6 +7,7 @@ const path = require("path");
 
 const {
   foldRunFacts,
+  recoverySteps,
 } = require("../../../skills/relay-dispatch/scripts/inspect");
 
 const START = "a".repeat(40);
@@ -44,10 +45,17 @@ function started(index = 1, attemptId = "a1") {
   }, attemptId);
 }
 
-function finished(index = 2, attemptId = "a1") {
+function finished(index = 2, attemptId = "a1", overrides = {}) {
   return fact("attempt_finished", index, {
     status: "completed", start_sha: START, final_sha: HEAD, tree_sha: HEAD,
     result_path: "/r/result", exit_code: 0, verification_status: "passed",
+    ...overrides,
+  }, attemptId);
+}
+
+function interrupted(index = 2, attemptId = "a1") {
+  return fact("attempt_interrupted", index, {
+    last_known_sha: HEAD, reason: "cancelled", host_liveness: "dead", reviewable_work: true,
   }, attemptId);
 }
 
@@ -153,6 +161,54 @@ test("fold implements active, publication, review, stale, changes, and ready pre
   });
   assert.equal(ready.action, "merge");
   assert.equal(ready.reason, "ready_to_merge");
+});
+
+test("#1190 review corrections reach canonical publication recovery only after completed work", () => {
+  const beforeReview = [started(), finished(), pr(3), verification(4), review("changes_requested", 5)];
+  const observation = {
+    gitFacts: { head_sha: HEAD, tree_sha: TREE, reviewable_work: true, reviewable_dirty: true },
+    githubFacts: livePrFacts(42, { pr_lookup_complete: true }),
+  };
+  const recovered = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [...beforeReview, started(6, "a2"), finished(7, "a2")],
+    ...observation,
+  });
+  assert.equal(recovered.action, "recover");
+  assert.equal(recovered.reason, "publication_incomplete");
+  assert.deepEqual(recoverySteps(recovered, {
+    git: { head_sha: HEAD, reviewable_dirty: true, remote_head_sha: HEAD },
+    github: { pr_state: "OPEN", matching_pr_count: 1, pr_head_sha: HEAD },
+  }, [...beforeReview, started(6, "a2"), finished(7, "a2")]), [
+    "commit_work", "push_branch", "record_or_create_pr",
+  ]);
+
+  const boundaries = [
+    { name: "no post-review attempt", facts: [pr(3), verification(4), review("changes_requested", 5)] },
+    { name: "attempt before review", facts: beforeReview },
+    {
+      name: "failed post-review attempt",
+      facts: [...beforeReview, started(6, "a2"), finished(7, "a2", { status: "failed", exit_code: 1 })],
+    },
+    {
+      name: "interrupted post-review attempt",
+      facts: [...beforeReview, started(6, "a2"), interrupted(7, "a2")],
+    },
+    {
+      name: "completed post-review attempt without reviewable work",
+      facts: [...beforeReview, started(6, "a2"), finished(7, "a2")],
+      gitFacts: { head_sha: HEAD, tree_sha: TREE },
+    },
+  ];
+  for (const boundary of boundaries) {
+    const result = foldRunFacts({
+      runRecord: runRecord(),
+      ...observation,
+      ...boundary,
+    });
+    assert.equal(result.action, "redispatch", boundary.name);
+    assert.equal(result.reason, "changes_requested", boundary.name);
+  }
 });
 test("exact criteria binding, external revalidation, and identity conflicts fail closed", () => {
   const staleCriteria = foldRunFacts({

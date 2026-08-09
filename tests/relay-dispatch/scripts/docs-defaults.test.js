@@ -69,6 +69,8 @@ test("recovery playbook documents only the canonical inspect/recover surface", (
 
   assert.match(playbook, /relay-recover\.js inspect/);
   assert.match(playbook, /relay-recover\.js recover/);
+  assert.match(playbook, /--repo <canonical-checkout> --branch <branch>/);
+  assert.match(playbook, /stranded Relay worktree/);
   assert.match(playbook, /Retired verbs and their target-state\s+and force-policy flags fail closed/);
   assert.match(playbook, /accepts only `inspect` and `recover`/);
   assert.doesNotMatch(playbook, /remain temporary argv aliases/);

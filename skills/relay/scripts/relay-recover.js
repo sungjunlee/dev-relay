@@ -5,16 +5,16 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const runStore = require("../../relay-dispatch/scripts/run-store");
-const { inspectProductionRun, recoverProductionRun } = require("../../relay-dispatch/scripts/recover");
+const { inspectProductionRun, recoverProductionRun, recoverStrandedWorktree } = require("../../relay-dispatch/scripts/recover");
 
 const KNOWN_FLAGS = [
-  "--repo", "--run-id", "--run-dir", "--reason", "--actor",
+  "--repo", "--branch", "--run-id", "--run-dir", "--reason", "--actor",
   "--expected-action-key", "--verification-file", "--break-lock", "--json", "--help", "-h",
 ];
 const CLI_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
   booleanFlags: ["--break-lock", "--json", "--help", "-h"],
-  verbatimValueFlags: ["--repo", "--run-dir", "--reason", "--actor", "--verification-file"],
+  verbatimValueFlags: ["--repo", "--branch", "--run-dir", "--reason", "--actor", "--verification-file"],
 };
 function parseCli(argv) {
   const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_OPTIONS.booleanFlags), verbatim = new Set(CLI_OPTIONS.verbatimValueFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (flag, value) => value !== undefined && (verbatim.has(flag) || (!String(value).startsWith("--") && !known.has(String(value))));
@@ -28,8 +28,9 @@ function usage() {
     "Usage:",
     "  relay-recover.js inspect (--repo <path> --run-id <id> | --run-dir <path>) [--json]",
     "  relay-recover.js recover (--repo <path> --run-id <id> | --run-dir <path>) --reason <text> [--actor <name>] [--expected-action-key <sha256>] [--verification-file <path>] [--break-lock] [--json]",
+    "  relay-recover.js recover --repo <path> --branch <branch> --reason <text> [--json]",
     "",
-    "inspect is strictly read-only. recover is the sole idempotent mutation operation.",
+    "inspect is strictly read-only. recover is the sole idempotent mutation operation. The repo-and-branch form removes only a clean Relay-owned worktree stranded before run.json existed.",
   ].join("\n");
 }
 
@@ -58,6 +59,14 @@ function resolveRunDir(cli) {
 }
 
 function formatText(result) {
+  if (result.operation === "recover_stranded_worktree") {
+    return [
+      `Repository: ${result.repo}`,
+      `Branch: ${result.branch}`,
+      `Operation: ${result.operation}`,
+      `Status: ${result.status}`,
+    ].join("\n");
+  }
   const lines = [
     `Run: ${result.run_id}`,
     `Operation: ${result.operation}`,
@@ -84,26 +93,39 @@ async function main(argv = process.argv.slice(2)) {
   if (!new Set(["inspect", "recover"]).has(command)) {
     throw new Error(`unknown operation ${command}; expected inspect or recover`);
   }
-  const runDir = resolveRunDir(cli);
   let result;
-  if (command === "inspect") {
-    for (const flag of ["--reason", "--actor", "--expected-action-key", "--verification-file", "--break-lock"]) {
-      if (cli.hasFlag(flag)) throw new Error(`${flag} is only valid for recover`);
+  const branch = cli.getArg("--branch");
+  if (branch) {
+    if (command !== "recover") throw new Error("--branch is only valid for recover");
+    if (!cli.getArg("--repo")) throw new Error("--repo is required with --branch");
+    if (cli.getArg("--run-id") || cli.getArg("--run-dir")) throw new Error("--branch is mutually exclusive with --run-id/--run-dir");
+    for (const flag of ["--actor", "--expected-action-key", "--verification-file", "--break-lock"]) {
+      if (cli.hasFlag(flag)) throw new Error(`${flag} is not valid for stranded-worktree recovery`);
     }
-    result = await inspectProductionRun({ runDir });
-  } else {
     const reason = String(cli.getArg("--reason") || "").trim();
     if (!reason) throw new Error("recover requires --reason <text>");
-    const record = runStore.readRunRecord({ runDir });
-    const actor = String(cli.getArg("--actor") || getActorName(record.repo.root)).trim();
-    result = await recoverProductionRun({
-      runDir,
-      actor,
-      reason,
-      expectedActionKey: cli.getArg("--expected-action-key") || null,
-      verificationFile: cli.getArg("--verification-file") || null,
-      breakLock: cli.hasFlag("--break-lock"),
-    });
+    result = recoverStrandedWorktree({ repository: path.resolve(cli.getArg("--repo")), branch });
+  } else {
+    const runDir = resolveRunDir(cli);
+    if (command === "inspect") {
+      for (const flag of ["--reason", "--actor", "--expected-action-key", "--verification-file", "--break-lock"]) {
+        if (cli.hasFlag(flag)) throw new Error(`${flag} is only valid for recover`);
+      }
+      result = await inspectProductionRun({ runDir });
+    } else {
+      const reason = String(cli.getArg("--reason") || "").trim();
+      if (!reason) throw new Error("recover requires --reason <text>");
+      const record = runStore.readRunRecord({ runDir });
+      const actor = String(cli.getArg("--actor") || getActorName(record.repo.root)).trim();
+      result = await recoverProductionRun({
+        runDir,
+        actor,
+        reason,
+        expectedActionKey: cli.getArg("--expected-action-key") || null,
+        verificationFile: cli.getArg("--verification-file") || null,
+        breakLock: cli.hasFlag("--break-lock"),
+      });
+    }
   }
   console.log(cli.hasFlag("--json") ? JSON.stringify(result, null, 2) : formatText(result));
   return 0;
