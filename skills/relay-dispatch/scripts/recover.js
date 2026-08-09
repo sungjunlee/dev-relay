@@ -28,6 +28,14 @@ const RUNTIME_METADATA_ROOTS = Object.freeze([
   ".antigravity", ".antigravitycli", ".cline",
 ]);
 const RUNTIME_METADATA_COMPONENTS = new Set(RUNTIME_METADATA_ROOTS);
+// These are the only candidate records that are positively known not to be a
+// usable vNext ownership claim. All read/trust failures fail closed instead.
+const IGNORABLE_RUN_RECORD_CODES = new Set([
+  "RUN_RECORD_MISSING",
+  "INVALID_RUN_RECORD",
+  "UNSUPPORTED_RUN_VERSION",
+  "RUN_ID_PATH_MISMATCH",
+]);
 function decodeGitPath(bytes) {
   const value = bytes.toString("utf8");
   if (!Buffer.from(value, "utf8").equals(bytes)) {
@@ -230,24 +238,50 @@ function localBranchRef(checkout, branch) {
 function parseWorktreeList(value) {
   const entries = [];
   let entry = null;
+  const finish = () => {
+    if (!entry) return;
+    const identities = [entry.branch !== null, entry.detached, entry.bare].filter(Boolean).length;
+    if (identities !== 1 || (entry.bare && entry.head !== null) || (!entry.bare && entry.head === null)) {
+      recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned conflicting worktree identities");
+    }
+    entries.push(entry);
+    entry = null;
+  };
   for (const line of String(value || "").split("\n")) {
     if (!line) {
-      if (entry) { entries.push(entry); entry = null; }
+      finish();
       continue;
     }
     const match = /^(worktree|HEAD|branch) (.+)$/.exec(line);
-    if (!match) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned an unsupported record");
-    if (match[1] === "worktree") {
+    const flag = /^(detached|bare)$/.exec(line);
+    const annotation = /^(locked|prunable)(?: (.+))?$/.exec(line);
+    if (!match && !flag && !annotation) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned an unsupported record");
+    const field = match?.[1] || flag?.[1] || annotation?.[1];
+    const payload = match?.[2] || annotation?.[2] || null;
+    if (field === "worktree") {
       if (entry) recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list record is missing its separator");
-      entry = { worktree: match[2], head: null, branch: null };
-    } else if (!entry || entry[match[1].toLowerCase()] !== null) {
+      entry = { worktree: payload, head: null, branch: null, detached: false, bare: false, locked: null, prunable: null };
+    } else if (!entry) {
       recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned a malformed record");
     } else {
-      entry[match[1].toLowerCase()] = match[2];
+      const order = { HEAD: 1, branch: 2, detached: 2, bare: 2, locked: 3, prunable: 4 };
+      const prior = entry._order || 0;
+      if (entry[field.toLowerCase()] !== null && entry[field.toLowerCase()] !== false) {
+        recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned a duplicate singleton field");
+      }
+      if (order[field] < prior || (order[field] === prior && ["branch", "detached", "bare"].includes(field))) {
+        recoveryFail("INVALID_WORKTREE_REGISTRY", "git worktree list returned fields in an invalid order");
+      }
+      if (field === "HEAD") entry.head = payload;
+      else if (field === "branch") entry.branch = payload;
+      else if (field === "detached") entry.detached = true;
+      else if (field === "bare") entry.bare = true;
+      else entry[field] = payload || "";
+      entry._order = order[field];
     }
   }
-  if (entry) entries.push(entry);
-  return entries;
+  finish();
+  return entries.map(({ _order, ...value }) => value);
 }
 
 function branchExists(checkout, ref) {
@@ -295,7 +329,13 @@ function validRunReferences({ repoRoot, branch, worktree }) {
       if (!runStat.isDirectory()) continue;
       let record;
       try { record = readRunRecord({ runDir }); }
-      catch { continue; }
+      catch (error) {
+        // An unclaimed directory or an old/structurally-invalid record cannot own this
+        // stranded worktree. Everything else is an inspection failure, not evidence of
+        // absence, and must stop recovery before it deletes Git state.
+        if (IGNORABLE_RUN_RECORD_CODES.has(error?.code)) continue;
+        recoveryFail("UNREADABLE_RUN_RECORD", `cannot safely inspect candidate run record ${runDir}: ${error?.code || error?.message || "unknown read failure"}`);
+      }
       let recordRepoRoot = null;
       try { recordRepoRoot = fs.realpathSync(record.repo.root); } catch {}
       let recordWorktree = path.resolve(record.git.worktree);
@@ -1678,6 +1718,7 @@ module.exports = {
     recoverySteps,
     observeStrandedWorktree,
     parsePorcelainV1Z,
+    parseWorktreeList,
     reviewableStatusPaths,
     resolveGithubObserverToken,
     selectGithubPr,

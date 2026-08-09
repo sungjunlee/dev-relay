@@ -451,6 +451,78 @@ test("a post-worktree-add kill is recovered through the typed repo-and-branch re
   assert.equal(json(repeated.stdout).status, "already_recovered");
 });
 
+test("stranded-worktree recovery ignores absent and structurally invalid candidate run records", (t) => {
+  const value = fixture("stranded-worktree-ignorable-records");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-ignorable-records";
+  const worktree = path.join(value.relayHome, "worktrees", "stranded-ignorable-records");
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+
+  const candidateBase = fixtureRunsDir(value);
+  fs.mkdirSync(path.join(candidateBase, "missing"), { recursive: true });
+  fs.mkdirSync(path.join(candidateBase, "invalid"));
+  fs.writeFileSync(path.join(candidateBase, "invalid", "run.json"), "{}\n");
+
+  const result = spawnSync(process.execPath, [RELAY_RECOVER, "recover", "--repo", value.repo, "--branch", branch,
+    "--reason", "ignore unclaimed and invalid candidates", "--json"], { encoding: "utf8", env: value.env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(json(result.stdout).status, "recovered");
+  assert.equal(fs.existsSync(worktree), false);
+  assert.equal(git(value.repo, ["branch", "--list", branch]), "");
+});
+
+test("stranded-worktree recovery fails closed when a candidate run record is untrusted", (t) => {
+  const value = fixture("stranded-worktree-untrusted-record");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-untrusted-record";
+  const worktree = path.join(value.relayHome, "worktrees", "stranded-untrusted-record");
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+
+  const candidate = path.join(fixtureRunsDir(value), "untrusted");
+  const target = path.join(value.root, "candidate-run.json");
+  fs.mkdirSync(candidate, { recursive: true });
+  fs.writeFileSync(target, "{}\n");
+  fs.symlinkSync(target, path.join(candidate, "run.json"));
+
+  const result = spawnSync(process.execPath, [RELAY_RECOVER, "recover", "--repo", value.repo, "--branch", branch,
+    "--reason", "do not discard when run ownership cannot be inspected", "--json"], { encoding: "utf8", env: value.env });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /cannot safely inspect candidate run record.*UNTRUSTED_RUN_ARTIFACT/);
+  assert.equal(fs.existsSync(worktree), true, "untrusted candidate inspection must happen before worktree deletion");
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40, "branch must survive failed inspection");
+  assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`branch refs/heads/${branch}`));
+});
+
+test("worktree porcelain accepts standard unrelated record types and rejects malformed records", () => {
+  const head = "a".repeat(40);
+  const entries = recovery.__testing.parseWorktreeList([
+    "worktree /repo", `HEAD ${head}`, "branch refs/heads/target", "",
+    "worktree /detached", `HEAD ${head}`, "detached", "locked maintenance window", "prunable gitdir is gone", "",
+    "worktree /bare", "bare", "locked", "prunable", "",
+  ].join("\n"));
+  assert.deepEqual(entries.filter((entry) => entry.branch === "refs/heads/target").map((entry) => entry.worktree), ["/repo"]);
+  assert.deepEqual(entries[1], {
+    worktree: "/detached", head, branch: null, detached: true, bare: false,
+    locked: "maintenance window", prunable: "gitdir is gone",
+  });
+  assert.deepEqual(entries[2], {
+    worktree: "/bare", head: null, branch: null, detached: false, bare: true,
+    locked: "", prunable: "",
+  });
+  assert.throws(
+    () => recovery.__testing.parseWorktreeList(`worktree /repo\nHEAD ${head}\nbranch refs/heads/target\nfuture value\n`),
+    (error) => error.code === "INVALID_WORKTREE_REGISTRY",
+  );
+  assert.throws(
+    () => recovery.__testing.parseWorktreeList(`worktree /repo\nHEAD ${head}\nbranch refs/heads/target\ndetached\n`),
+    (error) => error.code === "INVALID_WORKTREE_REGISTRY",
+  );
+});
+
 test("stranded-worktree recovery preserves a branch checked out during cleanup", (t) => {
   const value = fixture("stranded-worktree-holder-race");
   t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
