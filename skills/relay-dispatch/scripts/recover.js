@@ -404,6 +404,54 @@ function removeEmptyRelayParents(base, worktree) {
   return removed;
 }
 
+function postRemoveBranchState(current) {
+  let branchHead = null;
+  try {
+    branchHead = execGit(current.checkout, ["rev-parse", "--verify", `${current.ref}^{commit}`]);
+  } catch (error) {
+    // `rev-parse --verify` reports a missing ref with either status depending on Git version.
+    if (![1, 128].includes(error.status)) throw error;
+  }
+  const holders = parseWorktreeList(execGit(current.checkout, ["worktree", "list", "--porcelain"], { raw: true }))
+    .filter((entry) => entry.branch === current.ref);
+  return { branchHead, holders };
+}
+
+function restoreRemovedStrandedWorktree(current) {
+  try {
+    // Recheck immediately before restore. Attaching is safe only while the saved ref is still
+    // exact and nobody holds it; otherwise preserve the original path detached at its saved SHA.
+    const beforeRestore = postRemoveBranchState(current);
+    const attach = beforeRestore.branchHead === current.branchHead && beforeRestore.holders.length === 0;
+    if (attach) {
+      try {
+        execGit(current.checkout, ["worktree", "add", current.worktree, current.branch]);
+      } catch (error) {
+        // A holder may have appeared between the check and add. Do not disturb it; retry only a
+        // detached restoration of the removed Relay path.
+        execGit(current.checkout, ["worktree", "add", "--detach", current.worktree, current.branchHead]);
+      }
+    } else {
+      execGit(current.checkout, ["worktree", "add", "--detach", current.worktree, current.branchHead]);
+    }
+
+    const restored = fs.realpathSync(current.worktree);
+    if (restored !== current.worktree) throw new Error("restored worktree canonical path changed");
+    assertTrustedRecoveryWorktree({ repoRoot: current.repoRoot, activeCheckout: current.checkout, relayWorktreeBase: current.base, worktree: restored });
+    if (execGit(restored, ["rev-parse", "HEAD"]) !== current.branchHead) throw new Error("restored worktree HEAD does not match the saved branch head");
+    const registrations = parseWorktreeList(execGit(current.checkout, ["worktree", "list", "--porcelain"], { raw: true }))
+      .filter((entry) => entry.worktree === restored);
+    if (registrations.length !== 1 || registrations[0].head !== current.branchHead) throw new Error("restored worktree registration is not exact");
+    const dirt = gitBytes(restored, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    if (dirt.length) throw new Error("restored worktree is not clean");
+  } catch (error) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `could not restore original Relay worktree ${current.worktree}; saved branch ${current.branch} at ${current.branchHead} is preserved: ${commandFailure(error)}`,
+    );
+  }
+}
+
 function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null } = {}) {
   const initial = observeStrandedWorktree({ repository, branch, relayWorktreeBase });
   if (initial.status === "already_recovered") {
@@ -417,10 +465,35 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
     recoveryFail("STRANDED_WORKTREE_CHANGED", "stranded worktree changed while recovery was revalidating it");
   }
   execGit(current.checkout, ["worktree", "remove", current.worktree]);
+  let afterRemove;
+  let references;
+  try {
+    afterRemove = postRemoveBranchState(current);
+    references = validRunReferences({ repoRoot: current.repoRoot, branch: current.branch, worktree: current.worktree });
+  } catch (error) {
+    // Every post-remove observation failure is fail-closed only after the original user path has
+    // been restored. A failed compensation has its own actionable error above.
+    if (error.code === "STRANDED_WORKTREE_CLEANUP_INCOMPLETE") throw error;
+    restoreRemovedStrandedWorktree(current);
+    throw error;
+  }
+  if (afterRemove.branchHead !== current.branchHead) {
+    restoreRemovedStrandedWorktree(current);
+    recoveryFail("STRANDED_WORKTREE_CHANGED", `branch ${current.branch} changed after its worktree was removed`);
+  }
+  if (afterRemove.holders.length) {
+    restoreRemovedStrandedWorktree(current);
+    recoveryFail("STRANDED_WORKTREE_AMBIGUOUS", `branch ${current.branch} gained ${afterRemove.holders.length} registered worktree holder(s) after removal`);
+  }
+  if (references.length) {
+    restoreRemovedStrandedWorktree(current);
+    recoveryFail("STRANDED_WORKTREE_REFERENCED", `a valid vNext run references branch ${current.branch} after its worktree was removed: ${references.map((item) => item.run_id).join(", ")}`);
+  }
   try {
     execGit(current.checkout, ["branch", "-d", "--", current.branch]);
   } catch (error) {
-    recoveryFail("STRANDED_BRANCH_NOT_REMOVED", `worktree was removed but branch ${current.branch} was not deleted safely: ${commandFailure(error)}`);
+    restoreRemovedStrandedWorktree(current);
+    recoveryFail("STRANDED_BRANCH_NOT_REMOVED", `branch ${current.branch} was not deleted safely after restoring its original worktree: ${commandFailure(error)}`);
   }
   const removed = removeEmptyRelayParents(current.base, current.worktree);
   return {

@@ -234,6 +234,72 @@ test("losing the run-directory claim race unwinds only the loser's own branch an
   assert.equal(git(value.repo, ["branch", "--list", "race-loser"]), "", "the loser must remove the branch it created");
 });
 
+// The exclusive `git branch` failure is the ownership boundary. A competing ref can disappear
+// before Git returns, so dispatch must not turn that failure into a mutable post-failure probe.
+test("an atomic branch collision remains BRANCH_EXISTS when the competing ref vanishes before return", (t) => {
+  const value = fixture("vanishing-branch-collision");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "vanishing-collision";
+  const runId = "vanishing-collision-run";
+  const log = path.join(value.root, "git.log");
+  const gitStub = path.join(value.root, "vanishing-collision-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const fs = require("node:fs");',
+    'const args = process.argv.slice(2);',
+    `fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");`,
+    'const at = args[0] === "-C" ? 2 : 0;',
+    `if (args[at] === "branch" && args[at + 1] === ${JSON.stringify(branch)}) {`,
+    '  const repo = args[0] === "-C" ? args[1] : process.cwd();',
+    '  execFileSync(REAL_GIT, ["-C", repo, "branch", args[at + 1], args[at + 2]], { stdio: "inherit" });',
+    '  execFileSync(REAL_GIT, ["-C", repo, "branch", "-D", args[at + 1]], { stdio: "inherit" });',
+    '  process.stderr.write("fatal: a branch named collision already exists\\n");',
+    '  process.exit(128);',
+    '}',
+    'execFileSync(REAL_GIT, args, { stdio: "inherit" });',
+  ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });
+
+  const result = run(value, ["--branch", branch, "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env, RELAY_GIT_BIN: gitStub, RELAY_DISPATCH_INTERNAL_RUN_ID: runId,
+  });
+  assert.notEqual(result.status, 0);
+  const failure = json(result.stderr);
+  assert.equal(failure.code, "BRANCH_EXISTS");
+  assert.match(failure.error, new RegExp(`relay-recover\\.js recover --repo ['"]?${value.repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(failure.error, new RegExp(`--branch ['"]?${branch}`));
+  assert.equal(git(value.repo, ["branch", "--list", branch]), "", "the vanished competing ref must not be re-probed or recreated");
+  assert.equal(fs.existsSync(path.join(value.relayHome, "runs", runId)), false, "a collision must not start dispatch recovery");
+  const calls = fs.readFileSync(log, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(calls.some((args) => args.includes("show-ref")), false, "dispatch must not probe mutable branch state after the failed create");
+  assert.equal(calls.some((args) => args.includes("remove") || args.includes("-D")), false, "dispatch must not mutate recovery state after the failed create");
+});
+
+test("a non-collision branch creation failure is not mislabeled BRANCH_EXISTS", (t) => {
+  const value = fixture("branch-create-io-failure");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const gitStub = path.join(value.root, "branch-create-io-failure-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const args = process.argv.slice(2);',
+    'const at = args[0] === "-C" ? 2 : 0;',
+    'if (args[at] === "branch" && args[at + 1] === "io-failure") {',
+    '  process.stderr.write("fatal: cannot write ref: input/output error\\n");',
+    '  process.exit(128);',
+    '}',
+    'execFileSync(REAL_GIT, args, { stdio: "inherit" });',
+  ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });
+
+  const result = run(value, ["--branch", "io-failure", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env, RELAY_GIT_BIN: gitStub, RELAY_DISPATCH_INTERNAL_RUN_ID: "branch-create-io-failure-run",
+  });
+  assert.notEqual(result.status, 0);
+  const failure = json(result.stderr);
+  assert.notEqual(failure.code, "BRANCH_EXISTS");
+  assert.doesNotMatch(failure.error, /relay-recover\.js recover/);
+});
+
 // `git worktree add -b` creates the branch before it can reject an occupied destination, so a
 // dispatch that loses the retained-worktree race must delete the branch it just created. The
 // preload hides the worktree path from the pre-check exactly once, which is what the real race
@@ -557,7 +623,7 @@ test("stranded-worktree recovery preserves a branch checked out during cleanup",
       branch,
       relayWorktreeBase: path.join(value.relayHome, "worktrees"),
     }),
-      (error) => error.code === "STRANDED_BRANCH_NOT_REMOVED");
+      (error) => error.code === "STRANDED_WORKTREE_AMBIGUOUS");
   } finally {
     if (previousGit === undefined) delete process.env.RELAY_GIT_BIN;
     else process.env.RELAY_GIT_BIN = previousGit;
@@ -567,10 +633,82 @@ test("stranded-worktree recovery preserves a branch checked out during cleanup",
     else process.env.RELAY_TEST_HOLDER_BRANCH = previousHolderBranch;
   }
 
-  assert.equal(fs.existsSync(worktree), false, "the observed stranded worktree was removed before the competing checkout");
+  assert.equal(fs.existsSync(worktree), true, "the removed Relay worktree must be restored before failing closed");
   assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40, "the competing holder keeps the branch ref");
   assert.equal(git(holder, ["symbolic-ref", "--short", "HEAD"]), branch);
+  assert.equal(git(worktree, ["rev-parse", "HEAD"]), git(value.repo, ["rev-parse", "--verify", branch]), "the restored path keeps the exact saved checkout");
+  assert.throws(() => git(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"]), "the restored path must not steal the competing holder's branch");
   assert.equal(git(value.repo, ["worktree", "list", "--porcelain"]).includes(`worktree ${holder}`), true);
+  assert.equal(git(value.repo, ["worktree", "list", "--porcelain"]).includes(`worktree ${worktree}`), true);
+});
+
+test("stranded-worktree recovery restores the original path when a valid run reference appears after removal", (t) => {
+  const value = fixture("stranded-worktree-reference-race");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-reference-race";
+  const worktree = path.join(value.relayHome, "worktrees", "stranded-reference-race");
+  const head = git(value.repo, ["rev-parse", "HEAD"]);
+  const runId = "post-remove-reference";
+  const runDir = path.join(fixtureRunsDir(value), runId);
+  const criteria = "done_criteria:\n  - preserve the stranded checkout\n";
+  const payloadPath = path.join(value.root, "post-remove-reference.json");
+  const record = {
+    version: 3,
+    run_id: runId,
+    repo: { root: fs.realpathSync(value.repo), remote: "local/test" },
+    git: { branch, base_branch: "main", worktree, start_sha: head },
+    contract: { done_criteria_path: path.join(runDir, "done-criteria.md"), done_criteria_sha256: crypto.createHash("sha256").update(criteria).digest("hex") },
+    roles: { orchestrator: "relay", executor: "codex", reviewer: "reviewer" },
+    parent: null,
+    ownership_digest: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+  };
+  fs.writeFileSync(payloadPath, JSON.stringify({ runDir, criteria, record }));
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  const gitStub = path.join(value.root, "reference-race-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const fs = require("node:fs");',
+    'const args = process.argv.slice(2);',
+    'const at = args[0] === "-C" ? 2 : 0;',
+    'execFileSync(REAL_GIT, args, { stdio: "inherit" });',
+    'if (args[at] === "worktree" && args[at + 1] === "remove") {',
+    '  const payload = JSON.parse(fs.readFileSync(process.env.RELAY_TEST_REFERENCE_PAYLOAD, "utf8"));',
+    '  fs.mkdirSync(payload.runDir, { recursive: true });',
+    '  fs.writeFileSync(payload.record.contract.done_criteria_path, payload.criteria);',
+    '  fs.writeFileSync(`${payload.runDir}/run.json`, `${JSON.stringify(payload.record, null, 2)}\\n`);',
+    '}',
+  ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });
+
+  const previousGit = process.env.RELAY_GIT_BIN;
+  const previousHome = process.env.RELAY_HOME;
+  const previousPayload = process.env.RELAY_TEST_REFERENCE_PAYLOAD;
+  process.env.RELAY_GIT_BIN = gitStub;
+  process.env.RELAY_HOME = value.relayHome;
+  process.env.RELAY_TEST_REFERENCE_PAYLOAD = payloadPath;
+  try {
+    assert.throws(() => recovery.recoverStrandedWorktree({
+      repository: value.repo,
+      branch,
+      relayWorktreeBase: path.join(value.relayHome, "worktrees"),
+    }), (error) => error.code === "STRANDED_WORKTREE_REFERENCED");
+  } finally {
+    if (previousGit === undefined) delete process.env.RELAY_GIT_BIN;
+    else process.env.RELAY_GIT_BIN = previousGit;
+    if (previousHome === undefined) delete process.env.RELAY_HOME;
+    else process.env.RELAY_HOME = previousHome;
+    if (previousPayload === undefined) delete process.env.RELAY_TEST_REFERENCE_PAYLOAD;
+    else process.env.RELAY_TEST_REFERENCE_PAYLOAD = previousPayload;
+  }
+
+  assert.equal(fs.existsSync(worktree), true, "the original Relay path must be restored before reporting the new run reference");
+  assert.equal(git(worktree, ["symbolic-ref", "--short", "HEAD"]), branch, "an exact free branch may be restored attached");
+  assert.equal(git(worktree, ["rev-parse", "HEAD"]), head);
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]), head, "the branch ref must survive the race");
+  assert.equal(git(value.repo, ["worktree", "list", "--porcelain"]).includes(`worktree ${worktree}`), true);
 });
 
 test("stranded-worktree recovery fails closed without deleting reviewable work", (t) => {

@@ -96,6 +96,11 @@ function branchExistsMessage(checkout, branch) {
   ].join(". ");
 }
 
+function isExclusiveBranchCollision(error) {
+  const output = String(error?.stderr || error?.message || "");
+  return /(?:a branch named .* already exists|cannot lock ref .*reference already exists)/.test(output);
+}
+
 function observeAttemptWorktree(worktree) {
   return {
     head_sha: git(worktree, ["rev-parse", "HEAD"]),
@@ -327,12 +332,16 @@ function createRetainedWorktree(identity, runId, branch) {
   // distinguishes ours from one a concurrent dispatch created a moment earlier. Probing with
   // `rev-parse` first would only move that race, not close it.
   try {
-    git(identity.checkout, ["branch", branch, startSha]);
+    git(identity.checkout, ["branch", branch, startSha], {
+      env: { ...process.env, LANG: "C", LC_ALL: "C" },
+    });
   } catch (error) {
-    // The exclusive ref create is the branch-ownership boundary. Do not inspect or clean up here:
-    // recovery owns every mutation for an already-existing branch, including the add->run.json
-    // kill window. A second probe only translates Git's collision into an actionable typed error.
-    if (branchExists(identity.checkout, branch)) fail(branchExistsMessage(identity.checkout, branch), "BRANCH_EXISTS");
+    // The exclusive ref create is the branch-ownership boundary. Its failure means this dispatch
+    // did not acquire the requested branch, even if another actor removes that ref before this
+    // process can observe it. Do not re-probe or clean up mutable branch state here.
+    if (isExclusiveBranchCollision(error)) {
+      fail(branchExistsMessage(identity.checkout, branch), "BRANCH_EXISTS");
+    }
     throw error;
   }
   let registered = false;
