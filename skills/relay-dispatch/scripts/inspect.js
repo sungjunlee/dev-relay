@@ -262,10 +262,13 @@ function foldRunFacts({
   const prHead = githubFacts.pr_head_sha || prFact?.payload?.head_sha || null;
   const finalAttempt = known.filter((fact) => fact.type === "attempt_finished").at(-1) || null;
   const interrupted = known.filter((fact) => fact.type === "attempt_interrupted").at(-1) || null;
+  const reviews = known.filter((fact) => fact.type === "review_recorded");
+  const latestReview = reviews.at(-1) || null;
   const headSha = gitFacts.head_sha || prHead || finalAttempt?.payload?.final_sha || interrupted?.payload?.last_known_sha || null;
   if (prFact && !completeRecordedPrObservation(githubFacts)) {
     return none("github_unavailable", {
       head_sha: headSha,
+      reviewed_sha: latestReview?.payload?.reviewed_sha || null,
       pr_number: prNumber,
       diagnostics: [{ code: "github_pr_observation_incomplete" }],
     });
@@ -273,6 +276,7 @@ function foldRunFacts({
   if (prFact && githubFacts.pr_state === "CLOSED") {
     return none("github_pr_closed_unmerged", {
       head_sha: headSha,
+      reviewed_sha: latestReview?.payload?.reviewed_sha || null,
       pr_number: prNumber,
       diagnostics: [{ code: "github_pr_closed_unmerged" }],
     });
@@ -284,6 +288,7 @@ function foldRunFacts({
     ) {
       return none("github_unavailable", {
         head_sha: headSha,
+        reviewed_sha: latestReview?.payload?.reviewed_sha || null,
         pr_number: prNumber,
         diagnostics: [{ code: "github_merge_observation_incomplete" }],
       });
@@ -356,8 +361,6 @@ function foldRunFacts({
       diagnostics,
     }), githubFacts);
   }
-  const reviews = known.filter((fact) => fact.type === "review_recorded");
-  const latestReview = reviews.at(-1) || null;
   const criteriaHash = runRecord.contract?.done_criteria_sha256 || null;
   const currentTreeSha = gitFacts.head_sha === prHead ? gitFacts.tree_sha : null;
   const reviewBindingMatches = Boolean(
