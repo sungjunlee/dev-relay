@@ -1043,6 +1043,67 @@ test("stranded-worktree recovery quarantines before the final hidden-content pro
   assert.equal(fs.existsSync(path.join(relayWorktreeBase, "runs")), false, "all empty Relay-owned worktree parents are removed");
 });
 
+test("stranded-worktree recovery restores a registered holder when the original path races unregister", (t) => {
+  const value = fixture("stranded-worktree-unregister-path-race");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-unregister-path-race";
+  const relayWorktreeBase = path.join(value.relayHome, "worktrees");
+  const worktree = path.join(relayWorktreeBase, "runs", "unregister-path-race", "repo");
+  const marker = path.join(worktree, "concurrent-operator-notes.txt");
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  const gitStub = path.join(value.root, "unregister-path-race-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const fs = require("node:fs");',
+    'const path = require("node:path");',
+    'const args = process.argv.slice(2);',
+    'const at = args[0] === "-C" ? 2 : 0;',
+    'const input = args[at] === "update-ref" && args[at + 1] === "--stdin" ? fs.readFileSync(0) : null;',
+    'const output = execFileSync(REAL_GIT, args, { encoding: null, input, stdio: [input ? "pipe" : "ignore", "pipe", "inherit"] });',
+    'if (args[at] === "worktree" && args[at + 1] === "remove") {',
+    '  fs.mkdirSync(path.dirname(process.env.RELAY_TEST_RACE_MARKER), { recursive: true });',
+    '  fs.writeFileSync(process.env.RELAY_TEST_RACE_MARKER, "concurrent bytes survive\\n");',
+    '}',
+    'process.stdout.write(output);',
+  ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });
+
+  const previousGit = process.env.RELAY_GIT_BIN;
+  const previousMarker = process.env.RELAY_TEST_RACE_MARKER;
+  process.env.RELAY_GIT_BIN = gitStub;
+  process.env.RELAY_TEST_RACE_MARKER = marker;
+  let failure;
+  try {
+    assert.throws(() => recovery.recoverStrandedWorktree({ repository: value.repo, branch, relayWorktreeBase }),
+      (error) => { failure = error; return error.code === "STRANDED_WORKTREE_CHANGED"; });
+  } finally {
+    if (previousGit === undefined) delete process.env.RELAY_GIT_BIN;
+    else process.env.RELAY_GIT_BIN = previousGit;
+    if (previousMarker === undefined) delete process.env.RELAY_TEST_RACE_MARKER;
+    else process.env.RELAY_TEST_RACE_MARKER = previousMarker;
+  }
+
+  assert.equal(fs.readFileSync(marker, "utf8"), "concurrent bytes survive\n", "the competing path is never removed or overwritten");
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40, "the branch survives the failed recovery");
+  const registry = git(value.repo, ["worktree", "list", "--porcelain"]);
+  const holderMatch = new RegExp(`worktree (.+)\\nHEAD [0-9a-f]+\\nbranch refs/heads/${branch}`).exec(registry);
+  assert.ok(holderMatch, "the exact branch regains one registered holder");
+  const restoredHolder = holderMatch[1];
+  assert.notEqual(restoredHolder, worktree, "the competing original path is not claimed as the restored holder");
+  assert.equal(path.relative(relayWorktreeBase, restoredHolder).startsWith(".."), false, "the restored holder stays Relay-owned");
+  const evidenceMatch = /recovery evidence at (.+), and registered branch holder/.exec(failure.message);
+  assert.ok(evidenceMatch, "the preserved original checkout remains actionable evidence");
+  assert.equal(fs.readFileSync(path.join(evidenceMatch[1], "README.md"), "utf8"), "fixture\n", "the original checkout bytes survive in evidence");
+
+  const retried = recovery.recoverStrandedWorktree({ repository: value.repo, branch, relayWorktreeBase });
+  assert.equal(retried.status, "recovered", "a retry converges without manual Git surgery");
+  assert.equal(fs.readFileSync(marker, "utf8"), "concurrent bytes survive\n", "retry still preserves the competing path");
+  assert.throws(() => git(value.repo, ["rev-parse", "--verify", branch]), "retry removes only the stranded branch");
+  assert.equal(git(value.repo, ["worktree", "list", "--porcelain"]).includes(`branch refs/heads/${branch}`), false);
+});
+
 test("stranded-worktree recovery refuses tracked changes hidden by index visibility flags", (t) => {
   for (const { flag, marker } of [
     { flag: "--assume-unchanged", marker: "h" },

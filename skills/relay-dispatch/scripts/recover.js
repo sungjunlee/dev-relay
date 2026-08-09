@@ -590,6 +590,35 @@ function preserveAndUnregisterQuarantinedWorktree(current, quarantine) {
   return evidence;
 }
 
+function restoreRegisteredHolderAfterPathRace(current, quarantine, evidence) {
+  try {
+    if (!fs.existsSync(evidence)) throw new Error(`recovery evidence disappeared: ${evidence}`);
+    if (fs.existsSync(quarantine)) throw new Error(`safe restoration path was recreated: ${quarantine}`);
+    const state = postRemoveBranchState(current);
+    if (state.branchHead !== current.branchHead || state.holders.length) {
+      throw new Error(`branch changed before holder restoration (head ${state.branchHead || "absent"}, holders ${state.holders.length})`);
+    }
+    execGit(current.checkout, ["worktree", "add", quarantine, current.branch]);
+    const restored = fs.realpathSync(quarantine);
+    if (restored !== quarantine) throw new Error("restored holder canonical path changed");
+    assertTrustedRecoveryWorktree({ repoRoot: current.repoRoot, activeCheckout: current.checkout, relayWorktreeBase: current.base, worktree: restored });
+    if (execGit(restored, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== current.branch) throw new Error("restored holder is detached or on another branch");
+    if (execGit(restored, ["rev-parse", "HEAD"]) !== current.branchHead) throw new Error("restored holder HEAD changed");
+    const registrations = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
+      .filter((entry) => entry.worktree === restored);
+    if (registrations.length !== 1 || registrations[0].branch !== current.ref || registrations[0].head !== current.branchHead) {
+      throw new Error("restored holder registration is not exact");
+    }
+    strandedWorktreeSafetyProof(restored);
+  } catch (error) {
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `original path raced unregister and the saved branch holder could not be restored at ${quarantine}; preserved evidence ${evidence}: ${commandFailure(error)}`,
+    );
+  }
+  return quarantine;
+}
+
 function postRemoveBranchState(current) {
   let branchHead = null;
   try {
@@ -741,9 +770,10 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
   }
   const recoveryEvidence = preserveAndUnregisterQuarantinedWorktree(current, quarantine);
   if (fs.existsSync(current.worktree)) {
+    const restoredHolder = restoreRegisteredHolderAfterPathRace(current, quarantine, recoveryEvidence);
     recoveryFail(
       "STRANDED_WORKTREE_CHANGED",
-      `original Relay path was recreated during unregister; preserved replacement bytes at ${current.worktree} and recovery evidence at ${recoveryEvidence}`,
+      `original Relay path was recreated during unregister; preserved replacement bytes at ${current.worktree}, recovery evidence at ${recoveryEvidence}, and registered branch holder at ${restoredHolder}`,
     );
   }
   let afterRemove;
