@@ -536,6 +536,45 @@ function quarantineStrandedWorktree(current) {
   }
 }
 
+function preserveAndUnregisterQuarantinedWorktree(current, quarantine) {
+  const evidence = `${quarantine}.preserved`;
+  try {
+    if (fs.existsSync(evidence)) throw new Error(`preservation path already exists: ${evidence}`);
+    fs.renameSync(quarantine, evidence);
+    fs.mkdirSync(quarantine);
+    fs.copyFileSync(path.join(evidence, ".git"), path.join(quarantine, ".git"), fs.constants.COPYFILE_EXCL);
+    // The filesystem tree has been atomically preserved under `evidence`; force
+    // applies only to a fresh unpredictable replacement pathname containing the
+    // registration link and no user files. Existing handles still reference the
+    // preserved evidence inode, never this replacement directory.
+    execGit(current.checkout, ["worktree", "remove", "--force", quarantine]);
+    if (fs.existsSync(quarantine)) throw new Error("quarantine path appeared during unregister");
+    const registrations = parseWorktreeList(gitBytes(current.checkout, ["worktree", "list", "--porcelain", "-z"]))
+      .filter((entry) => entry.worktree === quarantine);
+    if (registrations.length) throw new Error("quarantined worktree registration survived unregister");
+  } catch (error) {
+    if (fs.existsSync(evidence) && fs.existsSync(quarantine)) {
+      try {
+        const replacementGit = path.join(quarantine, ".git");
+        const evidenceGit = path.join(evidence, ".git");
+        const stat = fs.lstatSync(replacementGit);
+        if (stat.isFile() && !stat.isSymbolicLink()
+          && fs.readFileSync(replacementGit).equals(fs.readFileSync(evidenceGit))) fs.unlinkSync(replacementGit);
+      } catch {}
+      try { fs.rmdirSync(quarantine); } catch {}
+    }
+    if (fs.existsSync(evidence) && !fs.existsSync(quarantine)) {
+      try { fs.renameSync(evidence, quarantine); } catch {}
+    }
+    if (fs.existsSync(quarantine) && !fs.existsSync(evidence)) restoreQuarantinedStrandedWorktree(current, quarantine);
+    recoveryFail(
+      "STRANDED_WORKTREE_CLEANUP_INCOMPLETE",
+      `could not preserve and unregister quarantined Relay worktree ${quarantine}: ${commandFailure(error)}`,
+    );
+  }
+  return evidence;
+}
+
 function postRemoveBranchState(current) {
   let branchHead = null;
   try {
@@ -685,17 +724,11 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
       `original Relay path was recreated during recovery; preserved quarantined worktree ${quarantine} and new bytes at ${current.worktree}`,
     );
   }
-  try {
-    execGit(current.checkout, ["worktree", "remove", quarantine]);
-  } catch (error) {
-    restoreQuarantinedStrandedWorktree(current, quarantine);
-    recoveryFail("STRANDED_WORKTREE_CHANGED", `stranded worktree changed at the remove boundary: ${commandFailure(error)}`);
-  }
+  const preservedWorktree = preserveAndUnregisterQuarantinedWorktree(current, quarantine);
   if (fs.existsSync(current.worktree)) {
-    restoreRemovedStrandedWorktree({ ...current, worktree: quarantine });
     recoveryFail(
       "STRANDED_WORKTREE_CHANGED",
-      `original Relay path was recreated during removal; preserved replacement bytes at ${current.worktree} and restored the Relay worktree at ${quarantine}`,
+      `original Relay path was recreated during unregister; preserved replacement bytes at ${current.worktree} and worktree evidence at ${preservedWorktree}`,
     );
   }
   let afterRemove;
@@ -805,6 +838,7 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
     repo: current.repoRoot,
     branch: current.branch,
     worktree: current.worktree,
+    preserved_worktree: preservedWorktree,
     removed_parent_directories: removed,
   };
 }
