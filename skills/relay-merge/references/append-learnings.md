@@ -11,7 +11,7 @@ The script is the only writer for that section (anti-adversarial-Goodhart struct
 `sprint-owner.js` is the shared seam (`finalize-run` today; `relay-fleet` #957 later). Precedence:
 
 1. Caller/CLI `--sprint <path>`, `--track <slug>`, or `--component <slug>` (operator override; mutually exclusive track/component on the CLI)
-2. Manifest/fleet owner object (`ownership` / aliases) — no-flag default when #957 injects it; never stronger than an explicit caller override
+2. Injected flat owner `{ sprint, track, component }` — no-flag default when #957 supplies it; never stronger than an explicit caller override
 3. Structured issue-body metadata line `component: <slug>` (leading `key: value` lines only; incidental prose is ignored)
 4. Exactly-one-active sprint fallback
 

@@ -301,13 +301,51 @@ function copyInputs(repoRoot, worktree, copyValue) {
   return copied;
 }
 
+function createWorktreeBase(directory, ownedRoot) {
+  const resolved = path.resolve(directory);
+  let stablePrefix = path.dirname(path.resolve(ownedRoot));
+  while (!fs.existsSync(stablePrefix)) {
+    const parent = path.dirname(stablePrefix);
+    if (parent === stablePrefix) fail(`relay worktree base has no existing parent: ${resolved}`);
+    stablePrefix = parent;
+  }
+  const canonicalPrefix = fs.realpathSync(stablePrefix);
+  if (!fs.statSync(canonicalPrefix).isDirectory()) {
+    fail(`relay worktree base parent is not a directory: ${stablePrefix}`);
+  }
+  const suffix = path.relative(stablePrefix, resolved);
+  if (!suffix || suffix.startsWith("..") || path.isAbsolute(suffix)) {
+    fail(`relay worktree base escapes its owned root: ${resolved}`);
+  }
+  let cursor = canonicalPrefix;
+  for (const part of suffix.split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, part);
+    let stat;
+    try { stat = fs.lstatSync(cursor); }
+    catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      try { fs.mkdirSync(cursor, { mode: 0o700 }); }
+      catch (mkdirError) { if (mkdirError.code !== "EEXIST") throw mkdirError; }
+      stat = fs.lstatSync(cursor);
+    }
+    if (stat.isSymbolicLink()) fail(`relay worktree base contains a symlink: ${cursor}`);
+    if (!stat.isDirectory()) fail(`relay worktree base component is not a directory: ${cursor}`);
+  }
+  return fs.realpathSync(resolved);
+}
+
 function createRetainedWorktree(identity, runId, branch) {
   git(identity.checkout, ["check-ref-format", "--branch", branch]);
   const baseBranch = git(identity.checkout, ["symbolic-ref", "--short", "HEAD"]);
   const startSha = git(identity.checkout, ["rev-parse", "HEAD"]);
   const base = worktreeBase();
-  fs.mkdirSync(base, { recursive: true });
-  const canonicalBase = fs.realpathSync(base);
+  // Canonicalize the stable prefix so platform aliases such as macOS /tmp remain valid, then
+  // no-follow only the path Relay owns: RELAY_HOME through its default worktrees child, or an
+  // explicitly configured RELAY_WORKTREE_BASE itself. Node has no mkdirat/openat path walk that
+  // can bind this chain against a concurrent rename, but a pre-existing symlink in the owned
+  // suffix is rejected before Relay writes through it (#1191).
+  const ownedRoot = process.env.RELAY_WORKTREE_BASE ? base : path.dirname(base);
+  const canonicalBase = createWorktreeBase(base, ownedRoot);
   const worktree = path.join(canonicalBase, repoSlug(identity.repoRoot), runId, path.basename(identity.repoRoot));
   if (fs.existsSync(worktree)) fail(`retained worktree already exists: ${worktree}`);
   // Reject a pre-existing symlink in any destination component BEFORE mkdirSync or git can write

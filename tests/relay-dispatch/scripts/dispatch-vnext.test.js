@@ -1263,6 +1263,52 @@ test("a symlinked repoSlug component is rejected before mkdirSync writes through
   assert.equal(git(value.repo, ["worktree", "list"]).includes("symlink-br2"), false, "no worktree is registered");
 });
 
+test("a symlinked worktree base is rejected before Relay writes through it", () => {
+  const value = fixture("worktree-base-symlink");
+  const target = path.join(value.root, "worktree-base-target");
+  fs.mkdirSync(value.relayHome, { recursive: true });
+  fs.mkdirSync(target);
+  fs.symlinkSync(target, path.join(value.relayHome, "worktrees"), "dir");
+
+  const result = run(value, ["--branch", "base-symlink-br", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /worktree base contains a symlink/, "the pre-creation validation names the symlink");
+  assert.deepEqual(fs.readdirSync(target), [], "nothing was written through the symlinked base");
+  assert.equal(git(value.repo, ["branch", "--list", "base-symlink-br"]), "", "no branch is left behind");
+  assert.equal(git(value.repo, ["worktree", "list"]).includes("base-symlink-br"), false, "no worktree is registered");
+});
+
+test("a symlinked Relay home is rejected before Relay writes through it", () => {
+  const value = fixture("worktree-home-symlink");
+  const target = path.join(value.root, "worktree-home-target");
+  fs.mkdirSync(target);
+  fs.symlinkSync(target, value.relayHome, "dir");
+
+  const result = run(value, ["--branch", "home-symlink-br", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /worktree base contains a symlink/, "the Relay-owned ancestor is rejected");
+  assert.deepEqual(fs.readdirSync(target), [], "nothing was written through the symlinked Relay home");
+  assert.equal(git(value.repo, ["branch", "--list", "home-symlink-br"]), "", "no branch is left behind");
+  assert.equal(git(value.repo, ["worktree", "list"]).includes("home-symlink-br"), false, "no worktree is registered");
+});
+
+test("a stable symlink prefix before an explicit Relay worktree base remains valid", () => {
+  const value = fixture("worktree-stable-prefix");
+  const stableTarget = path.join(value.root, "stable-prefix-target");
+  const stableAlias = path.join(value.root, "stable-prefix-alias");
+  fs.mkdirSync(stableTarget);
+  fs.symlinkSync(stableTarget, stableAlias, "dir");
+  const relayWorktreeBase = path.join(stableAlias, "worktrees");
+
+  const result = run(value, ["--branch", "stable-prefix-br", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env, RELAY_WORKTREE_BASE: relayWorktreeBase,
+  });
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(output.worktree.startsWith(`${fs.realpathSync(stableTarget)}${path.sep}`), true,
+    "the stable prefix is canonicalized before Relay creates its owned suffix");
+});
+
 test("attempt_started is durable before executor gate launch, so a launch-window crash cannot orphan work", () => {
   const value = fixture("launch-window");
   const runId = "crash-start-run";

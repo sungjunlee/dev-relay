@@ -16,11 +16,11 @@ Remove vNext transition residue and unearned compatibility, recovery, and test-a
 
 ### Batch 1 — Canonical vocabulary and contract
 
-- [~] #1193 — retire vNext transition vocabulary and dead compatibility selectors [branch:codex/relay-runtime-slimming]
+- [x] #1193 — retire vNext transition vocabulary and dead compatibility selectors [PR:#1198]
 
 ### Batch 2 — Independent correctness patch
 
-- [ ] #1191 — validate worktree-base containment before creation side effects
+- [~] #1191 — validate worktree-base containment before creation side effects [branch:codex/1191-worktree-base-containment]
 
 ### Batch 3 — Measured compatibility retirement
 
@@ -53,3 +53,5 @@ Remove vNext transition residue and unearned compatibility, recovery, and test-a
 
 - 2026-08-09 — Closed the stale core-reset sprint after reconciling GitHub #1129–#1136. Created epic #1197 and children #1193–#1196, retained #1191 as the independent correctness item, closed completed #1190 with PR #1192 evidence, and admitted this ordered cleanup sprint.
 - 2026-08-09 — #1193 implementation complete on `codex/relay-runtime-slimming`: removed two zero-consumer compatibility selectors, replaced current vNext terminology with Relay terminology, and corrected the capability/docs contract. Runtime 6,906→6,900 LOC; tests 14,848→14,838 LOC. Full gate passed 623/625 with 2 expected live-canary skips; independent review reached LGTM after two P2 current-doc corrections.
+- 2026-08-09 — Merged #1198, completing #1193 and establishing the current Relay vocabulary before the remaining runtime-slimming batches.
+- 2026-08-09 — #1191 implementation complete on `codex/1191-worktree-base-containment`: canonicalized stable path prefixes while creating only the Relay-owned suffix component-by-component, so platform aliases remain valid and pre-existing Relay-home/worktree-base symlinks fail before writes. Runtime 6,900→6,938 LOC; tests 14,838→14,884 LOC. Full gate passed 626/628 with 2 expected live-canary skips; independent review reached LGTM after fixing two P2 compatibility/contract findings.
