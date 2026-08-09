@@ -154,13 +154,16 @@ function directCallOptions(source) {
   return { objects, indirect };
 }
 
-function hasTopLevelComputedProperty(option) {
+function hasForbiddenTopLevelOption(option) {
   let depth = 0;
   for (let index = 0; index < option.masked.length; index += 1) {
     const token = option.masked[index];
     if (token === "{") depth += 1;
     else if (token === "}") depth -= 1;
     else if (token === "[" && depth === 1) {
+      const previous = option.masked.slice(0, index).trimEnd().at(-1);
+      if (previous === "{" || previous === ",") return true;
+    } else if (token === "." && depth === 1 && option.masked.startsWith("...", index)) {
       const previous = option.masked.slice(0, index).trimEnd().at(-1);
       if (previous === "{" || previous === ",") return true;
     }
@@ -184,8 +187,8 @@ function inspectSource(relative, source) {
   const calls = directCallOptions(executable);
   if (calls.indirect) violations.push(`${relative}: indirect three-argument test options are forbidden`);
   for (const optionObject of calls.objects) {
-    if (hasTopLevelComputedProperty(optionObject)) {
-      violations.push(`${relative}: computed test option is forbidden`);
+    if (hasForbiddenTopLevelOption(optionObject)) {
+      violations.push(`${relative}: computed or spread test option is forbidden`);
       continue;
     }
     if (option("only").test(optionObject.source)) violations.push(`${relative}: only option is forbidden`);
@@ -257,6 +260,8 @@ test("directive guard rejects injected unauthorized directives", () => {
     ["test", "[`dynamic`]('hidden', () => {});"].join(""),
     ["test", "\n[key]('hidden', () => {});"].join(""),
     "const options = { timeout: 1 }; test('hidden', options, () => {});",
+    "const hidden = { skip: true }; test('hidden', { ...hidden }, () => {});",
+    "test('hidden', { ...{ skip: true } }, () => {});",
   ];
   for (const source of injections) {
     assert.throws(() => assertDirectives([...allowed, {
@@ -267,7 +272,8 @@ test("directive guard rejects injected unauthorized directives", () => {
   assert.doesNotThrow(() => assertDirectives([...allowed, {
     relative: "relay/scripts/comment-decoy.test.js",
     source: ["// test", ".skip('comment only', () => {});\n/* { ['sk' + 'ip']: true } */\n",
-      "test('ordinary body', () => { const key = 'value'; const value = { [key]: true }; });"].join(""),
+      "test('ordinary body', () => { const key = 'value'; const source = {}; const value = { [key]: true, ...source }; });",
+      "test('nested option', { meta: { ...source } }, () => {});"].join(""),
   }, {
     relative: "relay/scripts/two-argument-callback.test.js",
     source: "function callback() {} test('callback identifier', callback);",
