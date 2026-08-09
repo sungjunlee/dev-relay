@@ -634,6 +634,11 @@ function recoverStrandedWorktree({ repository, branch, relayWorktreeBase = null 
     || current.retainingRef.oid !== initial.retainingRef.oid) {
     recoveryFail("STRANDED_WORKTREE_CHANGED", "stranded worktree changed while recovery was revalidating it");
   }
+  // `observeStrandedWorktree` scans every candidate run record after its safety
+  // proof. Repeat the hidden-content proof at the destructive boundary so that
+  // ignored bytes or index flags introduced during that scan fail closed. Git's
+  // own non-force remove supplies the final ordinary tracked/untracked dirt check.
+  strandedWorktreeSafetyProof(current.worktree);
   execGit(current.checkout, ["worktree", "remove", current.worktree]);
   let afterRemove;
   let references;

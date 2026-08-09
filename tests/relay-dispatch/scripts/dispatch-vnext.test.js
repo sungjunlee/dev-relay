@@ -895,6 +895,65 @@ test("stranded-worktree recovery refuses ignored user content hidden from porcel
   assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`worktree ${worktree}`));
 });
 
+test("stranded-worktree recovery revalidates hidden content at the remove boundary", (t) => {
+  const value = fixture("stranded-worktree-late-ignored-content");
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const branch = "stranded-late-ignored-content";
+  const worktree = path.join(value.relayHome, "worktrees", "stranded-late-ignored-content");
+  const ignoredPath = path.join(worktree, "private", "late-operator-notes.txt");
+  const counterPath = path.join(value.root, "safety-proof-count");
+  fs.writeFileSync(path.join(value.repo, ".gitignore"), "private/\n");
+  git(value.repo, ["add", ".gitignore"]);
+  git(value.repo, ["commit", "-m", "ignore private executor files"]);
+  git(value.repo, ["branch", branch]);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(value.repo, ["worktree", "add", worktree, branch]);
+  const gitStub = path.join(value.root, "late-ignored-git.js");
+  fs.writeFileSync(gitStub, [
+    `#!${process.execPath}`,
+    'const { execFileSync } = require("node:child_process");',
+    'const fs = require("node:fs");',
+    'const path = require("node:path");',
+    'const args = process.argv.slice(2);',
+    'const at = args[0] === "-C" ? 2 : 0;',
+    'const output = execFileSync(REAL_GIT, args, { encoding: null, stdio: ["ignore", "pipe", "inherit"] });',
+    'if (args[at] === "--no-optional-locks" && args[at + 1] === "ls-files" && args.includes("-v") && args.includes("-z")) {',
+    '  let count = 0;',
+    '  try { count = Number(fs.readFileSync(process.env.RELAY_TEST_PROOF_COUNTER, "utf8")); } catch {}',
+    '  count += 1;',
+    '  fs.writeFileSync(process.env.RELAY_TEST_PROOF_COUNTER, String(count));',
+    '  if (count === 2) {',
+    '    fs.mkdirSync(path.dirname(process.env.RELAY_TEST_LATE_IGNORED), { recursive: true });',
+    '    fs.writeFileSync(process.env.RELAY_TEST_LATE_IGNORED, "late bytes must survive\\n");',
+    '  }',
+    '}',
+    'process.stdout.write(output);',
+  ].join("\n").split("REAL_GIT").join(JSON.stringify(realGit())), { mode: 0o755 });
+
+  const previousGit = process.env.RELAY_GIT_BIN;
+  const previousCounter = process.env.RELAY_TEST_PROOF_COUNTER;
+  const previousIgnored = process.env.RELAY_TEST_LATE_IGNORED;
+  process.env.RELAY_GIT_BIN = gitStub;
+  process.env.RELAY_TEST_PROOF_COUNTER = counterPath;
+  process.env.RELAY_TEST_LATE_IGNORED = ignoredPath;
+  try {
+    assert.throws(() => recovery.recoverStrandedWorktree({
+      repository: value.repo, branch, relayWorktreeBase: path.join(value.relayHome, "worktrees"),
+    }), (error) => error.code === "STRANDED_WORKTREE_IGNORED_CONTENT");
+  } finally {
+    if (previousGit === undefined) delete process.env.RELAY_GIT_BIN;
+    else process.env.RELAY_GIT_BIN = previousGit;
+    if (previousCounter === undefined) delete process.env.RELAY_TEST_PROOF_COUNTER;
+    else process.env.RELAY_TEST_PROOF_COUNTER = previousCounter;
+    if (previousIgnored === undefined) delete process.env.RELAY_TEST_LATE_IGNORED;
+    else process.env.RELAY_TEST_LATE_IGNORED = previousIgnored;
+  }
+
+  assert.equal(fs.readFileSync(ignoredPath, "utf8"), "late bytes must survive\n");
+  assert.equal(git(value.repo, ["rev-parse", "--verify", branch]).length, 40, "the branch must survive");
+  assert.match(git(value.repo, ["worktree", "list", "--porcelain"]), new RegExp(`worktree ${worktree}`));
+});
+
 test("stranded-worktree recovery refuses tracked changes hidden by index visibility flags", (t) => {
   for (const { flag, marker } of [
     { flag: "--assume-unchanged", marker: "h" },
