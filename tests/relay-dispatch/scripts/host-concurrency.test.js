@@ -41,7 +41,7 @@ function startContender(runDir, attemptId, releasePath) {
 }
 
 test("50 independent processes elect exactly one owner and release permits a new owner", { timeout: 30_000 }, async (t) => {
-  const runDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-vnext-host-concurrency-")));
+  const runDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-host-concurrency-")));
   const releasePath = path.join(runDir, "release");
   const attempts = Array.from({ length: 50 }, (_, index) => startContender(runDir, `attempt-${index}`, releasePath));
   const cleanup = () => {

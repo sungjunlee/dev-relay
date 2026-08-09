@@ -168,9 +168,9 @@ fail-closed outcomes rather than silent, unbounded process leakage.
 
 ## Runtime size
 
-The Relay runtime is the only writer and there is no migration overlay. The installed
-package is 16 JS / 6,900 LOC, measured into
-`tests/ledger/vnext-baseline.generated.json` by the ledger generator.
+The Relay runtime is the only writer and there is no migration overlay. The
+installed package is the current filesystem below
+`skills/relay-dispatch/scripts/`; there is no generated inventory to refresh.
 
 Retired legacy manifests are not readable and `relay-recover` exposes only
 `inspect` and `recover`. A repository holding legacy state does not migrate: its

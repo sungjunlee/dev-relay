@@ -42,7 +42,7 @@ test("documented installed sibling script paths resolve", () => {
   }
 });
 
-test("install graph states the vNext installed sibling root contract", () => {
+test("install graph states the Relay installed sibling root contract", () => {
   const source = content("references/install-graph.md");
   assert.match(source, /RELAY_SKILL_ROOT/);
   assert.match(source, /installed sibling root/);

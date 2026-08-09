@@ -124,10 +124,9 @@ for the full contract.
 
 ## Runtime size
 
-There is one runtime. The installed dispatch package contains 16 JavaScript
-files and 6,900 production LOC, measured by the ledger generator into
-`tests/ledger/vnext-baseline.generated.json`; refresh it with that generator
-rather than editing the figure by hand.
+There is one runtime. The installed dispatch package is the current filesystem
+below `skills/relay-dispatch/scripts/`; no generated inventory or test ledger
+duplicates that source of truth.
 
 The Relay runtime is the only writer. Nothing admits a run, stamps a writer generation, or
 translates retired argv, and retired manifests are not readable — the legacy

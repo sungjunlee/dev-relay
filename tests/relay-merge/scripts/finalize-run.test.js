@@ -18,7 +18,7 @@ const runtime = { recordMerge: facts.recordMerge, withRunLock(runDir, callback) 
     hostKind: "local_supervisor", hostHandle: `test:${process.pid}`, worktreeDir: canonical }, callback); } };
 
 const SCRIPT = path.resolve(__dirname, "../../../skills/relay-merge/scripts/finalize-run.js");
-const OBSERVER = path.resolve(__dirname, "../fixtures/vnext-merge-observer.js");
+const OBSERVER = path.resolve(__dirname, "../fixtures/merge-observer.js");
 
 function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], {
@@ -173,7 +173,7 @@ async function appendReadyFacts(value) {
 }
 
 async function fixture(label, { github = {} } = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-merge-vnext-${label}-`)));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-merge-${label}-`)));
   const repo = path.join(root, "repo");
   const origin = path.join(root, "origin.git");
   const worktree = path.join(root, "worktree");
@@ -291,7 +291,7 @@ function hardCrashFinalize(value, mode) {
   });
 }
 
-test("vNext finalize performs one explicit merge, records exact provenance, and cleans idempotently", async () => {
+test("Relay finalize performs one explicit merge, records exact provenance, and cleans idempotently", async () => {
   const value = await fixture("success");
   const first = await withGh(value, () => finalize.finalizeRun(value.cli, services()));
   assert.equal(first.status, "merged");

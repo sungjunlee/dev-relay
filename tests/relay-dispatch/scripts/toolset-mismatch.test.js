@@ -17,8 +17,8 @@ const { getAdapter, listAdapters } = require("../../../skills/relay-dispatch/scr
 
 const ROOT = path.resolve(__dirname, "../../..");
 const DISPATCH = path.join(ROOT, "skills/relay-dispatch/scripts/dispatch.js");
-const FAKE_CODEX = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-fake-codex.js");
-const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/vnext-adapter-runtime-preload.js");
+const FAKE_CODEX = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-codex.js");
+const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/adapter-runtime-preload.js");
 const READ_ONCE_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-prompt-read-once-preload.js");
 const UNDECLARED_ADAPTER_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-undeclared-adapter-preload.js");
 const REGISTRY_DIVERGENCE_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-registry-divergence-preload.js");

@@ -17,7 +17,7 @@ function slug(repo) {
   return `${base}-${hash(repo).slice(0, 8)}`;
 }
 function setup() {
-  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-fleet-vnext-")));
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-fleet-")));
   execFileSync("git", ["init", "-q", repo]);
   execFileSync("git", ["-C", repo, "config", "user.email", "fleet@example.test"]);
   execFileSync("git", ["-C", repo, "config", "user.name", "Fleet"]);

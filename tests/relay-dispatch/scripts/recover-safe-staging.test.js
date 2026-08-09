@@ -119,6 +119,19 @@ test("path replacement with a symlink before add is rejected and index is rolled
   assert.equal(indexTree(repo), preTree);
 });
 
+test("an untracked FIFO is rejected without reading special-file bytes", { timeout: 5_000 }, () => {
+  const repo = fixture("fifo");
+  const fifo = path.join(repo, "executor.pipe");
+  execFileSync("mkfifo", [fifo]);
+  const preTree = indexTree(repo);
+  assert.throws(
+    () => recover.__testing.stageReviewableWork(repo, Buffer.from("?? executor.pipe\0")),
+    (error) => error.code === "UNSAFE_WORKTREE_ENTRY" && /executor\.pipe/.test(error.message),
+  );
+  assert.equal(fs.lstatSync(fifo).isFIFO(), true);
+  assert.equal(indexTree(repo), preTree);
+});
+
 test("a failure after ref publication rolls back HEAD and the exact pre-call index tree", () => {
   const repo = fixture("commit-rollback");
   const target = path.join(repo, "keep.txt");

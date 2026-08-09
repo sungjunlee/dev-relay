@@ -24,7 +24,7 @@ function git(repo, args) {
 }
 
 function fixture() {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-preflight-vnext-")));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-preflight-")));
   const repo = path.join(root, "repo");
   const remote = path.join(root, "remote.git");
   const relayHome = path.join(root, "relay-home");

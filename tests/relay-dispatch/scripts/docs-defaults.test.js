@@ -53,7 +53,7 @@ test("dispatch docs mirror executor timeout defaults", () => {
   assert.match(docs, new RegExp(`opencode[^\\n]*${opencodeTimeout}`, "i"));
 });
 
-test("dispatch help publishes the flat executor registry and vNext ownership boundary", () => {
+test("dispatch help publishes the flat executor registry and Relay ownership boundary", () => {
   const result = spawnSync("node", [DISPATCH_SCRIPT, "--help"], {
     encoding: "utf-8",
     stdio: "pipe",
