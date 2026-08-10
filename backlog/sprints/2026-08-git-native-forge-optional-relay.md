@@ -51,11 +51,10 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
   field, fact, registry entry, compatibility overlay, or review loop.
 - Canonical recovery remains the only general lifecycle writer and owns
   Publication. Explicit `relay-merge` remains the only Landing request.
-- The initial anonymous 2026-08-10 snapshot observed five active schema-v3
-  runs. The bounded follow-up inventory now observes six schema-v3 nonterminal
-  runs, none with an unmatched live attempt, plus two invalid versionless
-  records and two non-regular `run.json` entries. Drain all six in place; do not
-  migrate or mutate them.
+- The minimized anonymous inventory records 15 schema-v3 records: 9 terminal
+  and 6 nonterminal. Drain all six nonterminal records in place; do not migrate
+  or mutate them. Each remains subject to an explicit close decision if it does
+  not become terminal.
 - Do not regenerate the runtime inventory or deleted test-ledger machinery.
 
 ## Progress
@@ -63,7 +62,7 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
 - 2026-08-10 — Recorded the supplied aggregate inventory and drain-in-place
   decision; began #1209 as a documentation and deterministic-regression-test
   contract freeze with production JavaScript and schemas out of scope.
-- 2026-08-10 — Opus 5 review found the first inventory undercounted historical
-  layouts and equated active attempts with nonterminal runs. Replaced it with a
-  bounded recursive aggregate inventory and restored the full Milestone 17
-  execution order.
+- 2026-08-10 — Opus 5 review required a bounded recursive reproduction and a
+  literal schema-version plus schema-v3 terminal/nonterminal inventory. The
+  minimized output preserves the drain/close decision for all six nonterminal
+  records and leaves production JavaScript and schemas out of scope.

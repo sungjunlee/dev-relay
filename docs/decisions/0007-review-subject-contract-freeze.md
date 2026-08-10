@@ -60,10 +60,9 @@ lifecycle changes.
   Landing have one meaning across capability, architecture, and operator docs;
   Publication is not Change Request creation and does not imply Landing.
 - Versionless records remain invalid historical input and earn no reader.
-- The bounded current inventory's six schema-v3 nonterminal runs drain in
+- The minimized current inventory's six schema-v3 nonterminal runs drain in
   place; no record is migrated or mutated, and future schema work is blocked
-  until all six are terminal or an operator explicitly closes them. The
-  initial five-active-run snapshot remains historical measurement evidence.
+  until all six are terminal or an operator explicitly closes them.
 - Narrow regression tests pin actions, reasons, action keys, exact identity
   matching, live-head binding, and same-action lock reinspection.
 

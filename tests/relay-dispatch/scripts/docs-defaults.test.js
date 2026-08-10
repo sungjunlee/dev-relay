@@ -81,7 +81,7 @@ test("recovery playbook documents only the canonical inspect/recover surface", (
   assert.doesNotMatch(playbook, /recover-state\.js[^\n]*--force/);
 });
 
-test("#1209 docs freeze ReviewSubject derivation and bounded aggregate inventory", () => {
+test("#1209 docs freeze ReviewSubject derivation and minimized aggregate inventory", () => {
   const adr = readRepoFile("docs/decisions/0007-review-subject-contract-freeze.md");
   for (const member of [
     "object format",
@@ -96,21 +96,34 @@ test("#1209 docs freeze ReviewSubject derivation and bounded aggregate inventory
 
   const inventory = readRepoFile("docs/run-inventory-1209.md");
   for (const contract of [
-    "RELAY_RUNS_BASE", "RELAY_HOME", "os.homedir()", "selector_class",
-    "MAX_DEPTH", "MAX_ENTRIES", "MAX_RUN_DIRECTORIES", "path.isAbsolute",
+    "RELAY_RUNS_BASE", "RELAY_HOME", "os.homedir()",
+    "MAX_DEPTH = 12", "MAX_ENTRIES", "MAX_RUN_DIRECTORIES", "path.isAbsolute",
     "lstatSync", "isSymbolicLink", "isFile", "16 * 1024 * 1024",
-    "regular_run_json", "by_schema_version", "nonregular_run_json",
-    "malformed_run_json", "events_only_legacy_directories",
-    "schema_v3_nonterminal", "attempt_active", "inventory_validation_failed",
+    "schema_versions", "schema_v3", "terminal", "nonterminal",
+    "inventory_validation_failed",
   ]) assert.ok(inventory.includes(contract), contract);
-  assert.match(inventory, /reports only that selector class—not its\s+absolute path/i);
-  assert.match(inventory, /schema-v3 record is nonterminal whenever it has no valid\s+merge\/close terminal fact/is);
-  assert.match(inventory, /`attempt_active` is only a sub-count/i);
-  assert.match(inventory, /events_only_legacy_directories.*separate.*does not imply.*supported Relay reader/is);
-  assert.match(inventory, /symlinked path components fail closed/i);
-  assert.match(inventory, /Exceeding any cap returns\s+`inventory_validation_failed` rather than a truncated authoritative inventory/i);
+  const recorded = inventory.match(/```json\s*([\s\S]*?)\s*```/);
+  assert.ok(recorded, "recorded inventory JSON block");
+  assert.deepEqual(JSON.parse(recorded[1]), {
+    schema_versions: { "3": 15, missing: 2 },
+    schema_v3: { terminal: 9, nonterminal: 6 },
+  });
+  for (const category of [
+    "selector_class", "regular_run_json", "by_schema_version", "nonregular_run_json",
+    "malformed_run_json", "events_only_legacy_directories", "symlinked_path_components",
+    "invalid_historical", "versionless_regular_run_json", "attempt_active",
+    "malformed_event_lines", "conflict",
+  ]) {
+    assert.doesNotMatch(inventory, new RegExp(`['\"]${category}['\"]`), category);
+  }
+  assert.match(inventory, /without emitting selector metadata or the absolute\s+path/i);
+  assert.match(inventory, /symlinked child entries and non-regular `run\.json` leaves\s+are excluded.*never followed/is);
+  assert.match(inventory, /`events\.jsonl`\s+associated with a regular run must also be regular/i);
+  assert.match(inventory, /a record is terminal when it\s+has exactly one valid\s+`merge_recorded` or `run_closed` fact/i);
+  assert.match(inventory, /invalid or ambiguous terminal fact fails\s+closed/i);
+  assert.match(inventory, /Any\s+validation\s+violation.*inventory_validation_failed.*exits 1/is);
   assert.match(inventory, /drain[- ]in[- ]place/i);
-  assert.match(inventory, /invalid\s+historical inputs/i);
+  assert.match(inventory, /all six are terminal or explicitly closed/i);
 });
 
 test("executor prompt leaves Git metadata and publication exclusively to canonical recovery", () => {

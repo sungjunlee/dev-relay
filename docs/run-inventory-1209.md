@@ -1,58 +1,45 @@
 # Anonymous Relay Run Inventory for #1209
 
-Measured at `2026-08-10T12:13:55Z`:
+Measured at `2026-08-10T13:56:23Z`:
 
 ```json
 {
-  "selector_class": "default os.homedir()/.relay/runs",
-  "regular_run_json": {
-    "total": 17,
-    "by_schema_version": {
-      "3": 15,
-      "missing": 2
-    }
+  "schema_versions": {
+    "3": 15,
+    "missing": 2
   },
-  "nonregular_run_json": 2,
-  "malformed_run_json": 0,
-  "events_only_legacy_directories": 1171,
-  "symlinked_path_components": 7,
-  "invalid_historical": {"versionless_regular_run_json": 2},
-  "terminal": {"merged": 3, "closed": 6, "conflict": 0},
-  "schema_v3_nonterminal": {"total": 6, "attempt_active": 0},
-  "malformed_event_lines": 0
+  "schema_v3": {
+    "terminal": 9,
+    "nonterminal": 6
+  }
 }
 ```
 
-`regular_run_json.total` counts regular `run.json` files; only parseable
-records appear in `by_schema_version`. Versionless regular records are invalid
-historical inputs. `events_only_legacy_directories` counts directories that
-have a regular `events.jsonl` but no `run.json`; that category is separate and
-does not imply that every historical directory has a supported Relay reader.
-
-The terminal counts are for schema-v3 records with a valid `merge_recorded` or
-`run_closed` fact. A schema-v3 record is nonterminal whenever it has no valid
-merge/close terminal fact; `attempt_active` is only a sub-count of those
-nonterminal records, not the definition of nonterminal. The earlier five active
-schema-v3 runs retain the drain-in-place decision recorded in Running Context;
-this broader remeasurement currently reports six nonterminal records and no
-currently unmatched attempt. Do not migrate or mutate them. Future schema work
-is blocked until the measured nonterminal records become terminal or an
-operator makes an explicit close decision.
+The recorded aggregates count parseable `run.json` records by schema version.
+Only schema-v3 records contribute to `schema_v3`: a record is terminal when it
+has exactly one valid `merge_recorded` or `run_closed` fact, and nonterminal
+when it has no terminal fact. An invalid or ambiguous terminal fact fails
+closed. The six observed schema-v3 nonterminal records retain the
+drain-in-place decision: do not migrate or mutate them; drain each in place
+until it is terminal or an operator explicitly closes it. Future schema work is
+blocked until all six are terminal or explicitly closed.
 
 ## Bounded aggregate reproduction
 
 The command below selects `RELAY_RUNS_BASE`, then `RELAY_HOME/runs`, then
-`os.homedir()/.relay/runs`, and reports only that selector class—not its
-absolute path. It traverses every directory under the selected store through
-an explicit depth limit, an entry cap, and a run-directory cap. Every path
-component is checked with `lstat`; symlinked path components fail closed by
-stopping traversal at that component and reporting only a bounded aggregate
-count. Symlinked `run.json`/`events.jsonl` leaves are counted as non-regular and
-never followed. Regular reads use `O_NOFOLLOW`,
-inode/size checks, and a 16 MiB file cap. Exceeding any cap returns
-`inventory_validation_failed` rather than a truncated authoritative inventory.
-The output contains no paths, file contents, prompts, credentials, branches,
-issue content, or repository content.
+`os.homedir()/.relay/runs`, without emitting selector metadata or the absolute
+path. It traverses every directory under the selected store through explicit
+depth, entry, run-directory, and file-size caps. Every path component is
+checked with `lstat`; symlinked child entries and non-regular `run.json` leaves
+are excluded from the trusted input set and never followed. An `events.jsonl`
+associated with a regular run must also be regular. Regular reads use
+`O_NOFOLLOW` and stable inode/size checks. The command requires parseable
+JSON/JSONL and valid, unambiguous terminal facts for every trusted input. Any
+validation violation, including an exceeded cap, emits only
+`{"inventory_validation_failed":true}` and exits 1. Success emits only the
+schema-version and schema-v3 terminal/nonterminal aggregates; no output
+contains paths, file contents, prompts, credentials, branches, issue content,
+or repository content.
 
 ```bash
 node <<'NODE'
@@ -62,32 +49,19 @@ const os = require('node:os');
 const path = require('node:path');
 
 const FILE_CAP = 16 * 1024 * 1024;
-const MAX_DEPTH = 8;
+const MAX_DEPTH = 12;
 const MAX_ENTRIES = 100_000;
 const MAX_RUN_DIRECTORIES = 10_000;
 const RUN_FILE = 'run.json';
 const EVENTS_FILE = 'events.jsonl';
 const SHA1 = /^[0-9a-f]{40}$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
-const selectorClass = process.env.RELAY_RUNS_BASE
-  ? 'RELAY_RUNS_BASE'
-  : process.env.RELAY_HOME
-    ? 'RELAY_HOME/runs'
-    : 'default os.homedir()/.relay/runs';
 const base = process.env.RELAY_RUNS_BASE
   || (process.env.RELAY_HOME ? path.join(process.env.RELAY_HOME, 'runs') : null)
   || path.join(os.homedir(), '.relay', 'runs');
 const out = {
-  selector_class: selectorClass,
-  regular_run_json: { total: 0, by_schema_version: {} },
-  nonregular_run_json: 0,
-  malformed_run_json: 0,
-  events_only_legacy_directories: 0,
-  symlinked_path_components: 0,
-  invalid_historical: { versionless_regular_run_json: 0 },
-  terminal: { merged: 0, closed: 0, conflict: 0 },
-  schema_v3_nonterminal: { total: 0, attempt_active: 0 },
-  malformed_event_lines: 0,
+  schema_versions: {},
+  schema_v3: { terminal: 0, nonterminal: 0 },
 };
 let entriesSeen = 0;
 let runDirectoriesSeen = 0;
@@ -185,30 +159,30 @@ function validTerminalFact(event, runId) {
 }
 
 function readEvents(input) {
-  if (input.kind !== 'regular') return [];
+  if (input.kind === 'missing') return [];
+  if (input.kind !== 'regular') fail('event file is not regular');
   const events = [];
   for (const line of input.bytes.toString('utf8').split('\n')) {
     if (!line.trim()) continue;
     try {
       events.push(JSON.parse(line));
     } catch {
-      out.malformed_event_lines += 1;
+      fail('event JSONL is not parseable');
     }
   }
   return events;
 }
 
-function eventSummary(events, runId) {
-  const active = new Set();
-  const terminal = [];
+function hasTerminalFact(events, runId) {
+  let terminalCount = 0;
   for (const event of events) {
-    if (validTerminalFact(event, runId)) terminal.push(event.type);
-    if (!plainObject(event) || event.run_id !== runId || !nonEmpty(event.type)) continue;
-    if ((event.type === 'attempt_started') && nonEmpty(event.attempt_id)) active.add(event.attempt_id);
-    if ((event.type === 'attempt_finished' || event.type === 'attempt_interrupted')
-      && nonEmpty(event.attempt_id)) active.delete(event.attempt_id);
+    if (!plainObject(event)) continue;
+    if (event.type !== 'merge_recorded' && event.type !== 'run_closed') continue;
+    if (!validTerminalFact(event, runId)) fail('invalid terminal fact');
+    terminalCount += 1;
   }
-  return { terminal, activeAttempt: active.size > 0 };
+  if (terminalCount > 1) fail('ambiguous terminal facts');
+  return terminalCount === 1;
 }
 
 function schemaVersion(run) {
@@ -224,55 +198,38 @@ function classifyDirectory(runDir, names) {
   if (runDirectoriesSeen > MAX_RUN_DIRECTORIES) fail('run-directory cap exceeded');
 
   const runInput = hasRun ? boundedFile(path.join(runDir, RUN_FILE)) : { kind: 'missing' };
+  if (hasRun && runInput.kind === 'missing') {
+    fail('store entry disappeared while being inventoried');
+  }
+  if (runInput.kind === 'nonregular') {
+    return;
+  }
+  if (runInput.kind === 'missing') return;
   const eventsInput = hasEvents ? boundedFile(path.join(runDir, EVENTS_FILE)) : { kind: 'missing' };
-  if ((hasRun && runInput.kind === 'missing') || (hasEvents && eventsInput.kind === 'missing')) {
+  if (hasEvents && eventsInput.kind === 'missing') {
     fail('store entry disappeared while being inventoried');
   }
   const events = readEvents(eventsInput);
-  if (runInput.kind === 'nonregular') {
-    out.nonregular_run_json += 1;
-    return;
-  }
-  if (runInput.kind === 'missing') {
-    if (eventsInput.kind === 'regular') {
-      out.events_only_legacy_directories += 1;
-    }
-    return;
-  }
-  out.regular_run_json.total += 1;
   let run;
   try {
     run = JSON.parse(runInput.bytes.toString('utf8'));
   } catch {
-    out.malformed_run_json += 1;
-    return;
+    fail('run JSON is not parseable');
   }
   if (!plainObject(run)) {
-    out.malformed_run_json += 1;
-    return;
+    fail('run JSON is not an object');
   }
   const version = schemaVersion(run);
   if (version === '3' && !nonEmpty(run.run_id)) {
-    out.malformed_run_json += 1;
-    return;
+    fail('schema-v3 run has no run ID');
   }
-  out.regular_run_json.by_schema_version[version]
-    = (out.regular_run_json.by_schema_version[version] || 0) + 1;
-  if (version === 'missing') out.invalid_historical.versionless_regular_run_json += 1;
+  out.schema_versions[version] = (out.schema_versions[version] || 0) + 1;
   if (run.version !== 3) return;
 
-  const summary = eventSummary(events, run.run_id);
-  if (summary.terminal.length > 1) {
-    out.terminal.conflict += 1;
-    return;
-  }
-  if (summary.terminal[0] === 'merge_recorded') {
-    out.terminal.merged += 1;
-  } else if (summary.terminal[0] === 'run_closed') {
-    out.terminal.closed += 1;
+  if (hasTerminalFact(events, run.run_id)) {
+    out.schema_v3.terminal += 1;
   } else {
-    out.schema_v3_nonterminal.total += 1;
-    if (summary.activeAttempt) out.schema_v3_nonterminal.attempt_active += 1;
+    out.schema_v3.nonterminal += 1;
   }
 }
 
@@ -287,7 +244,6 @@ function walk(directory, depth) {
     const candidate = path.join(directory, name);
     const child = lstatPath(candidate, { allowFinalSymlink: true });
     if (child.isSymbolicLink()) {
-      out.symlinked_path_components += 1;
       continue;
     }
     if (name === RUN_FILE || name === EVENTS_FILE) continue;
@@ -307,10 +263,7 @@ try {
   walk(base, 0);
   process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
 } catch {
-  process.stdout.write(`${JSON.stringify({
-    inventory_validation_failed: true,
-    selector_class: selectorClass,
-  })}\n`);
+  process.stdout.write(`${JSON.stringify({ inventory_validation_failed: true })}\n`);
   process.exitCode = 1;
 }
 NODE
