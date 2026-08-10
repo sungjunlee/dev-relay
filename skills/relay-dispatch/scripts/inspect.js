@@ -381,11 +381,23 @@ function foldRunFacts({
     && fact.payload.escalation_kind === "runtime_failure"
     && fact.payload.retry_of_event_id === undefined
   )) || null;
+  const retryReviews = subjectReviews.filter((fact) => fact.payload.retry_of_event_id !== undefined);
+  const retryLineageValid = retryReviews.length === 0 || Boolean(
+    firstRuntimeFailure
+    && retryReviews.length === 1
+    && retryReviews[0].payload.retry_of_event_id === firstRuntimeFailure.event_id
+    && subjectReviews[subjectReviews.indexOf(firstRuntimeFailure) + 1] === retryReviews[0]
+  );
   if (
     reviewBindingMatches
-    && firstRuntimeFailure
-    && latestReview.event_id !== firstRuntimeFailure.event_id
-    && latestReview.payload.retry_of_event_id !== firstRuntimeFailure.event_id
+    && (
+      !retryLineageValid
+      || (
+        firstRuntimeFailure
+        && latestReview.event_id !== firstRuntimeFailure.event_id
+        && latestReview.payload.retry_of_event_id !== firstRuntimeFailure.event_id
+      )
+    )
   ) {
     return none("review_retry_binding_invalid", {
       head_sha: headSha,

@@ -242,6 +242,76 @@ test("inspect exposes one retry for a runtime escalation and exhausts that subje
   assert.equal(exhausted.recommended_action.kind, "none");
 });
 
+test("inspect accepts the immediate single passing retry", async () => {
+  const observations = publicationObservations({
+    git: { ...publicationObservations().git, reviewable_work: false },
+    github: {
+      ...publicationObservations().github,
+      matching_pr_count: 1, pr_number: 42, pr_state: "OPEN", pr_head_sha: HEAD,
+    },
+  });
+  const firstFact = reviewFact({ eventId: "review-runtime-pass-1", escalationKind: "runtime_failure" });
+  const retryPass = reviewFact({
+    eventId: "review-runtime-pass-2",
+    verdict: "pass",
+    retryOfEventId: firstFact.event_id,
+  });
+  const result = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), firstFact, retryPass],
+    observations,
+  }));
+  assert.equal(result.derived.action, "merge");
+  assert.equal(result.derived.reason, "ready_to_merge");
+});
+
+test("inspect rejects a passing retry without a matching initial runtime failure", async () => {
+  const observations = publicationObservations({
+    git: { ...publicationObservations().git, reviewable_work: false },
+    github: {
+      ...publicationObservations().github,
+      matching_pr_count: 1, pr_number: 42, pr_state: "OPEN", pr_head_sha: HEAD,
+    },
+  });
+  const arbitraryRetry = reviewFact({
+    eventId: "review-arbitrary-retry",
+    verdict: "pass",
+    retryOfEventId: "missing-runtime-failure",
+  });
+  const result = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), arbitraryRetry],
+    observations,
+  }));
+  assert.equal(result.derived.action, "none");
+  assert.equal(result.derived.reason, "review_retry_binding_invalid");
+});
+
+test("inspect rejects a third pass reusing the first retry event", async () => {
+  const observations = publicationObservations({
+    git: { ...publicationObservations().git, reviewable_work: false },
+    github: {
+      ...publicationObservations().github,
+      matching_pr_count: 1, pr_number: 42, pr_state: "OPEN", pr_head_sha: HEAD,
+    },
+  });
+  const firstFact = reviewFact({ eventId: "review-runtime-third-1", escalationKind: "runtime_failure" });
+  const retryFailure = reviewFact({
+    eventId: "review-runtime-third-2",
+    escalationKind: "runtime_failure",
+    retryOfEventId: firstFact.event_id,
+  });
+  const thirdPass = reviewFact({
+    eventId: "review-runtime-third-3",
+    verdict: "pass",
+    retryOfEventId: firstFact.event_id,
+  });
+  const result = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), firstFact, retryFailure, thirdPass],
+    observations,
+  }));
+  assert.equal(result.derived.action, "none");
+  assert.equal(result.derived.reason, "review_retry_binding_invalid");
+});
+
 test("recover refuses a stale inspect key before effects or durable writes", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
   const effects = { converge: async (step) => { h.state.effects.push(step); return { converged: true }; } };
