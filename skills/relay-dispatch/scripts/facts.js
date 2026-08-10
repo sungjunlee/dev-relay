@@ -51,9 +51,9 @@ const PAYLOAD_SCHEMAS = Object.freeze({
     required: [
       "round", "verdict", "reviewed_sha", "done_criteria_sha256",
       "reviewer", "review_artifact", "override",
-    ], optional: ["executed_runtime"],
+    ], optional: ["executed_runtime", "escalation_kind"],
   },
-  // Optional above so historical journals stay readable; required below on every append this runtime makes.
+  // executed_runtime stays optional so historical journals remain readable; current appends require it below.
   recovery_applied: {
     required: [
       "rule", "observed_event_id", "before_sha", "after_sha",
@@ -260,6 +260,16 @@ function validatePayload(type, payload, { allowFutureFields = false, appending =
         string(payload.executed_runtime.executable.path, "payload.executed_runtime.executable.path");
         for (const key of ["dev", "ino", "size"]) integer(payload.executed_runtime.executable[key], `payload.executed_runtime.executable.${key}`, { minimum: 0 });
         sha(payload.executed_runtime.executable.sha256, "payload.executed_runtime.executable.sha256", { sha256: true });
+      }
+      if (payload.verdict === "escalated") {
+        if (appending && payload.escalation_kind === undefined) {
+          fail("INVALID_FACT", "payload.escalation_kind is required when appending an escalated review_recorded");
+        }
+        if (payload.escalation_kind !== undefined && !new Set(["runtime_failure", "reviewer"]).has(payload.escalation_kind)) {
+          fail("INVALID_FACT", "payload.escalation_kind is invalid");
+        }
+      } else if (payload.escalation_kind !== undefined) {
+        fail("INVALID_FACT", "payload.escalation_kind is allowed only for an escalated review_recorded");
       }
       validateOverride(payload.override, "payload.override", { allowFutureFields });
       break;

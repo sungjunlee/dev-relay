@@ -9,6 +9,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const recovery = require("../../../skills/relay-dispatch/scripts/recover");
+const { foldRunFacts } = require("../../../skills/relay-dispatch/scripts/inspect");
 const { inspectRun, recoverRun } = recovery;
 
 const START = "a".repeat(40);
@@ -163,6 +164,93 @@ function publicationObservations(overrides = {}) {
     ...overrides,
   };
 }
+
+test("environmental review escalation folds to an explicit typed retry recommendation", () => {
+  const verification = {
+    event_id: "verification", run_id: "issue-1135-test", type: "verification_recorded",
+    at: "2026-08-01T00:03:00Z", actor: "owner", payload: {
+      head_sha: HEAD, tree_sha: TREE, done_criteria_sha256: HASH, command: "node --test",
+      verification_request_sha256: HASH, declared_command_count: 1, completed_command_count: 1,
+      result_path: "/run/verification.txt", result_sha256: HASH, exit_code: 0, status: "passed", operator: "owner",
+    },
+  };
+  const review = {
+    event_id: "review", run_id: "issue-1135-test", type: "review_recorded",
+    at: "2026-08-01T00:04:00Z", actor: "claude", payload: {
+      round: 1, verdict: "escalated", reviewed_sha: HEAD, done_criteria_sha256: HASH,
+      reviewer: "claude", review_artifact: "/run/review.json",
+      escalation_kind: "runtime_failure",
+      executed_runtime: { digest: HASH, executable: { path: "/bin/reviewer", dev: 1, ino: 2, size: 3, sha256: HASH } },
+      override: null,
+    },
+  };
+  const derived = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [pullRequestFact(HEAD), verification, review],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
+    githubFacts: {
+      available: true, pr_number: 42, repo: "owner/repo", pr_head_sha: HEAD,
+      head_ref: "issue-1135", base_ref: "main", pr_state: "OPEN",
+    },
+  });
+  assert.equal(derived.action, "review");
+  assert.equal(derived.reason, "review_retryable_escalation");
+  assert.equal(derived.reviewed_sha, HEAD);
+  assert.equal(derived.retry_of_event_id, review.event_id);
+  for (const escalationKind of [undefined, "reviewer"]) {
+    const blockedReview = structuredClone(review);
+    if (escalationKind === undefined) delete blockedReview.payload.escalation_kind;
+    else blockedReview.payload.escalation_kind = escalationKind;
+    const blocked = foldRunFacts({
+      runRecord: runRecord(), facts: [pullRequestFact(HEAD), verification, blockedReview],
+      gitFacts: { head_sha: HEAD, tree_sha: TREE }, githubFacts: {
+        available: true, pr_number: 42, repo: "owner/repo", pr_head_sha: HEAD,
+        head_ref: "issue-1135", base_ref: "main", pr_state: "OPEN",
+      },
+    });
+    assert.equal(blocked.action, "none");
+    assert.equal(blocked.reason, "review_escalated");
+  }
+});
+
+test("retry action key is bound to the exact escalated review fact", async () => {
+  const verification = {
+    event_id: "verification-key", run_id: "issue-1135-test", type: "verification_recorded",
+    at: "2026-08-01T00:03:00Z", actor: "owner", payload: {
+      head_sha: HEAD, tree_sha: TREE, done_criteria_sha256: HASH, command: "node --test",
+      verification_request_sha256: HASH, declared_command_count: 1, completed_command_count: 1,
+      result_path: "/run/verification.txt", result_sha256: HASH, exit_code: 0, status: "passed", operator: "owner",
+    },
+  };
+  const review = {
+    event_id: "review-key-1", run_id: "issue-1135-test", type: "review_recorded",
+    at: "2026-08-01T00:04:00Z", actor: "claude", payload: {
+      round: 1, verdict: "escalated", escalation_kind: "runtime_failure",
+      reviewed_sha: HEAD, done_criteria_sha256: HASH, reviewer: "claude",
+      review_artifact: "/run/review-1.json", override: null,
+    },
+  };
+  const h = harness({
+    facts: [pullRequestFact(HEAD), verification, review],
+    observations: publicationObservations({
+      git: { head_sha: HEAD, tree_sha: TREE },
+      github: {
+        available: true, pr_lookup_complete: true, matching_pr_count: 1,
+        repo: "owner/repo", pr_number: 42, pr_state: "OPEN", head_ref: "issue-1135",
+        base_ref: "main", pr_head_sha: HEAD, merge_sha: null,
+      },
+    }),
+  });
+  const first = await inspectRun(h);
+  h.state.facts.push({
+    ...structuredClone(review), event_id: "review-key-2", at: "2026-08-01T00:05:00Z",
+    payload: { ...structuredClone(review.payload), round: 2, review_artifact: "/run/review-2.json" },
+  });
+  const second = await inspectRun(h);
+  assert.equal(first.derived.retry_of_event_id, "review-key-1");
+  assert.equal(second.derived.retry_of_event_id, "review-key-2");
+  assert.notEqual(first.recommended_action.key, second.recommended_action.key);
+});
 
 test("inspect is byte-read-only and emits one stable recommended action", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });

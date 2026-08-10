@@ -92,13 +92,24 @@ async function fixture(label) {
   const inspectRun = async () => {
     const current = facts.readFacts({ eventsPath }).facts;
     const review = current.filter((fact) => fact.type === "review_recorded").at(-1);
-    const action = !review ? "review" : review.payload.verdict === "lgtm" ? "merge" : review.payload.verdict === "changes_requested" ? "redispatch" : "none";
+    const retryable = review?.payload.verdict === "escalated" && review.payload.escalation_kind === "runtime_failure";
+    const action = !review || retryable ? "review" : review.payload.verdict === "lgtm" ? "merge" : review.payload.verdict === "changes_requested" ? "redispatch" : "none";
+    const reason = !review ? "review_missing" : retryable ? "review_retryable_escalation" : review.payload.verdict === "escalated" ? "review_escalated" : review.payload.verdict;
     return {
       blockers: [],
       facts: current,
       observations: { github: { pr_number: 42, pr_head_sha: head, pr_state: "OPEN" } },
       derived: { action, head_sha: head, pr_number: 42 },
-      recommended_action: { kind: action, reason: review ? review.payload.verdict : "review_missing", key: "c".repeat(64), steps: [], required_inputs: [] },
+      recommended_action: {
+        kind: action,
+        reason,
+        key: crypto.createHash("sha256").update(JSON.stringify({
+          action, reason, head, pr_number: 42,
+          ...(retryable ? { retry_of_event_id: review.event_id } : {}),
+        })).digest("hex"),
+        steps: [],
+        required_inputs: [],
+      },
     };
   };
   const cli = runner.parseCli(["--repo", repo, "--run-dir", runDir, "--json"]);
@@ -154,7 +165,7 @@ test("Relay runner records one exact-SHA pass and the derived action advances to
   assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 1);
 });
 
-test("changes_requested and invocation error are durable blocking review facts", async () => {
+test("changes_requested blocks while an invocation failure permits one explicit evidence-bound retry", async () => {
   const changed = await fixture("changes");
   const changedResult = await runner.runReview(changed.cli, {
     inspectRun: changed.inspectRun,
@@ -174,9 +185,81 @@ test("changes_requested and invocation error are durable blocking review facts",
     },
   });
   assert.equal(errorResult.verdict, "escalated");
-  assert.equal(errorResult.recommended_action.kind, "none");
+  assert.equal(errorResult.recommended_action.kind, "review");
+  assert.equal(errorResult.recommended_action.reason, "review_retryable_escalation");
   const artifact = JSON.parse(fs.readFileSync(errorResult.review_artifact, "utf8"));
   assert.match(artifact.verdict.summary, /adapter crashed/);
+  const retryResult = await runner.runReview(errored.cli, {
+    inspectRun: errored.inspectRun,
+    invokeReviewer: async (input) => reviewerSuccess(input, { verdict: "pass", summary: "retry passed", issues: [] }),
+  });
+  assert.equal(retryResult.round, 2);
+  assert.equal(retryResult.verdict, "lgtm");
+  assert.equal(retryResult.recommended_action.kind, "merge");
+  const reviewFacts = facts.readFacts({ eventsPath: errored.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+  assert.deepEqual(reviewFacts.map((fact) => fact.payload.round), [1, 2]);
+  assert.equal(reviewFacts[0].payload.review_artifact, errorResult.review_artifact);
+});
+
+test("model escalation is durably classified but never authorizes retry", async () => {
+  const model = await fixture("model-escalation");
+  const modelResult = await runner.runReview(model.cli, {
+    inspectRun: model.inspectRun,
+    invokeReviewer: async (input) => reviewerSuccess(input, { verdict: "escalated", summary: "model is uncertain", issues: [] }),
+  });
+  assert.equal(modelResult.recommended_action.kind, "none");
+  assert.equal(modelResult.recommended_action.reason, "review_escalated");
+  const modelFact = facts.readFacts({ eventsPath: model.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").at(-1);
+  assert.equal(modelFact.payload.escalation_kind, "reviewer");
+  let modelRetryCalls = 0;
+  await assert.rejects(runner.runReview(model.cli, {
+    inspectRun: model.inspectRun,
+    invokeReviewer: async () => { modelRetryCalls += 1; throw new Error("must not run"); },
+  }), (error) => error.code === "REVIEW_ACTION_MISMATCH");
+  assert.equal(modelRetryCalls, 0);
+});
+
+test("concurrent failing retries append at most one next-round escalation fact", async () => {
+  const value = await fixture("retry-race");
+  const firstFailure = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async (input) => {
+      const error = new Error("temporary provider failure");
+      error.review_binding = reviewBinding(input);
+      error.executed_runtime = EXECUTED_RUNTIME;
+      throw error;
+    },
+  });
+  let arrivals = 0;
+  let release;
+  const bothInvoked = new Promise((resolve) => { release = resolve; });
+  const invokeReviewer = async (input) => {
+    arrivals += 1;
+    if (arrivals === 2) release();
+    await bothInvoked;
+    const error = new Error("provider remains unavailable");
+    error.review_binding = reviewBinding(input);
+    error.executed_runtime = EXECUTED_RUNTIME;
+    throw error;
+  };
+  let lockTail = Promise.resolve();
+  const withRunLock = (runDir, callback) => {
+    const turn = lockTail.then(() => runtime.withRunLock(runDir, callback));
+    lockTail = turn.catch(() => {});
+    return turn;
+  };
+  const settled = await Promise.allSettled([
+    runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer, withRunLock }),
+    runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer, withRunLock }),
+  ]);
+  assert.equal(settled.filter((entry) => entry.status === "fulfilled").length, 1);
+  assert.equal(settled.filter((entry) => entry.status === "rejected").length, 1);
+  const accepted = settled.find((entry) => entry.status === "fulfilled").value;
+  assert.equal(accepted.verdict, "escalated");
+  assert.notEqual(accepted.recommended_action.key, firstFailure.recommended_action.key);
+  assert.equal(settled.find((entry) => entry.status === "rejected").reason.code, "REVIEW_BINDING_CHANGED");
+  const reviewFacts = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+  assert.deepEqual(reviewFacts.map((fact) => fact.payload.round), [1, 2]);
 });
 
 test("review persistence rejects missing or malformed executed runtime evidence", async () => {

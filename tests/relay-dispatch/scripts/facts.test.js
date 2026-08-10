@@ -407,6 +407,19 @@ test("review executed runtime evidence is optional for history but closed when p
   assert.throws(() => validateFact({ ...base, payload: { ...base.payload, executed_runtime: { ...executed_runtime, executable: { ...executed_runtime.executable, sha256: "bad" } } } }), /sha256/);
 });
 
+test("review escalation provenance is optional for history and closed on append", () => {
+  const historical = fact("review_recorded");
+  historical.payload.verdict = "escalated";
+  const executed_runtime = { digest: HASH, executable: { path: "/bin/reviewer", dev: 1, ino: 2, size: 3, sha256: HASH } };
+  assert.equal(validateFact(historical).known, true);
+  for (const escalation_kind of ["runtime_failure", "reviewer"]) {
+    assert.equal(validateFact({ ...historical, payload: { ...historical.payload, escalation_kind } }).known, true);
+  }
+  assert.throws(() => validateFact({ ...historical, payload: { ...historical.payload, escalation_kind: "other" } }), /escalation_kind is invalid/);
+  assert.throws(() => validateFact({ ...historical, payload: { ...historical.payload, verdict: "pass", escalation_kind: "reviewer" } }), /only for an escalated/);
+  assert.throws(() => validateFact({ ...historical, payload: { ...historical.payload, executed_runtime } }, { appending: true }), /escalation_kind is required/);
+});
+
 // The schema keeps executed_runtime optional so journals written before it existed still parse. The
 // append path must not inherit that tolerance: a verdict this runtime records without its runtime
 // binding would be a review fact that no longer says which executable produced it.

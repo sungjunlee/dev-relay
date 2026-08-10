@@ -15,6 +15,7 @@ function result(action, reason, base = {}) {
     terminal: base.terminal === true || Boolean(base.terminal_kind),
     activeAttempt: base.activeAttempt || null,
     diagnostics: base.diagnostics || [],
+    ...(base.retry_of_event_id ? { retry_of_event_id: base.retry_of_event_id } : {}),
   };
 }
 function none(reason, base = {}) { return result("none", reason, { ...base, activeAttempt: null }); }
@@ -427,6 +428,18 @@ function foldRunFacts({
       head_sha: headSha,
       reviewed_sha: latestReview.payload.reviewed_sha,
       pr_number: prNumber,
+      diagnostics,
+    }), githubFacts);
+  }
+  if (
+    latestReview?.payload?.verdict === "escalated"
+    && latestReview.payload.escalation_kind === "runtime_failure"
+  ) {
+    return withGithubAvailability(result("review", "review_retryable_escalation", {
+      head_sha: headSha,
+      reviewed_sha: latestReview.payload.reviewed_sha,
+      pr_number: prNumber,
+      retry_of_event_id: latestReview.event_id,
       diagnostics,
     }), githubFacts);
   }

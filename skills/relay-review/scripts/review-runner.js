@@ -349,6 +349,7 @@ async function runReview(cli, overrides = {}) {
   const credentialEnv = Object.fromEntries(requestedCredentials.envNames.map((name) => [name, process.env[name]]));
   const initial = await services.inspectRun({ runDir });
   const binding = requireReviewAction(initial, record);
+  const initialActionKey = initial.recommended_action.key;
   const criteriaBytes = readFrozenCriteria(record);
   const criteria = criteriaBytes.toString("utf8");
   const diff = gitRaw(record.git.worktree, ["diff", "--binary", "--no-ext-diff", `${record.git.start_sha}..${binding.head}`, "--"]);
@@ -360,7 +361,7 @@ async function runReview(cli, overrides = {}) {
   const promptDigest = crypto.createHash("sha256").update(promptBytes).digest("hex");
   const promptPath = immutableBytes(path.join(inputDir, `prompt-${binding.head}-${promptDigest}.md`), promptBytes);
   const timeoutMs = (cli.timeoutSeconds || Math.ceil(adapter.defaults.timeoutMs / 1000)) * 1000;
-  let verdict, stagedBinding, executedRuntime;
+  let verdict, stagedBinding, executedRuntime, escalationKind = null;
   try {
     const outcome = await services.invokeReviewer({
       runDir,
@@ -383,10 +384,12 @@ async function runReview(cli, overrides = {}) {
     stagedBinding = outcome.review_binding;
     executedRuntime = normalizeExecutedRuntime(outcome.executed_runtime);
     verdict = normalizeVerdict(outcome.output);
+    if (verdict.verdict === "escalated") escalationKind = "reviewer";
   } catch (error) {
     if (error.review_evidence_preserved) throw error;
     stagedBinding = error.review_binding || null;
     executedRuntime = normalizeExecutedRuntime(error.executed_runtime);
+    escalationKind = "runtime_failure";
     verdict = { verdict: "escalated", summary: `Reviewer invocation failed: ${error.message}`, issues: [] };
   }
   const written = await services.withRunLock(runDir, async (lockContext) => {
@@ -411,7 +414,11 @@ async function runReview(cli, overrides = {}) {
     }
     const fresh = await services.inspectRun({ runDir });
     const freshBinding = requireReviewAction(fresh, freshRecord);
-    if (freshBinding.head !== binding.head || freshBinding.prNumber !== binding.prNumber) {
+    if (
+      fresh.recommended_action.key !== initialActionKey
+      || freshBinding.head !== binding.head
+      || freshBinding.prNumber !== binding.prNumber
+    ) {
       fail("review binding changed during independent review", "REVIEW_BINDING_CHANGED");
     }
     const round = Math.max(0, ...fresh.facts.filter((fact) => fact.type === "review_recorded").map((fact) => fact.payload.round)) + 1;
@@ -445,6 +452,7 @@ async function runReview(cli, overrides = {}) {
         reviewer,
         review_artifact: artifactPath,
         executed_runtime: executedRuntime,
+        ...(escalationKind ? { escalation_kind: escalationKind } : {}),
         override: null,
       },
     };

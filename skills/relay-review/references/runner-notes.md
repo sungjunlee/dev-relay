@@ -58,6 +58,14 @@ Codex and Claude receive the staged JSON schema through native structured-output
 
 The review environment allowlist excludes `GH_TOKEN` and `GITHUB_TOKEN`. The runtime does not expose the run directory, executor worktree, dispatch prompt, transcript, or session state to the reviewer sandbox.
 
+An isolated invocation failure is preserved as an escalated review fact. A
+later operator invocation can retry only when the current action still binds
+the same reviewer, PR head, verification, and Done Criteria, and the latest
+durable review fact is classified as a runtime invocation failure. The runner
+rechecks the action key, which is bound to that exact fact identity, and the
+immutable review binding under the run lock before it
+appends a new round; model-returned escalation is never a retry authority.
+
 Reviewer authentication is opt-in and uses the same adapter credential catalog
 as dispatch. Repeat `--credential-env NAME` for an exact environment value or
 `--credential-file ID=/absolute/source` for a declared file target. The runtime

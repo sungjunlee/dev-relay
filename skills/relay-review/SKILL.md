@@ -56,7 +56,14 @@ The reviewer returns only:
 {"verdict":"pass|changes_requested|escalated","summary":"...","issues":[]}
 ```
 
-`pass` is stored as `lgtm`; `changes_requested` derives `redispatch`; reviewer invocation or result errors are durably recorded as `escalated`. Rounds are derived from prior `review_recorded` facts. There is no review budget, mutable round state, manual verdict application, detached review supervisor, PR-comment authority, or manifest transition.
+`pass` is stored as `lgtm`; `changes_requested` derives `redispatch`; reviewer
+invocation or result errors are durably recorded as `escalated`. A runtime
+invocation failure may derive another explicit review action, but the runner
+retries only after validating the unchanged exact binding and its immutable,
+durably classified runtime-failure fact. Model-returned escalation remains blocked.
+Rounds are derived from prior `review_recorded` facts. There is no automatic
+retry, review budget, mutable round state, manual verdict application, detached
+review supervisor, PR-comment authority, or manifest transition.
 
 ## Isolation and failure behavior
 
