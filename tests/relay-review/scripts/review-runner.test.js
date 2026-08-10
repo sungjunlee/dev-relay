@@ -313,6 +313,56 @@ test("model-returned escalation is classified as reviewer uncertainty and is not
   }), /'none', not 'review'/);
 });
 
+test("malformed reviewer output is durably non-retryable reviewer escalation", async () => {
+  const value = await fixture("malformed-review-output");
+  let calls = 0;
+  const result = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async (input) => {
+      calls += 1;
+      return reviewerSuccess(input, { verdict: "pass", summary: "ok", issues: [], unexpected: true });
+    },
+  });
+  assert.equal(result.verdict, "escalated");
+  assert.equal(result.recommended_action.kind, "none");
+  assert.equal(result.recommended_action.reason, "review_escalated");
+  const reviews = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+  assert.equal(reviews.length, 1);
+  assert.equal(reviews[0].payload.escalation_kind, "reviewer");
+  const artifact = JSON.parse(fs.readFileSync(reviews[0].payload.review_artifact, "utf8"));
+  assert.equal(artifact.verdict.verdict, "escalated");
+  assert.match(artifact.verdict.summary, /invalid/i);
+  await assert.rejects(runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async () => { calls += 1; throw new Error("must not retry malformed output"); },
+  }), /'none', not 'review'/);
+  assert.equal(calls, 1);
+  assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 1);
+});
+
+test("nonzero invocation failures stay retryable while output protocol mismatches do not", async () => {
+  for (const [reason, expectedKind, expectedAction] of [
+    ["cli_nonzero_exit", "runtime_failure", "review"],
+    ["output_protocol_mismatch", "reviewer", "none"],
+  ]) {
+    const value = await fixture(`failure-classification-${reason}`);
+    const result = await runner.runReview(value.cli, {
+      inspectRun: value.inspectRun,
+      async invokeReviewer(input) {
+        const error = new Error(`review failed: ${reason}`);
+        error.failure_reason = reason;
+        error.failure_signals = ["output_protocol"];
+        error.review_binding = reviewBinding(input);
+        error.executed_runtime = EXECUTED_RUNTIME;
+        throw error;
+      },
+    });
+    assert.equal(result.recommended_action.kind, expectedAction);
+    const review = facts.readFacts({ eventsPath: value.eventsPath }).facts.at(-1);
+    assert.equal(review.payload.escalation_kind, expectedKind);
+  }
+});
+
 test("review persistence rejects missing or malformed executed runtime evidence", async () => {
   for (const mode of ["missing", "malformed"]) {
     const value = await fixture(`runtime-${mode}`);

@@ -408,14 +408,32 @@ async function runReview(cli, overrides = {}) {
     if (error.review_evidence_preserved) throw error;
     stagedBinding = error.review_binding || null;
     executedRuntime = normalizeExecutedRuntime(error.executed_runtime);
-    verdict = { verdict: "escalated", summary: `Reviewer invocation failed: ${error.message}`, issues: [] };
-    escalationKind = "runtime_failure";
+    const reviewerResultFailure = error.code === "REVIEW_RESULT_INVALID"
+      || error.failure_reason === "output_protocol_mismatch";
+    verdict = {
+      verdict: "escalated",
+      summary: `${reviewerResultFailure ? "Reviewer result invalid" : "Reviewer invocation failed"}: ${error.message}`,
+      issues: [],
+    };
+    escalationKind = reviewerResultFailure ? "reviewer" : "runtime_failure";
   }
   if (!verdict) {
     stagedBinding = outcome.review_binding;
     executedRuntime = normalizeExecutedRuntime(outcome.executed_runtime);
-    verdict = normalizeVerdict(outcome.output);
-    if (verdict.verdict === "escalated") escalationKind = "reviewer";
+    try {
+      verdict = normalizeVerdict(outcome.output);
+      if (verdict.verdict === "escalated") escalationKind = "reviewer";
+    } catch (error) {
+      // The provider invocation completed, but its result was not a valid reviewer
+      // result. Preserve the staged runtime/bindings and record this as reviewer
+      // uncertainty; it must not qualify for the environmental retry.
+      verdict = {
+        verdict: "escalated",
+        summary: `Reviewer result invalid: ${error.message}`,
+        issues: [],
+      };
+      escalationKind = "reviewer";
+    }
   }
   const written = await services.withRunLock(runDir, async (lockContext) => {
     const freshRecord = runStore.readRunRecord({ runDir });
