@@ -768,6 +768,75 @@ test("the run's own merge lock is not observed as a live executor host", async (
   assert.notEqual(unscoped.recommended_action.key, unlocked.recommended_action.key);
 });
 
+// Regression for #1214: the isolated observer talks to api.github.com, but the
+// descriptor never declared a network policy, so `runIsolated` defaulted it to
+// "disabled" and finalize-run died before it could authorize anything.
+test("the merge observer descriptor explicitly enables network access and keeps its exact identity binding", async () => {
+  const value = await fixture("observer-descriptor");
+  const descriptor = await withGh(value, () => finalize.mergeObserver(value.record));
+
+  assert.equal(descriptor.networkAccess, "enabled");
+  assert.equal(descriptor.command, process.execPath);
+  assert.deepEqual(Object.keys(descriptor.env), ["GH_TOKEN"]);
+  assert.equal(descriptor.env.GH_TOKEN, "test-token");
+
+  // The declaration is additive: command shape, staged `gh`, and the exact
+  // repository/branch/base checks in the inlined program are untouched.
+  const [flag, code, terminator, ghFlag, ghBin, nodeScript] = descriptor.args;
+  assert.deepEqual(flag, { kind: "literal", value: "-e" });
+  assert.deepEqual(terminator, { kind: "literal", value: "--" });
+  assert.deepEqual(ghFlag, { kind: "literal", value: "--gh-bin" });
+  assert.deepEqual(ghBin, { kind: "staged_file", value: value.gh.scriptPath });
+  assert.deepEqual(nodeScript, { kind: "literal", value: "--gh-node-script" });
+  assert.equal(descriptor.args.length, 6);
+  assert.equal(code.kind, "literal");
+  for (const bound of [value.record.repo.remote, value.record.git.branch, value.record.git.base_branch]) {
+    assert.ok(code.value.includes(JSON.stringify(bound)), bound);
+  }
+  assert.match(code.value, /exact PR identity mismatch/);
+  assert.match(code.value, /nonce:input\.nonce/);
+});
+
+test("the network-enabled merge observer still runs under real isolation and returns the exact observation", async () => {
+  const value = await fixture("observer-isolated");
+  // The shared fake `gh` keeps mutable state beside itself, which the isolated
+  // stage deliberately cannot reach; this stub carries its whole answer inline.
+  const row = {
+    number: 42,
+    state: "OPEN",
+    headRefName: value.record.git.branch,
+    headRefOid: value.head,
+    baseRefName: value.record.git.base_branch,
+    headRepository: { nameWithOwner: value.record.repo.remote, name: path.basename(value.record.repo.remote) },
+    headRepositoryOwner: { login: path.dirname(value.record.repo.remote) },
+    mergeCommit: null,
+    autoMergeRequest: null,
+    mergeStateStatus: "CLEAN",
+  };
+  const stub = path.join(value.root, "stub-gh.js");
+  fs.writeFileSync(stub, `process.stdout.write(${JSON.stringify(JSON.stringify(row))});\n`, { mode: 0o755 });
+  const prior = { bin: process.env.RELAY_GH_BIN, token: process.env.GH_TOKEN };
+  process.env.RELAY_GH_BIN = stub;
+  process.env.GH_TOKEN = "test-token";
+  try {
+    const observer = finalize.mergeObserver(value.record);
+    assert.equal(observer.networkAccess, "enabled");
+    const observed = runStore.invokeExternalObserver({
+      observer,
+      request: { nonce: "n".repeat(32), request: { pr_number: 42, repo: value.record.repo.remote } },
+    });
+    assert.equal(observed.nonce, "n".repeat(32));
+    assert.equal(observed.pr_number, 42);
+    assert.equal(observed.pr_head_sha, value.head);
+    assert.equal(observed.head_ref, value.record.git.branch);
+    assert.equal(observed.base_ref, value.record.git.base_branch);
+    assert.equal(observed.merge_state_status, "CLEAN");
+  } finally {
+    if (prior.bin === undefined) delete process.env.RELAY_GH_BIN; else process.env.RELAY_GH_BIN = prior.bin;
+    if (prior.token === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = prior.token;
+  }
+});
+
 test("finalize-run scopes its under-lock re-inspection to the merge lock", async () => {
   const value = await fixture("lockscope");
   const seen = [];

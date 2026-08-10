@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { spawnSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
@@ -607,6 +607,51 @@ test("network policy is explicit and grants only transport Mach services, never 
   assert.equal(observed.ca, ca); assert.equal(observed.certificate, true); assert.match(observed.sibling, /^denied:/);
   assert.throws(() => host.sandboxInvocation({ role: "executor", command: process.execPath, networkAccess: "enabled", env: { ...process.env, SSL_CERT_FILE: proof } }),
     (error) => error.code === "INVALID_INVOCATION" && /host-reserved/.test(error.message));
+});
+
+// Regression for #1214: a network-enabled sandbox reached the socket but not the
+// per-user trust daemon, so Go's darwin `crypto/x509` failed every handshake with
+// `OSStatus -26276` instead of returning a trust verdict.
+test("only a network-enabled sandbox reaches the macOS trust daemon, and only through the agent name", () => {
+  const value = roots("trust-service");
+  const TRUST_AGENT = '(allow mach-lookup (global-name "com.apple.trustd.agent"))';
+  const anchor = path.join(value.root, "anchor.pem"), args = ["verify-cert", "-c", anchor, "-p", "basic"];
+  const status = (command, argv, env) => spawnSync(command, argv, { cwd: value.worktree, env, encoding: "utf8" }).status;
+  // Verifying a system anchor against the system trust store is entirely offline:
+  // the probe needs no credentials and no public network, only trustd.
+  const rootsPem = execFileSync("/usr/bin/security", [
+    "find-certificate", "-a", "-p", "/System/Library/Keychains/SystemRootCertificates.keychain",
+  ], { encoding: "utf8" });
+  const anchorPem = rootsPem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)?.[0];
+  assert.ok(anchorPem, "the system root keychain must contain a certificate");
+  fs.writeFileSync(anchor, `${anchorPem}\n`);
+  assert.equal(status("/usr/bin/security", args, process.env), 0, "the host must trust its system anchor");
+
+  const profile = (networkAccess) => host.sandboxInvocation({ role: "reviewer", command: "/usr/bin/security",
+    args, readRoots: [value.root], networkAccess });
+  const enabled = profile("enabled"), disabled = profile("disabled");
+
+  // Observable boundary, not source text: the identical offline trust evaluation.
+  assert.equal(status(enabled.command, enabled.args, enabled.env), 0, "a network-enabled sandbox must reach trustd");
+  assert.notEqual(status(disabled.command, disabled.args, disabled.env), 0, "a network-disabled sandbox must stay trust-denied");
+  // Control: the denial above is the Mach lookup and nothing else. Granting only
+  // that one name to the untouched network-disabled profile makes the same probe pass.
+  assert.equal(status(disabled.command, [disabled.args[0], disabled.args[1] + TRUST_AGENT, ...disabled.args.slice(2)], disabled.env), 0);
+
+  // Exact allow policy: the agent name only. The root `com.apple.trustd` is
+  // measurably neither used nor sufficient, and nothing is widened to a prefix.
+  assert.match(enabled.args[1], /\(global-name "com\.apple\.trustd\.agent"\)/);
+  assert.doesNotMatch(enabled.args[1], /\(global-name "com\.apple\.trustd"\)/);
+  assert.doesNotMatch(enabled.args[1], /global-name-prefix|global-name-regex|\(allow mach\*|\(allow mach-lookup\)/);
+  assert.doesNotMatch(enabled.args[1], /securityd|SecurityServer|[Kk]eychain/);
+  assert.doesNotMatch(disabled.args[1], /mach-lookup|trustd/);
+
+  // The grant is a Mach lookup only: file authority still differs from the
+  // network-disabled profile by exactly the pre-existing root-owned CA literal.
+  const reads = (invocation) => invocation.args[1].match(/\(allow file-read\*.*?\(literal "\/dev\/random"\)\)/)[0];
+  const ca = fs.realpathSync("/etc/ssl/cert.pem");
+  assert.equal(enabled.env.SSL_CERT_FILE, ca);
+  assert.equal(reads(enabled).replace(`(literal "${ca}")`, ""), reads(disabled));
 });
 
 test("staged input bytes remain bound when the caller path mutates after launch", async () => {

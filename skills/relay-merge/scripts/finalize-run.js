@@ -377,6 +377,9 @@ function mergeObserver(record) {
     command: process.execPath,
     args,
     env: { GH_TOKEN: githubToken(record.repo.root) },
+    // The observer reaches api.github.com over TLS; without this the isolated profile denies the
+    // socket outright and never reaches the exact PR identity check below.
+    networkAccess: "enabled",
   };
 }
 
