@@ -17,10 +17,23 @@ The repository identity derived from the Git common directory and origin must eq
 
 Before invocation, canonical `inspect` must report `recommended_action.kind=review`. The live PR number/head must equal the latest durable `pull_request_recorded` fact and derived head. A passed `verification_recorded` fact must bind that head and the frozen Done Criteria hash.
 
+In operator terminology, the Git repository and immutable `start_sha` are the
+Source; the exact GitHub PR is the current Change Request. The runner derives
+the ReviewSubject without adding a runtime object: SHA-1 object format,
+`start_sha` base OID, exact live/durable reviewed head OID, the passed
+verification tree OID, the binary diff digest, and the frozen Done Criteria
+digest. The resulting Reviewed Result is terminal proof of exact verification
+and independent review; it does not imply Publication or Landing. Landing
+remains a separate explicit merge operation.
+
 The runner writes content-addressed immutable inputs below `review-inputs/`:
 
 - `diff-<sha>-<digest>.patch`
 - `prompt-<sha>-<digest>.md`
+
+The diff digest is exactly SHA-256 over the immutable newline-normalized output
+of `git diff --binary --no-ext-diff <start_sha>..<live-pr-head> --`. No
+`--full-index` or alternate patch format is implied.
 
 The durable result is `review-<round>-<digest>.json`. Its matching `review_recorded` fact stores the exact reviewed SHA, Done Criteria hash, reviewer binding, derived round, verdict, and artifact path. Orphaned immutable input/result files after a crash do not authorize lifecycle progress; only the fact does.
 

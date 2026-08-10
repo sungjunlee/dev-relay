@@ -13,12 +13,13 @@ For live schema and state-machine reference, prefer [`references/architecture.md
 
 | ADR | Decision | Source issue(s) |
 | --- | --- | --- |
-| [0001-orchestrator-owns-publication.md](./0001-orchestrator-owns-publication.md) | Push + PR creation live in dispatch orchestrator, not executor | `#198` |
+| [0001-orchestrator-owns-publication.md](./0001-orchestrator-owns-publication.md) | Historical publication ownership; superseded for the current runtime by ADR-0007 | `#198` |
 | [0002-manifest-slice-ownership.md](./0002-manifest-slice-ownership.md) | `manifest/*` slices + thin `relay-manifest.js` facade | `#188` |
 | [0003-worktree-runtime-single-owner.md](./0003-worktree-runtime-single-owner.md) | One `worktree-runtime.js` owns plan/create/register/remove | `#187` |
 | [0004-review-runner-staged-facade.md](./0004-review-runner-staged-facade.md) | `review-runner/` staged helpers + orchestration facade | `#189` |
 | [0005-rubric-mandatory-policy.md](./0005-rubric-mandatory-policy.md) | `anchor.rubric_grandfathered` retired; rubric required | `#190` |
 | [0006-merge-gate-contention-policy.md](./0006-merge-gate-contention-policy.md) | Lock timeout policy split by downstream consumer | `#166`, `#185` |
+| [0007-review-subject-contract-freeze.md](./0007-review-subject-contract-freeze.md) | Derived ReviewSubject and Git-required, forge-optional terminology | `#1209`, `#1204` |
 
 Dated records carry their own measurements and are longer than the numbered
 form; they are decisions all the same.

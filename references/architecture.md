@@ -9,6 +9,28 @@ This document describes the shipped Relay runtime. Files under
 [`docs/archive/`](../docs/archive/) and dated plans are historical evidence,
 not operator instructions.
 
+## Contract vocabulary
+
+Relay is **Git-required**: Git object identity is the content authority. It is
+**forge-optional** at the architectural boundary: a forge supplies transport,
+not a second content identity. The retained production route still uses GitHub
+and its current lifecycle behavior is unchanged.
+
+- **Source** is the Git repository plus immutable run start.
+- **ReviewSubject** is the derived six-member content binding in
+  [ADR-0007](../docs/decisions/0007-review-subject-contract-freeze.md), never a
+  stored runtime object or fact.
+- **Publication** places the exact revision on a remote ref. It is not Change
+  Request creation and does not imply Landing; canonical recovery owns it.
+- **Change Request** is the forge-owned PR/MR identity for a proposed revision.
+  The retained route uses the exact GitHub PR and records or creates it
+  separately from Publication.
+- **Reviewed Result** is terminal proof of exact verification and independent
+  review for one ReviewSubject. It does not imply Publication or Landing.
+- **Landing** applies a reviewed revision to a target and independently observes
+  the result; the current route performs Landing only through explicit
+  `relay-merge`.
+
 ## Core model
 
 ```text
@@ -30,8 +52,9 @@ same action key before they make a change.
 
 The normal action sequence is `wait` -> `recover` -> `review` -> `merge`.
 `redispatch`, `close`, `none`, and `operator_attention` are explicit terminal
-or recovery outcomes, not hidden state transitions. PR publication is a
-recovery action; dispatch never commits, pushes, opens a PR, or recovers a run.
+or recovery outcomes, not hidden state transitions. Publication and Change
+Request recording are recovery actions; dispatch never commits, pushes, opens a
+PR, or recovers a run.
 
 ```text
 relay-review
@@ -77,15 +100,19 @@ node skills/relay/scripts/relay-recover.js recover --repo . --run-id <id> \
   --reason "<why>" --expected-action-key <key> --json
 ```
 
-Recovery alone may close a dead attempt, commit reviewable work, push a branch,
-record/create the exact PR, record verification, or append `run_closed`.
+Recovery alone may close a dead attempt, commit reviewable work, place a branch
+revision on the remote ref (Publication), record/create the exact Change
+Request, record verification, or append `run_closed`.
 Every recovery step is authorized by a fresh action key and re-observed after
 the side effect. An explicit close carries a durable operator and reason.
 
-`review-runner.js` accepts only a run whose inspection says `review`. It binds
-the immutable reviewer, current PR head, passed verification, and frozen Done
-Criteria into an isolated review bundle, then appends one `review_recorded`
-fact. A passing verdict is `lgtm`; changed requests derive `redispatch`.
+`review-runner.js` accepts only a run whose inspection says `review`. It derives
+the ReviewSubject from the immutable Source, exact current Change Request head,
+passed verification tree, current binary diff bytes, and frozen Done Criteria,
+then binds the immutable reviewer into an isolated review bundle and appends one
+`review_recorded` fact. A passing Reviewed Result is `lgtm`; it is terminal
+proof of exact verification plus independent review and does not publish or
+land the revision. Changes requested derive `redispatch`.
 
 `gate-check.js` is read-only. `finalize-run.js` is the explicit merge writer:
 it repeats inspection under the run lock, records an HMAC-bound

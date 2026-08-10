@@ -20,7 +20,7 @@ Distilled ADRs (current rules):
 
 | Doc | Purpose |
 | --- | --- |
-| [decisions/README.md](./decisions/README.md) | ADR index — orchestrator publication, manifest slices, worktree runtime, review-runner facade, rubric policy, merge-gate contention |
+| [decisions/README.md](./decisions/README.md) | ADR index — current and historical decisions, including the ReviewSubject contract |
 
 Specialized ledgers (not ADRs): [rubric-fail-closed-history.md](./rubric-fail-closed-history.md), [relay-resolver-audit-history.md](./relay-resolver-audit-history.md).
 
@@ -41,6 +41,7 @@ Specialized ledgers (not ADRs): [rubric-fail-closed-history.md](./rubric-fail-cl
 | --- | --- |
 | [codex-app-server-analysis.md](./codex-app-server-analysis.md) | Codex app-server vs `codex exec` (RELAY-32/33 input) |
 | [codex-orchestrator-e2e-validation-2026-04-03.md](./codex-orchestrator-e2e-validation-2026-04-03.md) | Direct-read relay E2E validation report |
+| [run-inventory-1209.md](./run-inventory-1209.md) | Bounded anonymous Relay run inventory and drain-in-place evidence for #1209 |
 
 ## Rubric And Review History
 

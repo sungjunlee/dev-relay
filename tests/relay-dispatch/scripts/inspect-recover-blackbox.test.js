@@ -193,6 +193,27 @@ test("recover refuses a stale inspect key before effects or durable writes", asy
   assert.equal(h.state.writes, 0);
 });
 
+test("#1209 recovery reinspection requires the same action after live observations change", async () => {
+  const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
+  const inspected = await inspectRun(h);
+  h.state.observations.git.remote_head_sha = HEAD;
+  h.state.observations.git.remote_relation = "equal";
+  const effects = { converge: async (step) => { h.state.effects.push(step); return { converged: true }; } };
+  const result = await recoverRun({
+    ...h,
+    actor: "owner",
+    reason: "must reinspect the same action",
+    expectedActionKey: inspected.recommended_action.key,
+    effects,
+  });
+  assert.equal(result.status, "refused");
+  assert.equal(result.blockers[0].code, "stale_action");
+  assert.equal(result.before.recommended_action.kind, "recover");
+  assert.notEqual(result.action_key, inspected.recommended_action.key);
+  assert.deepEqual(h.state.effects, []);
+  assert.equal(h.state.writes, 0);
+});
+
 test("recover rejects a path-shaped expected action key before ownership or reads", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
   let lockCalls = 0;

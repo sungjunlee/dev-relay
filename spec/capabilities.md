@@ -138,6 +138,16 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 
 **Goal:** A PR is scored in a fresh context against frozen Done Criteria and rubric anchors, and the merge gate is tied to the exact commit SHA that was reviewed.
 
+Relay's contract vocabulary is Git-required and forge-optional: Source is the
+Git repository and immutable run start; ReviewSubject is the derived binding of
+object format, base/head/tree OIDs, binary diff digest, and frozen Done Criteria
+digest; Publication places the exact revision on a remote ref; Change Request
+is the forge-owned PR/MR identity; Reviewed Result is terminal proof of exact
+verification and independent review; Landing applies that revision to a target
+and independently observes it. Publication is not Change Request creation and
+does not imply Landing. These terms do not add runtime fields, and the retained
+GitHub route is unchanged. See ADR-0007.
+
 **In-scope:**
 - `skills/relay-review/` review runner, immutable review-bundle construction, reviewer invocation, and verdict fact append.
 - Fresh-context review using `context: fork` semantics from the skill contract.
@@ -149,6 +159,9 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 
 ### Expected Behaviors
 - The reviewer loads file-backed Done Criteria from `run.contract.done_criteria_path` and verifies the immutable digest before use.
+- The reviewer derives, but does not store as a new object, the exact
+  ReviewSubject defined by ADR-0007 from existing run, Git, verification, and
+  Change Request evidence.
 - A passing review appends one `review_recorded` fact bound to the exact PR head and Done Criteria digest; merge-time inspection rejects a later HEAD advance as stale.
 - `changes_requested` derives `redispatch`; the next executor attempt preserves the same immutable run identity and frozen Done Criteria.
 
