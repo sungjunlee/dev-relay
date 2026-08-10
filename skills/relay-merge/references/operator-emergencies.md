@@ -4,6 +4,11 @@ Relay merge has no `--skip-review`, `--force-finalize-nonready`, manifest-state
 override, or bootstrap artifact exemption. Missing or stale evidence changes the
 derived action; it does not create an emergency merge path.
 
+Landing applies the exact reviewed revision to the target and independently
+observes the result. The current GitHub Change Request is the forge-owned PR
+identity used by that route, not Publication; the passed Reviewed Result, live
+repository/base/head identity, and exact SHA remain mandatory.
+
 Inspect the run first:
 
 ```bash

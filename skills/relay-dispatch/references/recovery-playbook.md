@@ -3,6 +3,10 @@
 Relay has one recovery surface. `inspect` is byte-read-only and derives one
 typed next action from immutable run facts plus live Git/GitHub observation.
 `recover` re-observes under the run lock and converges that action idempotently.
+In the shared vocabulary, recovery-owned Publication places the exact Source
+revision on a remote ref. It is not Change Request creation and does not imply
+Landing; the current GitHub route separately records or creates its forge-owned
+Change Request identity.
 
 ```bash
 node skills/relay/scripts/relay-recover.js inspect \

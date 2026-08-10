@@ -199,7 +199,7 @@ settles the signed obligation, or by terminating the reported identities by hand
 The linked-worktree administration directory, common object store, refs, config,
 and hooks are deliberately outside the executor write set. Executors leave dirty
 worktree content; canonical `relay-recover recover` exclusively owns commit,
-push, and PR publication.
+remote-ref Publication, and the separate current-route Change Request handling.
 
 ## New Adapter Checklist
 

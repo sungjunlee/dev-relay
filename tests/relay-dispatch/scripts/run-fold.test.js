@@ -7,6 +7,7 @@ const path = require("path");
 
 const {
   foldRunFacts,
+  inspectRun,
   recoverySteps,
 } = require("../../../skills/relay-dispatch/scripts/inspect");
 
@@ -464,6 +465,97 @@ test("a Git tree is trusted only when observed at the live PR head", () => {
   assert.equal(result.reason, "verification_observation_incomplete");
   assert.equal(result.diagnostics.at(-1).code, "verification_tree_observation_incomplete");
   assert.notEqual(result.action, "merge");
+});
+
+test("#1209 freezes GitHub action, reason, and action-key contracts", async () => {
+  const baseFacts = [started(), finished(), pr(), verification()];
+  const open = livePrFacts(42, {
+    pr_lookup_complete: true,
+    lookup_complete: true,
+    matching_pr_count: 1,
+  });
+  const publication = {
+    git: {
+      head_sha: HEAD, tree_sha: TREE, branch: "work", base_branch: "main",
+      branch_commit_exists: true, reviewable_work: true, reviewable_dirty: false,
+      remote_head_sha: START, remote_relation: "behind_local",
+    },
+    github: {
+      available: true, lookup_complete: true, pr_lookup_complete: true,
+      matching_pr_count: 0, repo: "owner/repo", pr_number: null,
+      pr_head_sha: null, head_ref: "work", base_ref: "main", pr_state: null,
+    },
+    host: { live: false }, verification: { pending: false },
+  };
+  const cases = [
+    ["publication recovery", [started(), finished()], publication,
+      "recover", "publication_incomplete", "f7bcde21c47296320f322c368376f855b9da03da47103ecae53c4f40f6230fbd"],
+    ["review", baseFacts, { ...publication, github: open },
+      "review", "review_missing", "8eb98952991243d41a44240f7b29b30ab84fc0344a2cf6e776f95db1673aa402"],
+    ["stale review", [...baseFacts, review("pass", 5, START)], { ...publication, github: open },
+      "review", "review_stale", "4327d7143895359a710de4a530d82c1d4b55b5ee148c56e9af7e318202128fdd"],
+    ["ready to merge", [...baseFacts, review("pass", 5)], { ...publication, github: open },
+      "merge", "ready_to_merge", "b7525b15d238119500fd0c1a503555382f056ad25ab347650ba7f22a767c8033"],
+    ["externally merged", [started(), finished(), pr()], {
+      ...publication,
+      github: { ...open, pr_state: "MERGED", merge_sha: TARGET },
+    }, "recover", "merged_pr_unrecorded", "d2c031949c81ad7c5e8dc2920536ae38c12befc7c50b7b0cec46cc00de057c08"],
+    ["GitHub unavailable", baseFacts, {
+      ...publication,
+      github: { ...open, available: false },
+    }, "none", "github_unavailable", "02b9ed549207ac9576a7c8c86cb2c2e1de599ee1c91d4fc48150864cd149ace8"],
+    ["merge conflict observation", [started(), finished()], {
+      ...publication,
+      git: { ...publication.git, remote_relation: "diverged" },
+    }, "operator_attention", "remote_branch_conflict", "1a1a60051aefcef91368d36e84c921ed1d84b218728404f538067db4c5d3a255"],
+  ];
+  const observedKeys = {};
+  for (const [name, scenarioFacts, seen, kind, reason, key] of cases) {
+    const snapshot = {
+      run_sha256: crypto.createHash("sha256").update(JSON.stringify(runRecord())).digest("hex"),
+      facts_sha256: crypto.createHash("sha256").update(JSON.stringify(scenarioFacts)).digest("hex"),
+      fact_count: scenarioFacts.length,
+      last_event_id: scenarioFacts.at(-1)?.event_id || null,
+      tail_status: "complete",
+    };
+    const readSnapshot = async () => ({
+      runDir: "/run", runRecord: runRecord(), facts: scenarioFacts, snapshot,
+    });
+    const input = { runDir: "/run", observer: async () => seen, readSnapshot };
+    const first = await inspectRun(input);
+    const replay = await inspectRun(input);
+    assert.equal(first.recommended_action.kind, kind, name);
+    assert.equal(first.recommended_action.reason, reason, name);
+    observedKeys[name] = first.recommended_action.key;
+    assert.equal(replay.recommended_action.key, first.recommended_action.key, `${name} replay`);
+  }
+  assert.deepEqual(observedKeys, Object.fromEntries(cases.map(([name, , , , , key]) => [name, key])));
+});
+
+test("#1209 exact repository, base, head, and live SHA bindings fail closed", () => {
+  const ready = {
+    runRecord: runRecord(),
+    facts: [pr(), verification(), review("pass", 5)],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE, branch: "work", base_branch: "main" },
+    githubFacts: livePrFacts(),
+  };
+  const untouched = foldRunFacts(ready);
+  assert.equal(untouched.action, "merge");
+  assert.equal(untouched.reason, "ready_to_merge");
+  for (const [name, override, expectedReason, expectedDiagnostic] of [
+    ["repository", { repo: "other/repo" }, "fact_conflict", "external_identity_mismatch"],
+    ["base", { base_ref: "release" }, "fact_conflict", "external_identity_mismatch"],
+    ["head branch", { head_ref: "other-work" }, "fact_conflict", "external_identity_mismatch"],
+    ["live SHA", { pr_head_sha: START }, "verification_observation_incomplete", "verification_tree_observation_incomplete"],
+  ]) {
+    const result = foldRunFacts({
+      ...ready,
+      githubFacts: { ...ready.githubFacts, ...override },
+    });
+    assert.notEqual(result.action, "merge", name);
+    assert.equal(result.reason, expectedReason, name);
+    assert.equal(result.diagnostics.at(-1).code, expectedDiagnostic, name);
+  }
 });
 
 test("property replay preserves ordering, rejects duplicate delivery, and never leaves terminal", () => {

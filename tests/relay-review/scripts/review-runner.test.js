@@ -102,7 +102,7 @@ async function fixture(label) {
     };
   };
   const cli = runner.parseCli(["--repo", repo, "--run-dir", runDir, "--json"]);
-  return { root, repo, runDir, record, head, criteriaHash, eventsPath, inspectRun, cli };
+  return { root, repo, runDir, record, startSha, head, tree, criteriaHash, eventsPath, inspectRun, cli };
 }
 
 test("Relay runner records one exact-SHA pass and the derived action advances to merge", async () => {
@@ -123,8 +123,21 @@ test("Relay runner records one exact-SHA pass and the derived action advances to
   assert.equal(result.done_criteria_sha256, value.criteriaHash);
   assert.equal(result.recommended_action.kind, "merge");
   assert.equal(captured.request.reviewed_sha, value.head);
+  assert.equal(captured.request.current_sha, value.head);
+  const rawDiff = execFileSync("git", ["-C", value.repo, "diff", "--binary", "--no-ext-diff",
+    `${value.startSha}..${value.head}`, "--"], { encoding: "utf8" });
+  const exactDiff = Buffer.from(`${rawDiff}${rawDiff.endsWith("\n") || !rawDiff ? "" : "\n"}`, "utf8");
+  assert.equal(captured.request.diff_sha256, crypto.createHash("sha256").update(exactDiff).digest("hex"));
+  assert.deepEqual(fs.readFileSync(captured.request.diff_path), exactDiff);
   assert.deepEqual(Object.keys(captured.credentialRequest.env), [], "ambient environment must not cross the reviewer boundary");
   const prompt = fs.readFileSync(captured.request.prompt_path, "utf8");
+  const verificationPrefix = "Verification fact: ";
+  const verificationLine = prompt.split("\n").find((line) => line.startsWith(verificationPrefix));
+  assert.ok(verificationLine, "captured review prompt must include the verification input");
+  const capturedVerification = JSON.parse(verificationLine.slice(verificationPrefix.length));
+  assert.equal(capturedVerification.payload.head_sha, value.head);
+  assert.equal(capturedVerification.payload.tree_sha, value.tree);
+  assert.equal(capturedVerification.payload.done_criteria_sha256, value.criteriaHash);
   assert.match(prompt, /Frozen Done Criteria/);
   assert.match(prompt, /file\.txt says after/);
   assert.match(prompt, /Exact review diff/);
