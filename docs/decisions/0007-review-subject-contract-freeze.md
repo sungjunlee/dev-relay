@@ -15,7 +15,7 @@ must remain unchanged while terminology becomes forge-neutral.
 
 | Member | Existing authoritative derivation |
 | --- | --- |
-| object format | `sha1`: current run, fact, review, and GitHub OIDs are exactly 40 hexadecimal bytes as enforced by the existing readers/gates. |
+| object format | `sha1`: current run, fact, review, and GitHub OIDs are 20 bytes represented by exactly 40 hexadecimal characters, as enforced by the existing readers/gates. |
 | base OID | Immutable `run.json.git.start_sha`; this is the left side of the current review diff. |
 | reviewed head OID | Fresh GitHub `pr_head_sha`, which must equal the derived head and latest durable `pull_request_recorded.payload.head_sha`. |
 | tree OID | Latest passed `verification_recorded.payload.tree_sha` for that head and frozen Done Criteria; it must equal the freshly observed Git tree while the local observed head equals the live PR head. |

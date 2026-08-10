@@ -1,6 +1,6 @@
 # Anonymous Relay Run Inventory for #1209
 
-Measured at `2026-08-10T13:56:23Z`:
+Measured at `2026-08-10T14:20:04Z`:
 
 ```json
 {
@@ -47,6 +47,7 @@ node <<'NODE'
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { validateFact } = require('./skills/relay-dispatch/scripts/facts.js');
 
 const FILE_CAP = 16 * 1024 * 1024;
 const MAX_DEPTH = 12;
@@ -54,8 +55,6 @@ const MAX_ENTRIES = 100_000;
 const MAX_RUN_DIRECTORIES = 10_000;
 const RUN_FILE = 'run.json';
 const EVENTS_FILE = 'events.jsonl';
-const SHA1 = /^[0-9a-f]{40}$/i;
-const SHA256 = /^[0-9a-f]{64}$/i;
 const base = process.env.RELAY_RUNS_BASE
   || (process.env.RELAY_HOME ? path.join(process.env.RELAY_HOME, 'runs') : null)
   || path.join(os.homedir(), '.relay', 'runs');
@@ -76,14 +75,6 @@ function plainObject(value) {
 
 function nonEmpty(value) {
   return typeof value === 'string' && value.trim().length > 0;
-}
-
-function integer(value, minimum = Number.MIN_SAFE_INTEGER) {
-  return Number.isInteger(value) && value >= minimum;
-}
-
-function sha(value, pattern) {
-  return typeof value === 'string' && pattern.test(value);
 }
 
 function lstatPath(target, { allowFinalSymlink = false } = {}) {
@@ -133,31 +124,6 @@ function boundedFile(target) {
   }
 }
 
-function validTerminalFact(event, runId) {
-  if (!plainObject(event) || event.run_id !== runId || !nonEmpty(event.event_id)
-    || !nonEmpty(event.actor) || !nonEmpty(event.type) || !plainObject(event.payload)) return false;
-  const payload = event.payload;
-  if (event.type === 'merge_recorded') {
-    return integer(payload.pr_number, 1)
-      && sha(payload.reviewed_source_sha, SHA1)
-      && sha(payload.pr_head_sha, SHA1)
-      && sha(payload.result_target_sha, SHA1)
-      && ['squash', 'merge', 'rebase', 'external'].includes(payload.method)
-      && nonEmpty(payload.operator)
-      && (payload.override_reason === null || nonEmpty(payload.override_reason))
-      && nonEmpty(payload.operation_id)
-      && nonEmpty(payload.authorization_id)
-      && nonEmpty(payload.observation_nonce)
-      && sha(payload.done_criteria_sha256, SHA256);
-  }
-  if (event.type === 'run_closed') {
-    return nonEmpty(payload.reason) && nonEmpty(payload.operator)
-      && (payload.last_sha === null || sha(payload.last_sha, SHA1))
-      && (payload.pr_number === null || integer(payload.pr_number, 1));
-  }
-  return false;
-}
-
 function readEvents(input) {
   if (input.kind === 'missing') return [];
   if (input.kind !== 'regular') fail('event file is not regular');
@@ -178,7 +144,8 @@ function hasTerminalFact(events, runId) {
   for (const event of events) {
     if (!plainObject(event)) continue;
     if (event.type !== 'merge_recorded' && event.type !== 'run_closed') continue;
-    if (!validTerminalFact(event, runId)) fail('invalid terminal fact');
+    validateFact(event);
+    if (event.run_id !== runId) fail('terminal fact run ID mismatch');
     terminalCount += 1;
   }
   if (terminalCount > 1) fail('ambiguous terminal facts');

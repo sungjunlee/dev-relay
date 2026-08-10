@@ -91,6 +91,8 @@ test("#1209 docs freeze ReviewSubject derivation and minimized aggregate invento
     "binary diff SHA-256",
     "frozen Done Criteria SHA-256",
   ]) assert.ok(adr.toLowerCase().includes(`| ${member.toLowerCase()} |`), member);
+  assert.match(adr, /20 bytes represented by exactly 40 hexadecimal characters/);
+  assert.doesNotMatch(adr, /40 hexadecimal bytes/);
   assert.match(adr, /git diff --binary --no-ext-diff <base>\.\.<head> --/);
   assert.match(adr, /no runtime field, fact, helper hierarchy, adapter/);
 
@@ -102,6 +104,13 @@ test("#1209 docs freeze ReviewSubject derivation and minimized aggregate invento
     "schema_versions", "schema_v3", "terminal", "nonterminal",
     "inventory_validation_failed",
   ]) assert.ok(inventory.includes(contract), contract);
+  assert.match(
+    inventory,
+    /const \{ validateFact \} = require\('\.\/skills\/relay-dispatch\/scripts\/facts\.js'\);/,
+  );
+  assert.match(inventory, /validateFact\(event\)/);
+  assert.match(inventory, /event\.run_id !== runId/);
+  assert.doesNotMatch(inventory, /function validTerminalFact/);
   const recorded = inventory.match(/```json\s*([\s\S]*?)\s*```/);
   assert.ok(recorded, "recorded inventory JSON block");
   assert.deepEqual(JSON.parse(recorded[1]), {
