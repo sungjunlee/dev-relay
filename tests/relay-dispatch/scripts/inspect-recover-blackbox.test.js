@@ -135,6 +135,44 @@ function pullRequestFact(headSha = START) {
   };
 }
 
+function verificationFact() {
+  return {
+    event_id: "verification-review",
+    run_id: "issue-1135-test",
+    type: "verification_recorded",
+    at: "2026-08-01T00:03:00Z",
+    actor: "owner",
+    payload: {
+      head_sha: HEAD, tree_sha: TREE, done_criteria_sha256: HASH,
+      command: "node --test", verification_request_sha256: "f".repeat(64),
+      declared_command_count: 1, completed_command_count: 1,
+      result_path: "/run/verification.log", result_sha256: "f".repeat(64),
+      exit_code: 0, status: "passed", operator: "owner",
+    },
+  };
+}
+
+function reviewFact({ eventId, verdict = "escalated", escalationKind, retryOfEventId } = {}) {
+  return {
+    event_id: eventId,
+    run_id: "issue-1135-test",
+    type: "review_recorded",
+    at: "2026-08-01T00:04:00Z",
+    actor: "claude",
+    payload: {
+      round: retryOfEventId ? 2 : 1,
+      verdict,
+      reviewed_sha: HEAD,
+      done_criteria_sha256: HASH,
+      reviewer: "claude",
+      review_artifact: "/run/review.json",
+      ...(escalationKind ? { escalation_kind: escalationKind } : {}),
+      ...(retryOfEventId ? { retry_of_event_id: retryOfEventId } : {}),
+      override: null,
+    },
+  };
+}
+
 function publicationObservations(overrides = {}) {
   return {
     git: {
@@ -174,6 +212,34 @@ test("inspect is byte-read-only and emits one stable recommended action", async 
   assert.deepEqual(first.recommended_action.steps, ["push_branch", "record_or_create_pr"]);
   assert.equal(first.recommended_action.key, second.recommended_action.key);
   assert.deepEqual(first.facts, [attemptFinished()]);
+});
+
+test("inspect exposes one retry for a runtime escalation and exhausts that subject", async () => {
+  const observations = publicationObservations({
+    git: { ...publicationObservations().git, reviewable_work: false },
+    github: {
+      ...publicationObservations().github,
+      matching_pr_count: 1, pr_number: 42, pr_state: "OPEN", pr_head_sha: HEAD,
+    },
+  });
+  const firstFact = reviewFact({ eventId: "review-runtime-1", escalationKind: "runtime_failure" });
+  const first = await inspectRun(harness({ facts: [pullRequestFact(HEAD), verificationFact(), firstFact], observations }));
+  assert.equal(first.derived.action, "review");
+  assert.equal(first.derived.retry_of_event_id, firstFact.event_id);
+  assert.equal(first.recommended_action.kind, "review");
+
+  const retryFailure = reviewFact({
+    eventId: "review-runtime-2",
+    escalationKind: "runtime_failure",
+    retryOfEventId: firstFact.event_id,
+  });
+  const exhausted = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), firstFact, retryFailure],
+    observations,
+  }));
+  assert.equal(exhausted.derived.action, "none");
+  assert.equal(exhausted.derived.reason, "review_escalated_retry_exhausted");
+  assert.equal(exhausted.recommended_action.kind, "none");
 });
 
 test("recover refuses a stale inspect key before effects or durable writes", async () => {

@@ -23,6 +23,7 @@ function runRecord() {
     repo: { remote: "owner/repo" },
     git: { branch: "work", base_branch: "main" },
     contract: { done_criteria_sha256: HASH },
+    roles: { reviewer: "claude" },
   };
 }
 
@@ -489,25 +490,25 @@ test("#1209 freezes GitHub action, reason, and action-key contracts", async () =
   };
   const cases = [
     ["publication recovery", [started(), finished()], publication,
-      "recover", "publication_incomplete", "f7bcde21c47296320f322c368376f855b9da03da47103ecae53c4f40f6230fbd"],
+      "recover", "publication_incomplete", "17783b1eb88a4ae0bedfd64c697c7280d8bebf6cf2649e244228de1c61ae722a"],
     ["review", baseFacts, { ...publication, github: open },
-      "review", "review_missing", "8eb98952991243d41a44240f7b29b30ab84fc0344a2cf6e776f95db1673aa402"],
+      "review", "review_missing", "4d8ae47b98c90b1ba1b7c0c81abea2f29f934b9d8e38f3e7e320fec0bceb1354"],
     ["stale review", [...baseFacts, review("pass", 5, START)], { ...publication, github: open },
-      "review", "review_stale", "4327d7143895359a710de4a530d82c1d4b55b5ee148c56e9af7e318202128fdd"],
+      "review", "review_stale", "bfca830e29b3f3108cb7f61fda91d2197ab8115bab12942f45267e1e6da3018d"],
     ["ready to merge", [...baseFacts, review("pass", 5)], { ...publication, github: open },
-      "merge", "ready_to_merge", "b7525b15d238119500fd0c1a503555382f056ad25ab347650ba7f22a767c8033"],
+      "merge", "ready_to_merge", "d0a837542d6801de5c0205e3c2f0a0ff9e2536f66a36309440cbeca3819816bd"],
     ["externally merged", [started(), finished(), pr()], {
       ...publication,
       github: { ...open, pr_state: "MERGED", merge_sha: TARGET },
-    }, "recover", "merged_pr_unrecorded", "d2c031949c81ad7c5e8dc2920536ae38c12befc7c50b7b0cec46cc00de057c08"],
+    }, "recover", "merged_pr_unrecorded", "5b3a7c5628fafee5c631bbd798eee56c7dce2ace4e22b28db502ddeae300ac53"],
     ["GitHub unavailable", baseFacts, {
       ...publication,
       github: { ...open, available: false },
-    }, "none", "github_unavailable", "02b9ed549207ac9576a7c8c86cb2c2e1de599ee1c91d4fc48150864cd149ace8"],
+    }, "none", "github_unavailable", "3d5880c22fafe7de50341e9271c1e7e644ed288f280421220b4341f75d8e948e"],
     ["merge conflict observation", [started(), finished()], {
       ...publication,
       git: { ...publication.git, remote_relation: "diverged" },
-    }, "operator_attention", "remote_branch_conflict", "1a1a60051aefcef91368d36e84c921ed1d84b218728404f538067db4c5d3a255"],
+    }, "operator_attention", "remote_branch_conflict", "3b00be359fc8b47859f8839e3ac81b8bfa42a853d1a662e637322f1e8b4f98ee"],
   ];
   const observedKeys = {};
   for (const [name, scenarioFacts, seen, kind, reason, key] of cases) {

@@ -148,7 +148,8 @@ function resolveRun(cli) {
 
 function requireReviewAction(inspection, record) {
   if (inspection.blockers?.length) fail(`review is blocked: ${inspection.blockers[0].code}`, "REVIEW_BLOCKED");
-  if (inspection.recommended_action?.kind !== "review" || inspection.derived?.action !== "review") {
+  const actionKind = inspection.recommended_action?.kind;
+  if (actionKind !== "review" || inspection.derived?.action !== "review") {
     fail(`derived lifecycle action is '${inspection.recommended_action?.kind || "unknown"}', not 'review'`, "REVIEW_ACTION_MISMATCH");
   }
   const head = inspection.observations?.github?.pr_head_sha;
@@ -169,7 +170,17 @@ function requireReviewAction(inspection, record) {
     && fact.payload.done_criteria_sha256 === record.contract.done_criteria_sha256
   ));
   if (!verification) fail("review requires passed verification for the exact head and Done Criteria", "REVIEW_VERIFICATION_MISSING");
-  return { head, prNumber, verification };
+  const latestReview = inspection.facts.filter((fact) => fact.type === "review_recorded").at(-1) || null;
+  const retrying = inspection.recommended_action.reason === "review_retryable_escalation";
+  const retryOfEventId = retrying ? inspection.derived.retry_of_event_id : null;
+  if (retrying && (
+    typeof retryOfEventId !== "string"
+    || !latestReview
+    || latestReview.event_id !== retryOfEventId
+  )) {
+    fail("retry review action is not bound to the latest durable escalation", "REVIEW_RETRY_BINDING_MISMATCH");
+  }
+  return { head, prNumber, verification, retryOfEventId };
 }
 
 function reviewPrompt({ record, binding, criteria, diff }) {
@@ -308,6 +319,10 @@ function normalizeExecutedRuntime(files) {
   return { digest: crypto.createHash("sha256").update(JSON.stringify(files)).digest("hex"), executable: Object.fromEntries(keys.map((key) => [key, executable[key]])) };
 }
 
+function runRecordDigest(record) {
+  return crypto.createHash("sha256").update(JSON.stringify(record)).digest("hex");
+}
+
 function productionServices() {
   function withRunLock(runDir, callback) {
     const canonical = fs.realpathSync(runDir);
@@ -337,6 +352,7 @@ function productionServices() {
 async function runReview(cli, overrides = {}) {
   const services = { ...productionServices(), ...overrides };
   const { runDir, record } = resolveRun(cli);
+  const resolvedRunDigest = runRecordDigest(record);
   const reviewer = cli.values.reviewer || record.roles.reviewer;
   if (reviewer !== record.roles.reviewer) {
     fail(`reviewer override is not part of the Relay contract; immutable binding is '${record.roles.reviewer}'`, "REVIEWER_BINDING_MISMATCH");
@@ -348,6 +364,12 @@ async function runReview(cli, overrides = {}) {
   catch (error) { fail(error.message, "INVALID_CREDENTIAL"); }
   const credentialEnv = Object.fromEntries(requestedCredentials.envNames.map((name) => [name, process.env[name]]));
   const initial = await services.inspectRun({ runDir });
+  if (!/^[0-9a-f]{64}$/.test(String(initial.snapshot?.run_sha256 || ""))) {
+    fail("initial inspection is missing a valid run digest", "RUN_RECORD_BINDING_CHANGED");
+  }
+  if (initial.snapshot.run_sha256 !== resolvedRunDigest) {
+    fail("resolved run record does not match the canonical inspection", "RUN_RECORD_BINDING_CHANGED");
+  }
   const binding = requireReviewAction(initial, record);
   const criteriaBytes = readFrozenCriteria(record);
   const criteria = criteriaBytes.toString("utf8");
@@ -360,9 +382,10 @@ async function runReview(cli, overrides = {}) {
   const promptDigest = crypto.createHash("sha256").update(promptBytes).digest("hex");
   const promptPath = immutableBytes(path.join(inputDir, `prompt-${binding.head}-${promptDigest}.md`), promptBytes);
   const timeoutMs = (cli.timeoutSeconds || Math.ceil(adapter.defaults.timeoutMs / 1000)) * 1000;
-  let verdict, stagedBinding, executedRuntime;
+  let verdict, stagedBinding, executedRuntime, escalationKind = null;
+  let outcome;
   try {
-    const outcome = await services.invokeReviewer({
+    outcome = await services.invokeReviewer({
       runDir,
       adapter,
       model: cli.values.model || null,
@@ -377,20 +400,29 @@ async function runReview(cli, overrides = {}) {
         current_sha: binding.head,
         diff_sha256: diffDigest,
         prompt_sha256: promptDigest,
+        ...(binding.retryOfEventId ? { retry_of_event_id: binding.retryOfEventId } : {}),
         schema: REVIEW_RESULT_SCHEMA,
       },
     });
-    stagedBinding = outcome.review_binding;
-    executedRuntime = normalizeExecutedRuntime(outcome.executed_runtime);
-    verdict = normalizeVerdict(outcome.output);
   } catch (error) {
     if (error.review_evidence_preserved) throw error;
     stagedBinding = error.review_binding || null;
     executedRuntime = normalizeExecutedRuntime(error.executed_runtime);
     verdict = { verdict: "escalated", summary: `Reviewer invocation failed: ${error.message}`, issues: [] };
+    escalationKind = "runtime_failure";
+  }
+  if (!verdict) {
+    stagedBinding = outcome.review_binding;
+    executedRuntime = normalizeExecutedRuntime(outcome.executed_runtime);
+    verdict = normalizeVerdict(outcome.output);
+    if (verdict.verdict === "escalated") escalationKind = "reviewer";
   }
   const written = await services.withRunLock(runDir, async (lockContext) => {
     const freshRecord = runStore.readRunRecord({ runDir });
+    const freshRunDigest = runRecordDigest(freshRecord);
+    if (freshRunDigest !== resolvedRunDigest || freshRunDigest !== initial.snapshot.run_sha256) {
+      fail("immutable run record changed during independent review", "RUN_RECORD_CHANGED");
+    }
     if (freshRecord.contract.done_criteria_sha256 !== record.contract.done_criteria_sha256) {
       fail("immutable Done Criteria contract changed during independent review", "DONE_CRITERIA_CONTRACT_CHANGED");
     }
@@ -410,8 +442,23 @@ async function runReview(cli, overrides = {}) {
       fail("reviewer result is not bound to the exact staged prompt and diff", "REVIEW_INPUT_BINDING_CHANGED");
     }
     const fresh = await services.inspectRun({ runDir });
+    if (!/^[0-9a-f]{64}$/.test(String(fresh.snapshot?.run_sha256 || ""))) {
+      fail("fresh inspection is missing a valid run digest", "RUN_RECORD_CHANGED");
+    }
+    if (fresh.snapshot.run_sha256 !== resolvedRunDigest
+      || fresh.snapshot.run_sha256 !== initial.snapshot.run_sha256) {
+      fail("run record changed between canonical inspections", "RUN_RECORD_CHANGED");
+    }
+    if ((fresh.derived?.retry_of_event_id || null) !== binding.retryOfEventId) {
+      fail("review retry subject changed during independent review", "REVIEW_BINDING_CHANGED");
+    }
     const freshBinding = requireReviewAction(fresh, freshRecord);
-    if (freshBinding.head !== binding.head || freshBinding.prNumber !== binding.prNumber) {
+    if (
+      freshBinding.retryOfEventId !== binding.retryOfEventId
+      || freshBinding.head !== binding.head
+      || freshBinding.prNumber !== binding.prNumber
+      || JSON.stringify(freshBinding.verification) !== JSON.stringify(binding.verification)
+    ) {
       fail("review binding changed during independent review", "REVIEW_BINDING_CHANGED");
     }
     const round = Math.max(0, ...fresh.facts.filter((fact) => fact.type === "review_recorded").map((fact) => fact.payload.round)) + 1;
@@ -445,6 +492,8 @@ async function runReview(cli, overrides = {}) {
         reviewer,
         review_artifact: artifactPath,
         executed_runtime: executedRuntime,
+        ...(escalationKind ? { escalation_kind: escalationKind } : {}),
+        ...(binding.retryOfEventId ? { retry_of_event_id: binding.retryOfEventId } : {}),
         override: null,
       },
     };
