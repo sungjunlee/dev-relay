@@ -558,7 +558,18 @@ async function observeProduction({
   const worktree = fs.realpathSync(runRecord.git.worktree);
   if (!fs.statSync(worktree).isDirectory()) throw new Error("run worktree is not a directory");
   const branch = execGit(worktree, ["--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"]);
-  if (branch !== runRecord.git.branch) throw new Error(`worktree branch ${branch} does not match run identity`);
+  const durable = foldRunFacts({
+    runRecord,
+    facts: runFacts,
+    gitFacts: {},
+    githubFacts: {},
+    hostFacts: {},
+  });
+  const reviewedResultAlreadyClosed = durable.terminal === true
+    && durable.reason === "reviewed_result_ready";
+  if (branch !== runRecord.git.branch && !reviewedResultAlreadyClosed) {
+    throw new Error(`worktree branch ${branch} does not match run identity`);
+  }
   const headSha = execGit(worktree, ["--no-optional-locks", "rev-parse", "HEAD"]);
   const treeSha = execGit(worktree, ["--no-optional-locks", "rev-parse", "HEAD^{tree}"]);
   const status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
@@ -569,8 +580,12 @@ async function observeProduction({
   let remoteName = null;
   try {
     const remotes = configuredRemotes(worktree);
-    remoteName = remotes.length ? resolveBranchRemote(worktree, branch) : null;
-    delivery = classifyDelivery(runRecord, worktree, remotes, remoteName);
+    remoteName = remotes.length && !reviewedResultAlreadyClosed ? resolveBranchRemote(worktree, branch) : null;
+    delivery = reviewedResultAlreadyClosed
+      ? remotes.length
+        ? { kind: "unsupported", message: "transport configuration changed after the reviewed local result closed" }
+        : { kind: "local" }
+      : classifyDelivery(runRecord, worktree, remotes, remoteName);
   } catch (error) {
     delivery = { kind: "unsupported", message: `Git remote configuration could not be enumerated: ${commandFailure(error)}` };
   }

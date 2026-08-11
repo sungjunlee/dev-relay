@@ -187,7 +187,19 @@ function foldRunFacts({
     }
     known.push(fact);
   }
-  const prFacts = known.filter((fact) => fact.type === "pull_request_recorded");
+  const closes = known.filter((fact) => fact.type === "run_closed");
+  const merges = known.filter((fact) => fact.type === "merge_recorded");
+  const firstTerminal = known.find((fact) => (
+    fact.type === "run_closed" || fact.type === "merge_recorded"
+  )) || null;
+  const firstReviewedResultClose = Boolean(
+    firstTerminal?.type === "run_closed"
+    && firstTerminal.payload.reason === "reviewed_result_ready"
+  );
+  const identityFacts = firstReviewedResultClose
+    ? known.slice(0, known.indexOf(firstTerminal))
+    : known;
+  const prFacts = identityFacts.filter((fact) => fact.type === "pull_request_recorded");
   const prFact = prFacts.at(-1) || null;
   const prIdentities = new Set(prFacts.map((entry) => JSON.stringify({
     pr_number: entry.payload.pr_number,
@@ -201,34 +213,33 @@ function foldRunFacts({
     });
   }
   const branchConflict = Boolean(
-    (gitFacts.branch && gitFacts.branch !== runRecord.git?.branch)
-    || (gitFacts.base_branch && gitFacts.base_branch !== runRecord.git?.base_branch)
+    (!firstReviewedResultClose && gitFacts.branch && gitFacts.branch !== runRecord.git?.branch)
+    || (!firstReviewedResultClose && gitFacts.base_branch && gitFacts.base_branch !== runRecord.git?.base_branch)
     || (prFact && prFact.payload.repo !== runRecord.repo?.remote)
     || (prFact && prFact.payload.head_ref !== runRecord.git?.branch)
     || (prFact && prFact.payload.base_ref !== runRecord.git?.base_branch)
-    || (githubFacts.repo && githubFacts.repo !== runRecord.repo?.remote)
-    || (githubFacts.head_ref && githubFacts.head_ref !== runRecord.git?.branch)
-    || (githubFacts.base_ref && githubFacts.base_ref !== runRecord.git?.base_branch)
-    || (prFact && githubFacts.pr_number && githubFacts.pr_number !== prFact.payload.pr_number)
+    || (!firstReviewedResultClose && githubFacts.repo && githubFacts.repo !== runRecord.repo?.remote)
+    || (!firstReviewedResultClose && githubFacts.head_ref && githubFacts.head_ref !== runRecord.git?.branch)
+    || (!firstReviewedResultClose && githubFacts.base_ref && githubFacts.base_ref !== runRecord.git?.base_branch)
+    || (!firstReviewedResultClose && prFact && githubFacts.pr_number && githubFacts.pr_number !== prFact.payload.pr_number)
   );
   if (branchConflict) {
     return none("fact_conflict", {
       diagnostics: [{ code: "external_identity_mismatch" }],
     });
   }
-  const closes = known.filter((fact) => fact.type === "run_closed");
-  const merges = known.filter((fact) => fact.type === "merge_recorded");
-  if (closes.length > 1 || merges.length > 1 || (closes.length && merges.length)) {
+  if (!firstReviewedResultClose && (closes.length > 1 || merges.length > 1 || (closes.length && merges.length))) {
     return none("fact_conflict", {
       phase: "terminal",
       terminal: true,
       diagnostics: [{ code: "conflicting_terminal_facts" }],
     });
   }
-  const terminal = closes.at(-1) || merges.at(-1) || null;
+  const terminal = firstReviewedResultClose ? firstTerminal : closes.at(-1) || merges.at(-1) || null;
   if (terminal) {
     const terminalIndex = known.indexOf(terminal);
     const priorFacts = known.slice(0, terminalIndex);
+    const priorPrFacts = priorFacts.filter((fact) => fact.type === "pull_request_recorded");
     const reviewedResultTerminal = terminal.type === "run_closed"
       && terminal.payload.reason === "reviewed_result_ready";
     const priorReview = priorFacts.filter((fact) => fact.type === "review_recorded").at(-1) || null;
@@ -263,7 +274,7 @@ function foldRunFacts({
       : reviewedResultTerminal
         ? Boolean(
           terminal.payload.pr_number !== null
-          || prFacts.length > 0
+          || priorPrFacts.length > 0
           || !SHA1_RE.test(String(terminal.payload.last_sha || ""))
           || !reviewedResultEvidenceMatches
         )
@@ -283,8 +294,26 @@ function foldRunFacts({
     const laterActive = laterFacts
       .filter((fact) => fact.type === "attempt_started");
     if (laterActive.length) diagnostics.push({ code: "active_fact_after_terminal" });
+    for (const laterTerminal of laterFacts.filter((fact) => (
+      fact.type === "run_closed" || fact.type === "merge_recorded"
+    ))) {
+      diagnostics.push({
+        code: "conflicting_terminal_facts",
+        event_id: laterTerminal.event_id,
+        type: laterTerminal.type,
+      });
+    }
     if (laterFacts.some((fact) => ["review_recorded", "verification_recorded", "pull_request_recorded"].includes(fact.type))) {
       diagnostics.push({ code: "evidence_fact_after_terminal" });
+    }
+    const laterPrFacts = laterFacts.filter((fact) => fact.type === "pull_request_recorded");
+    const laterPrIdentityMismatch = laterPrFacts.some((fact) => (
+      fact.payload.repo !== runRecord.repo?.remote
+      || fact.payload.head_ref !== runRecord.git?.branch
+      || fact.payload.base_ref !== runRecord.git?.base_branch
+    ));
+    if (laterPrFacts.length > 1 || laterPrIdentityMismatch) {
+      diagnostics.push({ code: "pull_request_identity_after_terminal" });
     }
     if (reviewedResultTerminal && gitFacts.head_sha && gitFacts.head_sha !== terminal.payload.last_sha) {
       diagnostics.push({ code: "terminal_live_head_diverged" });
@@ -292,6 +321,12 @@ function foldRunFacts({
     if (reviewedResultTerminal && gitFacts.tree_sha && priorVerification
       && gitFacts.tree_sha !== priorVerification.payload.tree_sha) {
       diagnostics.push({ code: "terminal_live_tree_diverged" });
+    }
+    if (reviewedResultTerminal && gitFacts.branch && gitFacts.branch !== runRecord.git?.branch) {
+      diagnostics.push({ code: "terminal_live_branch_diverged" });
+    }
+    if (reviewedResultTerminal && gitFacts.base_branch && gitFacts.base_branch !== runRecord.git?.base_branch) {
+      diagnostics.push({ code: "terminal_live_base_diverged" });
     }
     return none(
       terminal.type === "merge_recorded"

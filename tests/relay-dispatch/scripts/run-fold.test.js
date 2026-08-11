@@ -493,6 +493,16 @@ test("reviewed-result close is terminal, exposes its reviewed SHA, and rejects a
   assert.ok(liveDiverged.diagnostics.some((entry) => entry.code === "terminal_live_head_diverged"));
   assert.ok(liveDiverged.diagnostics.some((entry) => entry.code === "terminal_live_tree_diverged"));
 
+  const branchDiverged = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [verification(4), review("pass", 5), close],
+    gitFacts: { branch: "later-branch", base_branch: "later-base" },
+  });
+  assert.equal(branchDiverged.reason, "reviewed_result_ready");
+  assert.equal(branchDiverged.terminal, true);
+  assert.ok(branchDiverged.diagnostics.some((entry) => entry.code === "terminal_live_branch_diverged"));
+  assert.ok(branchDiverged.diagnostics.some((entry) => entry.code === "terminal_live_base_diverged"));
+
   const retroactive = foldRunFacts({
     runRecord: runRecord(),
     facts: [close, verification(7), review("pass", 8)],
@@ -517,6 +527,74 @@ test("reviewed-result close is terminal, exposes its reviewed SHA, and rejects a
   assert.equal(prConflict.action, "none");
   assert.equal(prConflict.reason, "fact_conflict");
   assert.equal(prConflict.terminal, true);
+});
+
+test("the first reviewed-result close remains authoritative over later close and merge facts", () => {
+  const close = fact("run_closed", 6, {
+    reason: "reviewed_result_ready", operator: "owner", last_sha: HEAD, pr_number: null,
+  });
+  const genericClose = fact("run_closed", 7, {
+    reason: "operator", operator: "owner", last_sha: START, pr_number: null,
+  });
+  const merge = fact("merge_recorded", 8, {
+    pr_number: 42, reviewed_source_sha: HEAD, pr_head_sha: HEAD,
+    result_target_sha: TARGET, method: "squash", operator: "owner",
+    override_reason: null, operation_id: "merge-op-1",
+    authorization_id: "merge-auth-1", observation_nonce: "merge-observation-1",
+    done_criteria_sha256: HASH,
+  });
+  for (const [label, laterFact] of [["generic close", genericClose], ["merge delivery", merge]]) {
+    const folded = foldRunFacts({
+      runRecord: runRecord(),
+      facts: [verification(4), review("pass", 5), close, laterFact],
+      gitFacts: { local_delivery: true, head_sha: HEAD, tree_sha: TREE },
+    });
+    assert.equal(folded.action, "none", label);
+    assert.equal(folded.reason, "reviewed_result_ready", label);
+    assert.equal(folded.head_sha, HEAD, label);
+    assert.equal(folded.reviewed_sha, HEAD, label);
+    assert.equal(folded.terminal_kind, "closed", label);
+    assert.deepEqual(
+      folded.diagnostics.filter((entry) => entry.code === "conflicting_terminal_facts"),
+      [{ code: "conflicting_terminal_facts", event_id: laterFact.event_id, type: laterFact.type }],
+      label,
+    );
+  }
+
+  const laterDeliveryPair = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [verification(4), review("pass", 5), close, pr(9), merge],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE },
+    githubFacts: livePrFacts(42, { pr_state: "MERGED", merge_sha: TARGET }),
+  });
+  assert.equal(laterDeliveryPair.reason, "reviewed_result_ready");
+  assert.equal(laterDeliveryPair.reviewed_sha, HEAD);
+  assert.equal(laterDeliveryPair.pr_number, null);
+  assert.ok(laterDeliveryPair.diagnostics.some((entry) => entry.code === "evidence_fact_after_terminal"));
+  assert.deepEqual(
+    laterDeliveryPair.diagnostics.filter((entry) => entry.code === "conflicting_terminal_facts"),
+    [{ code: "conflicting_terminal_facts", event_id: merge.event_id, type: "merge_recorded" }],
+  );
+
+  const mismatchedLaterPr = {
+    ...pr(9),
+    payload: { ...pr(9).payload, repo: "other/repo", head_ref: "other-branch" },
+  };
+  const afterMismatchedPr = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [verification(4), review("pass", 5), close, mismatchedLaterPr],
+    githubFacts: { repo: "other/repo", head_ref: "other-branch" },
+  });
+  assert.equal(afterMismatchedPr.reason, "reviewed_result_ready");
+  assert.ok(afterMismatchedPr.diagnostics.some((entry) => entry.code === "pull_request_identity_after_terminal"));
+
+  const secondLaterPr = { ...pr(10), payload: { ...pr(10).payload, pr_number: 43 } };
+  const afterDuplicatePr = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [verification(4), review("pass", 5), close, pr(9), secondLaterPr],
+  });
+  assert.equal(afterDuplicatePr.reason, "reviewed_result_ready");
+  assert.ok(afterDuplicatePr.diagnostics.some((entry) => entry.code === "pull_request_identity_after_terminal"));
 });
 
 test("fold replay is deterministic and append position, not timestamps, controls precedence", () => {
