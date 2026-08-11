@@ -268,6 +268,43 @@ function services(overrides = {}) {
   };
 }
 
+test("production GitHub merge observation enables provider transport in the isolated seam", async () => {
+  const value = await fixture("observer-transport");
+  const observerGh = path.join(value.root, "observer-fake-gh.js");
+  const observerResponse = {
+    number: 42,
+    state: "OPEN",
+    headRefName: value.record.git.branch,
+    headRefOid: value.head,
+    baseRefName: value.record.git.base_branch,
+    headRepository: { nameWithOwner: value.record.repo.remote },
+    headRepositoryOwner: null,
+    mergeCommit: null,
+    autoMergeRequest: null,
+    mergeStateStatus: null,
+  };
+  fs.writeFileSync(observerGh, `#!/usr/bin/env node
+"use strict";
+process.stdout.write(${JSON.stringify(JSON.stringify(observerResponse))});
+`, { mode: 0o755 });
+  value.gh.scriptPath = observerGh;
+  await withGh(value, () => {
+    const observer = finalize.mergeObserver(value.record);
+    assert.equal(observer.networkAccess, "enabled");
+    const output = runStore.invokeExternalObserver({
+      observer,
+      request: {
+        nonce: "merge-observer-test",
+        request: { repo: value.record.repo.remote, pr_number: 42 },
+      },
+    });
+    assert.equal(output.pr_number, 42);
+    assert.equal(output.pr_head_sha, value.head);
+    assert.equal(output.head_ref, value.record.git.branch);
+    assert.equal(output.base_ref, value.record.git.base_branch);
+  });
+});
+
 function hardCrashFinalize(value, mode) {
   const override = mode === "after-intent"
     ? "afterRequestIntent(){process.exit(91);}"

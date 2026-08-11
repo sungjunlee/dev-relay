@@ -376,6 +376,7 @@ function mergeObserver(record) {
   return {
     command: process.execPath,
     args,
+    networkAccess: "enabled",
     env: { GH_TOKEN: githubToken(record.repo.root) },
   };
 }

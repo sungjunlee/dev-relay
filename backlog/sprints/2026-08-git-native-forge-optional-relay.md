@@ -66,3 +66,6 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
   literal schema-version plus schema-v3 terminal/nonterminal inventory. The
   minimized output preserves the drain/close decision for all six nonterminal
   records and leaves production JavaScript and schemas out of scope.
+- 2026-08-11 — #1219 — Discovered merge blocker: PR #1218 at reviewed SHA
+  `6a60b0a98bfa7af34b0aae552ba55db7001aa179`; isolated GitHub observation
+  transport fix is in flight.
