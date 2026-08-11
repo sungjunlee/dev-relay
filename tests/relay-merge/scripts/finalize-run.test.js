@@ -268,6 +268,31 @@ function services(overrides = {}) {
   };
 }
 
+test("production merge observer enables network through the real isolated observer seam", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-production-observer-")));
+  const fakeGh = path.join(root, "fake-gh.js"), prior = { bin: process.env.RELAY_GH_BIN, token: process.env.GH_TOKEN };
+  const record = { repo: { root, remote: "owner/repo" }, git: { branch: "issue-1214", base_branch: "main" } };
+  fs.writeFileSync(fakeGh, `"use strict";
+const args=process.argv.slice(2);
+if(args[0]!=="pr"||args[1]!=="view")process.exit(2);
+process.stdout.write(JSON.stringify({number:42,state:"OPEN",headRefName:"issue-1214",headRefOid:"${"a".repeat(40)}",baseRefName:"main",headRepository:{nameWithOwner:"owner/repo"},mergeCommit:null,autoMergeRequest:null,mergeStateStatus:"CLEAN"}));
+`, { mode: 0o700 });
+  process.env.RELAY_GH_BIN = fakeGh; process.env.GH_TOKEN = "test-token";
+  try {
+    const observer = finalize.mergeObserver(record);
+    assert.equal(observer.networkAccess, "enabled");
+    const observed = runStore.invokeExternalObserver({ observer, request: { nonce: "production-observer-nonce",
+      request: { pr_number: 42, repo: "owner/repo" } } });
+    assert.equal(observed.nonce, "production-observer-nonce");
+    assert.equal(observed.pr_head_sha, "a".repeat(40));
+    assert.equal(observed.head_repo, "owner/repo");
+  } finally {
+    if (prior.bin === undefined) delete process.env.RELAY_GH_BIN; else process.env.RELAY_GH_BIN = prior.bin;
+    if (prior.token === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = prior.token;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function hardCrashFinalize(value, mode) {
   const override = mode === "after-intent"
     ? "afterRequestIntent(){process.exit(91);}"

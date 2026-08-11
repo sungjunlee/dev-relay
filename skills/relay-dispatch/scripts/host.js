@@ -388,7 +388,7 @@ function sandboxInvocation({ role, command, args = [], readRoots = [], writeRoot
     ...runtimeDependencyRules(runtimeExecutables, runtimeDependencies, env).map((root) => `(subpath "${quote(root)}")`)].join(" ");
   const deniedWrites = deniedWriteFiles.map((file) => `(deny file-write* (literal "${quote(file)}"))`).join(" ");
   const transportMach = networkAccess === "enabled"
-    ? '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd") (global-name "com.apple.system.opendirectoryd.libinfo"))'
+    ? '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd") (global-name "com.apple.system.opendirectoryd.libinfo") (global-name "com.apple.trustd.agent"))'
     : "";
   const systemCa = networkAccess === "enabled" ? trustedSystemCaFile() : null;
   const systemCaRule = systemCa ? `(literal "${quote(systemCa)}")` : "";
