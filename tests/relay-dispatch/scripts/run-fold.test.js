@@ -165,6 +165,84 @@ test("fold implements active, publication, review, stale, changes, and ready pre
   assert.equal(ready.reason, "ready_to_merge");
 });
 
+test("#1207 proven no-remote Git runs recover verification and stop at local review", () => {
+  const local = {
+    local_delivery: true,
+    remote_name: null,
+    remote_url: null,
+    remote_head_sha: null,
+    remote_relation: null,
+    head_sha: HEAD,
+    tree_sha: TREE,
+    reviewable_work: true,
+    reviewable_dirty: false,
+  };
+  const localGithub = {};
+  const record = { ...runRecord(), repo: { remote: "local/repo" } };
+  const before = foldRunFacts({
+    runRecord: record,
+    facts: [started(), finished()],
+    gitFacts: local,
+    githubFacts: localGithub,
+  });
+  assert.equal(before.action, "recover");
+  assert.equal(before.reason, "verification_missing");
+  assert.deepEqual(recoverySteps(before, { git: local, github: localGithub }), ["record_verification"]);
+
+  const after = foldRunFacts({
+    runRecord: record,
+    facts: [started(), finished(), verification()],
+    gitFacts: local,
+    githubFacts: localGithub,
+  });
+  assert.equal(after.action, "none");
+  assert.equal(after.reason, "local_review_pending");
+  assert.equal(after.terminal, false);
+});
+
+test("#1207 keeps an unavailable forge distinct from a proven local delivery", () => {
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [started(), finished()],
+    gitFacts: { head_sha: HEAD, reviewable_work: true },
+    githubFacts: { available: false },
+  });
+  assert.equal(result.action, "none");
+  assert.equal(result.reason, "github_unavailable");
+});
+
+test("#1207 local dirty work, dead attempts, and durable PR contradictions stay singular", () => {
+  const local = {
+    local_delivery: true, head_sha: HEAD, tree_sha: TREE,
+    reviewable_work: true, reviewable_dirty: true,
+  };
+  const dirty = foldRunFacts({
+    runRecord: { ...runRecord(), repo: { remote: "local/repo" } },
+    facts: [started(), finished()], gitFacts: local, githubFacts: {}, hostFacts: { live: false },
+  });
+  assert.equal(dirty.reason, "publication_incomplete");
+  assert.deepEqual(recoverySteps(dirty, { git: local, github: {}, host: { live: false } }), ["commit_work"]);
+
+  const dead = foldRunFacts({
+    runRecord: { ...runRecord(), repo: { remote: "local/repo" } },
+    facts: [started()], gitFacts: { ...local, reviewable_work: false, reviewable_dirty: false },
+    githubFacts: {}, hostFacts: { live: false },
+  });
+  assert.equal(dead.reason, "attempt_liveness_unknown");
+  assert.deepEqual(recoverySteps(dead, {
+    git: { ...local, reviewable_work: false, reviewable_dirty: false }, github: {}, host: { live: false },
+  }), ["close_dead_attempt"]);
+
+  const localPr = pr();
+  localPr.payload.repo = "local/repo";
+  const contradiction = foldRunFacts({
+    runRecord: { ...runRecord(), repo: { remote: "local/repo" } }, facts: [started(), finished(), localPr],
+    gitFacts: { ...local, reviewable_dirty: false }, githubFacts: {}, hostFacts: { live: false },
+  });
+  assert.equal(contradiction.reason, "fact_conflict");
+  assert.equal(contradiction.diagnostics[0].code, "local_delivery_pull_request_conflict");
+});
+
 test("#1190 review corrections reach canonical publication recovery only after completed work", () => {
   const beforeReview = [started(), finished(), pr(3), verification(4), review("changes_requested", 5)];
   const observation = {

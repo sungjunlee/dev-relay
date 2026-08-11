@@ -202,6 +202,218 @@ function publicationObservations(overrides = {}) {
   };
 }
 
+function localObservations(overrides = {}) {
+  return {
+    git: {
+      local_delivery: true,
+      head_sha: HEAD,
+      tree_sha: TREE,
+      branch_commit_exists: true,
+      reviewable_work: true,
+      reviewable_dirty: false,
+      remote_name: null,
+      remote_url: null,
+      remote_head_sha: null,
+      remote_relation: null,
+    },
+    github: {},
+    host: { live: false },
+    verification: { pending: false },
+    ...overrides,
+  };
+}
+
+test("#1207 production observation proves no remote locally and never probes transport", async (t) => {
+  const root = fs.mkdtempSync(path.join(__dirname, ".1207-no-remote-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, "repo");
+  const runDir = path.join(root, "run");
+  const gitTrap = path.join(root, "git-trap.js");
+  const ghTrap = path.join(root, "gh-trap.js");
+  const gitTrapLog = path.join(root, "git-trap.log");
+  const ghTrapLog = path.join(root, "gh-trap.log");
+  const priorGit = process.env.RELAY_GIT_BIN;
+  const priorGh = process.env.RELAY_GH_BIN;
+  const priorTmp = process.env.TMPDIR;
+  process.env.TMPDIR = root;
+  fs.mkdirSync(repo);
+  fs.mkdirSync(runDir);
+  const gitSetup = (args) => execFileSync("/usr/bin/git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  gitSetup(["init", "-b", "main"]);
+  gitSetup(["config", "user.email", "relay@example.test"]);
+  gitSetup(["config", "user.name", "Relay Test"]);
+  fs.writeFileSync(path.join(repo, "README.md"), "local\n");
+  gitSetup(["add", "README.md"]);
+  gitSetup(["commit", "-m", "initial"]);
+  fs.writeFileSync(gitTrap, [
+    "#!/usr/bin/env node",
+    "const fs=require('fs'),{spawnSync}=require('child_process');",
+    `const log=${JSON.stringify(gitTrapLog)}, args=process.argv.slice(2);`,
+    "fs.appendFileSync(log, JSON.stringify(args)+'\\n');",
+    "if(process.env.RELAY_FAIL_REMOTE_CONFIG==='1'&&args.at(-1)==='remote') process.exit(93);",
+    "if(args.includes('fetch')||args.includes('ls-remote')||args.includes('push')) process.exit(91);",
+    "const result=spawnSync('/usr/bin/git',args,{stdio:'inherit'});",
+    "process.exit(result.status===null?92:result.status);",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  fs.writeFileSync(ghTrap, [
+    "#!/usr/bin/env node",
+    `require('fs').appendFileSync(${JSON.stringify(ghTrapLog)}, JSON.stringify(process.argv.slice(2))+'\\n');`,
+    "process.exit(92);",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  process.env.RELAY_GIT_BIN = gitTrap;
+  process.env.RELAY_GH_BIN = ghTrap;
+  try {
+    const transportCalls = () => fs.readFileSync(gitTrapLog, "utf8").trim().split("\n")
+      .filter(Boolean).map(JSON.parse)
+      .filter((args) => args.some((arg) => ["fetch", "ls-remote", "push"].includes(arg)));
+    const record = {
+      run_id: "issue-1207-no-remote",
+      repo: { root: repo, remote: "local/repo" },
+      git: {
+        branch: "main", base_branch: "main", worktree: repo,
+        start_sha: gitSetup(["rev-parse", "HEAD"]),
+      },
+    };
+    const observed = await recovery.observeProduction({ runDir, runRecord: record, facts: [] });
+    assert.equal(observed.git.remote_name, null);
+    assert.equal(observed.git.remote_url, null);
+    assert.equal(observed.git.remote_head_sha, null);
+    assert.equal(observed.git.remote_relation, null);
+    assert.equal(observed.git.local_delivery, true);
+    assert.deepEqual(observed.github, {});
+    assert.deepEqual(observed.blockers, []);
+    assert.deepEqual(transportCalls(), []);
+    assert.equal(fs.existsSync(ghTrapLog), false);
+    gitSetup(["remote", "add", "origin", "https://gitlab.example.test/owner/repo.git"]);
+    const unsupported = await recovery.observeProduction({
+      runDir, runRecord: { ...record, repo: { root: repo, remote: "https://gitlab.example.test/owner/repo.git" } }, facts: [],
+    });
+    assert.equal(unsupported.blockers[0].code, "delivery_unsupported");
+    assert.equal(unsupported.blockers[0].retryable, false);
+    assert.deepEqual(unsupported.github, {});
+    assert.deepEqual(transportCalls(), []);
+    assert.equal(fs.existsSync(ghTrapLog), false);
+
+    gitSetup(["remote", "remove", "origin"]);
+    const wrongFallback = await recovery.observeProduction({
+      runDir, runRecord: { ...record, repo: { root: repo, remote: "local/other" } }, facts: [],
+    });
+    assert.equal(wrongFallback.blockers[0].code, "delivery_unsupported");
+
+    gitSetup(["remote", "add", "backup", "https://github.com/local/repo.git"]);
+    const originless = await recovery.observeProduction({ runDir, runRecord: record, facts: [] });
+    assert.equal(originless.blockers[0].code, "delivery_unsupported");
+    gitSetup(["remote", "remove", "backup"]);
+
+    gitSetup(["remote", "add", "origin", repo]);
+    const localPath = await recovery.observeProduction({ runDir, runRecord: record, facts: [] });
+    assert.equal(localPath.blockers[0].code, "delivery_unsupported");
+    gitSetup(["remote", "set-url", "origin", "https://github.com/other/repo.git"]);
+    const mismatch = await recovery.observeProduction({ runDir, runRecord: record, facts: [] });
+    assert.equal(mismatch.blockers[0].code, "delivery_unsupported");
+
+    process.env.RELAY_FAIL_REMOTE_CONFIG = "1";
+    const configFailure = await recovery.observeProduction({ runDir, runRecord: record, facts: [] });
+    delete process.env.RELAY_FAIL_REMOTE_CONFIG;
+    assert.equal(configFailure.blockers[0].code, "delivery_unsupported");
+    assert.equal(configFailure.blockers[0].retryable, false);
+    assert.deepEqual(transportCalls(), []);
+    assert.equal(fs.existsSync(ghTrapLog), false);
+
+    gitSetup(["remote", "set-url", "origin", "https://github.com/local/repo.git"]);
+    gitSetup(["remote", "add", "backup", repo]);
+    gitSetup(["remote", "set-url", "--push", "origin", "https://gitlab.example.test/local/repo.git"]);
+    const pushMismatch = await recovery.observeProduction({ runDir, runRecord: record, facts: [] });
+    assert.equal(pushMismatch.blockers[0].code, "delivery_unsupported");
+    assert.deepEqual(transportCalls(), []);
+    assert.equal(fs.existsSync(ghTrapLog), false);
+    gitSetup(["config", "--unset-all", "remote.origin.pushurl"]);
+    gitSetup(["remote", "set-url", "backup", "https://gitlab.example.test/local/repo.git"]);
+    gitSetup(["remote", "set-url", "--push", "backup", "https://github.com/local/repo.git"]);
+    gitSetup(["config", "branch.main.remote", "backup"]);
+    const trackedFetchMismatch = await recovery.observeProduction({ runDir, runRecord: record, facts: [] });
+    assert.equal(trackedFetchMismatch.blockers[0].code, "delivery_unsupported");
+    assert.deepEqual(transportCalls(), []);
+    assert.equal(fs.existsSync(ghTrapLog), false);
+    gitSetup(["config", "--unset", "branch.main.remote"]);
+    const githubRoute = await recovery.observeProduction({ runDir, runRecord: record, facts: [] });
+    assert.equal(Object.hasOwn(githubRoute.git, "local_delivery"), false);
+    assert.equal(githubRoute.git.remote_name, "origin");
+    assert.equal(githubRoute.github.available, false);
+    assert.match(fs.readFileSync(gitTrapLog, "utf8"), /ls-remote/);
+    assert.equal(fs.existsSync(ghTrapLog), true);
+  } finally {
+    delete process.env.RELAY_FAIL_REMOTE_CONFIG;
+    if (priorGit === undefined) delete process.env.RELAY_GIT_BIN; else process.env.RELAY_GIT_BIN = priorGit;
+    if (priorGh === undefined) delete process.env.RELAY_GH_BIN; else process.env.RELAY_GH_BIN = priorGh;
+    if (priorTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = priorTmp;
+  }
+});
+
+test("#1207 local recovery converges commit then verification across an effect crash", async () => {
+  const record = { ...runRecord(), repo: { root: "/repo", remote: "local/repo" } };
+  const h = harness({
+    record,
+    facts: [attemptFinished()],
+    observations: localObservations({
+      git: { ...localObservations().git, reviewable_dirty: true },
+    }),
+  });
+  const dirty = await inspectRun(h);
+  assert.equal(dirty.recommended_action.reason, "publication_incomplete");
+  assert.deepEqual(dirty.recommended_action.steps, ["commit_work"]);
+
+  let commitCalls = 0;
+  const commitEffects = {
+    converge: async (step) => {
+      assert.equal(step, "commit_work");
+      commitCalls += 1;
+      h.state.observations.git.reviewable_dirty = false;
+      if (commitCalls === 1) throw new Error("simulated crash after local commit");
+      return { converged: true, applied: false };
+    },
+  };
+  await assert.rejects(recoverRun({
+    ...h, actor: "owner", reason: "commit local work",
+    expectedActionKey: dirty.recommended_action.key, effects: commitEffects,
+  }), /simulated crash/);
+  const committed = await recoverRun({
+    ...h, actor: "owner", reason: "commit local work",
+    expectedActionKey: dirty.recommended_action.key, effects: commitEffects,
+  });
+  assert.equal(committed.status, "converged");
+  assert.equal(committed.after.derived.reason, "verification_missing");
+  assert.deepEqual(committed.after.recommended_action.steps, ["record_verification"]);
+
+  // The in-memory harness has one intent slot; production keeps each completed
+  // operation in its own content-addressed intent/receipt pair.
+  h.state.intent = null;
+  const verified = await recoverRun({
+    ...h, actor: "owner", reason: "verify local work",
+    expectedActionKey: committed.after.recommended_action.key,
+    effects: {
+      converge: async (step, context) => {
+        assert.equal(step, "record_verification");
+        return {
+          converged: true,
+          applied: true,
+          fact: {
+            type: "verification_recorded", at: context.intent.created_at, actor: "owner",
+            payload: verificationFact().payload,
+          },
+        };
+      },
+    },
+  });
+  assert.equal(verified.status, "converged");
+  assert.equal(verified.after.derived.reason, "local_review_pending");
+  assert.equal(verified.after.recommended_action.kind, "none");
+  assert.deepEqual(h.state.effects, []);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "verification_recorded").length, 1);
+});
+
 test("inspect is byte-read-only and emits one stable recommended action", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
   const before = structuredClone(h.state);

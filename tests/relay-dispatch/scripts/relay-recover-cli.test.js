@@ -20,25 +20,28 @@ function git(cwd, args) {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
 }
 
-function fixture({ branch = "main" } = {}) {
+function fixture({ branch = "main", delivery = "github" } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-cli-")));
   const repo = path.join(root, "repo");
   const active = path.join(root, "active");
-  const remote = path.join(root, "remote.git");
+  const bareRemote = path.join(root, "remote.git");
+  const remote = "owner/repo";
   const runId = "issue-1135-cli";
   const runDir = path.join(root, runId);
   fs.mkdirSync(repo);
   fs.mkdirSync(active);
   fs.mkdirSync(runDir);
-  execFileSync("git", ["init", "--bare", remote], { stdio: "ignore" });
+  execFileSync("git", ["init", "--bare", bareRemote], { stdio: "ignore" });
   git(repo, ["init", "-b", "main"]);
   git(repo, ["config", "user.email", "relay@example.test"]);
   git(repo, ["config", "user.name", "Relay Test"]);
   fs.writeFileSync(path.join(repo, "README.md"), "test\n");
   git(repo, ["add", "README.md"]);
   git(repo, ["commit", "-m", "initial"]);
-  git(repo, ["remote", "add", "origin", remote]);
-  git(repo, ["push", "-u", "origin", "main"]);
+  if (delivery === "github") {
+    git(repo, ["remote", "add", "origin", `https://github.com/${remote}.git`]);
+    git(repo, ["push", bareRemote, "main"]);
+  }
   if (branch !== "main") git(repo, ["checkout", "-b", branch]);
   const head = git(repo, ["rev-parse", "HEAD"]);
   const tree = git(repo, ["rev-parse", "HEAD^{tree}"]);
@@ -50,7 +53,7 @@ function fixture({ branch = "main" } = {}) {
     record: {
       version: 3,
       run_id: runId,
-      repo: { root: active, remote },
+      repo: { root: active, remote: delivery === "local" ? "local/active" : remote },
       git: { branch, base_branch: "main", worktree: repo, start_sha: head },
       contract: { done_criteria_path: donePath, done_criteria_sha256: doneHash },
       roles: { orchestrator: "codex", executor: "codex", reviewer: "claude" },
@@ -61,14 +64,33 @@ function fixture({ branch = "main" } = {}) {
   });
   fs.writeFileSync(path.join(runDir, "events.jsonl"), "");
   const gh = path.join(root, "fake-gh.js");
+  const ghLog = path.join(root, "fake-gh.log");
   fs.writeFileSync(gh, [
     "#!/usr/bin/env node",
+    `require('fs').appendFileSync(${JSON.stringify(ghLog)},JSON.stringify(process.argv.slice(2))+'\\n');`,
+    "if(process.env.RELAY_TRAP_FORGE==='1') process.exit(92);",
     "if (process.argv[2] === 'pr' && process.argv[3] === 'list') process.stdout.write(process.env.FAKE_GH_ROWS || '[]');",
     "else { process.stderr.write('unsupported fake gh argv\\n'); process.exit(2); }",
     "",
   ].join("\n"));
   fs.chmodSync(gh, 0o755);
-  return { root, active, repo, remote, runDir, gh, head, tree, doneHash, branch };
+  const gitBin = path.join(root, "fake-git.js");
+  const gitLog = path.join(root, "fake-git.log");
+  fs.writeFileSync(gitBin, [
+    "#!/usr/bin/env node",
+    "const fs=require('node:fs');",
+    "const {spawnSync}=require('node:child_process');",
+    `const args=process.argv.slice(2),i=args.indexOf('ls-remote'),bare=${JSON.stringify(bareRemote)},log=${JSON.stringify(gitLog)};`,
+    "fs.appendFileSync(log,JSON.stringify(args)+'\\n');",
+    "if(process.env.RELAY_TRAP_TRANSPORT==='1'&&args.some((arg)=>['fetch','ls-remote','push'].includes(arg))) process.exit(91);",
+    "if(process.env.RELAY_FAIL_COMMIT_TREE_ONCE&&args.includes('commit-tree')&&!fs.existsSync(process.env.RELAY_FAIL_COMMIT_TREE_ONCE)){fs.writeFileSync(process.env.RELAY_FAIL_COMMIT_TREE_ONCE,'failed');process.exit(93);}",
+    "if(i>=0){const ref=args.at(-1);const r=spawnSync('/usr/bin/git',['-C',bare,'rev-parse','--verify',ref],{encoding:'utf8'});if(r.status===0)process.stdout.write(r.stdout.trim()+'\\t'+ref+'\\n');process.exit(0);}",
+    "const p=args.indexOf('push');if(p>=0){const cwd=args[args.indexOf('-C')+1],branch=args.at(-1);const r=spawnSync('/usr/bin/git',['-C',cwd,'push',bare,branch],{stdio:'inherit'});process.exit(r.status===null?2:r.status);}",
+    "const r=spawnSync('/usr/bin/git',args,{stdio:'inherit'});process.exit(r.status===null?2:r.status);",
+    "",
+  ].join("\n"));
+  fs.chmodSync(gitBin, 0o755);
+  return { root, active, repo, remote, bareRemote, runDir, gh, ghLog, gitBin, gitLog, head, tree, doneHash, branch };
 }
 
 function writeFacts(runDir, facts) {
@@ -162,7 +184,7 @@ test("canonical inspect CLI reads a Relay run without changing durable bytes", (
   const result = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
     cwd: ROOT,
     encoding: "utf8",
-    env: { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root },
+    env: { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root },
   });
   assert.equal(result.status, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
@@ -186,7 +208,7 @@ test("GitHub observation excludes an identical branch from a different head repo
   ];
   const result = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
     cwd: ROOT, encoding: "utf8",
-    env: { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root, FAKE_GH_ROWS: JSON.stringify(rows) },
+    env: { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root, FAKE_GH_ROWS: JSON.stringify(rows) },
   });
   assert.equal(result.status, 0, result.stderr);
   const github = JSON.parse(result.stdout).observations.github;
@@ -214,11 +236,119 @@ test("recover CLI requires an explicit audit reason", (t) => {
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    env: { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root },
+    env: { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root },
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /requires --reason/);
   assert.equal(fs.readdirSync(f.runDir).some((name) => name.startsWith("recovery-intent-")), false);
+});
+
+test("#1207 real local production recovery commits then verifies with crash-safe receipts and zero transport", (t) => {
+  const f = fixture({ delivery: "local" });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(f.repo, "README.md"), "local recovery work\n");
+  const commonEnv = {
+    ...process.env,
+    RELAY_GIT_BIN: f.gitBin,
+    RELAY_GH_BIN: f.gh,
+    RELAY_WORKTREE_BASE: f.root,
+    RELAY_TRAP_FORGE: "1",
+    RELAY_TRAP_TRANSPORT: "1",
+  };
+  const inspect = () => {
+    const result = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+      cwd: ROOT, encoding: "utf8", env: commonEnv,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const dirty = inspect();
+  assert.equal(dirty.observations.git.local_delivery, true);
+  assert.deepEqual(dirty.observations.github, {});
+  assert.deepEqual(dirty.recommended_action.steps, ["commit_work"]);
+
+  const crashMarker = path.join(f.root, "commit-tree-failed-once");
+  const crashed = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "commit exact local work",
+    "--actor", "owner", "--expected-action-key", dirty.recommended_action.key, "--json",
+  ], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: { ...commonEnv, RELAY_FAIL_COMMIT_TREE_ONCE: crashMarker },
+  });
+  assert.notEqual(crashed.status, 0);
+  assert.equal(git(f.repo, ["rev-parse", "HEAD"]), f.head);
+  assert.equal(fs.readdirSync(f.runDir).filter((name) => name.startsWith("recovery-intent-")).length, 1);
+  assert.equal(fs.readdirSync(f.runDir).filter((name) => name.startsWith("recovery-receipt-")).length, 0);
+
+  const committed = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "commit exact local work",
+    "--actor", "owner", "--expected-action-key", dirty.recommended_action.key, "--json",
+  ], { cwd: ROOT, encoding: "utf8", env: commonEnv });
+  assert.equal(committed.status, 0, committed.stderr);
+  const committedOutput = JSON.parse(committed.stdout);
+  assert.equal(committedOutput.status, "converged");
+  assert.deepEqual(committedOutput.applied.map((entry) => entry.step), ["commit_work"]);
+  const committedHead = git(f.repo, ["rev-parse", "HEAD"]);
+  const committedTree = git(f.repo, ["rev-parse", "HEAD^{tree}"]);
+  assert.notEqual(committedHead, f.head);
+  assert.equal(git(f.repo, ["rev-list", "--count", `${f.head}..HEAD`]), "1");
+
+  const clean = inspect();
+  assert.deepEqual(clean.recommended_action.steps, ["record_verification"]);
+  const resultPath = path.join(f.root, "local-verification.log");
+  fs.writeFileSync(resultPath, "local verification passed\n");
+  const resultHash = crypto.createHash("sha256").update("local verification passed\n").digest("hex");
+  const verificationPath = path.join(f.root, "local-verification.json");
+  fs.writeFileSync(verificationPath, `${JSON.stringify({
+    schema_version: 1,
+    head_sha: committedHead,
+    tree_sha: committedTree,
+    done_criteria_sha256: f.doneHash,
+    operator: "owner",
+    commands: ["node --test"],
+    completed_commands: [{ command: "node --test", exit_code: 0 }],
+    result_path: resultPath,
+    result_sha256: resultHash,
+  })}\n`);
+  const verified = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "verify exact local work",
+    "--actor", "owner", "--expected-action-key", clean.recommended_action.key,
+    "--verification-file", verificationPath, "--json",
+  ], { cwd: ROOT, encoding: "utf8", env: commonEnv });
+  assert.equal(verified.status, 0, verified.stderr);
+  const verifiedOutput = JSON.parse(verified.stdout);
+  assert.equal(verifiedOutput.status, "converged");
+  assert.equal(verifiedOutput.after.derived.reason, "local_review_pending");
+  assert.equal(verifiedOutput.after.recommended_action.kind, "none");
+
+  for (const [key, reason] of [
+    [dirty.recommended_action.key, "commit exact local work"],
+    [clean.recommended_action.key, "verify exact local work"],
+  ]) {
+    const retry = spawnSync(process.execPath, [
+      CLI, "recover", "--run-dir", f.runDir, "--reason", reason,
+      "--actor", "owner", "--expected-action-key", key, "--json",
+    ], { cwd: ROOT, encoding: "utf8", env: commonEnv });
+    assert.equal(retry.status, 0, retry.stderr);
+    assert.equal(JSON.parse(retry.stdout).status, "noop");
+  }
+  const journal = factsApi.readFacts({ eventsPath: path.join(f.runDir, "events.jsonl") }).facts;
+  assert.equal(journal.filter((fact) => fact.type === "verification_recorded").length, 1);
+  assert.equal(fs.readdirSync(f.runDir).filter((name) => name.startsWith("recovery-intent-")).length, 2);
+  assert.equal(fs.readdirSync(f.runDir).filter((name) => name.startsWith("recovery-receipt-")).length, 2);
+  const transportCalls = fs.readFileSync(f.gitLog, "utf8").trim().split("\n")
+    .filter(Boolean).map(JSON.parse)
+    .filter((args) => args.some((arg) => ["fetch", "ls-remote", "push"].includes(arg)));
+  assert.deepEqual(transportCalls, []);
+  assert.equal(fs.existsSync(f.ghLog), false);
+
+  const gitControl = spawnSync(f.gitBin, ["-C", f.repo, "ls-remote", "origin"], {
+    encoding: "utf8", env: commonEnv,
+  });
+  assert.equal(gitControl.status, 91);
+  const ghControl = spawnSync(f.gh, ["pr", "list"], { encoding: "utf8", env: commonEnv });
+  assert.equal(ghControl.status, 92);
 });
 
 test("production recovery excludes its own lock from executor liveness", (t) => {
@@ -235,7 +365,7 @@ test("production recovery excludes its own lock from executor liveness", (t) => 
       result_path: path.join(f.runDir, "result.txt"), timeout_ms: 60000,
     },
   }]);
-  const env = { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
   const inspected = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
     cwd: ROOT, encoding: "utf8", env,
   });
@@ -271,7 +401,7 @@ test("production recovery reclaims a proven stale owner without invalidating the
   assert.equal(abandoned.crashed, false);
   const staleBeforeRecovery = host.inspectOwnership({ runDir: f.runDir });
   assert.equal(staleBeforeRecovery.status, "stale");
-  const env = { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
   const inspected = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
     cwd: ROOT, encoding: "utf8", env,
   });
@@ -347,7 +477,7 @@ test("a release crash before the authoritative close records exactly one canonic
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    env: { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root },
+    env: { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root },
   });
   assert.equal(recovered.status, 0, recovered.stderr);
   assert.equal(JSON.parse(recovered.stdout).status, "converged", recovered.stdout);
@@ -377,7 +507,7 @@ test("a release crash between the authoritative close and its receipt converges 
   assert.deepEqual(ownerCloseArtifacts(f.runDir), ["000000000001.closed.json"], "the authoritative close survives the crash");
   assert.equal(host.inspectOwnership({ runDir: f.runDir }).status, "absent");
 
-  const env = { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
   for (const pass of ["first", "second"]) {
     const recovered = spawnSync(process.execPath, [
       CLI, "recover", "--run-dir", f.runDir, "--reason", `materialize the lost release receipt (${pass})`,
@@ -451,7 +581,7 @@ test("recover CLI records exact structured verification under the production loc
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    env: { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root, FAKE_GH_ROWS: JSON.stringify([pr]) },
+    env: { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root, FAKE_GH_ROWS: JSON.stringify([pr]) },
   });
   assert.equal(inspected.status, 0, inspected.stderr);
   const inspectedOutput = JSON.parse(inspected.stdout);
@@ -465,7 +595,7 @@ test("recover CLI records exact structured verification under the production loc
   ], {
     cwd: ROOT,
     encoding: "utf8",
-    env: { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root, FAKE_GH_ROWS: JSON.stringify([pr]) },
+    env: { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root, FAKE_GH_ROWS: JSON.stringify([pr]) },
   });
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout);
@@ -519,7 +649,7 @@ test("production publication converges on an exact concurrently created PR witho
     "",
   ].join("\n"));
   fs.chmodSync(f.gh, 0o755);
-  const env = { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
   const inspected = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
     cwd: ROOT, encoding: "utf8", env,
   });
@@ -534,7 +664,7 @@ test("production publication converges on an exact concurrently created PR witho
   assert.equal(recovered.status, 0, recovered.stderr);
   const output = JSON.parse(recovered.stdout);
   assert.equal(output.status, "converged");
-  assert.equal(git(f.remote, ["rev-parse", `refs/heads/${f.branch}`]), finalHead);
+  assert.equal(git(f.bareRemote, ["rev-parse", `refs/heads/${f.branch}`]), finalHead);
   assert.equal(fs.readFileSync(countPath, "utf8"), "1");
   const eventsPath = path.join(f.runDir, "events.jsonl");
   const factsAfter = fs.readFileSync(eventsPath, "utf8");
@@ -580,14 +710,14 @@ test("production recovery refuses a tracked remote outside the immutable run rep
       verification_status: "not_declared",
     },
   }]);
-  const env = { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
   const inspected = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
     cwd: ROOT, encoding: "utf8", env,
   });
   assert.equal(inspected.status, 0, inspected.stderr);
   const output = JSON.parse(inspected.stdout);
   assert.equal(output.recommended_action.kind, "operator_attention");
-  assert.equal(output.blockers.some((item) => item.code === "remote_identity_mismatch"), true);
+  assert.equal(output.blockers[0].code, "delivery_unsupported");
   assert.throws(() => git(wrongRemote, ["rev-parse", `refs/heads/${f.branch}`]));
 });
 
@@ -608,7 +738,7 @@ test("non-regular recovery receipt artifacts fail closed before effects or fact 
       verification_status: "not_declared",
     },
   }]);
-  const env = { ...process.env, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
   const inspected = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
     cwd: ROOT, encoding: "utf8", env,
   });
@@ -681,6 +811,7 @@ test("production external MERGED recovery records durable provenance and no post
   ]);
   const env = {
     ...process.env,
+    RELAY_GIT_BIN: f.gitBin,
     RELAY_GH_BIN: f.gh,
     RELAY_WORKTREE_BASE: f.root,
     GH_TOKEN: "ephemeral-observer-token",
