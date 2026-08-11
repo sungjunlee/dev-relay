@@ -11,6 +11,8 @@ const path = require("path");
 const facts = require("../../../skills/relay-dispatch/scripts/facts");
 const host = require("../../../skills/relay-dispatch/scripts/host");
 const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
+const recovery = require("../../../skills/relay-dispatch/scripts/recover");
+const relayStatus = require("../../../skills/relay/scripts/relay-status");
 const runner = require("../../../skills/relay-review/scripts/review-runner");
 const runtime = { withRunLock(runDir, callback) { const canonical = fs.realpathSync(runDir);
   return host.withRunLock({ runDir: canonical, attemptId: `test-${crypto.randomUUID()}`, operation: "review",
@@ -38,7 +40,7 @@ function reviewerSuccess(input, output) {
   return { status: "succeeded", output, review_binding: reviewBinding(input), executed_runtime: EXECUTED_RUNTIME };
 }
 
-async function fixture(label) {
+async function fixture(label, { local = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-review-${label}-`)));
   const repo = path.join(root, "repo");
   const runId = `review-${label}`;
@@ -57,6 +59,15 @@ async function fixture(label) {
   git(repo, ["commit", "-am", "change"]);
   const head = git(repo, ["rev-parse", "HEAD"]);
   const tree = git(repo, ["rev-parse", "HEAD^{tree}"]);
+  let worktree = repo;
+  let worktreeBase = null;
+  if (local) {
+    worktreeBase = path.join(root, "worktrees");
+    fs.mkdirSync(worktreeBase);
+    git(repo, ["checkout", "main"]);
+    worktree = path.join(worktreeBase, `issue-${label}`);
+    execFileSync("git", ["-C", repo, "worktree", "add", worktree, `issue-${label}`], { stdio: "ignore" });
+  }
   const criteriaPath = path.join(runDir, "done-criteria.md");
   fs.writeFileSync(criteriaPath, "- file.txt says after\n");
   const criteriaHash = crypto.createHash("sha256").update(fs.readFileSync(criteriaPath)).digest("hex");
@@ -65,7 +76,7 @@ async function fixture(label) {
     version: 3,
     run_id: runId,
     repo: { root: fs.realpathSync(repo), remote },
-    git: { branch: `issue-${label}`, base_branch: "main", worktree: fs.realpathSync(repo), start_sha: startSha },
+    git: { branch: `issue-${label}`, base_branch: "main", worktree: fs.realpathSync(worktree), start_sha: startSha },
     contract: { done_criteria_path: criteriaPath, done_criteria_sha256: criteriaHash },
     roles: { orchestrator: "codex", executor: "codex", reviewer: "codex" },
     parent: null,
@@ -75,10 +86,12 @@ async function fixture(label) {
   runStore.createRunRecord({ runDir, record });
   const eventsPath = path.join(runDir, "events.jsonl");
   await runtime.withRunLock(runDir, (lockContext) => {
-    facts.appendFact({ eventsPath, lockContext, fact: {
-      event_id: `pr-${label}`, run_id: runId, type: "pull_request_recorded", at: "2026-08-01T00:01:00.000Z", actor: "codex",
-      payload: { pr_number: 42, repo: remote, head_ref: record.git.branch, base_ref: "main", head_sha: head, created_by_relay: true },
-    } });
+    if (!local) {
+      facts.appendFact({ eventsPath, lockContext, fact: {
+        event_id: `pr-${label}`, run_id: runId, type: "pull_request_recorded", at: "2026-08-01T00:01:00.000Z", actor: "codex",
+        payload: { pr_number: 42, repo: remote, head_ref: record.git.branch, base_ref: "main", head_sha: head, created_by_relay: true },
+      } });
+    }
     facts.appendFact({ eventsPath, lockContext, fact: {
       event_id: `verify-${label}`, run_id: runId, type: "verification_recorded", at: "2026-08-01T00:02:00.000Z", actor: "codex",
       payload: {
@@ -98,20 +111,22 @@ async function fixture(label) {
     const exhausted = review?.payload?.verdict === "escalated"
       && review.payload.escalation_kind === "runtime_failure"
       && review.payload.retry_of_event_id !== undefined;
-    const action = !review ? "review" : review.payload.verdict === "lgtm" ? "merge"
+    const action = !review ? "review" : review.payload.verdict === "lgtm" ? (local ? "recover" : "merge")
       : review.payload.verdict === "changes_requested" ? "redispatch"
         : retryable ? "review" : "none";
     return {
       blockers: [],
       snapshot: { run_sha256: crypto.createHash("sha256").update(JSON.stringify(record)).digest("hex") },
       facts: current,
-      observations: { github: { pr_number: 42, pr_head_sha: head, pr_state: "OPEN" } },
-      derived: { action, head_sha: head, pr_number: 42, retry_of_event_id: retryable ? review.event_id : null },
+      observations: local
+        ? { git: { local_delivery: true, head_sha: head, tree_sha: tree, reviewable_dirty: false }, github: {} }
+        : { github: { pr_number: 42, pr_head_sha: head, pr_state: "OPEN" } },
+      derived: { action, head_sha: head, pr_number: local ? null : 42, retry_of_event_id: retryable ? review.event_id : null },
       recommended_action: { kind: action, reason: retryable ? "review_retryable_escalation" : exhausted ? "review_escalated_retry_exhausted" : review?.payload?.verdict === "escalated" ? "review_escalated" : review ? review.payload.verdict : "review_missing", key: "c".repeat(64), steps: [], required_inputs: [] },
     };
   };
-  const cli = runner.parseCli(["--repo", repo, "--run-dir", runDir, "--json"]);
-  return { root, repo, runDir, record, startSha, head, tree, criteriaHash, eventsPath, inspectRun, cli };
+  const cli = runner.parseCli(["--repo", worktree, "--run-dir", runDir, "--json"]);
+  return { root, repo: worktree, repoRoot: repo, worktreeBase, runDir, record, startSha, head, tree, criteriaHash, eventsPath, inspectRun, cli };
 }
 
 test("Relay runner records one exact-SHA pass and the derived action advances to merge", async () => {
@@ -159,8 +174,376 @@ test("Relay runner records one exact-SHA pass and the derived action advances to
   assert.equal(fs.existsSync(reviews[0].payload.review_artifact), true);
   const artifact = JSON.parse(fs.readFileSync(reviews[0].payload.review_artifact, "utf8"));
   assert.equal(artifact.schema_version, 2); assert.deepEqual(artifact.executed_runtime, reviews[0].payload.executed_runtime);
+  assert.deepEqual(Object.keys(artifact), [
+    "schema_version", "run_id", "round", "reviewer", "reviewed_sha",
+    "done_criteria_sha256", "diff_sha256", "prompt_sha256",
+    "staging_request_sha256", "executed_runtime", "verdict",
+  ], "GitHub schema-v2 artifact bytes retain their historical field order and shape");
+  assert.deepEqual(
+    fs.readFileSync(reviews[0].payload.review_artifact),
+    Buffer.from(`${JSON.stringify(artifact, null, 2)}\n`),
+  );
   await assert.rejects(runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer: async () => { throw new Error("must not run"); } }), /not 'review'/);
   assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 1);
+});
+
+test("#1208 production-shaped no-origin review records the exact verification projection", async () => {
+  const value = await fixture("local-pass", { local: true });
+  let activeReviewLock = null;
+  const result = await runner.runReview(value.cli, {
+    inspectRun: (input) => recovery.inspectProductionRun({ ...input, activeRunLock: activeReviewLock }),
+    withRunLock: (runDir, callback) => runtime.withRunLock(runDir, async (lockContext) => {
+      activeReviewLock = lockContext;
+      try { return await callback(lockContext); }
+      finally { activeReviewLock = null; }
+    }),
+    invokeReviewer: async (input) => reviewerSuccess(input, { verdict: "pass", summary: "local exact subject", issues: [] }),
+  });
+  assert.equal(result.pr_number, null);
+  assert.equal(result.recommended_action.kind, "recover");
+  const review = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").at(-1);
+  const artifact = JSON.parse(fs.readFileSync(review.payload.review_artifact, "utf8"));
+  assert.equal(artifact.verification_event_id, "verify-local-pass");
+  assert.equal(artifact.run_sha256, crypto.createHash("sha256").update(JSON.stringify(value.record)).digest("hex"));
+  assert.equal(Object.hasOwn(artifact, "base_sha"), false);
+  assert.equal(Object.hasOwn(artifact, "tree_sha"), false);
+
+  const inspected = await recovery.inspectProductionRun({ runDir: value.runDir });
+  assert.equal(inspected.recommended_action.reason, "reviewed_result_ready");
+  const ghMarker = path.join(value.root, "gh-called");
+  const failingGh = path.join(value.root, "fail-gh.js");
+  fs.writeFileSync(failingGh, `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(ghMarker)}, 'called'); process.exit(91);\n`);
+  fs.chmodSync(failingGh, 0o755);
+  const recoverArgs = [
+    path.join(__dirname, "../../../skills/relay/scripts/relay-recover.js"),
+    "recover", "--run-dir", value.runDir, "--actor", "codex",
+    "--reason", "close exact reviewed local result",
+    "--expected-action-key", inspected.recommended_action.key, "--json",
+  ];
+  const recoverOptions = { encoding: "utf8", env: {
+    ...process.env, RELAY_WORKTREE_BASE: value.worktreeBase, RELAY_GH_BIN: failingGh,
+  } };
+  const cliResult = spawnSync(process.execPath, recoverArgs, recoverOptions);
+  assert.equal(cliResult.status, 0, cliResult.stderr);
+  const recovered = JSON.parse(cliResult.stdout);
+  assert.equal(recovered.status, "converged");
+  assert.equal(recovered.after.derived.terminal, true);
+  assert.equal(recovered.after.derived.reason, "reviewed_result_ready");
+  const closes = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed");
+  assert.equal(closes.length, 1);
+  assert.deepEqual(closes[0].payload, {
+    reason: "reviewed_result_ready", operator: "codex", last_sha: value.head, pr_number: null,
+  });
+  assert.equal(fs.existsSync(ghMarker), false, "local reviewed-result close must not invoke GitHub");
+  const receiptPath = fs.readdirSync(value.runDir).map((name) => path.join(value.runDir, name))
+    .find((filePath) => path.basename(filePath).startsWith("recovery-receipt-"));
+  const receiptBytes = fs.readFileSync(receiptPath);
+  const retry = spawnSync(process.execPath, recoverArgs, recoverOptions);
+  assert.equal(retry.status, 0, retry.stderr);
+  assert.equal(JSON.parse(retry.stdout).status, "noop");
+  assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed").length, 1);
+  assert.deepEqual(fs.readFileSync(receiptPath), receiptBytes);
+  assert.equal(fs.existsSync(ghMarker), false);
+
+  git(value.repo, ["checkout", "-b", "after-reviewed-close"]);
+  const drifted = await recovery.inspectProductionRun({ runDir: value.runDir });
+  assert.equal(drifted.derived.reason, "reviewed_result_ready");
+  assert.equal(drifted.derived.terminal, true);
+  assert.ok(drifted.derived.diagnostics.some((entry) => entry.code === "terminal_live_branch_diverged"));
+  const row = relayStatus.statusRow(value.record, value.runDir, drifted);
+  assert.equal(row.terminal, true);
+  assert.equal(row.reason, "reviewed_result_ready");
+  assert.equal(row.local_delivery, true);
+});
+
+test("#1208 production CLI recovers reviewed-result close crashes before and after terminal append", async () => {
+  for (const phase of ["before", "after"]) {
+    const value = await fixture(`local-close-crash-${phase}`, { local: true });
+    let activeReviewLock = null;
+    await runner.runReview(value.cli, {
+      inspectRun: (input) => recovery.inspectProductionRun({ ...input, activeRunLock: activeReviewLock }),
+      withRunLock: (runDir, callback) => runtime.withRunLock(runDir, async (lockContext) => {
+        activeReviewLock = lockContext;
+        try { return await callback(lockContext); }
+        finally { activeReviewLock = null; }
+      }),
+      invokeReviewer: async (input) => reviewerSuccess(input, {
+        verdict: "pass", summary: "durable local result", issues: [],
+      }),
+    });
+    if (phase === "before") {
+      // Historical writers used the accepted `pass` spelling in the durable fact.
+      const journal = fs.readFileSync(value.eventsPath, "utf8");
+      fs.writeFileSync(value.eventsPath, journal.replace('"verdict":"lgtm"', '"verdict":"pass"'));
+      assert.equal(
+        facts.readFacts({ eventsPath: value.eventsPath }).facts.find((fact) => fact.type === "review_recorded").payload.verdict,
+        "pass",
+      );
+    }
+    const inspected = await recovery.inspectProductionRun({ runDir: value.runDir });
+    assert.equal(inspected.recommended_action.reason, "reviewed_result_ready");
+
+    const factsModulePath = path.join(__dirname, "../../../skills/relay-dispatch/scripts/facts.js");
+    const preload = path.join(value.root, `crash-close-${phase}.js`);
+    fs.writeFileSync(preload, `"use strict";
+const facts = require(${JSON.stringify(factsModulePath)});
+const original = facts.appendFact;
+facts.appendFact = function crashReviewedClose(options) {
+  if (options?.fact?.type !== "run_closed") return original.apply(this, arguments);
+  if (process.env.RELAY_CLOSE_CRASH_PHASE === "before") process.exit(86);
+  const result = original.apply(this, arguments);
+  process.exit(87);
+};
+`);
+    const transportMarker = path.join(value.root, "transport-called");
+    const ghMarker = path.join(value.root, "gh-called");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const gitTrap = path.join(value.root, "git-trap.js");
+    const ghTrap = path.join(value.root, "gh-trap.js");
+    fs.writeFileSync(gitTrap, `#!/usr/bin/env node
+const fs=require("fs"),{spawnSync}=require("child_process"),args=process.argv.slice(2);
+if(args.some((value)=>["fetch","ls-remote","push"].includes(value))){fs.writeFileSync(${JSON.stringify(transportMarker)},"called");process.exit(97)}
+const result=spawnSync(${JSON.stringify(realGit)},args,{encoding:null});
+if(result.stdout)process.stdout.write(result.stdout);if(result.stderr)process.stderr.write(result.stderr);process.exit(result.status??1);
+`);
+    fs.writeFileSync(ghTrap, `#!/usr/bin/env node\nrequire("fs").writeFileSync(${JSON.stringify(ghMarker)},"called");process.exit(98);\n`);
+    fs.chmodSync(gitTrap, 0o755); fs.chmodSync(ghTrap, 0o755);
+    const args = [
+      path.join(__dirname, "../../../skills/relay/scripts/relay-recover.js"),
+      "recover", "--run-dir", value.runDir, "--actor", "codex",
+      "--reason", "close crash-tested reviewed local result",
+      "--expected-action-key", inspected.recommended_action.key, "--break-lock", "--json",
+    ];
+    const stableEnv = {
+      ...process.env,
+      RELAY_WORKTREE_BASE: value.worktreeBase,
+      RELAY_GH_BIN: ghTrap,
+      RELAY_GIT_BIN: gitTrap,
+    };
+    const crashed = spawnSync(process.execPath, args, { encoding: "utf8", env: {
+      ...stableEnv,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+      RELAY_CLOSE_CRASH_PHASE: phase,
+    } });
+    assert.equal(crashed.status, phase === "before" ? 86 : 87, crashed.stderr);
+    assert.equal(
+      facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed").length,
+      phase === "before" ? 0 : 1,
+    );
+    assert.equal(fs.readdirSync(value.runDir).some((name) => name.startsWith("recovery-receipt-")), false);
+
+    const retry = spawnSync(process.execPath, args, { encoding: "utf8", env: stableEnv });
+    assert.equal(retry.status, 0, retry.stderr);
+    assert.equal(JSON.parse(retry.stdout).status, "converged");
+    const closes = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed");
+    assert.equal(closes.length, 1);
+    const receiptPath = fs.readdirSync(value.runDir).map((name) => path.join(value.runDir, name))
+      .find((filePath) => path.basename(filePath).startsWith("recovery-receipt-"));
+    const receiptBytes = fs.readFileSync(receiptPath);
+    const receipt = JSON.parse(receiptBytes);
+    assert.equal(receipt.action_key, inspected.recommended_action.key);
+    assert.equal(receipt.operation_id, `recover-${inspected.recommended_action.key.slice(0, 32)}`);
+    assert.deepEqual(receipt.fact_event_ids, [closes[0].event_id]);
+
+    const noop = spawnSync(process.execPath, args, { encoding: "utf8", env: stableEnv });
+    assert.equal(noop.status, 0, noop.stderr);
+    assert.equal(JSON.parse(noop.stdout).status, "noop");
+    assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed").length, 1);
+    assert.deepEqual(fs.readFileSync(receiptPath), receiptBytes);
+    assert.equal(fs.existsSync(transportMarker), false, phase);
+    assert.equal(fs.existsSync(ghMarker), false, phase);
+  }
+});
+
+test("#1208 production observation still rejects a nonterminal worktree branch mismatch", async () => {
+  const value = await fixture("local-branch-mismatch", { local: true });
+  git(value.repo, ["checkout", "-b", "wrong-before-close"]);
+  await assert.rejects(
+    recovery.inspectProductionRun({ runDir: value.runDir }),
+    /does not match run identity/,
+  );
+});
+
+test("#1208 canonical fold alone controls reviewed-close branch exceptions before transports", async () => {
+  for (const mode of ["invalid", "retroactive", "duplicate", "run-id", "actor-mismatch"]) {
+    const value = await fixture(`local-forged-${mode}`, { local: true });
+    const close = {
+      event_id: `close-${mode}`, run_id: value.record.run_id, type: "run_closed",
+      at: "2026-08-01T00:04:00.000Z", actor: mode === "actor-mismatch" ? "other-actor" : "codex",
+      payload: { reason: "reviewed_result_ready", operator: "codex", last_sha: value.head, pr_number: null },
+    };
+    const executable = EXECUTED_RUNTIME[0];
+    const review = {
+      event_id: `review-${mode}`, run_id: value.record.run_id, type: "review_recorded",
+      at: "2026-08-01T00:03:00.000Z", actor: "codex",
+      payload: {
+        round: 1, verdict: mode === "invalid" ? "changes_requested" : "lgtm",
+        reviewed_sha: value.head, done_criteria_sha256: value.criteriaHash,
+        reviewer: "codex", review_artifact: path.join(value.runDir, "forged-review.json"),
+        executed_runtime: {
+          digest: crypto.createHash("sha256").update(JSON.stringify(EXECUTED_RUNTIME)).digest("hex"),
+          executable: { ...executable },
+        },
+        override: null,
+      },
+    };
+    await runtime.withRunLock(value.runDir, (lockContext) => {
+      const ordered = mode === "retroactive" ? [close, review] : [review, close];
+      for (const fact of ordered) facts.appendFact({ eventsPath: value.eventsPath, lockContext, fact });
+    });
+    if (mode === "duplicate") {
+      const firstFact = JSON.parse(fs.readFileSync(value.eventsPath, "utf8").trim().split("\n")[0]);
+      fs.appendFileSync(value.eventsPath, `${JSON.stringify({
+        ...firstFact, at: "2026-08-01T00:09:00.000Z",
+      })}\n`);
+    }
+    if (mode === "run-id") {
+      fs.appendFileSync(value.eventsPath, `${JSON.stringify({
+        ...close, event_id: "foreign-run-fact", run_id: "different-run",
+      })}\n`);
+    }
+    git(value.repo, ["checkout", "-b", `wrong-${mode}`]);
+    const transportMarker = path.join(value.root, "transport-called");
+    const ghMarker = path.join(value.root, "gh-called");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const gitTrap = path.join(value.root, "git-trap.js");
+    const ghTrap = path.join(value.root, "gh-trap.js");
+    fs.writeFileSync(gitTrap, `#!/usr/bin/env node
+const fs=require('fs'),{spawnSync}=require('child_process'),a=process.argv.slice(2);
+if(a.some((v)=>['ls-remote','push','fetch'].includes(v))){fs.writeFileSync(${JSON.stringify(transportMarker)},'called');process.exit(97)}
+const r=spawnSync(${JSON.stringify(realGit)},a,{encoding:null});if(r.stdout)process.stdout.write(r.stdout);if(r.stderr)process.stderr.write(r.stderr);process.exit(r.status??1);
+`);
+    fs.writeFileSync(ghTrap, `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(ghMarker)},'called');process.exit(98);\n`);
+    fs.chmodSync(gitTrap, 0o755); fs.chmodSync(ghTrap, 0o755);
+    const previousGit = process.env.RELAY_GIT_BIN, previousGh = process.env.RELAY_GH_BIN;
+    process.env.RELAY_GIT_BIN = gitTrap; process.env.RELAY_GH_BIN = ghTrap;
+    try {
+      if (mode === "actor-mismatch") {
+        const inspected = await recovery.inspectProductionRun({ runDir: value.runDir });
+        assert.equal(inspected.derived.reason, "reviewed_result_ready");
+        assert.equal(inspected.derived.terminal, true);
+      } else {
+        await assert.rejects(
+          recovery.inspectProductionRun({ runDir: value.runDir }),
+          mode === "duplicate" ? /duplicate event_id/
+            : mode === "run-id" ? /does not match immutable run_id/
+              : /does not match run identity/,
+          mode,
+        );
+      }
+    } finally {
+      if (previousGit === undefined) delete process.env.RELAY_GIT_BIN; else process.env.RELAY_GIT_BIN = previousGit;
+      if (previousGh === undefined) delete process.env.RELAY_GH_BIN; else process.env.RELAY_GH_BIN = previousGh;
+    }
+    assert.equal(fs.existsSync(transportMarker), false, mode);
+    assert.equal(fs.existsSync(ghMarker), false, mode);
+  }
+});
+
+test("#1208 canonical local close refuses a tampered content-addressed review artifact without a terminal fact", async () => {
+  const value = await fixture("local-tamper", { local: true });
+  const result = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async (input) => reviewerSuccess(input, { verdict: "pass", summary: "bound before tamper", issues: [] }),
+  });
+  const inspection = await recovery.inspectProductionRun({ runDir: value.runDir });
+  fs.appendFileSync(result.review_artifact, " \n");
+  await assert.rejects(recovery.recoverProductionRun({
+    runDir: value.runDir,
+    actor: "codex",
+    reason: "must reject tampered artifact",
+    expectedActionKey: inspection.recommended_action.key,
+    activeCheckout: value.repoRoot,
+    relayWorktreeBase: value.worktreeBase,
+  }), /content digest/);
+  assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed").length, 0);
+});
+
+test("#1208 canonical local close rejects missing, escaped, and symlinked review artifacts", async () => {
+  for (const mode of [
+    "missing", "outside", "ancestor-symlink", "review-symlink", "diff-symlink", "prompt-symlink",
+  ]) {
+    const value = await fixture(`local-${mode}`, { local: true });
+    const result = await runner.runReview(value.cli, {
+      inspectRun: value.inspectRun,
+      invokeReviewer: async (input) => reviewerSuccess(input, { verdict: "pass", summary: "artifact boundary", issues: [] }),
+    });
+    if (mode === "missing") {
+      fs.unlinkSync(result.review_artifact);
+    } else if (mode === "outside") {
+      const outside = path.join(value.root, path.basename(result.review_artifact));
+      fs.copyFileSync(result.review_artifact, outside);
+      const journal = fs.readFileSync(value.eventsPath, "utf8");
+      fs.writeFileSync(value.eventsPath, journal.replace(result.review_artifact, outside));
+    } else if (mode === "ancestor-symlink") {
+      const inputRoot = path.join(value.runDir, "review-inputs");
+      const moved = path.join(value.root, "moved-review-inputs");
+      fs.renameSync(inputRoot, moved);
+      fs.symlinkSync(moved, inputRoot, "dir");
+    } else if (mode === "review-symlink") {
+      const outside = path.join(value.root, "same-byte-review.json");
+      fs.copyFileSync(result.review_artifact, outside);
+      fs.unlinkSync(result.review_artifact);
+      fs.symlinkSync(outside, result.review_artifact);
+    } else {
+      const inputRoot = path.join(value.runDir, "review-inputs");
+      const prefix = mode === "diff-symlink" ? "diff-" : "prompt-";
+      const inputPath = path.join(inputRoot, fs.readdirSync(inputRoot).find((name) => name.startsWith(prefix)));
+      const outside = path.join(value.root, `same-byte-${path.basename(inputPath)}`);
+      fs.copyFileSync(inputPath, outside);
+      fs.unlinkSync(inputPath);
+      fs.symlinkSync(outside, inputPath);
+    }
+    const inspection = await recovery.inspectProductionRun({ runDir: value.runDir });
+    await assert.rejects(recovery.recoverProductionRun({
+      runDir: value.runDir,
+      actor: "codex",
+      reason: `must reject ${mode} artifact`,
+      expectedActionKey: inspection.recommended_action.key,
+      activeCheckout: value.repoRoot,
+      relayWorktreeBase: value.worktreeBase,
+    }), mode === "missing" ? /missing/
+      : mode === "outside" ? /outside the canonical run artifact surface/
+        : mode === "ancestor-symlink" ? /canonical non-symlink directory/
+          : /canonical regular non-symlink file/);
+    assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed").length, 0);
+  }
+});
+
+test("#1208 review action binding accepts only fresh clean local Git and the latest exact verification", () => {
+  const head = "a".repeat(40);
+  const tree = "b".repeat(40);
+  const criteriaHash = "c".repeat(64);
+  const record = { roles: { reviewer: "claude" }, contract: { done_criteria_sha256: criteriaHash } };
+  const verification = {
+    event_id: "verification-local",
+    type: "verification_recorded",
+    payload: {
+      status: "passed", exit_code: 0, head_sha: head, tree_sha: tree,
+      done_criteria_sha256: criteriaHash,
+    },
+  };
+  const inspection = {
+    blockers: [],
+    facts: [verification],
+    observations: { git: { local_delivery: true, head_sha: head, tree_sha: tree, reviewable_dirty: false } },
+    derived: { action: "review", head_sha: head },
+    recommended_action: { kind: "review", reason: "review_missing" },
+  };
+  const binding = runner.requireReviewAction(inspection, record);
+  assert.equal(binding.local, true);
+  assert.equal(binding.head, head);
+  assert.equal(binding.tree, tree);
+  assert.equal(binding.prNumber, null);
+  assert.equal(binding.verification.event_id, "verification-local");
+
+  const stale = structuredClone(inspection);
+  stale.facts.push({ ...verification, event_id: "verification-failed", payload: { ...verification.payload, status: "failed", exit_code: 1 } });
+  assert.throws(() => runner.requireReviewAction(stale, record), /latest passing verification/);
+
+  const withPr = structuredClone(inspection);
+  withPr.facts.push({ type: "pull_request_recorded", payload: {} });
+  assert.throws(() => runner.requireReviewAction(withPr, record), /durable PR fact/);
 });
 
 test("changes_requested and invocation error are durable blocking review facts", async () => {

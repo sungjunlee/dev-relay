@@ -99,6 +99,44 @@ test("Done Criteria are frozen by bytes and later source mutation has no effect"
   );
 });
 
+test("artifact reader binds the no-follow open to the caller's expected inode", () => {
+  const runDir = tempDir("artifact-identity");
+  const artifact = path.join(runDir, "artifact.json");
+  const replacement = path.join(runDir, "replacement.json");
+  fs.writeFileSync(artifact, "same bytes\n");
+  const identity = fs.lstatSync(artifact, { bigint: true });
+  assert.equal(store.readArtifact(artifact, "artifact", {
+    expectedIdentity: { dev: identity.dev, ino: identity.ino },
+  }).bytes.toString("utf8"), "same bytes\n");
+  fs.writeFileSync(replacement, "same bytes\n");
+  fs.renameSync(replacement, artifact);
+  assert.throws(
+    () => store.readArtifact(artifact, "artifact", {
+      expectedIdentity: { dev: identity.dev, ino: identity.ino },
+    }),
+    (error) => error.code === "UNTRUSTED_RUN_ARTIFACT" && /changed identity before/.test(error.message),
+  );
+  const actualDev = (2n ** 53n) + 4n;
+  const expectedDev = actualDev + 1n;
+  assert.equal(Number(actualDev), Number(expectedDev));
+  const currentIdentity = fs.lstatSync(artifact, { bigint: true });
+  const originalFstatSync = fs.fstatSync;
+  fs.fstatSync = (fd, options) => {
+    const stat = originalFstatSync(fd, options);
+    return { ...stat, dev: actualDev, isFile: () => true };
+  };
+  try {
+    assert.throws(
+      () => store.readArtifact(artifact, "artifact", {
+        expectedIdentity: { dev: expectedDev, ino: currentIdentity.ino },
+      }),
+      (error) => error.code === "UNTRUSTED_RUN_ARTIFACT" && /changed identity before/.test(error.message),
+    );
+  } finally {
+    fs.fstatSync = originalFstatSync;
+  }
+});
+
 test("run and Done Criteria readers refuse symlinks", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-run-symlink-")));
   const target = path.join(root, "target");

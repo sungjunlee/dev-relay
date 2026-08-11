@@ -22,11 +22,11 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
 
 ### Batch 2 — Git-native identity
 
-- [~] #1207 — Let no-origin Git runs inspect and recover without forge blockers (in flight; run `issue-1207-20260811062805756-b698a5ae`).
+- [x] #1207 — Let no-origin Git runs inspect and recover without forge blockers (PR #1223).
 
 ### Batch 3 — Forge-optional boundary
 
-- [ ] #1208 — Review exact local Git changes and close terminal reviewed results.
+- [~] #1208 — Review exact local Git changes and close terminal reviewed results (run `issue-1208-20260811141912577-b5562f0b`).
 
 ### Batch 4 — Lifecycle evidence
 
@@ -70,3 +70,6 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
   `issue-1207-20260811062805756-b698a5ae`; production observer/fold/recovery
   changes now pass the focused local-delivery, production recovery, GitHub
   parity, and skills-lint suites; the full serialized gate remains pending.
+- 2026-08-11 — #1207 completed in PR #1223. Began #1208 in run
+  `issue-1208-20260811141912577-b5562f0b`; local review now shares the exact
+  Git review fold and uses canonical recovery for the terminal Reviewed Result.

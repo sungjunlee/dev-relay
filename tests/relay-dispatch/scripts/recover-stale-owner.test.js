@@ -288,6 +288,12 @@ test("explicit close intent appends one terminal fact and is exactly idempotent"
   const f = fixture("close-intent");
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   await withFakeGh(f, async () => {
+    await assert.rejects(recovery.recoverProductionRun({
+      runDir: f.runDir,
+      closeIntent: { operator: "owner", reason: "reviewed_result_ready" },
+      activeCheckout: f.active, relayWorktreeBase: f.root,
+    }), (error) => error.code === "RESERVED_CLOSE_REASON");
+    assert.equal(factsFor(f).filter((entry) => entry.type === "run_closed").length, 0);
     const first = await recovery.recoverProductionRun({
       runDir: f.runDir, actor: "ignored-for-close", reason: "close",
       closeIntent: { operator: "owner", reason: "superseded" },

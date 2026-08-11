@@ -319,8 +319,8 @@ test("#1207 real local production recovery commits then verifies with crash-safe
   assert.equal(verified.status, 0, verified.stderr);
   const verifiedOutput = JSON.parse(verified.stdout);
   assert.equal(verifiedOutput.status, "converged");
-  assert.equal(verifiedOutput.after.derived.reason, "local_review_pending");
-  assert.equal(verifiedOutput.after.recommended_action.kind, "none");
+  assert.equal(verifiedOutput.after.derived.reason, "review_missing");
+  assert.equal(verifiedOutput.after.recommended_action.kind, "review");
 
   for (const [key, reason] of [
     [dirty.recommended_action.key, "commit exact local work"],

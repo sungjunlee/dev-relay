@@ -9,7 +9,7 @@ const os = require("os");
 const path = require("path");
 
 const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
-const { selectIssueRuns } = require("../../../skills/relay/scripts/relay-status");
+const { selectIssueRuns, statusRow } = require("../../../skills/relay/scripts/relay-status");
 
 const ROOT = path.resolve(__dirname, "../../..");
 const SCRIPT = path.join(ROOT, "skills/relay/scripts/relay-status.js");
@@ -121,6 +121,68 @@ test("relay-status black box derives phase, action, blockers, and PR from canoni
   assert.equal(payload.row.pr_number, null);
   assert.ok(Array.isArray(payload.row.blockers));
   assert.match(payload.row.run_path, /run\.json$/);
+});
+
+test("#1208 status projects only review evidence matching the derived reviewed SHA across local states", () => {
+  const record = { run_id: "local-status", git: { branch: "work" } };
+  const review = (eventId, verdict, sha, artifact) => ({
+    event_id: eventId,
+    type: "review_recorded",
+    payload: { verdict, reviewed_sha: sha, review_artifact: artifact },
+  });
+  const base = {
+    blockers: [],
+    observations: { git: { local_delivery: true }, github: {} },
+    recommended_action: { kind: "review", reason: "review_missing", key: "a".repeat(64) },
+    derived: { phase: "reviewable", action: "review", reason: "review_missing", reviewed_sha: null, terminal: false },
+    facts: [],
+  };
+  const pending = statusRow(record, "/run", base);
+  assert.equal(pending.local_delivery, true);
+  assert.equal(pending.review_artifact, null);
+
+  const requestedReview = review("review-1", "changes_requested", "b".repeat(40), "/run/review-1.json");
+  const requested = statusRow(record, "/run", {
+    ...base,
+    facts: [requestedReview],
+    recommended_action: { kind: "redispatch", reason: "changes_requested" },
+    derived: { ...base.derived, action: "redispatch", reason: "changes_requested", reviewed_sha: requestedReview.payload.reviewed_sha },
+  });
+  assert.equal(requested.review_verdict, "changes_requested");
+  assert.equal(requested.review_artifact, "/run/review-1.json");
+
+  const passReview = review("review-2", "lgtm", "c".repeat(40), "/run/review-2.json");
+  const ready = statusRow(record, "/run", {
+    ...base,
+    facts: [requestedReview, passReview],
+    recommended_action: { kind: "recover", reason: "reviewed_result_ready" },
+    derived: { ...base.derived, action: "recover", reason: "reviewed_result_ready", reviewed_sha: passReview.payload.reviewed_sha, review_event_id: passReview.event_id },
+  });
+  assert.equal(ready.review_verdict, "lgtm");
+  assert.equal(ready.action, "recover");
+
+  const staleLater = review("review-3", "changes_requested", "d".repeat(40), "/run/review-3.json");
+  const terminal = statusRow(record, "/run", {
+    ...base,
+    facts: [passReview, staleLater],
+    recommended_action: { kind: "none", reason: "reviewed_result_ready" },
+    derived: { phase: "terminal", action: "none", reason: "reviewed_result_ready", terminal: true,
+      reviewed_sha: passReview.payload.reviewed_sha, review_event_id: passReview.event_id },
+  });
+  assert.equal(terminal.reason, "reviewed_result_ready");
+  assert.equal(terminal.review_artifact, "/run/review-2.json", "terminal evidence is selected by its exact derived event id");
+
+  const remoteAddedAfterClose = statusRow(record, "/run", {
+    ...base,
+    blockers: [{ code: "delivery_unsupported", message: "remote added after close", retryable: false }],
+    observations: { git: { remote_name: "origin" }, github: {} },
+    facts: [passReview],
+    recommended_action: { kind: "none", reason: "reviewed_result_ready" },
+    derived: { phase: "terminal", action: "none", reason: "reviewed_result_ready", terminal: true,
+      reviewed_sha: passReview.payload.reviewed_sha, review_event_id: passReview.event_id },
+  });
+  assert.equal(remoteAddedAfterClose.local_delivery, true);
+  assert.equal(remoteAddedAfterClose.blockers[0].code, "delivery_unsupported");
 });
 
 test("relay-recover rejects the retired pre-run --branch surface", () => {

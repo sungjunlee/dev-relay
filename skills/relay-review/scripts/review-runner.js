@@ -152,6 +152,40 @@ function requireReviewAction(inspection, record) {
   if (actionKind !== "review" || inspection.derived?.action !== "review") {
     fail(`derived lifecycle action is '${inspection.recommended_action?.kind || "unknown"}', not 'review'`, "REVIEW_ACTION_MISMATCH");
   }
+  const local = inspection.observations?.git?.local_delivery === true;
+  if (local) {
+    if (inspection.facts.some((fact) => fact.type === "pull_request_recorded")) {
+      fail("local review cannot have a durable PR fact", "REVIEW_PR_FORBIDDEN");
+    }
+    const head = inspection.observations?.git?.head_sha;
+    const tree = inspection.observations?.git?.tree_sha;
+    if (!SHA1_RE.test(String(head || "")) || head !== inspection.derived.head_sha) {
+      fail("local review head must exactly equal the fresh derived Git HEAD", "REVIEW_HEAD_MISMATCH");
+    }
+    if (!SHA1_RE.test(String(tree || "")) || inspection.observations.git.reviewable_dirty !== false) {
+      fail("local review requires a fresh clean Git tree", "REVIEW_TREE_MISMATCH");
+    }
+    const verification = inspection.facts.filter((fact) => fact.type === "verification_recorded").at(-1);
+    if (!verification
+      || verification.payload.status !== "passed"
+      || verification.payload.exit_code !== 0
+      || verification.payload.head_sha !== head
+      || verification.payload.tree_sha !== tree
+      || verification.payload.done_criteria_sha256 !== record.contract.done_criteria_sha256) {
+      fail("local review requires the exact latest passing verification event", "REVIEW_VERIFICATION_MISSING");
+    }
+    const latestReview = inspection.facts.filter((fact) => fact.type === "review_recorded").at(-1) || null;
+    const retrying = inspection.recommended_action.reason === "review_retryable_escalation";
+    const retryOfEventId = retrying ? inspection.derived.retry_of_event_id : null;
+    if (retrying && (
+      typeof retryOfEventId !== "string"
+      || !latestReview
+      || latestReview.event_id !== retryOfEventId
+    )) {
+      fail("retry review action is not bound to the latest durable escalation", "REVIEW_RETRY_BINDING_MISMATCH");
+    }
+    return { head, tree, prNumber: null, verification, retryOfEventId, local: true };
+  }
   const head = inspection.observations?.github?.pr_head_sha;
   const prNumber = inspection.observations?.github?.pr_number;
   if (!SHA1_RE.test(String(head || "")) || head !== inspection.derived.head_sha) {
@@ -180,7 +214,7 @@ function requireReviewAction(inspection, record) {
   )) {
     fail("retry review action is not bound to the latest durable escalation", "REVIEW_RETRY_BINDING_MISMATCH");
   }
-  return { head, prNumber, verification, retryOfEventId };
+  return { head, prNumber, verification, retryOfEventId, local: false };
 }
 
 function reviewPrompt({ record, binding, criteria, diff }) {
@@ -196,7 +230,7 @@ function reviewPrompt({ record, binding, criteria, diff }) {
     `Run: ${record.run_id}`,
     `Repository: ${record.repo.remote}`,
     `Branch: ${record.git.branch} -> ${record.git.base_branch}`,
-    `PR: #${binding.prNumber}`,
+    binding.local ? "PR: none (local Git review)" : `PR: #${binding.prNumber}`,
     `Reviewed SHA: ${binding.head}`,
     `Done Criteria SHA-256: ${record.contract.done_criteria_sha256}`,
     `Verification fact: ${JSON.stringify(binding.verification)}`,
@@ -474,6 +508,8 @@ async function runReview(cli, overrides = {}) {
     if (
       freshBinding.retryOfEventId !== binding.retryOfEventId
       || freshBinding.head !== binding.head
+      || freshBinding.local !== binding.local
+      || freshBinding.tree !== binding.tree
       || freshBinding.prNumber !== binding.prNumber
       || JSON.stringify(freshBinding.verification) !== JSON.stringify(binding.verification)
     ) {
@@ -486,6 +522,10 @@ async function runReview(cli, overrides = {}) {
       round,
       reviewer,
       reviewed_sha: binding.head,
+      ...(binding.local ? {
+        run_sha256: resolvedRunDigest,
+        verification_event_id: binding.verification.event_id,
+      } : {}),
       done_criteria_sha256: record.contract.done_criteria_sha256,
       diff_sha256: diffDigest,
       prompt_sha256: promptDigest,

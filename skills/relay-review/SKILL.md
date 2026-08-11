@@ -1,9 +1,9 @@
 ---
 name: relay-review
 argument-hint: "[run-id]"
-description: Use when a recovered Relay run has an exact PR head and verification proof ready for independent review.
+description: Use when a recovered Relay run has an exact local Git or PR head and verification proof ready for independent review.
 context: fork
-compatibility: Requires git, gh CLI, and Node.js 22+; macOS sandbox-exec is required for direct reviewer CLI isolation.
+compatibility: Requires git and Node.js 22+; gh CLI is required only for the retained GitHub route. macOS sandbox-exec is required for direct reviewer CLI isolation.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-merge"
   keywords: "리뷰, 검토, review, exact SHA, fresh context"
@@ -14,7 +14,8 @@ metadata:
 ## Use when
 
 - `relay-recover inspect` derives the single lifecycle action `review`.
-- The durable PR fact, live PR head, passed verification, and frozen Done Criteria all bind to the same commit.
+- For local delivery, fresh clean Git `HEAD`/tree and the latest passed verification bind to the same commit; no PR or forge observation is required.
+- For GitHub delivery, the durable PR fact, live PR head, passed verification, and frozen Done Criteria all bind to the same commit.
 - An independent primary reviewer should produce the next blocking lifecycle fact.
 
 Do not use this skill to plan work, dispatch an executor, repair publication, or merge. Use `relay-plan`, `relay-dispatch`, `relay-recover`, or `relay-merge` respectively.
@@ -44,8 +45,8 @@ The runner:
 
 1. Reads the immutable Relay `run.json` and frozen Done Criteria.
 2. Calls canonical `inspect` and requires the derived action `review`.
-3. Requires an exact durable/live PR identity, PR head, and passed verification proof for the frozen Done Criteria hash.
-4. Builds one review bundle containing only the immutable contract, exact diff, PR identity, and verification fact. It never includes the dispatch prompt, executor transcript, session id, or mutable manifest state.
+3. Requires either the exact fresh local Git head/tree and passed verification proof, or the exact durable/live PR identity, PR head, and passed verification proof, for the frozen Done Criteria hash.
+4. Builds one review bundle containing only the immutable contract, exact diff, delivery identity, and verification fact. It never includes the dispatch prompt, executor transcript, session id, or mutable manifest state.
 5. Stages that bundle in an isolated temporary directory and asks the bound adapter for a direct read-only structured-output invocation.
 6. Re-enters the per-run lock, repeats inspection, and appends exactly one `review_recorded` fact.
 7. Re-inspects and returns the next derived action.

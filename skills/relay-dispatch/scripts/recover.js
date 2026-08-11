@@ -18,6 +18,7 @@ const RECOVERY_STEPS = new Set([
   "record_or_create_pr",
   "record_verification",
   "record_external_merge",
+  "close_reviewed_result",
 ]);
 function sha256(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function stable(value, { omitVolatile = false } = {}) { return inspect.stable(value, omitVolatile); }
@@ -97,7 +98,16 @@ function productionRecoveryIo(runDir) {
           if (!intent) return null;
           if (intent.action_key !== actionKeyValue) throw new Error("recovery intent payload does not match its immutable filename");
           const receipt = readJsonIfPresent(receiptPath(runDir, actionKeyValue));
-          if (receipt) { validateRecoveryReceipt(receipt, { actionKey: actionKeyValue, facts }); return null; }
+          if (receipt) {
+            validateRecoveryReceipt(receipt, {
+              actionKey: actionKeyValue,
+              facts,
+              intent,
+              requiredStep: Array.isArray(intent?.steps) && intent.steps.includes("close_reviewed_result")
+                ? "close_reviewed_result" : null,
+            });
+            return null;
+          }
           return intent;
         })
         .filter(Boolean);
@@ -548,7 +558,18 @@ async function observeProduction({
   const worktree = fs.realpathSync(runRecord.git.worktree);
   if (!fs.statSync(worktree).isDirectory()) throw new Error("run worktree is not a directory");
   const branch = execGit(worktree, ["--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"]);
-  if (branch !== runRecord.git.branch) throw new Error(`worktree branch ${branch} does not match run identity`);
+  const durable = foldRunFacts({
+    runRecord,
+    facts: runFacts,
+    gitFacts: {},
+    githubFacts: {},
+    hostFacts: {},
+  });
+  const reviewedResultAlreadyClosed = durable.terminal === true
+    && durable.reason === "reviewed_result_ready";
+  if (branch !== runRecord.git.branch && !reviewedResultAlreadyClosed) {
+    throw new Error(`worktree branch ${branch} does not match run identity`);
+  }
   const headSha = execGit(worktree, ["--no-optional-locks", "rev-parse", "HEAD"]);
   const treeSha = execGit(worktree, ["--no-optional-locks", "rev-parse", "HEAD^{tree}"]);
   const status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
@@ -559,8 +580,12 @@ async function observeProduction({
   let remoteName = null;
   try {
     const remotes = configuredRemotes(worktree);
-    remoteName = remotes.length ? resolveBranchRemote(worktree, branch) : null;
-    delivery = classifyDelivery(runRecord, worktree, remotes, remoteName);
+    remoteName = remotes.length && !reviewedResultAlreadyClosed ? resolveBranchRemote(worktree, branch) : null;
+    delivery = reviewedResultAlreadyClosed
+      ? remotes.length
+        ? { kind: "unsupported", message: "transport configuration changed after the reviewed local result closed" }
+        : { kind: "local" }
+      : classifyDelivery(runRecord, worktree, remotes, remoteName);
   } catch (error) {
     delivery = { kind: "unsupported", message: `Git remote configuration could not be enumerated: ${commandFailure(error)}` };
   }
@@ -678,6 +703,103 @@ const inspectRun = inspect.inspectRun;
 const recoverySteps = inspect.recoverySteps;
 function blocker(code, message, retryable = false, details = {}) { return { code, message, retryable, details }; }
 function deterministicEventId(operationId, step) { return `recovery-${sha256(`${operationId}:${step}`).slice(0, 32)}`; }
+function terminalCompletionFacts(facts, intent) {
+  const operationId = intent.operation_id;
+  if (!intent.steps.includes("close_reviewed_result")) {
+    return facts.filter((fact) => fact.type === "merge_recorded" && fact.payload.operation_id === operationId);
+  }
+  return facts.filter((fact) => (
+    fact.event_id === deterministicEventId(operationId, "close_reviewed_result")
+    && fact.type === "run_closed"
+    && fact.actor === intent.actor
+    && fact.payload.reason === "reviewed_result_ready"
+    && fact.payload.operator === intent.actor
+    && fact.payload.last_sha === intent.before_sha
+    && fact.payload.pr_number === null
+  ));
+}
+function readCanonicalRegularArtifact(filePath, expectedParent, label) {
+  const resolved = path.resolve(filePath);
+  if (path.dirname(resolved) !== expectedParent || fs.realpathSync(path.dirname(resolved)) !== expectedParent) {
+    throw new Error(`${label} escaped its canonical parent`);
+  }
+  let entry;
+  try { entry = fs.lstatSync(resolved, { bigint: true }); }
+  catch (error) {
+    if (error.code === "ENOENT") return readArtifact(resolved, label);
+    throw error;
+  }
+  if (entry.isSymbolicLink() || !entry.isFile() || fs.realpathSync(resolved) !== resolved) {
+    throw new Error(`${label} must be a canonical regular non-symlink file`);
+  }
+  return readArtifact(resolved, label, {
+    expectedIdentity: { dev: entry.dev, ino: entry.ino },
+  });
+}
+function directRunArtifact(runDir, filePath, pattern, label) {
+  const canonicalRunDir = fs.realpathSync(runDir);
+  const resolved = path.resolve(filePath);
+  if (path.dirname(resolved) !== canonicalRunDir || !pattern.test(path.basename(resolved))) {
+    throw new Error(`${label} is outside the canonical run artifact surface`);
+  }
+  return readCanonicalRegularArtifact(resolved, canonicalRunDir, label);
+}
+function assertReviewedCloseEvidence({ runDir, record, inspection, review, verification }) {
+  const artifactMatch = path.basename(review.payload.review_artifact).match(/^review-(\d+)-([0-9a-f]{64})\.json$/);
+  if (!artifactMatch || Number(artifactMatch[1]) !== review.payload.round) {
+    throw new Error("review artifact filename is not bound to its round");
+  }
+  const source = directRunArtifact(runDir, review.payload.review_artifact, /^review-\d+-[0-9a-f]{64}\.json$/, "review artifact");
+  if (source.sha256 !== artifactMatch[2]) throw new Error("review artifact content digest does not match its filename");
+  let artifact;
+  try { artifact = JSON.parse(source.bytes.toString("utf8")); }
+  catch { throw new Error("review artifact is not valid JSON"); }
+  const expectedKeys = [
+    "diff_sha256", "done_criteria_sha256", "executed_runtime", "prompt_sha256",
+    "reviewed_sha", "reviewer", "round", "run_id", "run_sha256", "schema_version",
+    "staging_request_sha256", "verdict", "verification_event_id",
+  ];
+  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)
+    || JSON.stringify(Object.keys(artifact).sort()) !== JSON.stringify(expectedKeys)
+    || artifact.schema_version !== 2
+    || artifact.run_id !== record.run_id
+    || artifact.round !== review.payload.round
+    || artifact.reviewer !== record.roles.reviewer
+    || artifact.reviewed_sha !== inspection.derived.reviewed_sha
+    || artifact.run_sha256 !== sha256(JSON.stringify(record))
+    || artifact.verification_event_id !== verification.event_id
+    || artifact.done_criteria_sha256 !== record.contract.done_criteria_sha256
+    || !/^[0-9a-f]{64}$/.test(String(artifact.run_sha256 || ""))
+    || !/^[0-9a-f]{64}$/.test(String(artifact.diff_sha256 || ""))
+    || !/^[0-9a-f]{64}$/.test(String(artifact.prompt_sha256 || ""))
+    || !/^[0-9a-f]{64}$/.test(String(artifact.staging_request_sha256 || ""))
+    || artifact.verdict?.verdict !== "pass"
+    || !["pass", "lgtm"].includes(review.payload.verdict)
+    || JSON.stringify(stable(artifact.executed_runtime)) !== JSON.stringify(stable(review.payload.executed_runtime))
+  ) throw new Error("review artifact does not match the exact reviewed subject");
+  const reviewIndex = inspection.facts.indexOf(review);
+  const verificationIndex = inspection.facts.indexOf(verification);
+  if (verificationIndex < 0 || reviewIndex < 0 || verificationIndex >= reviewIndex) {
+    throw new Error("review artifact verification event is not ordered before its review fact");
+  }
+  const criteria = readArtifact(record.contract.done_criteria_path, "frozen Done Criteria");
+  if (criteria.sha256 !== record.contract.done_criteria_sha256) throw new Error("frozen Done Criteria digest changed");
+  const diffPath = path.join(runDir, "review-inputs", `diff-${artifact.reviewed_sha}-${artifact.diff_sha256}.patch`);
+  const promptPath = path.join(runDir, "review-inputs", `prompt-${artifact.reviewed_sha}-${artifact.prompt_sha256}.md`);
+  const inputRoot = path.join(fs.realpathSync(runDir), "review-inputs");
+  const inputRootEntry = fs.lstatSync(inputRoot);
+  if (inputRootEntry.isSymbolicLink() || !inputRootEntry.isDirectory() || fs.realpathSync(inputRoot) !== inputRoot) {
+    throw new Error("review-inputs must be a canonical non-symlink directory");
+  }
+  for (const [filePath, digest, label] of [[diffPath, artifact.diff_sha256, "review diff"], [promptPath, artifact.prompt_sha256, "review prompt"]]) {
+    if (readCanonicalRegularArtifact(filePath, inputRoot, label).sha256 !== digest) {
+      throw new Error(`${label} digest changed`);
+    }
+  }
+  const diff = execGit(record.git.worktree, ["diff", "--binary", "--no-ext-diff", `${record.git.start_sha}..${artifact.reviewed_sha}`, "--"], { raw: true });
+  const diffBytes = Buffer.from(`${diff}${diff.endsWith("\n") || !diff ? "" : "\n"}`, "utf8");
+  if (sha256(diffBytes) !== artifact.diff_sha256) throw new Error("fresh binary diff does not match reviewed bytes");
+}
 function validateRecoveryIntent(intent) {
   const expectedKeys = [
     "action_key", "actor", "before_sha", "created_at", "observed_event_id",
@@ -699,7 +821,7 @@ function validateRecoveryIntent(intent) {
   ) throw new Error("active recovery intent is malformed");
   return intent;
 }
-function validateRecoveryReceipt(receipt, { actionKey: actionKeyValue, facts }) {
+function validateRecoveryReceipt(receipt, { actionKey: actionKeyValue, facts, requiredStep = null, intent = null }) {
   const expectedKeys = ["action_key", "fact_event_ids", "operation_id", "schema_version"];
   const operationId = `recover-${actionKeyValue.slice(0, 32)}`;
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
@@ -714,13 +836,30 @@ function validateRecoveryReceipt(receipt, { actionKey: actionKeyValue, facts }) 
   const byId = new Map(facts.map((fact) => [fact.event_id, fact]));
   if (receipt.fact_event_ids.some((eventId) => !byId.has(eventId))) throw new Error("recovery receipt references a missing durable fact");
   const recoveryEventId = deterministicEventId(operationId, "recovery_applied");
+  const recoveryFact = byId.get(recoveryEventId);
   const hasRecoveryFact = receipt.fact_event_ids.includes(recoveryEventId)
-    && byId.get(recoveryEventId)?.type === "recovery_applied";
+    && recoveryFact?.type === "recovery_applied";
   const hasTerminalMergeFact = receipt.fact_event_ids.some((eventId) => {
     const fact = byId.get(eventId);
     return fact?.type === "merge_recorded" && fact.payload?.operation_id === operationId;
   });
-  if (!hasRecoveryFact && !hasTerminalMergeFact) throw new Error("recovery receipt is not bound to a completion fact");
+  const reviewedCloseEventId = deterministicEventId(operationId, "close_reviewed_result");
+  const hasReviewedCloseFact = receipt.fact_event_ids.includes(reviewedCloseEventId)
+    && byId.get(reviewedCloseEventId)?.type === "run_closed"
+    && byId.get(reviewedCloseEventId)?.payload?.reason === "reviewed_result_ready"
+    && byId.get(reviewedCloseEventId)?.payload?.pr_number === null;
+  if (hasReviewedCloseFact && intent && terminalCompletionFacts(facts, intent).length !== 1) {
+    throw new Error("recovery receipt reviewed close does not exactly match its immutable intent");
+  }
+  const recoveryClaimsReviewedClose = hasRecoveryFact
+    && recoveryFact.payload?.side_effects?.includes("close_reviewed_result");
+  if (
+    (!hasRecoveryFact && !hasTerminalMergeFact && !hasReviewedCloseFact)
+    || (requiredStep === "close_reviewed_result" && !hasReviewedCloseFact)
+    || (recoveryClaimsReviewedClose && !hasReviewedCloseFact)
+  ) {
+    throw new Error("recovery receipt is not bound to a completion fact");
+  }
   return receipt;
 }
 function recoveryAppliedFact({ runId, intent, after, applied }) {
@@ -824,6 +963,10 @@ async function recoverRun({
       const completed = completedCandidate && validateRecoveryReceipt(completedCandidate, {
         actionKey: expectedActionKey,
         facts: before.facts,
+        requiredStep: (before.derived.reason === "reviewed_result_ready" ||
+          (Array.isArray(before.recommended_action.steps)
+            && before.recommended_action.steps.includes("close_reviewed_result")))
+          ? "close_reviewed_result" : null,
       });
       if (completed) {
         return recoverResult({
@@ -873,6 +1016,9 @@ async function recoverRun({
     const existingReceipt = existingReceiptCandidate && validateRecoveryReceipt(existingReceiptCandidate, {
       actionKey: actionKeyValue,
       facts: before.facts,
+      intent,
+      requiredStep: intent?.steps.includes("close_reviewed_result")
+        ? "close_reviewed_result" : null,
     });
     if (existingReceipt) {
       return recoverResult({
@@ -921,9 +1067,7 @@ async function recoverRun({
     // published. Never append a non-terminal recovery fact after that terminal;
     // the immutable intent is sufficient to finish the receipt.
     if (before.derived.terminal === true) {
-      const matchingTerminalFacts = before.facts.filter((fact) => (
-        fact.type === "merge_recorded" && fact.payload.operation_id === operationId
-      ));
+      const matchingTerminalFacts = terminalCompletionFacts(before.facts, intent);
       if (matchingTerminalFacts.length !== 1) {
         return recoverResult({
           before,
@@ -985,12 +1129,25 @@ async function recoverRun({
     }
     const afterEffects = await inspectRun({ runDir, observer, readSnapshot });
     if (afterEffects.derived.terminal === true) {
+      const completionFacts = terminalCompletionFacts(afterEffects.facts, intent);
+      if (completionFacts.length !== 1) {
+        return recoverResult({
+          before,
+          status: "refused",
+          operationId,
+          actionKeyValue,
+          blockers: [blocker(
+            "terminal_intent_mismatch",
+            "terminal run is not bound to the active recovery operation",
+          )],
+          applied,
+          after: afterEffects,
+        });
+      }
       const receipt = recoveryReceipt(
         operationId,
         actionKeyValue,
-        afterEffects.facts
-          .filter((fact) => fact.type === "merge_recorded" && fact.payload.operation_id === operationId)
-          .map((fact) => fact.event_id),
+        completionFacts.map((fact) => fact.event_id),
       );
       await writeReceipt({ runDir, actionKey: actionKeyValue, operationId, receipt });
       return recoverResult({
@@ -1127,6 +1284,85 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
               reason: context.reason,
               host_liveness: "dead",
               reviewable_work: observed.git.reviewable_work,
+            },
+          },
+        };
+      }
+      if (step === "close_reviewed_result") {
+        if (observed.git.local_delivery !== true) {
+          throw new Error("reviewed result close requires proven local Git delivery");
+        }
+        if (observed.git.reviewable_dirty !== false) {
+          throw new Error("reviewed result close requires a clean local worktree");
+        }
+        const lockedInspection = await inspectRun({
+          runDir: context.runDir,
+          observer: (request) => observeProduction({
+            ...request,
+            activeRecoveryLock: getLockContext(),
+          }),
+        });
+        if (
+          lockedInspection.blockers.length
+          || lockedInspection.recommended_action.kind !== "recover"
+          || lockedInspection.recommended_action.reason !== "reviewed_result_ready"
+          || lockedInspection.recommended_action.steps.length !== 1
+          || lockedInspection.recommended_action.steps[0] !== "close_reviewed_result"
+          || lockedInspection.recommended_action.key !== context.actionKey
+          || lockedInspection.observations.git.local_delivery !== true
+          || lockedInspection.observations.git.reviewable_dirty !== false
+          || lockedInspection.observations.github?.pr_number != null
+          || lockedInspection.observations.github?.pr_head_sha != null
+          || lockedInspection.facts.some((fact) => fact.type === "pull_request_recorded")
+        ) {
+          throw new Error("reviewed result close binding changed under the run lock");
+        }
+        const head = lockedInspection.observations.git.head_sha;
+        const tree = lockedInspection.observations.git.tree_sha;
+        const review = lockedInspection.facts.find((fact) => (
+          fact.event_id === lockedInspection.derived.review_event_id
+        ));
+        const verification = lockedInspection.facts.find((fact) => (
+          fact.event_id === lockedInspection.derived.verification_event_id
+        ));
+        if (
+          !/^[0-9a-f]{40}$/i.test(String(head || ""))
+          || !/^[0-9a-f]{40}$/i.test(String(tree || ""))
+          || lockedInspection.derived.head_sha !== head
+          || lockedInspection.derived.reviewed_sha !== head
+          || !review
+          || !["pass", "lgtm"].includes(review.payload.verdict)
+          || review.payload.reviewed_sha !== head
+          || review.payload.reviewer !== record.roles.reviewer
+          || review.payload.done_criteria_sha256 !== record.contract.done_criteria_sha256
+          || !verification
+          || verification.payload.status !== "passed"
+          || verification.payload.exit_code !== 0
+          || verification.payload.head_sha !== head
+          || verification.payload.tree_sha !== tree
+          || verification.payload.done_criteria_sha256 !== record.contract.done_criteria_sha256
+        ) {
+          throw new Error("reviewed result close requires exact local review and verification lineage");
+        }
+        assertReviewedCloseEvidence({
+          runDir: context.runDir,
+          record,
+          inspection: lockedInspection,
+          review,
+          verification,
+        });
+        return {
+          converged: true,
+          applied: true,
+          fact: {
+            type: "run_closed",
+            at: context.intent.created_at,
+            actor: context.actor,
+            payload: {
+              reason: "reviewed_result_ready",
+              operator: context.actor,
+              last_sha: context.intent.before_sha,
+              pr_number: null,
             },
           },
         };
@@ -1439,6 +1675,12 @@ async function recoverProductionRun({
       || typeof closeIntent.operator !== "string" || !closeIntent.operator.trim()
       || typeof closeIntent.reason !== "string" || !closeIntent.reason.trim()) {
       throw new Error("closeIntent must contain exactly non-empty operator and reason strings");
+    }
+    if (closeIntent.reason.trim() === "reviewed_result_ready") {
+      throw Object.assign(
+        new Error("reviewed_result_ready is reserved for canonical review-bound recovery"),
+        { code: "RESERVED_CLOSE_REASON" },
+      );
     }
     return withProductionRecoveryLock({
       runDir: canonicalRunDir, runId: record.run_id, worktree: trustedWorktree,
