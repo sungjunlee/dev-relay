@@ -165,7 +165,7 @@ test("fold implements active, publication, review, stale, changes, and ready pre
   assert.equal(ready.reason, "ready_to_merge");
 });
 
-test("#1207 proven no-remote Git runs recover verification and stop at local review", () => {
+test("#1207 proven no-remote Git runs recover verification and advance to local review", () => {
   const local = {
     local_delivery: true,
     remote_name: null,
@@ -195,9 +195,54 @@ test("#1207 proven no-remote Git runs recover verification and stop at local rev
     gitFacts: local,
     githubFacts: localGithub,
   });
-  assert.equal(after.action, "none");
-  assert.equal(after.reason, "local_review_pending");
+  assert.equal(after.action, "review");
+  assert.equal(after.reason, "review_missing");
   assert.equal(after.terminal, false);
+});
+
+test("#1208 local review uses the exact Git head and closes through one recovery step", () => {
+  const local = {
+    local_delivery: true, head_sha: HEAD, tree_sha: TREE,
+    reviewable_work: true, reviewable_dirty: false,
+  };
+  const record = { ...runRecord(), repo: { remote: "local/repo" } };
+  const facts = [started(), finished(), verification(), review("pass", 5)];
+  const ready = foldRunFacts({ runRecord: record, facts, gitFacts: local, githubFacts: {} });
+  assert.equal(ready.action, "recover");
+  assert.equal(ready.reason, "reviewed_result_ready");
+  assert.equal(ready.reviewed_sha, HEAD);
+  assert.equal(ready.review_event_id, "e5");
+  assert.equal(ready.verification_event_id, "e4");
+  assert.deepEqual(recoverySteps(ready, { git: local, github: {} }, facts), ["close_reviewed_result"]);
+
+  const laterDuplicateVerification = verification(6);
+  const stableReviewSubject = foldRunFacts({
+    runRecord: record,
+    facts: [...facts, laterDuplicateVerification],
+    gitFacts: local,
+    githubFacts: {},
+  });
+  assert.equal(stableReviewSubject.reason, "reviewed_result_ready");
+  assert.equal(stableReviewSubject.review_event_id, "e5");
+  assert.equal(stableReviewSubject.verification_event_id, "e4");
+
+  const failedAfterPass = foldRunFacts({
+    runRecord: record,
+    facts: [verification(4), verification(5, { status: "failed", exit_code: 1 }), review("pass", 6)],
+    gitFacts: local,
+    githubFacts: {},
+  });
+  assert.equal(failedAfterPass.action, "recover");
+  assert.equal(failedAfterPass.reason, "verification_not_passing");
+
+  const requested = foldRunFacts({
+    runRecord: record,
+    facts: [started(), finished(), verification(), review("changes_requested", 5)],
+    gitFacts: local,
+    githubFacts: {},
+  });
+  assert.equal(requested.action, "redispatch");
+  assert.equal(requested.reason, "changes_requested");
 });
 
 test("#1207 keeps an unavailable forge distinct from a proven local delivery", () => {
@@ -420,6 +465,58 @@ test("terminal facts are irreversible and conflicting terminal history fails clo
   });
   assert.equal(contradictoryTerminal.reason, "fact_conflict");
   assert.equal(contradictoryTerminal.terminal, true);
+});
+
+test("reviewed-result close is terminal, exposes its reviewed SHA, and rejects any durable PR history", () => {
+  const close = fact("run_closed", 6, {
+    reason: "reviewed_result_ready", operator: "owner", last_sha: HEAD, pr_number: null,
+  });
+  const localGit = { local_delivery: true, head_sha: HEAD, tree_sha: TREE };
+  const terminal = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [verification(4), review("pass", 5), verification(7), close, started(8, "a2")],
+    gitFacts: localGit,
+  });
+  assert.equal(terminal.action, "none");
+  assert.equal(terminal.reason, "reviewed_result_ready");
+  assert.equal(terminal.terminal_kind, "closed");
+  assert.equal(terminal.reviewed_sha, HEAD);
+  assert.equal(terminal.verification_event_id, "e4");
+  assert.ok(terminal.diagnostics.some((entry) => entry.code === "active_fact_after_terminal"));
+
+  const liveDiverged = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [verification(4), review("pass", 5), close],
+    gitFacts: { head_sha: START, tree_sha: START },
+  });
+  assert.equal(liveDiverged.reason, "reviewed_result_ready");
+  assert.ok(liveDiverged.diagnostics.some((entry) => entry.code === "terminal_live_head_diverged"));
+  assert.ok(liveDiverged.diagnostics.some((entry) => entry.code === "terminal_live_tree_diverged"));
+
+  const retroactive = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [close, verification(7), review("pass", 8)],
+    gitFacts: localGit,
+  });
+  assert.equal(retroactive.reason, "fact_conflict");
+
+  const failedBeforeReview = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [
+      verification(4),
+      verification(5, { status: "failed", exit_code: 1 }),
+      review("pass", 6),
+      fact("run_closed", 7, {
+        reason: "reviewed_result_ready", operator: "owner", last_sha: HEAD, pr_number: null,
+      }),
+    ],
+  });
+  assert.equal(failedBeforeReview.reason, "fact_conflict");
+
+  const prConflict = foldRunFacts({ runRecord: runRecord(), facts: [verification(4), review("pass", 5), pr(), close], gitFacts: localGit });
+  assert.equal(prConflict.action, "none");
+  assert.equal(prConflict.reason, "fact_conflict");
+  assert.equal(prConflict.terminal, true);
 });
 
 test("fold replay is deterministic and append position, not timestamps, controls precedence", () => {

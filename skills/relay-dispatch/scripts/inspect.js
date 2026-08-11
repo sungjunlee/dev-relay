@@ -3,8 +3,9 @@ const path = require("path");
 const { readFacts, validateFact } = require("./facts");
 const { readRunRecord } = require("./run-store");
 const PASS_VERDICTS = new Set(["pass", "lgtm"]);
+const SHA1_RE = /^[0-9a-f]{40}$/i;
 function result(action, reason, base = {}) {
-  return {
+  const output = {
     phase: base.phase || "reviewable",
     action,
     reason,
@@ -17,6 +18,10 @@ function result(action, reason, base = {}) {
     activeAttempt: base.activeAttempt || null,
     diagnostics: base.diagnostics || [],
   };
+  for (const field of ["review_event_id", "verification_event_id"]) {
+    if (Object.prototype.hasOwnProperty.call(base, field)) output[field] = base[field];
+  }
+  return output;
 }
 function none(reason, base = {}) { return result("none", reason, { ...base, activeAttempt: null }); }
 function hasReviewableWork(gitFacts, interrupted = null) {
@@ -222,6 +227,29 @@ function foldRunFacts({
   }
   const terminal = closes.at(-1) || merges.at(-1) || null;
   if (terminal) {
+    const terminalIndex = known.indexOf(terminal);
+    const priorFacts = known.slice(0, terminalIndex);
+    const reviewedResultTerminal = terminal.type === "run_closed"
+      && terminal.payload.reason === "reviewed_result_ready";
+    const priorReview = priorFacts.filter((fact) => fact.type === "review_recorded").at(-1) || null;
+    const priorReviewIndex = priorReview ? known.indexOf(priorReview) : -1;
+    const priorVerification = priorReview
+      ? known.slice(0, priorReviewIndex).filter((fact) => fact.type === "verification_recorded").at(-1) || null
+      : null;
+    const reviewedResultEvidenceMatches = Boolean(
+      reviewedResultTerminal
+      && priorReview
+      && priorVerification
+      && PASS_VERDICTS.has(priorReview.payload.verdict)
+      && priorReview.payload.reviewed_sha === terminal.payload.last_sha
+      && priorReview.payload.reviewer === runRecord.roles?.reviewer
+      && priorReview.payload.done_criteria_sha256 === runRecord.contract?.done_criteria_sha256
+      && priorVerification.payload.status === "passed"
+      && priorVerification.payload.exit_code === 0
+      && priorVerification.payload.head_sha === terminal.payload.last_sha
+      && SHA1_RE.test(String(priorVerification.payload.tree_sha || ""))
+      && priorVerification.payload.done_criteria_sha256 === runRecord.contract?.done_criteria_sha256
+    );
     const terminalConflict = terminal.type === "merge_recorded"
       ? Boolean(
         terminal.payload.reviewed_source_sha !== terminal.payload.pr_head_sha
@@ -232,6 +260,13 @@ function foldRunFacts({
         || (githubFacts.pr_state && githubFacts.pr_state !== "MERGED")
         || (githubFacts.merge_sha && githubFacts.merge_sha !== terminal.payload.result_target_sha)
       )
+      : reviewedResultTerminal
+        ? Boolean(
+          terminal.payload.pr_number !== null
+          || prFacts.length > 0
+          || !SHA1_RE.test(String(terminal.payload.last_sha || ""))
+          || !reviewedResultEvidenceMatches
+        )
       : Boolean(
         terminal.payload.pr_number !== null
         && prFact
@@ -239,26 +274,48 @@ function foldRunFacts({
       );
     if (terminalConflict) {
       return none("fact_conflict", {
-        phase: "terminal",
-        terminal_kind: terminal.type === "merge_recorded" ? "merged" : "closed",
-        diagnostics: [{ code: "terminal_identity_mismatch" }],
+      phase: "terminal",
+      terminal_kind: terminal.type === "merge_recorded" ? "merged" : "closed",
+      diagnostics: [{ code: "terminal_identity_mismatch" }],
       });
     }
-    const laterActive = known.slice(known.indexOf(terminal) + 1)
+    const laterFacts = known.slice(terminalIndex + 1);
+    const laterActive = laterFacts
       .filter((fact) => fact.type === "attempt_started");
     if (laterActive.length) diagnostics.push({ code: "active_fact_after_terminal" });
-    return none(terminal.type === "run_closed" ? "closed" : "merged", {
+    if (laterFacts.some((fact) => ["review_recorded", "verification_recorded", "pull_request_recorded"].includes(fact.type))) {
+      diagnostics.push({ code: "evidence_fact_after_terminal" });
+    }
+    if (reviewedResultTerminal && gitFacts.head_sha && gitFacts.head_sha !== terminal.payload.last_sha) {
+      diagnostics.push({ code: "terminal_live_head_diverged" });
+    }
+    if (reviewedResultTerminal && gitFacts.tree_sha && priorVerification
+      && gitFacts.tree_sha !== priorVerification.payload.tree_sha) {
+      diagnostics.push({ code: "terminal_live_tree_diverged" });
+    }
+    return none(
+      terminal.type === "merge_recorded"
+        ? "merged"
+        : reviewedResultTerminal ? "reviewed_result_ready" : "closed",
+      {
       phase: "terminal",
-      terminal_kind: terminal.type === "run_closed" ? "closed" : "merged",
+        terminal_kind: terminal.type === "merge_recorded" ? "merged" : "closed",
       head_sha: terminal.type === "run_closed"
         ? terminal.payload.last_sha
         : terminal.payload.result_target_sha,
-      reviewed_sha: terminal.type === "merge_recorded"
-        ? terminal.payload.reviewed_source_sha
+      reviewed_sha: terminal.type === "merge_recorded" || reviewedResultTerminal
+        ? terminal.type === "merge_recorded"
+          ? terminal.payload.reviewed_source_sha
+          : terminal.payload.last_sha
         : null,
+      ...(reviewedResultTerminal ? {
+        review_event_id: priorReview?.event_id || null,
+        verification_event_id: priorVerification?.event_id || null,
+      } : {}),
       pr_number: terminal.payload.pr_number,
       diagnostics,
-    });
+      },
+    );
   }
   const prNumber = prFact?.payload?.pr_number || null;
   const prHead = githubFacts.pr_head_sha || prFact?.payload?.head_sha || null;
@@ -367,6 +424,8 @@ function foldRunFacts({
     }
   }
   const localDelivery = !prFact && isLocalDelivery(gitFacts);
+  let localVerification = null;
+  let localReviewReady = false;
   if (localDelivery && headSha && hasReviewableWork(gitFacts, terminalForAttempt)) {
     if (gitFacts.reviewable_dirty === true) {
       return result("recover", "publication_incomplete", {
@@ -374,34 +433,43 @@ function foldRunFacts({
         diagnostics,
       });
     }
+    const currentReviewIsAuthoritative = Boolean(
+      latestReview
+      && latestReview.payload.reviewed_sha === headSha
+      && latestReview.payload.done_criteria_sha256 === runRecord.contract?.done_criteria_sha256
+      && latestReview.payload.reviewer === runRecord.roles?.reviewer
+    );
+    const reviewIndex = currentReviewIsAuthoritative ? known.indexOf(latestReview) : known.length;
+    const candidateFacts = known.slice(0, reviewIndex);
     const verification = verificationGate({
-      facts: known,
+      facts: candidateFacts,
       prHead: headSha,
       treeSha: gitFacts.head_sha === headSha ? gitFacts.tree_sha : null,
       doneCriteriaSha256: runRecord.contract?.done_criteria_sha256 || null,
     });
+    localVerification = verification;
     if (!verification.ready) {
       return result("recover", verification.reason, {
         head_sha: headSha,
         diagnostics: [...diagnostics, verification.diagnostic],
       });
     }
-    return none("local_review_pending", {
-      head_sha: headSha,
-      diagnostics,
-    });
+    localReviewReady = true;
   }
-  if (headSha && hasReviewableWork(gitFacts, terminalForAttempt) && !prFact) {
+  if (headSha && hasReviewableWork(gitFacts, terminalForAttempt) && !prFact && !localDelivery) {
     return withGithubAvailability(result("recover", "publication_incomplete", {
       head_sha: headSha,
       diagnostics,
     }), githubFacts);
   }
   const criteriaHash = runRecord.contract?.done_criteria_sha256 || null;
-  const currentTreeSha = gitFacts.head_sha === prHead ? gitFacts.tree_sha : null;
+  // One review state machine serves both deliveries.  GitHub supplies the
+  // exact live PR head; local delivery supplies the fresh Git HEAD.
+  const reviewHead = localReviewReady ? headSha : prHead;
+  const currentTreeSha = gitFacts.head_sha === reviewHead ? gitFacts.tree_sha : null;
   const reviewBindingMatches = Boolean(
     latestReview
-    && latestReview.payload.reviewed_sha === prHead
+    && latestReview.payload.reviewed_sha === reviewHead
     && latestReview.payload.done_criteria_sha256 === criteriaHash
     && latestReview.payload.reviewer === runRecord.roles?.reviewer,
   );
@@ -452,11 +520,11 @@ function foldRunFacts({
       .slice(known.indexOf(latestReview) + 1)
       .filter((fact) => fact.type === "attempt_finished" || fact.type === "attempt_interrupted")
       .at(-1) || null;
-    if (
+    if (!localReviewReady && (
       latestPostReviewTerminal?.type === "attempt_finished"
       && latestPostReviewTerminal.payload.status === "completed"
       && hasReviewableWork(gitFacts)
-    ) {
+    )) {
       return withGithubAvailability(result("recover", "publication_incomplete", {
         head_sha: headSha,
         reviewed_sha: latestReview.payload.reviewed_sha,
@@ -464,12 +532,13 @@ function foldRunFacts({
         diagnostics,
       }), githubFacts);
     }
-    return result("redispatch", "changes_requested", {
+    const correction = result("redispatch", "changes_requested", {
       head_sha: headSha,
       reviewed_sha: latestReview.payload.reviewed_sha,
       pr_number: prNumber,
       diagnostics,
     });
+    return localReviewReady ? correction : withGithubAvailability(correction, githubFacts);
   }
   if (prFact) {
     const verification = verificationGate({
@@ -495,7 +564,23 @@ function foldRunFacts({
       diagnostics,
     }), githubFacts);
   }
+  if (localReviewReady && latestReview && !reviewBindingMatches) {
+    return result("review", "review_stale", {
+      head_sha: headSha,
+      reviewed_sha: latestReview.payload.reviewed_sha,
+      diagnostics,
+    });
+  }
   if (latestReview && PASS_VERDICTS.has(latestReview.payload.verdict) && reviewBindingMatches) {
+    if (localReviewReady) {
+      return result("recover", "reviewed_result_ready", {
+        head_sha: headSha,
+        reviewed_sha: latestReview.payload.reviewed_sha,
+        review_event_id: latestReview.event_id,
+        verification_event_id: localVerification?.latest?.event_id || null,
+        diagnostics,
+      });
+    }
     return withGithubAvailability(result("merge", "ready_to_merge", {
       head_sha: headSha,
       reviewed_sha: latestReview.payload.reviewed_sha,
@@ -516,13 +601,14 @@ function foldRunFacts({
       && firstRuntimeFailure
       && latestReview.event_id === firstRuntimeFailure.event_id
     ) {
-      return withGithubAvailability(result("review", "review_retryable_escalation", {
+      const retry = result("review", "review_retryable_escalation", {
         head_sha: headSha,
         reviewed_sha: latestReview.payload.reviewed_sha,
         pr_number: prNumber,
         retry_of_event_id: latestReview.event_id,
         diagnostics,
-      }), githubFacts);
+      });
+      return localReviewReady ? retry : withGithubAvailability(retry, githubFacts);
     }
     if (isRetryFailure) {
       return none("review_escalated_retry_exhausted", {
@@ -545,6 +631,12 @@ function foldRunFacts({
       pr_number: prNumber,
       diagnostics,
     }), githubFacts);
+  }
+  if (localReviewReady) {
+    return result("review", "review_missing", {
+      head_sha: headSha,
+      diagnostics,
+    });
   }
   if (finalAttempt?.payload?.status === "failed" && !hasReviewableWork(gitFacts)) {
     return result("redispatch", "attempt_failed_no_work", {
@@ -594,6 +686,7 @@ function recoverySteps(derived, seen, facts = []) {
     }
     if (seen.git.reviewable_dirty === true) return ["commit_work"];
     if (String(derived.reason || "").startsWith("verification_")) return ["record_verification"];
+    if (derived.reason === "reviewed_result_ready") return ["close_reviewed_result"];
     return [];
   }
   if (derived.reason === "merged_pr_unrecorded" && matchingRecordedPr(facts, seen.github)) return ["record_external_merge"];

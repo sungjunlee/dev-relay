@@ -122,6 +122,10 @@ function resolveRunById(repoRoot, runId) {
 function statusRow(record, runDir, inspection) {
   const derived = inspection.derived || {};
   const action = inspection.recommended_action || {};
+  const reviews = (inspection.facts || []).filter((fact) => fact.type === "review_recorded");
+  const matchingReview = derived.review_event_id
+    ? reviews.find((fact) => fact.event_id === derived.review_event_id) || null
+    : reviews.at(-1)?.payload?.reviewed_sha === derived.reviewed_sha ? reviews.at(-1) : null;
   return {
     run_id: record.run_id,
     run_path: path.join(runDir, "run.json"),
@@ -133,6 +137,10 @@ function statusRow(record, runDir, inspection) {
     pr_number: derived.pr_number || inspection.observations?.github?.pr_number || null,
     head_sha: derived.head_sha || null,
     reviewed_sha: derived.reviewed_sha || null,
+    local_delivery: (derived.terminal === true && derived.reason === "reviewed_result_ready")
+      || inspection.observations?.git?.local_delivery === true,
+    review_verdict: matchingReview?.payload?.verdict || null,
+    review_artifact: matchingReview?.payload?.review_artifact || null,
     terminal: derived.terminal === true,
     action_key: action.key || null,
   };
@@ -144,6 +152,10 @@ function formatText(row) {
     `Phase: ${row.phase}`,
     `Action: ${row.action}${row.reason ? ` (${row.reason})` : ""}`,
     `PR: ${row.pr_number ? `#${row.pr_number}` : "none"}`,
+    `Local delivery: ${row.local_delivery ? "yes" : "no"}`,
+    `Reviewed SHA: ${row.reviewed_sha || "none"}`,
+    `Review verdict: ${row.review_verdict || "none"}`,
+    `Review artifact: ${row.review_artifact || "none"}`,
   ];
   for (const blocker of row.blockers) lines.push(`Blocker: ${blocker.code}: ${blocker.message}`);
   return lines.join("\n");

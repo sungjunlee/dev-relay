@@ -11,16 +11,24 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --json
 node skills/relay-review/scripts/review-runner.js --repo . --run-dir <absolute-run-dir> --json
 ```
 
-The repository identity derived from the Git common directory and origin must equal `run.json`. The runner reads Done Criteria only from the frozen run-local path and verifies its hash through `run-store`.
+The repository identity derived from the Git common directory and origin (or
+the immutable local repository identity when no origin exists) must equal
+`run.json`. The runner reads Done Criteria only from the frozen run-local path
+and verifies its hash through `run-store`.
 
 ## Inputs and artifacts
 
-Before invocation, canonical `inspect` must report `recommended_action.kind=review`. The live PR number/head must equal the latest durable `pull_request_recorded` fact and derived head. A passed `verification_recorded` fact must bind that head and the frozen Done Criteria hash.
+Before invocation, canonical `inspect` must report `recommended_action.kind=review`.
+For local delivery, fresh clean Git `HEAD`/tree and the latest passed
+`verification_recorded` fact must bind the derived head and frozen Done Criteria
+hash, with no durable PR fact. For GitHub delivery, the live PR number/head
+must equal the latest durable `pull_request_recorded` fact and derived head.
 
 In operator terminology, the Git repository and immutable `start_sha` are the
-Source; the exact GitHub PR is the current Change Request. The runner derives
-the ReviewSubject without adding a runtime object: SHA-1 object format,
-`start_sha` base OID, exact live/durable reviewed head OID, the passed
+Source; the exact GitHub PR is the current Change Request when that route is
+used. The runner derives the ReviewSubject without adding a runtime object:
+SHA-1 object format, `start_sha` base OID, exact fresh Git reviewed head OID (or
+exact live/durable PR head), the passed
 verification tree OID, the binary diff digest, and the frozen Done Criteria
 digest. The resulting Reviewed Result is terminal proof of exact verification
 and independent review; it does not imply Publication or Landing. Landing
@@ -32,10 +40,18 @@ The runner writes content-addressed immutable inputs below `review-inputs/`:
 - `prompt-<sha>-<digest>.md`
 
 The diff digest is exactly SHA-256 over the immutable newline-normalized output
-of `git diff --binary --no-ext-diff <start_sha>..<live-pr-head> --`. No
+of `git diff --binary --no-ext-diff <start_sha>..<head> --`. No
 `--full-index` or alternate patch format is implied.
 
-The durable result is `review-<round>-<digest>.json`. Its matching `review_recorded` fact stores the exact reviewed SHA, Done Criteria hash, reviewer binding, derived round, verdict, and artifact path. Orphaned immutable input/result files after a crash do not authorize lifecycle progress; only the fact does.
+The durable result is `review-<round>-<digest>.json`. For local delivery only,
+it projects the exact verification event id and immutable run digest alongside
+the existing reviewed SHA and input digests; GitHub schema-v2 artifact bytes
+retain their existing shape. Its matching `review_recorded` fact stores the exact
+reviewed SHA, Done Criteria hash, reviewer binding, derived round, verdict, and
+artifact path. Canonical local closure revalidates the content-addressed
+artifact and fresh binary diff under the recovery lock. Orphaned immutable
+input/result files after a crash do not authorize lifecycle progress; only the
+fact does.
 
 Immediately before staging, the runtime re-hashes the content-addressed prompt
 and diff against the caller's initial digests and verifies frozen Done Criteria
@@ -43,12 +59,12 @@ bytes against `run.json`. Staged inputs live in a read-only `inputs/` child;
 only the separate `output/` child is writable by the reviewer. After execution,
 the runtime re-hashes diff, prompt, Done Criteria, request, and schema before it
 returns the binding. The runner then re-hashes durable inputs under the append
-lock and records those digests plus the staging-request digest. A source swap or
-staged-input mutation therefore writes no review fact.
+lock and records those digests plus the staging-request digest. A source/head
+swap or staged-input mutation therefore writes no review fact.
 
 ## Concurrency
 
-The expensive reviewer call holds a dedicated per-run execution lock. This gives any uncertain process cleanup a signed recovery authority before credential staging can be removed. Persistence later acquires a new per-run lock generation, re-runs inspection, and refuses any changed action, PR, or head. Concurrent review attempts therefore converge to at most one fact. Nothing is serialized repository-wide: unrelated runs in one repository proceed independently.
+The expensive reviewer call holds a dedicated per-run execution lock. This gives any uncertain process cleanup a signed recovery authority before credential staging can be removed. Persistence later acquires a new per-run lock generation, re-runs inspection, and refuses any changed action, delivery, or head/tree. Concurrent review attempts therefore converge to at most one fact. Nothing is serialized repository-wide: unrelated runs in one repository proceed independently.
 
 ## Direct adapter invocation
 

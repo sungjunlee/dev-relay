@@ -408,10 +408,80 @@ test("#1207 local recovery converges commit then verification across an effect c
     },
   });
   assert.equal(verified.status, "converged");
-  assert.equal(verified.after.derived.reason, "local_review_pending");
-  assert.equal(verified.after.recommended_action.kind, "none");
+  assert.equal(verified.after.derived.reason, "review_missing");
+  assert.equal(verified.after.recommended_action.kind, "review");
   assert.deepEqual(h.state.effects, []);
   assert.equal(h.state.facts.filter((fact) => fact.type === "verification_recorded").length, 1);
+});
+
+test("#1208 local reviewed-result close survives the terminal-fact/receipt crash cut", async () => {
+  const h = harness({
+    record: { ...runRecord(), repo: { root: "/repo", remote: "local/repo" } },
+    facts: [attemptFinished(), verificationFact(), reviewFact({ eventId: "review-local-pass", verdict: "pass" })],
+    observations: localObservations(),
+  });
+  const inspected = await inspectRun(h);
+  assert.equal(inspected.recommended_action.kind, "recover");
+  assert.equal(inspected.recommended_action.reason, "reviewed_result_ready");
+  assert.deepEqual(inspected.recommended_action.steps, ["close_reviewed_result"]);
+
+  let crashAfterAppend = true;
+  const appendFact = async (fact) => {
+    await h.appendFact(fact);
+    if (crashAfterAppend && fact.type === "run_closed") {
+      crashAfterAppend = false;
+      throw new Error("simulated crash after reviewed-result terminal fact");
+    }
+  };
+  const effects = {
+    converge: async (step, context) => {
+      assert.equal(step, "close_reviewed_result");
+      return {
+        converged: true,
+        applied: true,
+        fact: {
+          type: "run_closed",
+          at: context.intent.created_at,
+          actor: context.actor,
+          payload: { reason: "reviewed_result_ready", operator: context.actor, last_sha: HEAD, pr_number: null },
+        },
+      };
+    },
+  };
+  await assert.rejects(recoverRun({
+    ...h,
+    actor: "owner",
+    reason: "close exact local reviewed result",
+    expectedActionKey: inspected.recommended_action.key,
+    appendFact,
+    effects,
+  }), /simulated crash/);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "run_closed").length, 1);
+  assert.equal(h.state.receipts.size, 0);
+
+  const converged = await recoverRun({
+    ...h,
+    actor: "owner",
+    reason: "close exact local reviewed result",
+    expectedActionKey: inspected.recommended_action.key,
+    appendFact,
+    effects,
+  });
+  assert.equal(converged.status, "converged");
+  assert.equal(converged.after.derived.reason, "reviewed_result_ready");
+  assert.equal(converged.after.derived.reviewed_sha, HEAD);
+  assert.deepEqual(converged.receipt.fact_event_ids, [h.state.facts.at(-1).event_id]);
+
+  const retry = await recoverRun({
+    ...h,
+    actor: "owner",
+    reason: "close exact local reviewed result",
+    expectedActionKey: inspected.recommended_action.key,
+    appendFact,
+    effects,
+  });
+  assert.equal(retry.status, "noop");
+  assert.equal(h.state.facts.filter((fact) => fact.type === "run_closed").length, 1);
 });
 
 test("inspect is byte-read-only and emits one stable recommended action", async () => {
