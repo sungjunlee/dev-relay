@@ -166,7 +166,7 @@ function assertRunDirectoryIdentity(runDir, runId) {
   return canonical;
 }
 
-function readRegularFile(filePath, label) {
+function readRegularFile(filePath, label, { expectedIdentity = null } = {}) {
   let fd;
   try {
     fd = fs.openSync(
@@ -183,12 +183,16 @@ function readRegularFile(filePath, label) {
     throw error;
   }
   try {
-    const before = fs.fstatSync(fd);
+    const before = expectedIdentity ? fs.fstatSync(fd, { bigint: true }) : fs.fstatSync(fd);
     if (!before.isFile()) {
       fail("UNTRUSTED_RUN_ARTIFACT", `${label} must be a stable regular non-symlink file`);
     }
+    if (expectedIdentity
+      && (before.dev !== expectedIdentity.dev || before.ino !== expectedIdentity.ino)) {
+      fail("UNTRUSTED_RUN_ARTIFACT", `${label} changed identity before its stable read`);
+    }
     const bytes = fs.readFileSync(fd);
-    const after = fs.fstatSync(fd);
+    const after = expectedIdentity ? fs.fstatSync(fd, { bigint: true }) : fs.fstatSync(fd);
     if (before.dev !== after.dev || before.ino !== after.ino) {
       fail("UNTRUSTED_RUN_ARTIFACT", `${label} changed identity while being read`);
     }
@@ -310,8 +314,8 @@ function freezeDoneCriteria({ sourcePath, runDir }) {
     sha256: crypto.createHash("sha256").update(source).digest("hex"),
   };
 }
-function readArtifact(filePath, label, { optional = false } = {}) {
-  const bytes = readRegularFile(filePath, label);
+function readArtifact(filePath, label, { optional = false, expectedIdentity = null } = {}) {
+  const bytes = readRegularFile(filePath, label, { expectedIdentity });
   if (!bytes) { if (optional) return null; fail("RUN_ARTIFACT_MISSING", `${label} is missing: ${filePath}`); }
   return { path: path.resolve(filePath), bytes, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
 }

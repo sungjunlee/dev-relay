@@ -718,13 +718,31 @@ function terminalCompletionFacts(facts, intent) {
     && fact.payload.pr_number === null
   ));
 }
+function readCanonicalRegularArtifact(filePath, expectedParent, label) {
+  const resolved = path.resolve(filePath);
+  if (path.dirname(resolved) !== expectedParent || fs.realpathSync(path.dirname(resolved)) !== expectedParent) {
+    throw new Error(`${label} escaped its canonical parent`);
+  }
+  let entry;
+  try { entry = fs.lstatSync(resolved, { bigint: true }); }
+  catch (error) {
+    if (error.code === "ENOENT") return readArtifact(resolved, label);
+    throw error;
+  }
+  if (entry.isSymbolicLink() || !entry.isFile() || fs.realpathSync(resolved) !== resolved) {
+    throw new Error(`${label} must be a canonical regular non-symlink file`);
+  }
+  return readArtifact(resolved, label, {
+    expectedIdentity: { dev: entry.dev, ino: entry.ino },
+  });
+}
 function directRunArtifact(runDir, filePath, pattern, label) {
   const canonicalRunDir = fs.realpathSync(runDir);
   const resolved = path.resolve(filePath);
   if (path.dirname(resolved) !== canonicalRunDir || !pattern.test(path.basename(resolved))) {
     throw new Error(`${label} is outside the canonical run artifact surface`);
   }
-  return readArtifact(resolved, label);
+  return readCanonicalRegularArtifact(resolved, canonicalRunDir, label);
 }
 function assertReviewedCloseEvidence({ runDir, record, inspection, review, verification }) {
   const artifactMatch = path.basename(review.payload.review_artifact).match(/^review-(\d+)-([0-9a-f]{64})\.json$/);
@@ -774,10 +792,9 @@ function assertReviewedCloseEvidence({ runDir, record, inspection, review, verif
     throw new Error("review-inputs must be a canonical non-symlink directory");
   }
   for (const [filePath, digest, label] of [[diffPath, artifact.diff_sha256, "review diff"], [promptPath, artifact.prompt_sha256, "review prompt"]]) {
-    if (path.dirname(path.resolve(filePath)) !== inputRoot || fs.realpathSync(path.dirname(filePath)) !== inputRoot) {
-      throw new Error(`${label} escaped review-inputs`);
+    if (readCanonicalRegularArtifact(filePath, inputRoot, label).sha256 !== digest) {
+      throw new Error(`${label} digest changed`);
     }
-    if (readArtifact(filePath, label).sha256 !== digest) throw new Error(`${label} digest changed`);
   }
   const diff = execGit(record.git.worktree, ["diff", "--binary", "--no-ext-diff", `${record.git.start_sha}..${artifact.reviewed_sha}`, "--"], { raw: true });
   const diffBytes = Buffer.from(`${diff}${diff.endsWith("\n") || !diff ? "" : "\n"}`, "utf8");

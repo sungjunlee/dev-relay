@@ -360,8 +360,10 @@ test("#1208 canonical local close refuses a tampered content-addressed review ar
   assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed").length, 0);
 });
 
-test("#1208 canonical local close refuses missing, out-of-run, and ancestor-symlink review artifacts", async () => {
-  for (const mode of ["missing", "outside", "ancestor-symlink"]) {
+test("#1208 canonical local close rejects missing, escaped, and symlinked review artifacts", async () => {
+  for (const mode of [
+    "missing", "outside", "ancestor-symlink", "review-symlink", "diff-symlink", "prompt-symlink",
+  ]) {
     const value = await fixture(`local-${mode}`, { local: true });
     const result = await runner.runReview(value.cli, {
       inspectRun: value.inspectRun,
@@ -374,11 +376,24 @@ test("#1208 canonical local close refuses missing, out-of-run, and ancestor-syml
       fs.copyFileSync(result.review_artifact, outside);
       const journal = fs.readFileSync(value.eventsPath, "utf8");
       fs.writeFileSync(value.eventsPath, journal.replace(result.review_artifact, outside));
-    } else {
+    } else if (mode === "ancestor-symlink") {
       const inputRoot = path.join(value.runDir, "review-inputs");
       const moved = path.join(value.root, "moved-review-inputs");
       fs.renameSync(inputRoot, moved);
       fs.symlinkSync(moved, inputRoot, "dir");
+    } else if (mode === "review-symlink") {
+      const outside = path.join(value.root, "same-byte-review.json");
+      fs.copyFileSync(result.review_artifact, outside);
+      fs.unlinkSync(result.review_artifact);
+      fs.symlinkSync(outside, result.review_artifact);
+    } else {
+      const inputRoot = path.join(value.runDir, "review-inputs");
+      const prefix = mode === "diff-symlink" ? "diff-" : "prompt-";
+      const inputPath = path.join(inputRoot, fs.readdirSync(inputRoot).find((name) => name.startsWith(prefix)));
+      const outside = path.join(value.root, `same-byte-${path.basename(inputPath)}`);
+      fs.copyFileSync(inputPath, outside);
+      fs.unlinkSync(inputPath);
+      fs.symlinkSync(outside, inputPath);
     }
     const inspection = await recovery.inspectProductionRun({ runDir: value.runDir });
     await assert.rejects(recovery.recoverProductionRun({
@@ -390,7 +405,8 @@ test("#1208 canonical local close refuses missing, out-of-run, and ancestor-syml
       relayWorktreeBase: value.worktreeBase,
     }), mode === "missing" ? /missing/
       : mode === "outside" ? /outside the canonical run artifact surface/
-        : /canonical non-symlink directory/);
+        : mode === "ancestor-symlink" ? /canonical non-symlink directory/
+          : /canonical regular non-symlink file/);
     assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed").length, 0);
   }
 });
