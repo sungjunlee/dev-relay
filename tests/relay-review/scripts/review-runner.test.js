@@ -92,13 +92,22 @@ async function fixture(label) {
   const inspectRun = async () => {
     const current = facts.readFacts({ eventsPath }).facts;
     const review = current.filter((fact) => fact.type === "review_recorded").at(-1);
-    const action = !review ? "review" : review.payload.verdict === "lgtm" ? "merge" : review.payload.verdict === "changes_requested" ? "redispatch" : "none";
+    const retryable = review?.payload?.verdict === "escalated"
+      && review.payload.escalation_kind === "runtime_failure"
+      && review.payload.retry_of_event_id === undefined;
+    const exhausted = review?.payload?.verdict === "escalated"
+      && review.payload.escalation_kind === "runtime_failure"
+      && review.payload.retry_of_event_id !== undefined;
+    const action = !review ? "review" : review.payload.verdict === "lgtm" ? "merge"
+      : review.payload.verdict === "changes_requested" ? "redispatch"
+        : retryable ? "review" : "none";
     return {
       blockers: [],
+      snapshot: { run_sha256: crypto.createHash("sha256").update(JSON.stringify(record)).digest("hex") },
       facts: current,
       observations: { github: { pr_number: 42, pr_head_sha: head, pr_state: "OPEN" } },
-      derived: { action, head_sha: head, pr_number: 42 },
-      recommended_action: { kind: action, reason: review ? review.payload.verdict : "review_missing", key: "c".repeat(64), steps: [], required_inputs: [] },
+      derived: { action, head_sha: head, pr_number: 42, retry_of_event_id: retryable ? review.event_id : null },
+      recommended_action: { kind: action, reason: retryable ? "review_retryable_escalation" : exhausted ? "review_escalated_retry_exhausted" : review?.payload?.verdict === "escalated" ? "review_escalated" : review ? review.payload.verdict : "review_missing", key: "c".repeat(64), steps: [], required_inputs: [] },
     };
   };
   const cli = runner.parseCli(["--repo", repo, "--run-dir", runDir, "--json"]);
@@ -174,9 +183,184 @@ test("changes_requested and invocation error are durable blocking review facts",
     },
   });
   assert.equal(errorResult.verdict, "escalated");
-  assert.equal(errorResult.recommended_action.kind, "none");
+  assert.equal(errorResult.recommended_action.kind, "review");
   const artifact = JSON.parse(fs.readFileSync(errorResult.review_artifact, "utf8"));
   assert.match(artifact.verdict.summary, /adapter crashed/);
+  const errorFacts = facts.readFacts({ eventsPath: errored.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+  assert.equal(errorFacts[0].payload.escalation_kind, "runtime_failure");
+});
+
+test("a runtime escalation permits one explicitly bound retry, then fails closed", async () => {
+  const value = await fixture("retry");
+  let calls = 0;
+  const first = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    async invokeReviewer(input) {
+      calls += 1;
+      const error = new Error("transient transport failure");
+      error.review_binding = reviewBinding(input);
+      error.executed_runtime = EXECUTED_RUNTIME;
+      throw error;
+    },
+  });
+  assert.equal(first.recommended_action.kind, "review");
+  const firstFact = facts.readFacts({ eventsPath: value.eventsPath }).facts.at(-1);
+
+  const second = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    async invokeReviewer(input) {
+      calls += 1;
+      assert.equal(input.request.retry_of_event_id, firstFact.event_id);
+      return reviewerSuccess(input, { verdict: "pass", summary: "retry passed", issues: [] });
+    },
+  });
+  assert.equal(second.verdict, "lgtm");
+  assert.equal(second.recommended_action.kind, "merge");
+  const reviewFacts = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+  assert.equal(reviewFacts.length, 2);
+  assert.equal(reviewFacts[1].payload.retry_of_event_id, firstFact.event_id);
+
+  await assert.rejects(runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async () => { throw new Error("must not retry a passed retry"); },
+  }), /not 'review'/);
+
+  const exhausted = await fixture("retry-exhausted");
+  let exhaustedCalls = 0;
+  await runner.runReview(exhausted.cli, {
+    inspectRun: exhausted.inspectRun,
+    async invokeReviewer(input) {
+      exhaustedCalls += 1;
+      const error = new Error("first transient failure");
+      error.review_binding = reviewBinding(input);
+      error.executed_runtime = EXECUTED_RUNTIME;
+      throw error;
+    },
+  });
+  const retryFailure = await runner.runReview(exhausted.cli, {
+    inspectRun: exhausted.inspectRun,
+    async invokeReviewer(input) {
+      exhaustedCalls += 1;
+      assert.equal(input.request.retry_of_event_id, facts.readFacts({ eventsPath: exhausted.eventsPath }).facts.at(-1).event_id);
+      const error = new Error("second transient failure");
+      error.review_binding = reviewBinding(input);
+      error.executed_runtime = EXECUTED_RUNTIME;
+      throw error;
+    },
+  });
+  assert.equal(retryFailure.recommended_action.kind, "none");
+  assert.equal(retryFailure.recommended_action.reason, "review_escalated_retry_exhausted");
+  await assert.rejects(runner.runReview(exhausted.cli, {
+    inspectRun: exhausted.inspectRun,
+    invokeReviewer: async () => { throw new Error("unbounded retry"); },
+  }), /derived lifecycle action is 'none'/);
+  assert.equal(calls, 2);
+  assert.equal(exhaustedCalls, 2);
+});
+
+test("concurrent failing retries append exactly one second-round fact", async () => {
+  const value = await fixture("retry-race");
+  await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async (input) => {
+      const error = new Error("temporary provider failure");
+      error.review_binding = reviewBinding(input);
+      error.executed_runtime = EXECUTED_RUNTIME;
+      throw error;
+    },
+  });
+  let arrivals = 0;
+  let release;
+  const bothInvoked = new Promise((resolve) => { release = resolve; });
+  const invokeReviewer = async (input) => {
+    arrivals += 1;
+    if (arrivals === 2) release();
+    await bothInvoked;
+    const error = new Error("provider remains unavailable");
+    error.review_binding = reviewBinding(input);
+    error.executed_runtime = EXECUTED_RUNTIME;
+    throw error;
+  };
+  let lockTail = Promise.resolve();
+  const withRunLock = (runDir, callback) => {
+    const turn = lockTail.then(() => runtime.withRunLock(runDir, callback));
+    lockTail = turn.catch(() => {});
+    return turn;
+  };
+  const settled = await Promise.allSettled([
+    runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer, withRunLock }),
+    runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer, withRunLock }),
+  ]);
+  assert.equal(settled.filter((entry) => entry.status === "fulfilled").length, 1);
+  assert.equal(settled.find((entry) => entry.status === "rejected").reason.code, "REVIEW_BINDING_CHANGED");
+  const reviewFacts = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+  assert.deepEqual(reviewFacts.map((fact) => fact.payload.round), [1, 2]);
+});
+
+test("model-returned escalation is classified as reviewer uncertainty and is not retryable", async () => {
+  const value = await fixture("model-escalation");
+  const result = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async (input) => reviewerSuccess(input, { verdict: "escalated", summary: "evidence is ambiguous", issues: [] }),
+  });
+  assert.equal(result.recommended_action.kind, "none");
+  assert.equal(result.recommended_action.reason, "review_escalated");
+  const review = facts.readFacts({ eventsPath: value.eventsPath }).facts.at(-1);
+  assert.equal(review.payload.escalation_kind, "reviewer");
+  await assert.rejects(runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async () => { throw new Error("must not retry model escalation"); },
+  }), /'none', not 'review'/);
+});
+
+test("malformed reviewer output is durably non-retryable reviewer escalation", async () => {
+  const value = await fixture("malformed-review-output");
+  let calls = 0;
+  const result = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async (input) => {
+      calls += 1;
+      return reviewerSuccess(input, { verdict: "pass", summary: "ok", issues: [], unexpected: true });
+    },
+  });
+  assert.equal(result.verdict, "escalated");
+  assert.equal(result.recommended_action.kind, "none");
+  assert.equal(result.recommended_action.reason, "review_escalated");
+  const reviews = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+  assert.equal(reviews.length, 1);
+  assert.equal(reviews[0].payload.escalation_kind, "reviewer");
+  const artifact = JSON.parse(fs.readFileSync(reviews[0].payload.review_artifact, "utf8"));
+  assert.equal(artifact.verdict.verdict, "escalated");
+  assert.match(artifact.verdict.summary, /invalid/i);
+  await assert.rejects(runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async () => { calls += 1; throw new Error("must not retry malformed output"); },
+  }), /'none', not 'review'/);
+  assert.equal(calls, 1);
+  assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 1);
+});
+
+test("nonzero invocation failures stay retryable while output protocol mismatches do not", async () => {
+  for (const [reason, expectedKind, expectedAction] of [
+    ["cli_nonzero_exit", "runtime_failure", "review"],
+    ["output_protocol_mismatch", "reviewer", "none"],
+  ]) {
+    const value = await fixture(`failure-classification-${reason}`);
+    const result = await runner.runReview(value.cli, {
+      inspectRun: value.inspectRun,
+      async invokeReviewer(input) {
+        const error = new Error(`review failed: ${reason}`);
+        error.failure_reason = reason;
+        error.failure_signals = ["output_protocol"];
+        error.review_binding = reviewBinding(input);
+        error.executed_runtime = EXECUTED_RUNTIME;
+        throw error;
+      },
+    });
+    assert.equal(result.recommended_action.kind, expectedAction);
+    const review = facts.readFacts({ eventsPath: value.eventsPath }).facts.at(-1);
+    assert.equal(review.payload.escalation_kind, expectedKind);
+  }
 });
 
 test("review persistence rejects missing or malformed executed runtime evidence", async () => {
@@ -188,6 +372,39 @@ test("review persistence rejects missing or malformed executed runtime evidence"
     } }), /runtime binding/);
     assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
   }
+});
+
+test("initial run snapshot must be valid and match resolved run.json before invocation", async () => {
+  for (const mode of ["missing", "malformed", "mismatch"]) {
+    const value = await fixture(`initial-snapshot-${mode}`);
+    let reviewerCalls = 0;
+    await assert.rejects(runner.runReview(value.cli, {
+      async inspectRun(input) {
+        const inspection = await value.inspectRun(input);
+        if (mode === "missing") delete inspection.snapshot.run_sha256;
+        else inspection.snapshot.run_sha256 = mode === "malformed" ? "bad" : "f".repeat(64);
+        return inspection;
+      },
+      invokeReviewer: async () => { reviewerCalls += 1; throw new Error("must not run"); },
+    }), (error) => error.code === "RUN_RECORD_BINDING_CHANGED");
+    assert.equal(reviewerCalls, 0);
+    assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
+  }
+});
+
+test("fresh run snapshot drift rejects the append", async () => {
+  const value = await fixture("fresh-snapshot-drift");
+  let inspections = 0;
+  await assert.rejects(runner.runReview(value.cli, {
+    async inspectRun(input) {
+      const inspection = await value.inspectRun(input);
+      inspections += 1;
+      if (inspections === 2) inspection.snapshot.run_sha256 = "f".repeat(64);
+      return inspection;
+    },
+    invokeReviewer: async (input) => reviewerSuccess(input, { verdict: "pass", summary: "ok", issues: [] }),
+  }), (error) => error.code === "RUN_RECORD_CHANGED");
+  assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
 });
 
 test("immutable reviewer binding and closed CLI reject legacy policy surfaces", async () => {

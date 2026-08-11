@@ -11,6 +11,7 @@ function result(action, reason, base = {}) {
     head_sha: base.head_sha || null,
     reviewed_sha: base.reviewed_sha || null,
     pr_number: base.pr_number || null,
+    retry_of_event_id: base.retry_of_event_id || null,
     terminal_kind: base.terminal_kind || null,
     terminal: base.terminal === true || Boolean(base.terminal_kind),
     activeAttempt: base.activeAttempt || null,
@@ -366,8 +367,45 @@ function foldRunFacts({
   const reviewBindingMatches = Boolean(
     latestReview
     && latestReview.payload.reviewed_sha === prHead
-    && latestReview.payload.done_criteria_sha256 === criteriaHash,
+    && latestReview.payload.done_criteria_sha256 === criteriaHash
+    && latestReview.payload.reviewer === runRecord.roles?.reviewer,
   );
+  const subjectReviews = latestReview
+    ? reviews.filter((fact) => (
+      fact.payload.reviewed_sha === latestReview.payload.reviewed_sha
+      && fact.payload.done_criteria_sha256 === latestReview.payload.done_criteria_sha256
+    ))
+    : [];
+  const firstRuntimeFailure = subjectReviews.find((fact) => (
+    fact.payload.verdict === "escalated"
+    && fact.payload.escalation_kind === "runtime_failure"
+    && fact.payload.retry_of_event_id === undefined
+  )) || null;
+  const retryReviews = subjectReviews.filter((fact) => fact.payload.retry_of_event_id !== undefined);
+  const retryLineageValid = retryReviews.length === 0 || Boolean(
+    firstRuntimeFailure
+    && retryReviews.length === 1
+    && retryReviews[0].payload.retry_of_event_id === firstRuntimeFailure.event_id
+    && subjectReviews[subjectReviews.indexOf(firstRuntimeFailure) + 1] === retryReviews[0]
+  );
+  if (
+    reviewBindingMatches
+    && (
+      !retryLineageValid
+      || (
+        firstRuntimeFailure
+        && latestReview.event_id !== firstRuntimeFailure.event_id
+        && latestReview.payload.retry_of_event_id !== firstRuntimeFailure.event_id
+      )
+    )
+  ) {
+    return none("review_retry_binding_invalid", {
+      head_sha: headSha,
+      reviewed_sha: latestReview.payload.reviewed_sha,
+      pr_number: prNumber,
+      diagnostics: [...diagnostics, { code: "review_retry_binding_invalid", event_id: latestReview.event_id }],
+    });
+  }
   if (
     latestReview
     && latestReview.payload.verdict === "changes_requested"
@@ -431,6 +469,34 @@ function foldRunFacts({
     }), githubFacts);
   }
   if (latestReview?.payload?.verdict === "escalated") {
+    const isRetryFailure = Boolean(
+      firstRuntimeFailure
+      && latestReview.event_id !== firstRuntimeFailure.event_id
+      && latestReview.payload.retry_of_event_id === firstRuntimeFailure.event_id
+      && latestReview.payload.escalation_kind === "runtime_failure",
+    );
+    if (
+      reviewBindingMatches
+      && latestReview.payload.escalation_kind === "runtime_failure"
+      && firstRuntimeFailure
+      && latestReview.event_id === firstRuntimeFailure.event_id
+    ) {
+      return withGithubAvailability(result("review", "review_retryable_escalation", {
+        head_sha: headSha,
+        reviewed_sha: latestReview.payload.reviewed_sha,
+        pr_number: prNumber,
+        retry_of_event_id: latestReview.event_id,
+        diagnostics,
+      }), githubFacts);
+    }
+    if (isRetryFailure) {
+      return none("review_escalated_retry_exhausted", {
+        head_sha: headSha,
+        reviewed_sha: latestReview.payload.reviewed_sha,
+        pr_number: prNumber,
+        diagnostics: [...diagnostics, { code: "review_retry_exhausted", event_id: latestReview.event_id }],
+      });
+    }
     return none("review_escalated", {
       head_sha: headSha,
       reviewed_sha: latestReview.payload.reviewed_sha,

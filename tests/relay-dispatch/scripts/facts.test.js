@@ -428,6 +428,27 @@ test("appending a review verdict without executed runtime evidence fails closed"
   }
 });
 
+test("review escalation classification is required only for current escalated appends", () => {
+  const eventsPath = tempEvents("review-escalation-kind");
+  const lock = acquireFactLock(eventsPath);
+  const executed_runtime = { digest: HASH, executable: { path: "/bin/reviewer", dev: 1, ino: 2, size: 3, sha256: HASH } };
+  try {
+    const escalated = fact("review_recorded");
+    escalated.payload = { ...escalated.payload, verdict: "escalated", executed_runtime };
+    assert.throws(() => appendFact({ eventsPath, fact: escalated, lockContext: lock }), /escalation_kind is required/);
+
+    const pass = fact("review_recorded");
+    pass.payload = { ...pass.payload, executed_runtime, escalation_kind: "reviewer" };
+    assert.throws(() => appendFact({ eventsPath, fact: pass, lockContext: lock }), /only allowed for escalated/);
+
+    const historical = fact("review_recorded");
+    historical.payload = { ...historical.payload, verdict: "escalated" };
+    assert.equal(validateFact(historical).known, true, "old escalations remain readable but fail closed in inspect");
+  } finally {
+    releaseRunLock(lock);
+  }
+});
+
 test("journal path and fact run identity are bound to immutable run.json", () => {
   const eventsPath = tempEvents("identity");
   const lock = acquireFactLock(eventsPath);

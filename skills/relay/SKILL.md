@@ -88,7 +88,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
 
 Invoke **relay-review** in an isolated context. It records immutable review evidence and facts while keeping frozen Done Criteria as the review anchor. A requested change remains blocking until the corrected HEAD receives a passing primary review. Do NOT review inline.
 
-The runner returns `verdict` and a fresh `recommended_action`. `lgtm` must recommend `merge` before Step 5. `changes_requested` must recommend `redispatch`; send a new prompt through `dispatch --run-id`, follow any recovery needed to republish the corrected HEAD, then review again. `escalated`, `operator_attention`, or a mismatched action stops the loop for investigation.
+The runner returns `verdict` and a fresh `recommended_action`. `lgtm` must recommend `merge` before Step 5. `changes_requested` must recommend `redispatch`; send a new prompt through `dispatch --run-id`, follow any recovery needed to republish the corrected HEAD, then review again. A runtime invocation failure may recommend one explicit `review` retry bound to that failure; a second failure, model-returned `escalated`, `operator_attention`, or a mismatched action stops for investigation.
 
 ## Step 5: Ready to Merge
 
