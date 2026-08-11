@@ -176,6 +176,7 @@ async function fixture(label, { github = {} } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-merge-${label}-`)));
   const repo = path.join(root, "repo");
   const origin = path.join(root, "origin.git");
+  const remote = "owner/repo";
   const worktree = path.join(root, "worktree");
   const runId = `merge-${label}`;
   const runDir = path.join(root, runId);
@@ -185,16 +186,16 @@ async function fixture(label, { github = {} } = {}) {
   execFileSync("git", ["init", "-b", "main", repo], { stdio: "ignore" });
   git(repo, ["config", "user.email", "merge@example.test"]);
   git(repo, ["config", "user.name", "Merge Operator"]);
-  git(repo, ["remote", "add", "origin", origin]);
+  git(repo, ["remote", "add", "origin", `https://github.com/${remote}.git`]);
   fs.writeFileSync(path.join(repo, "file.txt"), "before\n");
   git(repo, ["add", "file.txt"]);
   git(repo, ["commit", "-m", "initial"]);
-  git(repo, ["push", "-u", "origin", "main"]);
+  git(repo, ["push", origin, "main"]);
   const start = git(repo, ["rev-parse", "HEAD"]);
   git(repo, ["worktree", "add", "-b", `issue-${label}`, worktree]);
   fs.writeFileSync(path.join(worktree, "file.txt"), "after\n");
   git(worktree, ["commit", "-am", "change"]);
-  git(worktree, ["push", "-u", "origin", `issue-${label}`]);
+  git(worktree, ["push", origin, `issue-${label}`]);
   const head = git(worktree, ["rev-parse", "HEAD"]);
   const tree = git(worktree, ["rev-parse", "HEAD^{tree}"]);
   const criteriaPath = path.join(runDir, "done-criteria.md");
@@ -203,7 +204,7 @@ async function fixture(label, { github = {} } = {}) {
   const record = {
     version: 3,
     run_id: runId,
-    repo: { root: fs.realpathSync(repo), remote: fs.realpathSync(origin) },
+    repo: { root: fs.realpathSync(repo), remote },
     git: {
       branch: `issue-${label}`,
       base_branch: "main",
@@ -217,7 +218,15 @@ async function fixture(label, { github = {} } = {}) {
     created_at: "2026-08-01T00:00:00.000Z",
   };
   runStore.createRunRecord({ runDir, record });
-  const value = { root, repo, origin, worktree, runDir, record, label, head, tree, criteriaHash };
+  const gitBin = path.join(root, "fake-git.js");
+  fs.writeFileSync(gitBin, `#!/usr/bin/env node
+"use strict";
+const {spawnSync}=require("node:child_process");
+const args=process.argv.slice(2), index=args.indexOf("ls-remote");
+if(index>=0){const ref=args.at(-1);const result=spawnSync("/usr/bin/git",["-C",${JSON.stringify(origin)},"rev-parse","--verify",ref],{encoding:"utf8"});if(result.status===0)process.stdout.write(result.stdout.trim()+"\\t"+ref+"\\n");process.exit(0);}
+const result=spawnSync("/usr/bin/git",args,{stdio:"inherit"});process.exit(result.status===null?2:result.status);
+`, { mode: 0o755 });
+  const value = { root, repo, origin, worktree, runDir, record, label, head, tree, criteriaHash, gitBin };
   await appendReadyFacts(value);
   const gh = writeFakeGh(root, {
     number: 42,
@@ -239,10 +248,13 @@ async function fixture(label, { github = {} } = {}) {
 }
 
 function withGh(value, callback) {
-  const prior = { bin: process.env.RELAY_GH_BIN, token: process.env.GH_TOKEN };
+  const prior = { git: process.env.RELAY_GIT_BIN, bin: process.env.RELAY_GH_BIN, token: process.env.GH_TOKEN };
+  process.env.RELAY_GIT_BIN = value.gitBin;
   process.env.RELAY_GH_BIN = value.gh.scriptPath;
   process.env.GH_TOKEN = "test-token";
   const restore = () => {
+    if (prior.git === undefined) delete process.env.RELAY_GIT_BIN;
+    else process.env.RELAY_GIT_BIN = prior.git;
     if (prior.bin === undefined) delete process.env.RELAY_GH_BIN;
     else process.env.RELAY_GH_BIN = prior.bin;
     if (prior.token === undefined) delete process.env.GH_TOKEN;
@@ -311,7 +323,7 @@ function hardCrashFinalize(value, mode) {
   `;
   return spawnSync(process.execPath, ["-e", source], {
     encoding: "utf8",
-    env: { ...process.env, RELAY_GH_BIN: value.gh.scriptPath, GH_TOKEN: "test-token" },
+    env: { ...process.env, RELAY_GIT_BIN: value.gitBin, RELAY_GH_BIN: value.gh.scriptPath, GH_TOKEN: "test-token" },
     timeout: 30_000,
   });
 }

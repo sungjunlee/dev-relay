@@ -138,6 +138,40 @@ function normalizedRemoteIdentity(value, worktree) {
     return `unknown:${remote}`;
   }
 }
+function configuredRemotes(worktree) {
+  const names = execGit(worktree, ["--no-optional-locks", "remote"])
+    .split(/\r?\n/).filter(Boolean);
+  return names.map((name) => ({
+    name,
+    fetch_urls: execGit(worktree, [
+      "--no-optional-locks", "remote", "get-url", "--all", name,
+    ]).split(/\r?\n/).filter(Boolean),
+    push_urls: execGit(worktree, [
+      "--no-optional-locks", "remote", "get-url", "--push", "--all", name,
+    ]).split(/\r?\n/).filter(Boolean),
+  }));
+}
+function classifyDelivery(runRecord, worktree, remotes, trackedRemote) {
+  if (remotes.length === 0) {
+    return runRecord.repo.remote === `local/${path.basename(runRecord.repo.root)}`
+      ? { kind: "local" }
+      : { kind: "unsupported", message: "an empty remote set does not match the immutable local repository identity" };
+  }
+  const expected = normalizedRemoteIdentity(runRecord.repo.remote, worktree);
+  const origin = remotes.find((remote) => remote.name === "origin") || null;
+  const tracked = remotes.find((remote) => remote.name === trackedRemote) || null;
+  const exactGithubUrls = (urls) => urls.length > 0 && urls.every((url) => {
+    const identity = normalizedRemoteIdentity(url, worktree);
+    return identity.startsWith("github:") && identity === expected;
+  });
+  if (origin && tracked
+    && exactGithubUrls(origin.fetch_urls)
+    && exactGithubUrls(origin.push_urls)
+    && exactGithubUrls(tracked.fetch_urls)
+    && exactGithubUrls(tracked.push_urls)
+  ) return { kind: "github" };
+  return { kind: "unsupported", message: "delivery requires an identity-matching GitHub origin or an exact no-remote local identity" };
+}
 function selectGithubPr(rows, { remote, branch, baseBranch, localHeadSha = null, recordedPrNumber = null }) {
   const headRepo = (row) => row?.headRepository?.nameWithOwner
     || (row?.headRepositoryOwner?.login && row?.headRepository?.name
@@ -520,31 +554,47 @@ async function observeProduction({
   const status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   const dirt = classifyRepositoryDirt(status);
   const unsafeEntries = unsafeWorktreeEntries(worktree, status);
-  const remoteName = resolveBranchRemote(worktree, branch);
+  const blockers = [];
+  let delivery;
+  let remoteName = null;
+  try {
+    const remotes = configuredRemotes(worktree);
+    remoteName = remotes.length ? resolveBranchRemote(worktree, branch) : null;
+    delivery = classifyDelivery(runRecord, worktree, remotes, remoteName);
+  } catch (error) {
+    delivery = { kind: "unsupported", message: `Git remote configuration could not be enumerated: ${commandFailure(error)}` };
+  }
+  if (delivery.kind === "unsupported") {
+    blockers.push({ code: "delivery_unsupported", message: delivery.message, retryable: false });
+  }
+  const localDelivery = delivery.kind === "local";
+  const githubDelivery = delivery.kind === "github";
+  remoteName = githubDelivery ? remoteName : null;
   let remoteUrl = null;
   let remoteHeadSha = null;
-  const blockers = [];
-  try {
-    remoteUrl = execGit(worktree, ["--no-optional-locks", "remote", "get-url", remoteName]);
-    if (
-      normalizedRemoteIdentity(remoteUrl, worktree)
-      !== normalizedRemoteIdentity(runRecord.repo.remote, worktree)
-    ) {
-      blockers.push({
-        code: "remote_identity_mismatch",
-        message: "tracked Git remote does not match the immutable run repository",
-        retryable: false,
-      });
+  if (githubDelivery) {
+    try {
+      remoteUrl = execGit(worktree, ["--no-optional-locks", "remote", "get-url", remoteName]);
+      if (
+        normalizedRemoteIdentity(remoteUrl, worktree)
+        !== normalizedRemoteIdentity(runRecord.repo.remote, worktree)
+      ) {
+        blockers.push({
+          code: "remote_identity_mismatch",
+          message: "tracked Git remote does not match the immutable run repository",
+          retryable: false,
+        });
+      }
+      const remoteLine = execGit(worktree, [
+        "--no-optional-locks", "ls-remote", "--heads", remoteName, `refs/heads/${branch}`,
+      ]);
+      remoteHeadSha = remoteLine ? remoteLine.split(/\s+/)[0] : null;
+    } catch (error) {
+      blockers.push({ code: "remote_observation_failed", message: commandFailure(error), retryable: true });
     }
-    const remoteLine = execGit(worktree, [
-      "--no-optional-locks", "ls-remote", "--heads", remoteName, `refs/heads/${branch}`,
-    ]);
-    remoteHeadSha = remoteLine ? remoteLine.split(/\s+/)[0] : null;
-  } catch (error) {
-    blockers.push({ code: "remote_observation_failed", message: commandFailure(error), retryable: true });
   }
-  const remoteRelation = safeRelation(worktree, remoteHeadSha, headSha);
-  if (remoteRelation === "unknown") {
+  const remoteRelation = githubDelivery ? safeRelation(worktree, remoteHeadSha, headSha) : null;
+  if (githubDelivery && remoteRelation === "unknown") {
     blockers.push({
       code: "remote_relation_unknown",
       message: "remote head object is unavailable locally; recover will not push from an unproven relation",
@@ -552,11 +602,13 @@ async function observeProduction({
     });
   }
   const recordedPr = runFacts.filter((fact) => fact.type === "pull_request_recorded").at(-1) || null;
-  const github = observeGithub(runRecord, {
-    localHeadSha: headSha,
-    recordedPrNumber: recordedPr?.payload.pr_number || null,
-  });
-  if (!github.available) {
+  const github = githubDelivery
+    ? observeGithub(runRecord, {
+      localHeadSha: headSha,
+      recordedPrNumber: recordedPr?.payload.pr_number || null,
+    })
+    : {};
+  if (githubDelivery && !github.available) {
     blockers.push({ code: "github_unavailable", message: github.error, retryable: true });
   }
   let hostObservation = { status: "absent" };
@@ -603,6 +655,7 @@ async function observeProduction({
       remote_head_sha: remoteHeadSha,
       remote_relation: remoteRelation,
       status: status.toString("utf8"),
+      ...(localDelivery ? { local_delivery: true } : {}),
     },
     github,
     host: {

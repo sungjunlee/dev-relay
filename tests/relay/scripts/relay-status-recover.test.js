@@ -34,11 +34,20 @@ function fixture() {
   fs.writeFileSync(path.join(repo, "README.md"), "base\n");
   git(repo, ["add", "README.md"]);
   git(repo, ["commit", "-m", "base"]);
-  git(repo, ["remote", "add", "origin", remote]);
-  git(repo, ["push", "-u", "origin", "main"]);
+  const remoteIdentity = "owner/repo";
+  git(repo, ["remote", "add", "origin", `https://github.com/${remoteIdentity}.git`]);
+  git(repo, ["push", remote, "main"]);
   const canonical = fs.realpathSync(repo);
   const slug = `${path.basename(canonical)}-${crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 8)}`;
-  return { root, repo: canonical, remote, relayHome, runs: path.join(relayHome, "runs", slug), worktrees };
+  const gitBin = path.join(root, "fake-git.js");
+  fs.writeFileSync(gitBin, `#!/usr/bin/env node
+"use strict";
+const {spawnSync}=require("node:child_process");
+const args=process.argv.slice(2), index=args.indexOf("ls-remote");
+if(index>=0){const ref=args.at(-1);const result=spawnSync("/usr/bin/git",["-C",${JSON.stringify(remote)},"rev-parse","--verify",ref],{encoding:"utf8"});if(result.status===0)process.stdout.write(result.stdout.trim()+"\\t"+ref+"\\n");process.exit(0);}
+const result=spawnSync("/usr/bin/git",args,{stdio:"inherit"});process.exit(result.status===null?2:result.status);
+`, { mode: 0o755 });
+  return { root, repo: canonical, remote: remoteIdentity, gitBin, relayHome, runs: path.join(relayHome, "runs", slug), worktrees };
 }
 
 function createRun(value, issue, suffix) {
@@ -102,7 +111,7 @@ test("relay-status black box derives phase, action, blockers, and PR from canoni
   fs.chmodSync(gh, 0o755);
   const result = spawnSync(process.execPath, [SCRIPT, "--repo", value.repo, "--run-id", created.runId, "--json"], {
     encoding: "utf8",
-    env: { ...process.env, RELAY_HOME: value.relayHome, RELAY_GH_BIN: gh },
+    env: { ...process.env, RELAY_HOME: value.relayHome, RELAY_GIT_BIN: value.gitBin, RELAY_GH_BIN: gh },
   });
   assert.equal(result.status, 0, result.stderr);
   const payload = JSON.parse(result.stdout);

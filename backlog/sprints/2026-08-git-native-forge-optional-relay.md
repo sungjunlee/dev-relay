@@ -18,11 +18,11 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
 
 ### Batch 1 — ReviewSubject contract
 
-- [ ] #1209 — Freeze GitHub lifecycle parity and specify the exact Git ReviewSubject.
+- [x] #1209 — Freeze GitHub lifecycle parity and specify the exact Git ReviewSubject → PR #1213 (merged).
 
 ### Batch 2 — Git-native identity
 
-- [ ] #1207 — Let no-origin Git runs inspect and recover without forge blockers.
+- [~] #1207 — Let no-origin Git runs inspect and recover without forge blockers (in flight; run `issue-1207-20260811062805756-b698a5ae`).
 
 ### Batch 3 — Forge-optional boundary
 
@@ -66,3 +66,7 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
   literal schema-version plus schema-v3 terminal/nonterminal inventory. The
   minimized output preserves the drain/close decision for all six nonterminal
   records and leaves production JavaScript and schemas out of scope.
+- 2026-08-11 — #1209 merged in PR #1213. Began #1207 in run
+  `issue-1207-20260811062805756-b698a5ae`; production observer/fold/recovery
+  changes now pass the focused local-delivery, production recovery, GitHub
+  parity, and skills-lint suites; the full serialized gate remains pending.

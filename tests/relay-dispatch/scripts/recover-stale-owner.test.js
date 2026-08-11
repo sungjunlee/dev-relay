@@ -36,22 +36,17 @@ function fixture(label) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-recover-stale-${label}-`)));
   const repo = path.join(root, "repo");
   const active = path.join(root, "active");
-  const remote = path.join(root, "remote.git");
   const runDir = path.join(root, `issue-1135-${label}`);
   fs.mkdirSync(repo);
   fs.mkdirSync(active);
   fs.mkdirSync(runDir);
-  assert.equal(spawnSync("git", ["init", "--bare", remote], { encoding: "utf8" }).status, 0);
   requireGit(repo, ["init", "-b", "main"]);
   requireGit(repo, ["config", "user.email", "relay@example.test"]);
   requireGit(repo, ["config", "user.name", "Relay Test"]);
   fs.writeFileSync(path.join(repo, "README.md"), "stale owner fixture\n");
   requireGit(repo, ["add", "README.md"]);
   requireGit(repo, ["commit", "-m", "initial"]);
-  requireGit(repo, ["remote", "add", "origin", remote]);
-  requireGit(repo, ["push", "-u", "origin", "main"]);
   requireGit(repo, ["checkout", "-b", "issue-1135-stale-owner"]);
-  requireGit(repo, ["push", "-u", "origin", "issue-1135-stale-owner"]);
   const head = requireGit(repo, ["rev-parse", "HEAD"]);
   const donePath = path.join(runDir, "done-criteria.md");
   const done = "# Done\n\nRecover stale ownership safely.\n";
@@ -61,10 +56,10 @@ function fixture(label) {
     record: {
       version: 3,
       run_id: path.basename(runDir),
-      // The production observer binds the tracked Git remote to this exact
-      // immutable value.  A local bare remote keeps the test offline while
-      // still exercising that binding rather than bypassing it.
-      repo: { root: active, remote: fs.realpathSync(remote) },
+      // Stale-owner recovery is delivery-neutral. Keep this fixture on the
+      // exact no-remote local identity so it also proves local dead-attempt
+      // recovery without a forge or transport side effect.
+      repo: { root: active, remote: "local/active" },
       git: {
         branch: "issue-1135-stale-owner",
         base_branch: "main",

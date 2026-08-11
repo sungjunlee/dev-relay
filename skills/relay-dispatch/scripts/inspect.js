@@ -37,6 +37,7 @@ function hostIsLive(hostFacts, attempt) {
 function requiresGithub(action) {
   return action === "merge" || action === "review" || action === "recover";
 }
+function isLocalDelivery(gitFacts = {}) { return gitFacts.local_delivery === true; }
 function completeRecordedPrObservation(githubFacts) {
   const sha = /^[0-9a-f]{40}$/i;
   return githubFacts.available === true
@@ -266,6 +267,13 @@ function foldRunFacts({
   const reviews = known.filter((fact) => fact.type === "review_recorded");
   const latestReview = reviews.at(-1) || null;
   const headSha = gitFacts.head_sha || prHead || finalAttempt?.payload?.final_sha || interrupted?.payload?.last_known_sha || null;
+  if (prFact && isLocalDelivery(gitFacts)) {
+    return none("fact_conflict", {
+      head_sha: headSha,
+      pr_number: prNumber,
+      diagnostics: [{ code: "local_delivery_pull_request_conflict" }],
+    });
+  }
   if (prFact && !completeRecordedPrObservation(githubFacts)) {
     return none("github_unavailable", {
       head_sha: headSha,
@@ -345,7 +353,9 @@ function foldRunFacts({
       activeAttempt: latestStart.attempt_id,
       diagnostics,
     });
-    return live === true ? attempt : withGithubAvailability(attempt, githubFacts);
+    return live === true || isLocalDelivery(gitFacts)
+      ? attempt
+      : withGithubAvailability(attempt, githubFacts);
   }
   if (terminalForAttempt?.type === "attempt_interrupted") {
     if (!hasReviewableWork(gitFacts, terminalForAttempt)) {
@@ -355,6 +365,31 @@ function foldRunFacts({
         diagnostics,
       });
     }
+  }
+  const localDelivery = !prFact && isLocalDelivery(gitFacts);
+  if (localDelivery && headSha && hasReviewableWork(gitFacts, terminalForAttempt)) {
+    if (gitFacts.reviewable_dirty === true) {
+      return result("recover", "publication_incomplete", {
+        head_sha: headSha,
+        diagnostics,
+      });
+    }
+    const verification = verificationGate({
+      facts: known,
+      prHead: headSha,
+      treeSha: gitFacts.head_sha === headSha ? gitFacts.tree_sha : null,
+      doneCriteriaSha256: runRecord.contract?.done_criteria_sha256 || null,
+    });
+    if (!verification.ready) {
+      return result("recover", verification.reason, {
+        head_sha: headSha,
+        diagnostics: [...diagnostics, verification.diagnostic],
+      });
+    }
+    return none("local_review_pending", {
+      head_sha: headSha,
+      diagnostics,
+    });
   }
   if (headSha && hasReviewableWork(gitFacts, terminalForAttempt) && !prFact) {
     return withGithubAvailability(result("recover", "publication_incomplete", {
@@ -553,6 +588,14 @@ function matchingRecordedPr(facts, github) {
     && fact.payload.head_sha === github.pr_head_sha ? fact : null;
 }
 function recoverySteps(derived, seen, facts = []) {
+  if (isLocalDelivery(seen.git)) {
+    if (derived.reason === "attempt_liveness_unknown") {
+      return seen.host.live === false ? ["close_dead_attempt"] : [];
+    }
+    if (seen.git.reviewable_dirty === true) return ["commit_work"];
+    if (String(derived.reason || "").startsWith("verification_")) return ["record_verification"];
+    return [];
+  }
   if (derived.reason === "merged_pr_unrecorded" && matchingRecordedPr(facts, seen.github)) return ["record_external_merge"];
   if (derived.reason === "attempt_liveness_unknown") return seen.host.live === false ? ["close_dead_attempt"] : [];
   const steps = [], head = seen.git.head_sha || derived.head_sha;
