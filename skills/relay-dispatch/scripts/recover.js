@@ -774,7 +774,7 @@ function assertReviewedCloseEvidence({ runDir, record, inspection, review, verif
     || !/^[0-9a-f]{64}$/.test(String(artifact.prompt_sha256 || ""))
     || !/^[0-9a-f]{64}$/.test(String(artifact.staging_request_sha256 || ""))
     || artifact.verdict?.verdict !== "pass"
-    || review.payload.verdict !== "lgtm"
+    || !["pass", "lgtm"].includes(review.payload.verdict)
     || JSON.stringify(stable(artifact.executed_runtime)) !== JSON.stringify(stable(review.payload.executed_runtime))
   ) throw new Error("review artifact does not match the exact reviewed subject");
   const reviewIndex = inspection.facts.indexOf(review);

@@ -256,6 +256,105 @@ test("#1208 production-shaped no-origin review records the exact verification pr
   assert.equal(row.local_delivery, true);
 });
 
+test("#1208 production CLI recovers reviewed-result close crashes before and after terminal append", async () => {
+  for (const phase of ["before", "after"]) {
+    const value = await fixture(`local-close-crash-${phase}`, { local: true });
+    let activeReviewLock = null;
+    await runner.runReview(value.cli, {
+      inspectRun: (input) => recovery.inspectProductionRun({ ...input, activeRunLock: activeReviewLock }),
+      withRunLock: (runDir, callback) => runtime.withRunLock(runDir, async (lockContext) => {
+        activeReviewLock = lockContext;
+        try { return await callback(lockContext); }
+        finally { activeReviewLock = null; }
+      }),
+      invokeReviewer: async (input) => reviewerSuccess(input, {
+        verdict: "pass", summary: "durable local result", issues: [],
+      }),
+    });
+    if (phase === "before") {
+      // Historical writers used the accepted `pass` spelling in the durable fact.
+      const journal = fs.readFileSync(value.eventsPath, "utf8");
+      fs.writeFileSync(value.eventsPath, journal.replace('"verdict":"lgtm"', '"verdict":"pass"'));
+      assert.equal(
+        facts.readFacts({ eventsPath: value.eventsPath }).facts.find((fact) => fact.type === "review_recorded").payload.verdict,
+        "pass",
+      );
+    }
+    const inspected = await recovery.inspectProductionRun({ runDir: value.runDir });
+    assert.equal(inspected.recommended_action.reason, "reviewed_result_ready");
+
+    const factsModulePath = path.join(__dirname, "../../../skills/relay-dispatch/scripts/facts.js");
+    const preload = path.join(value.root, `crash-close-${phase}.js`);
+    fs.writeFileSync(preload, `"use strict";
+const facts = require(${JSON.stringify(factsModulePath)});
+const original = facts.appendFact;
+facts.appendFact = function crashReviewedClose(options) {
+  if (options?.fact?.type !== "run_closed") return original.apply(this, arguments);
+  if (process.env.RELAY_CLOSE_CRASH_PHASE === "before") process.exit(86);
+  const result = original.apply(this, arguments);
+  process.exit(87);
+};
+`);
+    const transportMarker = path.join(value.root, "transport-called");
+    const ghMarker = path.join(value.root, "gh-called");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const gitTrap = path.join(value.root, "git-trap.js");
+    const ghTrap = path.join(value.root, "gh-trap.js");
+    fs.writeFileSync(gitTrap, `#!/usr/bin/env node
+const fs=require("fs"),{spawnSync}=require("child_process"),args=process.argv.slice(2);
+if(args.some((value)=>["fetch","ls-remote","push"].includes(value))){fs.writeFileSync(${JSON.stringify(transportMarker)},"called");process.exit(97)}
+const result=spawnSync(${JSON.stringify(realGit)},args,{encoding:null});
+if(result.stdout)process.stdout.write(result.stdout);if(result.stderr)process.stderr.write(result.stderr);process.exit(result.status??1);
+`);
+    fs.writeFileSync(ghTrap, `#!/usr/bin/env node\nrequire("fs").writeFileSync(${JSON.stringify(ghMarker)},"called");process.exit(98);\n`);
+    fs.chmodSync(gitTrap, 0o755); fs.chmodSync(ghTrap, 0o755);
+    const args = [
+      path.join(__dirname, "../../../skills/relay/scripts/relay-recover.js"),
+      "recover", "--run-dir", value.runDir, "--actor", "codex",
+      "--reason", "close crash-tested reviewed local result",
+      "--expected-action-key", inspected.recommended_action.key, "--break-lock", "--json",
+    ];
+    const stableEnv = {
+      ...process.env,
+      RELAY_WORKTREE_BASE: value.worktreeBase,
+      RELAY_GH_BIN: ghTrap,
+      RELAY_GIT_BIN: gitTrap,
+    };
+    const crashed = spawnSync(process.execPath, args, { encoding: "utf8", env: {
+      ...stableEnv,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+      RELAY_CLOSE_CRASH_PHASE: phase,
+    } });
+    assert.equal(crashed.status, phase === "before" ? 86 : 87, crashed.stderr);
+    assert.equal(
+      facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed").length,
+      phase === "before" ? 0 : 1,
+    );
+    assert.equal(fs.readdirSync(value.runDir).some((name) => name.startsWith("recovery-receipt-")), false);
+
+    const retry = spawnSync(process.execPath, args, { encoding: "utf8", env: stableEnv });
+    assert.equal(retry.status, 0, retry.stderr);
+    assert.equal(JSON.parse(retry.stdout).status, "converged");
+    const closes = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed");
+    assert.equal(closes.length, 1);
+    const receiptPath = fs.readdirSync(value.runDir).map((name) => path.join(value.runDir, name))
+      .find((filePath) => path.basename(filePath).startsWith("recovery-receipt-"));
+    const receiptBytes = fs.readFileSync(receiptPath);
+    const receipt = JSON.parse(receiptBytes);
+    assert.equal(receipt.action_key, inspected.recommended_action.key);
+    assert.equal(receipt.operation_id, `recover-${inspected.recommended_action.key.slice(0, 32)}`);
+    assert.deepEqual(receipt.fact_event_ids, [closes[0].event_id]);
+
+    const noop = spawnSync(process.execPath, args, { encoding: "utf8", env: stableEnv });
+    assert.equal(noop.status, 0, noop.stderr);
+    assert.equal(JSON.parse(noop.stdout).status, "noop");
+    assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "run_closed").length, 1);
+    assert.deepEqual(fs.readFileSync(receiptPath), receiptBytes);
+    assert.equal(fs.existsSync(transportMarker), false, phase);
+    assert.equal(fs.existsSync(ghMarker), false, phase);
+  }
+});
+
 test("#1208 production observation still rejects a nonterminal worktree branch mismatch", async () => {
   const value = await fixture("local-branch-mismatch", { local: true });
   git(value.repo, ["checkout", "-b", "wrong-before-close"]);
