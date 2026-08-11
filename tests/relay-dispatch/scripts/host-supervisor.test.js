@@ -590,23 +590,42 @@ test("a missing system CA bundle fails typed instead of raw ENOENT", () => {
   } finally { fs.realpathSync = original; }
 });
 
-test("network policy is explicit and grants only transport Mach services, never Keychain", () => {
+test("network policy is explicit and grants only transport and per-user trust Mach services, never Keychain", () => {
   const value = roots("network-profile"), proof = path.join(value.runDir, "network-proof.json");
   const disabled = host.sandboxInvocation({ role: "executor", command: process.execPath, readRoots: [value.worktree], networkAccess: "disabled" }).args[1];
   const script = "const fs=require('fs');let sibling='readable';try{fs.readFileSync('/private/etc/hosts')}catch(e){sibling='denied:'+e.code}fs.writeFileSync(process.argv[1],JSON.stringify({ca:process.env.SSL_CERT_FILE,certificate:fs.readFileSync(process.env.SSL_CERT_FILE,'utf8').includes('BEGIN CERTIFICATE'),sibling}))";
   const invocation = host.sandboxInvocation({ role: "executor", command: process.execPath, args: ["-e", script, proof], readRoots: [value.worktree], writeFiles: [proof], networkAccess: "enabled" });
   const enabled = invocation.args[1], ca = fs.realpathSync("/etc/ssl/cert.pem");
-  assert.doesNotMatch(disabled, /allow network|SystemConfiguration\.configd|opendirectoryd\.libinfo/);
+  assert.doesNotMatch(disabled, /allow network|SystemConfiguration\.configd|opendirectoryd\.libinfo|trustd/);
   assert.match(enabled, /allow network/); assert.match(enabled, /SystemConfiguration\.configd/); assert.match(enabled, /opendirectoryd\.libinfo/);
+  assert.match(enabled, /\(global-name "com\.apple\.trustd\.agent"\)/);
   assert.match(enabled, new RegExp(`literal "${ca.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
   assert.doesNotMatch(enabled, /\(subpath "\/(?:private\/)?etc/);
-  assert.doesNotMatch(enabled, /securityd|SecurityServer|appleevent-send\)"?$/);
+  assert.doesNotMatch(enabled, /com\.apple\.trustd"|securityd|SecurityServer|keychain|mach-lookup.*regex|mach-lookup.*global-prefix/);
   assert.equal(Object.hasOwn(host.sandboxInvocation({ role: "executor", command: process.execPath, networkAccess: "disabled" }).env, "SSL_CERT_FILE"), false);
   assert.equal(spawnSync(invocation.command, invocation.args, { cwd: value.worktree, env: invocation.env }).status, 0);
   const observed = JSON.parse(fs.readFileSync(proof, "utf8"));
   assert.equal(observed.ca, ca); assert.equal(observed.certificate, true); assert.match(observed.sibling, /^denied:/);
   assert.throws(() => host.sandboxInvocation({ role: "executor", command: process.execPath, networkAccess: "enabled", env: { ...process.env, SSL_CERT_FILE: proof } }),
     (error) => error.code === "INVALID_INVOCATION" && /host-reserved/.test(error.message));
+});
+
+test("offline trust evaluation needs exactly the per-user trust agent lookup", () => {
+  const value = roots("offline-trust"), certificate = path.join(value.worktree, "root.pem");
+  const match = fs.readFileSync("/etc/ssl/cert.pem", "utf8").match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/);
+  assert.ok(match, "the trusted root-owned CA literal contains a certificate");
+  fs.writeFileSync(certificate, `${match[0]}\n`, { mode: 0o600 });
+  const options = { role: "executor", command: "/usr/bin/security",
+    args: ["verify-cert", "-c", certificate, "-r", certificate, "-N", "-L", "-l", "-q"], readFiles: [certificate] };
+  const disabled = host.sandboxInvocation({ ...options, networkAccess: "disabled" });
+  const enabled = host.sandboxInvocation({ ...options, networkAccess: "enabled" });
+  const exactAgentOnly = { ...disabled, args: [...disabled.args] };
+  exactAgentOnly.args[1] = exactAgentOnly.args[1].replace("(allow file-read-metadata)",
+    '(allow file-read-metadata)(allow mach-lookup (global-name "com.apple.trustd.agent"))');
+  const run = (invocation) => spawnSync(invocation.command, invocation.args, { cwd: value.worktree, env: invocation.env, encoding: "utf8" });
+  assert.notEqual(run(disabled).status, 0, "offline trust fails without the agent lookup");
+  assert.equal(run(enabled).status, 0, "network-enabled policy permits offline trust evaluation");
+  assert.equal(run(exactAgentOnly).status, 0, "the exact agent lookup alone permits the same offline trust evaluation");
 });
 
 test("staged input bytes remain bound when the caller path mutates after launch", async () => {
