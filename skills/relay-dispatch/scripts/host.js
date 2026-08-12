@@ -340,7 +340,8 @@ let linuxClockTicks = null;
 let linuxBootSeconds = null;
 function linuxProcessRows({ environment = false, pid = null } = {}) {
   if (linuxClockTicks === null) {
-    const clockTicks = Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8", timeout: 5_000 }).trim());
+    const getconf = fs.existsSync("/usr/bin/getconf") ? "/usr/bin/getconf" : "/bin/getconf";
+    const clockTicks = Number(execFileSync(getconf, ["CLK_TCK"], { encoding: "utf8", timeout: 5_000 }).trim());
     const bootLine = fs.readFileSync("/proc/stat", "utf8").split(/\r?\n/).find((line) => line.startsWith("btime "));
     const bootSeconds = Number(bootLine?.slice(6));
     if (!Number.isFinite(clockTicks) || clockTicks <= 0 || !Number.isFinite(bootSeconds)) {

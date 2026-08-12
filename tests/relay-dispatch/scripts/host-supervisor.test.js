@@ -194,6 +194,17 @@ test("Linux cleanup retains stat identity when proc cmdline is unreadable", { ti
   assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), false);
 });
 
+test("Linux process identity ignores a PATH-shadowed getconf", () => {
+  if (process.platform !== "linux") return;
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-shadow-getconf-")));
+  const shadow = path.join(root, "getconf");
+  fs.writeFileSync(shadow, "#!/bin/sh\nprintf 999999999999\\n\n", { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${root}${path.delimiter}${originalPath}`;
+  try { assert.ok(host.hostInvocation.beginProcessScope().seal); }
+  finally { process.env.PATH = originalPath; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("cleanup recovery treats an exact zombie as gone even when ps redacts its scope environment", { timeout: 30_000 }, async (t) => {
   const value = roots("zombie-cleanup"), attemptId = "zombie-cleanup", capability = lock(value, attemptId);
   const scope = host.hostInvocation.beginProcessScope(), pidsPath = path.join(value.root, "zombie.json");
