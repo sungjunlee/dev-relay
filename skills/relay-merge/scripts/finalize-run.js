@@ -95,9 +95,9 @@ function gitRaw(repo, args) {
   });
 }
 
-function nulPaths(bytes) {
+function nulFields(bytes) {
   if (!Buffer.isBuffer(bytes)) fail("Git path evidence must be bytes", "MERGE_BASE_EVIDENCE_INCOMPLETE");
-  const paths = [];
+  const fields = [];
   let offset = 0;
   while (offset < bytes.length) {
     const end = bytes.indexOf(0, offset);
@@ -107,8 +107,27 @@ function nulPaths(bytes) {
     if (!Buffer.from(decoded, "utf8").equals(value)) {
       fail("Git path evidence contains a non-UTF-8 path", "MERGE_BASE_EVIDENCE_INCOMPLETE");
     }
-    if (decoded) paths.push(decoded);
+    if (!decoded) fail("Git path evidence contains an empty field", "MERGE_BASE_EVIDENCE_INCOMPLETE");
+    fields.push(decoded);
     offset = end + 1;
+  }
+  return fields;
+}
+
+function reviewedDiffPaths(bytes) {
+  const fields = nulFields(bytes);
+  const paths = [];
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++];
+    if (!/^[ACDMRTUXB][0-9]{0,3}$/.test(status)) {
+      fail("Git path evidence contains an invalid status", "MERGE_BASE_EVIDENCE_INCOMPLETE");
+    }
+    const count = /^[RC]/.test(status) ? 2 : 1;
+    if (index + count > fields.length) {
+      fail("Git path evidence has an incomplete status record", "MERGE_BASE_EVIDENCE_INCOMPLETE");
+    }
+    paths.push(...fields.slice(index, index + count));
+    index += count;
   }
   return paths;
 }
@@ -173,8 +192,9 @@ function assertBaseIntegrity(record, binding, liveBase) {
         && (typeof file.previous_filename !== "string" || file.previous_filename.length === 0))
     ) fail("GitHub base-advance path evidence is malformed", "MERGE_BASE_EVIDENCE_INCOMPLETE");
   }
-  const reviewedPaths = nulPaths(gitRaw(record.git.worktree, [
-    "diff", "--name-only", "-z", "--no-ext-diff", `${record.git.start_sha}..${binding.head}`, "--",
+  const reviewedPaths = reviewedDiffPaths(gitRaw(record.git.worktree, [
+    "diff", "--name-status", "-z", "--find-renames", "--no-ext-diff",
+    `${record.git.start_sha}..${binding.head}`, "--",
   ]));
   const prPaths = new Set(reviewedPaths);
   const advancedPaths = advancedFiles.flatMap((file) => [file.filename, file.previous_filename]).filter(Boolean);

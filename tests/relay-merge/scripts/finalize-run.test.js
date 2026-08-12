@@ -408,6 +408,14 @@ test("base movement allows zero reviewed-path overlap and rejects unsafe or inco
     writeComparison(comparison({ files: [{ filename: unusual }] }));
     assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced),
       (error) => error.code === "MERGE_BASE_PATH_OVERLAP" && error.collision_paths[0] === unusual);
+    fs.writeFileSync(path.join(value.worktree, "file.txt"), "before\n");
+    git(value.worktree, ["commit", "-am", "restore rename source"]);
+    git(value.worktree, ["mv", "file.txt", "renamed.txt"]);
+    git(value.worktree, ["commit", "-m", "rename reviewed path"]);
+    binding.head = git(value.worktree, ["rev-parse", "HEAD"]);
+    writeComparison(comparison({ files: [{ filename: "file.txt" }] }));
+    assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced),
+      (error) => error.code === "MERGE_BASE_PATH_OVERLAP" && error.collision_paths[0] === "file.txt");
     writeComparison(comparison({ status: "diverged" }));
     assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced), { code: "MERGE_BASE_NOT_DESCENDANT" });
     writeComparison(comparison({ total_commits: 2 }));
