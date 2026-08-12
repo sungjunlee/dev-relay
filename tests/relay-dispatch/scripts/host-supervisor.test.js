@@ -197,12 +197,14 @@ test("Linux cleanup retains stat identity when proc cmdline is unreadable", { ti
 test("Linux process identity ignores a PATH-shadowed getconf", () => {
   if (process.platform !== "linux") return;
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-shadow-getconf-")));
-  const shadow = path.join(root, "getconf");
-  fs.writeFileSync(shadow, "#!/bin/sh\nprintf 999999999999\\n\n", { mode: 0o755 });
-  const originalPath = process.env.PATH;
-  process.env.PATH = `${root}${path.delimiter}${originalPath}`;
-  try { assert.ok(host.hostInvocation.beginProcessScope().seal); }
-  finally { process.env.PATH = originalPath; fs.rmSync(root, { recursive: true, force: true }); }
+  const shadow = path.join(root, "getconf"), marker = path.join(root, "shadow-called");
+  fs.writeFileSync(shadow, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nprintf 999999999999\\n\n`, { mode: 0o755 });
+  const modulePath = path.resolve(__dirname, "../../../skills/relay-dispatch/scripts/host.js");
+  const child = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(modulePath)}).hostInvocation.beginProcessScope()`], {
+    encoding: "utf8", env: { ...process.env, PATH: `${root}${path.delimiter}${process.env.PATH}` },
+  });
+  try { assert.equal(child.status, 0, child.stderr); assert.equal(fs.existsSync(marker), false); }
+  finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("cleanup recovery treats an exact zombie as gone even when ps redacts its scope environment", { timeout: 30_000 }, async (t) => {
