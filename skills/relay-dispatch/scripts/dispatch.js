@@ -183,7 +183,7 @@ function parseOwnership(raw, fleetId) {
 
 function parseCli(argv) {
   let parsed;
-  try { parsed = parseNodeArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true }); }
+  try { parsed = parseNodeArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true, tokens: true }); }
   catch (error) {
     if (error.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") fail(`unknown flag: ${error.message}`);
     throw error;
@@ -208,7 +208,20 @@ function parseCli(argv) {
   const creating = Boolean(values.branch);
   if (creating && !values["rubric-file"]) fail("new dispatch requires --rubric-file");
   const ownership = parseOwnership(values["ownership-json"], values["fleet-id"]);
-  return { values, repo, runId, creating, issueNumber, timeoutSeconds, ownership };
+  return { values, repo, runId, creating, issueNumber, timeoutSeconds, ownership,
+    executorExplicit: parsed.tokens.some((token) => token.kind === "option" && token.name === "executor") };
+}
+
+function resolveResumeExecutor(cli) {
+  if (cli.creating) return cli;
+  const identity = repositoryIdentity(canonicalCheckout(cli.repo));
+  const record = runStore.readRunRecord({ runDir: runStore.resolveRunDirectory(identity.checkout, cli.runId) });
+  const bound = record.roles.executor;
+  if (cli.executorExplicit && cli.values.executor !== bound) {
+    fail(`run executor is immutably bound to ${bound}`, "RUN_EXECUTOR_MISMATCH");
+  }
+  if (!cli.executorExplicit) cli.values.executor = bound;
+  return cli;
 }
 
 // Evaluated in this order; the first hit is the reported evidence. Deliberately literal: the
@@ -744,6 +757,7 @@ async function main(argv = process.argv.slice(2)) {
   try {
     cli = parseCli(argv);
     if (cli.help) { console.log(usage()); return 0; }
+    resolveResumeExecutor(cli);
     // Resolve the executor once, before any filesystem read: an unknown one stays the argv error it
     // is rather than a missing prompt file, and every later stage uses this exact descriptor.
     const adapter = getAdapter(cli.values.executor);

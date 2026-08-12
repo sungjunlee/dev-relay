@@ -210,10 +210,9 @@ test("a shell-capable executor is unaffected by the same command-demanding promp
   assert.doesNotMatch(result.stderr, /toolset mismatch/i);
 });
 
-// DC6-f. The gate is bound to the requested executor and runs before the run record is read, so the
-// resume is rejected for the toolset, not for the executor binding or the derived action. Asserting
-// the exact code is what makes this red when the gate is removed: without it the resume still fails,
-// but as RUN_NOT_REDISPATCHABLE, and after appending nothing either way.
+// DC6-f. Resume resolves the immutable executor before it reads or validates the new prompt. An
+// explicit mismatch therefore fails at the executor binding rather than evaluating the wrong
+// adapter's toolset, while preserving the same zero-write boundary.
 test("a mismatched resume is rejected with no attempt_started fact appended", () => {
   const value = fixture("resume");
   const created = run(value, ["--branch", "resume-base", "--prompt-file", value.benignPrompt, "--rubric-file", value.rubric]);
@@ -225,7 +224,7 @@ test("a mismatched resume is rejected with no attempt_started fact appended", ()
 
   const resumed = run(value, ["--run-id", output.run_id, "--executor", "pi", "--prompt-file", value.commandPrompt]);
   assert.notEqual(resumed.status, 0, resumed.stdout);
-  assert.equal(json(resumed.stderr).code, "TOOLSET_MISMATCH");
+  assert.equal(json(resumed.stderr).code, "RUN_EXECUTOR_MISMATCH");
   assert.deepEqual(facts.readFacts({ eventsPath }).facts, before, "no fact may be appended");
   assert.deepEqual(fs.readdirSync(output.run_dir).sort(), beforeFiles, "no prompt or attempt artifact may be written");
 });

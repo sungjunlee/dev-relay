@@ -10,6 +10,7 @@ Repo-local design notes, operator workflow docs, audit ledgers, and archived iss
 | [external-tool-workflow.md](./external-tool-workflow.md) | gstack, superpowers, CE around relay (optional) |
 | [direct-read-relay-operator-note.md](./direct-read-relay-operator-note.md) | Operate relay from a repo checkout without installed skills |
 | [relay-operator-guide.md](./relay-operator-guide.md) | Operator workflow for `/relay`, setup, manual phases, batch dispatch, recovery, and extension points |
+| [trusted-local-native-dogfood-1235.md](./trusted-local-native-dogfood-1235.md) | Bounded real-provider closure evidence for the trusted-local native Relay migration |
 | [references/operator-surface.md](../references/operator-surface.md) | Public/internal/optional skill tiers and placement rules for stable command surfaces |
 | [model-route-policy.md](./model-route-policy.md) | Provider/model route policy via `relay-config` for dispatch and primary review |
 | [script-inventory-and-cleanup.md](./script-inventory-and-cleanup.md) | Runtime script classification and cleanup backlog |

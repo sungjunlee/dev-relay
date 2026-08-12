@@ -62,7 +62,7 @@ Essential flags:
 - `--branch, -b` starts a new retained run; `--run-id` requests a same-run redispatch.
 - `--prompt, -p` or `--prompt-file` supplies the executor prompt.
 - `--rubric-file` is required for new dispatches. `--done-criteria-file` freezes a separate review anchor; otherwise the rubric is frozen as Done Criteria.
-- `--executor, -e` and `--model, -m` select execution. Resume cannot replace the executor bound in `run.json`.
+- `--executor, -e` and `--model, -m` select execution. On `--run-id`, omit `--executor` to use the immutable executor bound in `run.json`; an explicit different executor fails before reading the prompt or writing an attempt. `--model` remains per-attempt.
 - `--sandbox`, `--network-access`, `--timeout`, `--reasoning`, and `--copy` configure the attempt. Copy inputs must be regular files contained by the repository.
 - Provider control-plane transport is always available to the trusted CLI. `--network-access` governs model/tool networking: `disabled` requires an adapter-native deny and fails closed for adapters that cannot enforce one; `enabled` explicitly permits the adapter's network-capable tools.
 - CLI authentication, HOME, XDG config, and supported token variables come from the operator's ambient local environment. Credential selector flags were removed and fail as unknown options; Relay never copies auth files or records their paths.
