@@ -85,14 +85,14 @@ implementations are removed.
   framework was removed so native descriptors are the only extension path.
 - The serialized repository gate on Node v22.22.3 reported 707 tests, 705 passed,
   0 failed, 2 skipped **on 2026-08-02, before the overlay deletion**. Both skips
-  are the ledger-approved opt-in live canaries (`opencode-live`, `pi-live`) that
-  require external credentials to run. The two deleted suites took 64 test
-  declarations with them, so the current count is lower; re-measure rather than
-  quoting this line.
+  were then-approved opt-in provider canaries (`opencode-live`, `pi-live`). The
+  two deleted suites took 64 test declarations with them, so the current count
+  is lower; re-measure rather than quoting this line.
 - Independent lifecycle re-review is LGTM after PID-reuse, zombie, quarantine,
   signed-close, and reviewer-cleanup regressions were closed.
-- The exact live-canary release matrix remains intentionally incomplete at
-  2/13. Missing credentials, CLIs, skips, and fallbacks do not satisfy a cell.
+- The historical provider release matrix was incomplete at 2/13. It was
+  retired by #1234 because operator credentials and installed CLIs are not a
+  repository release condition.
 - The migration overlay was deleted on 2026-08-03 rather than exercised. There
   are no shims, no writer generation, and no retirement gate; vNext admits
   itself and claims a run directory with a non-recursive `mkdir`.

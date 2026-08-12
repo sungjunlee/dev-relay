@@ -109,8 +109,9 @@ revision when that route is selected, or to close a reviewed local result.
 
 Claude, Codex, OpenCode, Pi, and Cursor prompts use bound stdin transport.
 Antigravity and Cline are explicit argv-visible exceptions with a 256 KiB
-prompt limit and local process-list exposure. Primary review uses the same
-explicit adapter credential catalog and never discovers an ambient HOME.
+prompt limit and local process-list exposure. Primary review inherits the
+operator's ambient HOME/XDG CLI session just as dispatch does; Relay neither
+discovers nor copies authentication files.
 
 ### Handling Failures
 

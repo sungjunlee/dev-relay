@@ -165,21 +165,26 @@ Expect:
 - the original frozen Done Criteria snapshot stays unchanged
 - the request event log remains append-only with the original two persistence events only
 
-### 9. Optional live adapter verification
+### 9. Inspect native isolation without a release gate
 
-Commands:
+From a Git repository, use the normal dry-run result for the adapter you are
+actually using. Replace the rubric path and choose a fresh branch name:
 
 ```bash
-node skills/relay-review/scripts/invoke-reviewer-codex.js --repo /tmp/review-fixture --prompt-file /tmp/review-prompt.md --json
-node skills/relay-review/scripts/review-runner.js --repo /tmp/review-fixture --branch issue-42 --pr 123 --done-criteria-file /tmp/done.md --diff-file /tmp/diff.patch --reviewer codex --no-comment --json
-node skills/relay-review/scripts/invoke-reviewer-claude.js --repo /tmp/review-fixture --prompt-file /tmp/review-prompt.md --json
+node skills/relay-dispatch/scripts/dispatch.js . \
+  --executor pi \
+  --branch relay-isolation-dry-run \
+  --prompt "Report the selected adapter invocation." \
+  --rubric-file /path/to/done-criteria.md \
+  --dry-run --json
 ```
 
-Current result:
+Expect:
 
-- live `codex` adapter invocation returns schema-valid JSON
-- live `review-runner --reviewer codex` can promote `review_pending -> ready_to_merge`
-- live `claude` adapter wiring is fixed, but the local machine still needs an authenticated `claude` CLI session
+- the selected adapter's foreground or dry-run JSON reports
+  `filesystem_isolation.requested` and `.effective`
+- unavailable or declaration-only native isolation is visible but nonblocking
+- provider credentials and unrelated installed CLIs are not a release condition
 
 ### 10. Merge finalizer records cleanup success or failure
 

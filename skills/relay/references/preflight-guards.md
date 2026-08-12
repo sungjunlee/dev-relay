@@ -27,7 +27,8 @@ checkout and returns one of these routes:
 - `github`: the configured origin and tracked remote satisfy the same exact
   GitHub identity checks used by production recovery. The existing PR and
   in-flight scans then run, with GitHub authentication and the selected
-  executor/reviewer network and credential requirements explicit.
+  executor/reviewer network requirements and ambient CLI authentication
+  available.
 
 Non-Git input fails with `SOURCE_NOT_GIT` and recommends explicit `git init` or
 direct `delegate`. A non-GitHub, ambiguous, or otherwise unsupported remote

@@ -290,13 +290,11 @@ test("allowlist entries must exist on disk", () => {
   );
 });
 
-test("real adapter reviewer and executor scripts are reachable", () => {
+test("real adapter scripts are reachable", () => {
   const orphans = new Set(findUnreachableScripts());
   [
     "skills/relay-dispatch/scripts/adapters/codex.js",
     "skills/relay-dispatch/scripts/adapters/opencode.js",
-    "skills/relay-review/scripts/invoke-reviewer-codex.js",
-    "skills/relay-review/scripts/invoke-reviewer-opencode.js",
   ].forEach((relativePath) => {
     assert.ok(!orphans.has(relativePath), `${relativePath} must be reachable`);
   });

@@ -8,20 +8,6 @@ const path = require("node:path");
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const TESTS_ROOT = path.join(REPO_ROOT, "tests");
 
-// These are permanent environment boundaries: seven live adapter canaries and
-// two opt-in live executor checks. Every other Relay test must always run.
-const ALLOWED_SKIPS = new Set([
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: two production phase cells use the ambient CLI session and exact nonce evidence",
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: ambient authentication failure is failed, never skipped or not_run",
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: a post-receipt timeout is cancelled and settled before canary fixture deletion",
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: an invalid post-receipt terminal aborts with a typed cause and destroys no evidence",
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: dispatch and review cells use phase-pristine fixtures",
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: boundary mutation and stale or fallback nonce cannot produce a pass",
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: clean exit with a missing or wrong nonce artifact is output failure, not boundary mutation",
-  "relay-dispatch/scripts/opencode-live.test.js :: opencode live canary is opt-in and uses explicit adapter/model selection",
-  "relay-dispatch/scripts/pi-live.test.js :: pi live canary is opt-in and records explicit adapter/model capability",
-]);
-
 function relayTestFiles(root = TESTS_ROOT) {
   function walk(directory) {
     return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -30,18 +16,6 @@ function relayTestFiles(root = TESTS_ROOT) {
     });
   }
   return walk(root).filter((file) => file.endsWith(".test.js"));
-}
-
-function literalNameBefore(source, offset) {
-  const prefix = source.slice(0, offset);
-  const call = prefix.lastIndexOf("test(");
-  if (call < 0) throw new Error("skip directive is not attached to a literal test call");
-  const argument = prefix.slice(call + 5).trimStart();
-  const match = /^("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\$]|\$(?!\{))*`)/.exec(argument);
-  if (!match) throw new Error("skip directive test name must be a normalized literal");
-  const quote = match[1][0];
-  const body = match[1].slice(1, -1);
-  return body.replace(new RegExp(`\\\\${quote}`, "g"), quote).replace(/\\\\n/g, "\n").replace(/\\\\\\\\/g, "\\");
 }
 
 function regexStartsAt(source, index) {
@@ -147,7 +121,7 @@ function directCallOptions(source) {
       if (masked[end] === "{") depth += 1;
       else if (masked[end] === "}") depth -= 1;
     }
-    if (depth === 0) objects.push({ start, end, masked: masked.slice(start, end), source: source.slice(start, end) });
+    if (depth === 0) objects.push({ masked: masked.slice(start, end), source: source.slice(start, end) });
   }
   return { objects, indirect };
 }
@@ -181,7 +155,6 @@ function inspectSource(relative, source) {
   if (/\b(?:test|it|describe)\s*\[/.test(maskedExecutable)) {
     violations.push(`${relative}: computed test registration is forbidden`);
   }
-  const skips = [];
   const calls = directCallOptions(executable);
   if (calls.indirect) violations.push(`${relative}: indirect three-argument test options are forbidden`);
   for (const optionObject of calls.objects) {
@@ -193,28 +166,21 @@ function inspectSource(relative, source) {
     if (option("todo").test(optionObject.source)) violations.push(`${relative}: todo is forbidden`);
     const alternateSkipOption = /(?:\{|,)\s*skip\s*(?=[,}])/;
     if (alternateSkipOption.test(optionObject.source)) violations.push(`${relative}: shorthand skip is forbidden`);
-    for (const match of optionObject.source.matchAll(/(?:\{|,)\s*skip\s*:/g)) {
-      try { skips.push(`${relative} :: ${literalNameBefore(executable, optionObject.start + match.index)}`); }
-      catch (error) { violations.push(`${relative}: ${error.message}`); }
-    }
+    if (/(?:\{|,)\s*skip\s*:/.test(optionObject.source)) violations.push(`${relative}: skip option is forbidden`);
   }
-  return { violations, skips };
+  return { violations };
 }
 
 function assertDirectives(files) {
   const violations = [];
-  const skips = [];
   for (const { relative, source } of files) {
     const result = inspectSource(relative, source);
     violations.push(...result.violations);
-    skips.push(...result.skips);
   }
   assert.deepEqual(violations, [], violations.join("\n"));
-  assert.deepEqual(new Set(skips), ALLOWED_SKIPS, "skip directives must exactly match the permanent allowlist");
-  assert.equal(skips.length, ALLOWED_SKIPS.size, "each allowed skip must occur exactly once");
 }
 
-test("Relay tests contain no focused/todo directives and exactly the allowed skips", () => {
+test("Relay tests contain no focused, todo, or skip directives", () => {
   assertDirectives(relayTestFiles().map((file) => ({
     relative: path.relative(TESTS_ROOT, file).split(path.sep).join("/"),
     source: fs.readFileSync(file, "utf8"),
@@ -223,10 +189,6 @@ test("Relay tests contain no focused/todo directives and exactly the allowed ski
 
 test("directive guard rejects injected unauthorized directives", () => {
   const skipProperty = ["sk", "ip: true"].join("");
-  const allowed = [...ALLOWED_SKIPS].map((identity) => {
-    const [relative, name] = identity.split(" :: ");
-    return { relative, source: `test(${JSON.stringify(name)}, { ${skipProperty} }, () => {});` };
-  });
   const injections = [
     ["test", ".only('focused', () => {});"].join(""),
     ["it", ".only('focused', () => {});"].join(""),
@@ -262,12 +224,12 @@ test("directive guard rejects injected unauthorized directives", () => {
     "test('hidden', { ...{ skip: true } }, () => {});",
   ];
   for (const source of injections) {
-    assert.throws(() => assertDirectives([...allowed, {
+    assert.throws(() => assertDirectives([{
       relative: "relay/scripts/injected.test.js",
       source,
-    }]), /forbidden|allowlist/);
+    }]), /forbidden/);
   }
-  assert.doesNotThrow(() => assertDirectives([...allowed, {
+  assert.doesNotThrow(() => assertDirectives([{
     relative: "relay/scripts/comment-decoy.test.js",
     source: ["// test", ".skip('comment only', () => {});\n/* { ['sk' + 'ip']: true } */\n",
       "test('ordinary body', () => { const key = 'value'; const source = {}; const value = { [key]: true, ...source }; });",

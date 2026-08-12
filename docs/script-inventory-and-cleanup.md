@@ -31,7 +31,7 @@ orphan scripts rather than reproducing a second inventory.
 | Append-only fact validation and merge authorization | `facts.js` |
 | Derived lifecycle action | `inspect.js` |
 | Git/GitHub observation and idempotent recovery/close | `recover.js` via `relay-recover.js` |
-| Host lock, supervisor, cancellation, sandbox | `host.js` |
+| Host lock, supervisor, cancellation, runtime binding, process-scope cleanup | `host.js` |
 | Executor argv/capability/output contract | `adapter-contract.js` and `adapters/` |
 
 `dispatch.js` only starts an attempt. `review-runner.js` only records a bound

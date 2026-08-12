@@ -73,7 +73,8 @@ node skills/relay-merge/scripts/finalize-run.js --repo . --run-id <id> --json
 All current executors are retained: Claude, Codex, OpenCode, Pi, Antigravity,
 Cursor, and Cline. The adapter registry gives each a common argv, capability,
 and output contract; it does not own lifecycle or registration state. Cline is
-dispatch-only until its strict primary-review canary passes.
+dispatch-only because it has no registered structured primary-review output
+contract.
 
 ```bash
 node skills/relay-config/scripts/relay-config.js doctor --json

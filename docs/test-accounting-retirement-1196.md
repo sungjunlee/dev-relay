@@ -15,10 +15,10 @@ Net accounting reduction is **3,847 LOC** before the additional narrowing of
 `recover.__testing`. The current tree contains zero generated inventory or
 ledger artifacts.
 
-The directive guard identifies the 11 permanent exceptions by exact relative
-path and normalized literal test name: nine macOS sandbox canaries and two
-explicit live-executor canaries. It rejects `.only`, todo, every other skip, and
-duplicate allowlisted skips without relying on line or ordinal identity.
+The directive guard now permits no exceptions. It rejects `.only`, todo, and
+every skip without relying on line or ordinal identity. The historical macOS
+sandbox and live-provider exceptions were retired with the 13-cell release
+gate.
 
 The RR contract remains separate because it owns a distinct fail-closed check:
 all 12 invariant ids resolve through `relay_test_path` to an exact current named

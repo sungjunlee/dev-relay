@@ -36,6 +36,9 @@ The seven executors are Claude, Codex, OpenCode, Pi, Antigravity, Cursor, and
 Cline. Add an executor as one `adapters/<name>.js` four-method descriptor,
 register it in `adapters/index.js`, and update adapter tests/docs. Do not give
 an adapter its own state, publisher, worktree utility, or registration hook.
+Provider credentials and installed CLIs are never a release gate: adapter
+coverage uses fake executables for argv/output contracts, while native-isolation
+availability remains a non-authoritative foreground diagnostic.
 
 ## Required invariants
 

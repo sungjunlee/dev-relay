@@ -35,7 +35,7 @@ See [the disposition](decisions/2026-08-03-migration-overlay-disposition.md).
 | Block | LOC | Invariant it protects | Verdict |
 | --- | ---: | --- | --- |
 | `recover.js` | 1,488 | Inspect-before-write and re-inspect under the run lock with the same action key; the only general lifecycle writer | Justified — single writer is the point |
-| `host.js` | 1,297 | Run lock, detached host, cancellation, sandbox containment; host locks are capabilities | Justified |
+| `host.js` | 1,297 | Run lock, detached host, cancellation, runtime binding, process-scope cleanup; host locks are capabilities | Justified |
 | `facts.js` | 739 | Append-only `events.jsonl`; merge authorization | Justified |
 | `dispatch.js` | 633 | Worktree containment; dispatch never commits, pushes, opens a PR, or recovers | Justified |
 | `run-store.js` | 591 | Immutable run/artifact trust boundary; regular-file containment | Justified |

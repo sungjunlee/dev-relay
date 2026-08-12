@@ -253,7 +253,7 @@ function verifyRuntimeFileBindings({ command, runtimeFiles, runtimeDependencies,
 }
 // Relay executes directly on a trusted local host. Filesystem policy is requested
 // from the selected CLI when available; Relay owns no filesystem admission or
-// profile compiler. Runtime bindings and process-scope cleanup remain separate
+// filesystem-policy compiler. Runtime bindings and process-scope cleanup remain separate
 // host guarantees below.
 function hostInvocation({ command, args = [], env = process.env } = {}) {
   if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) fail("args must be string argv", "INVALID_INVOCATION");

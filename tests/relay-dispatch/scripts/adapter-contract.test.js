@@ -154,7 +154,7 @@ test("Codex omits the reasoning override when the operator did not select one", 
 test("phase matrix is fail-closed before an invocation is built", () => {
   assert.throws(
     () => invocationFor(getAdapter("cline"), "primary_review"),
-    (error) => error instanceof contract.AdapterCapabilityError && /strict live canary/.test(error.message)
+    (error) => error instanceof contract.AdapterCapabilityError && /structured primary-review output contract/.test(error.message)
   );
   assert.equal(contract.validateCapabilities(getAdapter("cursor"), "dispatch", { readOnly: true, sandbox: "read-only", networkAccess: "enabled" }).supported, true);
   assert.equal(contract.validateCapabilities(getAdapter("codex"), "primary_review", { readOnly: true }).supported, true);
@@ -294,7 +294,7 @@ test("native probe is argv-only and reports unavailable CLIs as an explicit skip
     assert.equal(unavailable.status, "skipped", name);
     assert.match(unavailable.error, /CLI not found/, name);
     const isolatedEnvironment = adapter.probe({ env: { PATH: "" }, timeoutMs: 1000 });
-    assert.equal(isolatedEnvironment.status, "skipped", `${name} unavailable live canary`);
+    assert.equal(isolatedEnvironment.status, "skipped", `${name} unavailable CLI probe`);
   }
 });
 

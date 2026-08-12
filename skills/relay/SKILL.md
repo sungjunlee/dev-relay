@@ -44,7 +44,8 @@ Reviewed Result closure without a forge. If `source.route` is `github`, use
 the reported `source.remote_name` for the existing re-anchor fetch, then use
 `gh issue view <N>` when issue text is needed. That route retains its current
 GitHub deduplication and requires authenticated GitHub access plus the selected
-executor/reviewer's explicit network and credential prerequisites. GitLab and
+executor/reviewer's ordinary ambient CLI authentication and network
+availability. GitLab and
 other forges are unsupported; configure GitHub, remove all remotes for local
 delivery, or use direct `delegate`. A `SOURCE_NOT_GIT` error recommends
 explicit `git init` or direct `delegate`.

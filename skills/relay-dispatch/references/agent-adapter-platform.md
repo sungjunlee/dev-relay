@@ -47,43 +47,18 @@ applies to that invocation; otherwise the adapter default is used. Historical
 | `antigravity` | `agy` CLI with its declared, unverified `--sandbox`. |
 | `cursor` | Agent ask mode with native sandbox enabled. |
 
-Cline remains a dispatch executor. It is not a primary reviewer because a
-healthy strict-verdict live canary has not established that capability.
+Cline remains a dispatch executor. It is not a primary reviewer because it has
+no registered structured primary-review output contract.
 All review timeouts use the closed `review-runner.js --timeout <seconds>` input;
 there are no adapter-specific timeout environment variables.
-Antigravity primary review remains experimental until a healthy live reviewer
-canary returns strict verdict JSON within timeout. Its dispatch canary must make
-a minimal repository change to recoverable/reviewable state; a documented CLI limitation is not healthy success.
+Antigravity primary review remains experimental in its static adapter
+descriptor; its actual CLI availability is reported only when an operator
+invokes it, never as a repository release condition.
 Antigravity transports its prompt as argv and rejects invocations at a
 conservative 256 KiB argv budget before launch. Local process-list access can
 therefore disclose prompt content while `agy` is running.
 
-## Release canary acceptance
-
-The test-only live runner requires an exact 13-cell matrix: dispatch for all
-seven adapters plus primary review for every adapter that declares it (six at
-present). Every cell must pass; a missing CLI, unavailable ambient login,
-diagnostic fallback, timeout, sandbox/authentication failure, or unexecuted cell
-keeps the evidence `incomplete_non_release` and makes the command exit nonzero.
-
-Each dispatch cell crosses `host.launchLocalSupervisor` and must create one
-nonce-bound artifact.
-Each review cell crosses `runStore.invokeIndependentReviewer`, must return that
-run's nonce through an exact JSON schema, and must leave the repository
-unchanged. These are the production isolation entry boundaries; the runner does
-not call `dispatch.js` because that would create lifecycle facts and publication
-work unrelated to an adapter canary. The runner performs no credential
-selection: every cell invokes its CLI through the ordinary ambient local
-HOME/XDG session.
-
-Evidence records source-tree and dirty-state digests, runner/runtime hashes,
-platform, executable identity/version, prompt/invocation/output digests, and
-boundary/cleanup/process audits. It never records ambient environment values
-or source paths, and the recorded
-executable identity is the basename only — the old absolute-path evidence was
-archived as superseded (2026-08-07, #1153) and the next canary run regenerates
-current evidence under `docs/plans/relay-runtime-core-reset-vnext/`; it is
-intentionally incomplete until operators provision every required cell.
+## Network and native filesystem capabilities
 
 The trusted local CLI's remote provider control-plane transport is available.
 `networkAccess` separately describes model/tool networking and must
@@ -129,10 +104,8 @@ Claude dispatch runs with `--settings` that enables its native Bash sandbox and
 permits Bash while `allowUnsandboxedCommands:false` blocks automatic fallback.
 Claude primary review instead uses `--safe-mode`, permits only `Read`, and
 explicitly disallows `Bash`, `Write`, and `Edit`; its native-isolation
-diagnostic is `not_requested`. An unattended Claude Max canary uses the
-operator's existing Claude CLI login session. Relay never extracts the macOS
-Keychain login,
-and `--bare` is not used because it rejects subscription OAuth.
+diagnostic is `not_requested`. Relay never extracts a provider login from the
+macOS Keychain, and `--bare` is not used because it rejects subscription OAuth.
 
 ## Capability Matrix
 
@@ -148,8 +121,13 @@ and `--bare` is not used because it rejects subscription OAuth.
 
 All commands are built as argv arrays. Adapters that cannot represent a requested
 tool-network behavior fail closed; filesystem isolation absence instead emits the
-foreground diagnostic. A fake-binary test is contract evidence, not proof that a
-live provider integration is healthy.
+foreground diagnostic. Contract tests use fake binaries; their purpose is
+stable argv and lifecycle behavior, not live provider-health certification.
+
+The Relay host and its lifecycle/review seams run on macOS and Linux. Native
+filesystem controls remain adapter- and platform-specific: an unavailable
+native control is visible in the diagnostic but never blocks an otherwise valid
+trusted-local invocation.
 
 ### `inherited_scope_no_daemon`
 

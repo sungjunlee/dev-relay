@@ -16,8 +16,8 @@ Direct orchestration completed the code reset while retaining all seven native
 executors. The installed dispatch runtime fell from 75 JavaScript files / 29,607
 LOC to 18 files / 8,165 LOC. Excluding the two migration-only shims, the core is
 16 files / 6,049 LOC. The serialized gate on Node v22.22.3 reports 703 tests, 701
-passed, 0 failed, and 2 skipped; both skips are the ledger-approved opt-in live
-canaries that require external credentials.
+passed, 0 failed, and 2 skipped; both skips were then-approved opt-in provider
+canaries. They were later retired and do not describe the current gate.
 
 Both figures are the anchor's, per the measurement rule above, and are left
 as measured. Later work moved them: the migration overlay was deleted on
@@ -28,8 +28,8 @@ The runtime is larger than the figure published at the reset because production
 CLI isolation (#1141) added credential staging, the signed two-phase cleanup
 lifecycle, and runtime-identity binding after that measurement was taken.
 
-The rollout itself is not complete: the live adapter matrix is honestly 2/13 at
-`353f6fc`, and shim retirement still required 30 days plus 30 vNext terminal runs
+At `353f6fc`, the rollout was not complete: the live adapter matrix was honestly
+2/13, and shim retirement still required 30 days plus 30 vNext terminal runs
 with zero legacy reads. Both Codex cells pass the real production path; the
 remaining eleven carry typed external blockers, not weakened isolation. That
 retirement gate was never run: the overlay was deleted outright on 2026-08-03.
@@ -43,10 +43,10 @@ retirement gate was never run: the overlay was deleted outright on 2026-08-03.
   The strongest example was cleanup recovery: review found PID-reuse, pathname
   TOCTOU, signed-close ordering, and reviewer-reap gaps; the follow-up closed all
   four and received an explicit LGTM.
-- The orchestrator could reject false completion evidence. The canary changed
-  from “one pass plus skips may succeed” to an exact 13-cell all-or-nothing gate,
-  leaving the current result as `incomplete_non_release` instead of manufacturing
-  a green status.
+- The orchestrator could reject false completion evidence. The historical
+  provider matrix correctly reported incomplete external evidence rather than
+  manufacturing a green status; it was later retired because provider login is
+  not a repository release condition.
 - Simplification stayed coupled to the live import graph. The unused generic
   adapter and its identity framework were deleted while the seven native
   descriptors and their extension contract remained.
@@ -73,9 +73,9 @@ retirement gate was never run: the overlay was deleted outright on 2026-08-03.
   incomplete leaves easier to resume.
 - A standardized review state would make “fix requested → patch → same reviewer
   LGTM” auditable without reconstructing the sequence from conversation state.
-- Explicit evidence slots could separate code gates, live credentials, calendar
-  gates, and external-model availability instead of treating them as one broad
-  completion condition.
+- Explicit evidence slots could separate code gates, operator-local provider
+  availability, calendar gates, and external-model availability instead of
+  treating them as one broad completion condition.
 
 ## What Relay Should Not Reintroduce
 
@@ -96,9 +96,9 @@ retirement gate was never run: the overlay was deleted outright on 2026-08-03.
    actionable finding remains or relevant code changed.
 3. Give external delegates hard default deadlines and record timeout as
    unavailable evidence, not as a reason to restart the whole workflow.
-4. Model external gates separately: `code_green`, `live_matrix`,
-   `calendar_retirement`, and `external_review` should not collapse into one
-   state.
+4. Keep operator-local provider availability out of the repository test gate;
+   `code_green`, calendar retirement, and external review should not collapse
+   into one state.
 5. Preserve the direct approach's subtraction bias: new policy machinery needs
    a demonstrated invariant or incident, a production caller, and a retirement
    rule.

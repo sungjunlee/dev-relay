@@ -19,7 +19,7 @@ With no configured remotes, the result selects `local-reviewed-result`; do not
 fetch or invoke `gh`, and use local task text or the user description. A
 supported GitHub source retains the existing PR/in-flight dedup scan and may
 fetch the reported remote, use `gh`, and proceed only with explicit executor
-and reviewer network/credential prerequisites. Non-Git input returns
+and reviewer ambient CLI authentication plus network availability. Non-Git input returns
 `SOURCE_NOT_GIT` with explicit `git init` or direct `delegate` remediation.
 Unsupported forges return `SOURCE_UNSUPPORTED_REMOTE`; GitLab is not supported
 and Relay never silently falls back to local delivery.
@@ -125,15 +125,7 @@ node skills/relay-config/scripts/relay-config.js \
   check --phase dispatch --executor opencode --model provider/model --json
 ```
 
-The release-only adapter canary lives in the test suite; it is
-intentionally not an installed operator command. See the [adapter platform](../skills/relay-dispatch/references/agent-adapter-platform.md).
-
-The release-only adapter canary invokes each CLI with the operator's ambient
-local authentication and configuration. Missing authentication or CLIs remain
-non-release evidence; the runner never receives credential values or source
-paths as arguments.
-
-### Prompt and credential limits
+### Prompt and ambient authentication
 
 Claude, Codex, OpenCode, Pi, and Cursor receive prompts over digest-bound stdin.
 Cline and Antigravity are the two argv-visible exceptions: prompt text may be
