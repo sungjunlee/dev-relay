@@ -40,6 +40,12 @@ const IDLE = "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)";
 // `lstart` has one-second resolution, so an unrelated process occupying a recorded PID yields a matching
 // {pid, pgid, started_at} triple. Only the inherited scope token separates the two.
 function liveIdentity(pid) {
+  if (process.platform === "linux" && fs.existsSync(`/proc/${pid}/stat`)) {
+    const raw = fs.readFileSync(`/proc/${pid}/stat`, "utf8"), close = raw.lastIndexOf(")"), fields = raw.slice(close + 2).trim().split(/\s+/);
+    const ticks = Number(spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).stdout.trim());
+    const boot = Number(fs.readFileSync("/proc/stat", "utf8").split(/\r?\n/).find((line) => line.startsWith("btime ")).slice(6));
+    return { pid, pgid: Number(fields[2]), started_at: new Date((boot + Number(fields[19]) / ticks) * 1000).toISOString() };
+  }
   const out = spawnSync("/bin/ps", ["-p", String(pid), "-o", "pgid=,lstart="], { encoding: "utf8" }).stdout.trim();
   const match = out.match(/^(\d+)\s+(.*)$/);
   assert.ok(match, `no ps row for ${pid}`);
@@ -319,7 +325,9 @@ test("a quarantine that does not match the signed identity is not reclaimed", as
   writeCleanupObligation(value.runDir, attemptId, {
     processes: [], credential_root: { path: credentialRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
   });
-  fs.rmSync(credentialRoot, { recursive: true, force: true });
+  const displaced = path.join(value.runDir, ".displaced-bound-root");
+  fs.renameSync(credentialRoot, displaced);
+  t.after(() => fs.rmSync(displaced, { recursive: true, force: true }));
   const foreign = path.join(value.runDir, `.executor-credentials-${attemptId}.quarantine.${process.pid}.00000000000000ff`);
   fs.mkdirSync(foreign, { mode: 0o700 });
   fs.writeFileSync(path.join(foreign, "unrelated"), "not-ours", { mode: 0o600 });
