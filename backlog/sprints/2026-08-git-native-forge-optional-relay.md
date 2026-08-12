@@ -1,8 +1,8 @@
 ---
 milestone: Git-native, forge-optional Relay
-status: active
+status: completed
 started: 2026-08-10
-due: TBD
+completed: 2026-08-12
 component: "run-lifecycle"
 ---
 
@@ -26,15 +26,16 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
 
 ### Batch 3 — Forge-optional boundary
 
-- [~] #1208 — Review exact local Git changes and close terminal reviewed results (run `issue-1208-20260811141912577-b5562f0b`).
+- [x] #1208 — Review exact local Git changes and close terminal reviewed results → PR #1224 (merged).
 
 ### Batch 4 — Lifecycle evidence
 
-- [ ] #1205 — Make the public Relay workflow Git-required and forge-optional.
+- [x] #1205 — Make the public Relay workflow Git-required and forge-optional → PR #1226 (merged).
 
 ### Batch 5 — Landing and observation
 
-- [ ] #1206 — Verify and close the Git-native forge-optional Relay milestone.
+- [x] #1206 — Verify and close the Git-native forge-optional Relay milestone
+  ([closure evidence](../../docs/git-native-forge-optional-closure.md), completed by this closure PR).
 
 ## Deferred outside this milestone
 
@@ -73,3 +74,9 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
 - 2026-08-11 — #1207 completed in PR #1223. Began #1208 in run
   `issue-1208-20260811141912577-b5562f0b`; local review now shares the exact
   Git review fold and uses canonical recovery for the terminal Reviewed Result.
+- 2026-08-12 — #1208 and #1205 merged in PRs #1224 and #1226. #1206 then
+  closed the program with one uninterrupted no-origin journey, five real
+  child-process crash cuts, and the final serialized gate: 634 tests, 632 pass,
+  0 fail, and the two existing credential-gated skips. Runtime remained 16
+  files; milestone implementation added 540 LOC and no new framework, schema,
+  fact type, or lifecycle writer.
