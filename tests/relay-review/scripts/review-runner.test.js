@@ -154,7 +154,7 @@ test("Relay runner records one exact-SHA pass and the derived action advances to
   const exactDiff = Buffer.from(`${rawDiff}${rawDiff.endsWith("\n") || !rawDiff ? "" : "\n"}`, "utf8");
   assert.equal(captured.request.diff_sha256, crypto.createHash("sha256").update(exactDiff).digest("hex"));
   assert.deepEqual(fs.readFileSync(captured.request.diff_path), exactDiff);
-  assert.deepEqual(Object.keys(captured.credentialRequest.env), [], "ambient environment must not cross the reviewer boundary");
+  assert.equal(Object.hasOwn(captured, "credentialRequest"), false, "credential selections never cross the reviewer boundary");
   const prompt = fs.readFileSync(captured.request.prompt_path, "utf8");
   const verificationPrefix = "Verification fact: ";
   const verificationLine = prompt.split("\n").find((line) => line.startsWith(verificationPrefix));
@@ -809,10 +809,8 @@ test("fresh run snapshot drift rejects the append", async () => {
 
 test("immutable reviewer binding and closed CLI reject legacy policy surfaces", async () => {
   const value = await fixture("binding");
-  const credentialCli = runner.parseCli(["--repo", value.repo, "--run-dir", value.runDir,
-    "--credential-env", "OPENAI_API_KEY", "--credential-file", `auth=${path.join(value.root, "auth.json")}`]);
-  assert.deepEqual(credentialCli.values["credential-env"], ["OPENAI_API_KEY"]);
-  assert.deepEqual(credentialCli.values["credential-file"], [`auth=${path.join(value.root, "auth.json")}`]);
+  assert.throws(() => runner.parseCli(["--repo", value.repo, "--run-dir", value.runDir, "--credential-env", "OPENAI_API_KEY"]), /Unknown option/);
+  assert.throws(() => runner.parseCli(["--repo", value.repo, "--run-dir", value.runDir, "--credential-file", "auth=/private/auth.json"]), /Unknown option/);
   const override = runner.parseCli(["--repo", value.repo, "--run-dir", value.runDir, "--reviewer", "claude"]);
   await assert.rejects(runner.runReview(override, { inspectRun: value.inspectRun }), /immutable binding/);
   assert.throws(() => runner.parseCli(["--repo", value.repo, "--run-dir", value.runDir, "--review-budget", "3"]), /Unknown option/);

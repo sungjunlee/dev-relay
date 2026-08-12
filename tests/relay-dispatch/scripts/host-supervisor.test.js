@@ -75,10 +75,10 @@ function ownerSecret(runDir) {
   return JSON.parse(fs.readFileSync(path.join(ownership, name), "utf8"));
 }
 
-function writeCleanupObligation(runDir, attemptId, obligation) {
+function writeCleanupObligation(runDir, attemptId, obligation, kind = obligation.staged_input_root ? "reviewer" : "executor") {
   const owner = ownerSecret(runDir);
   const body = {
-    v: 2, attempt_id: attemptId, lock_id: owner.lock_id, host_handle: owner.host_handle,
+    v: 2, kind, attempt_id: attemptId, lock_id: owner.lock_id, host_handle: owner.host_handle,
     identities: { supervisor: { pid: owner.process.pid, pgid: owner.process.pgid, started_at: owner.process.started_at }, executor: null },
     error: "injected cleanup obligation", terminal: { status: "failed", exit_code: 1, signal: null },
     obligation, observed_at: new Date().toISOString(),
@@ -86,6 +86,12 @@ function writeCleanupObligation(runDir, attemptId, obligation) {
   const signature = crypto.createHmac("sha256", owner.secret).update(JSON.stringify(body)).digest("hex");
   fs.writeFileSync(path.join(runDir, `host-attempt-${attemptId}.cleanup-incomplete.json`),
     `${JSON.stringify({ ...body, auth_sha256: signature })}\n`, { mode: 0o600 });
+}
+
+function stagedInputRoot(t) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "relay-review-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  return root;
 }
 
 test("a same-second PID reuse without the inherited scope token is never signalled", { timeout: 30_000 }, async (t) => {
@@ -139,9 +145,8 @@ test("lost cleanup scope proof requires exact external action and then converges
   await waitForFile(marker);
   assert.equal(fs.readFileSync(marker, "utf8"), scope.env.RELAY_PROCESS_SCOPE, "the process must inherit the run scope before dropping it");
   await new Promise((resolve) => setTimeout(resolve, 300));
-  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
   writeCleanupObligation(value.runDir, attemptId, {
-    processes: [liveIdentity(foreign.pid)], credential_root: { path: credentialRoot, dev: null, ino: null },
+    processes: [liveIdentity(foreign.pid)], staged_input_root: null,
     scope_seal: scope.seal,
   });
   const inspection = host.inspectOwnership({ runDir: value.runDir });
@@ -174,9 +179,8 @@ test("Linux cleanup retains stat identity when proc cmdline is unreadable", { ti
   t.after(() => { if (!processDead(foreign.pid)) try { process.kill(-foreign.pid, "SIGKILL"); } catch {} try { host.releaseRunLock(capability); } catch {} });
   await waitForFile(marker);
   await new Promise((resolve) => setTimeout(resolve, 300));
-  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
   writeCleanupObligation(value.runDir, attemptId, {
-    processes: [liveIdentity(foreign.pid)], credential_root: { path: credentialRoot, dev: null, ino: null },
+    processes: [liveIdentity(foreign.pid)], staged_input_root: null,
     scope_seal: scope.seal,
   });
   const realReadFile = fs.readFileSync;
@@ -224,26 +228,26 @@ test("cleanup recovery treats an exact zombie as gone even when ps redacts its s
     if (/^Z/.test(state)) return state; await new Promise((resolve) => setTimeout(resolve, 20));
   } return ""; })();
   assert.match(zombie, /^Z/, "the stopped parent must leave an exact zombie identity");
-  writeCleanupObligation(value.runDir, attemptId, { processes: [identity], credential_root: { path: path.join(value.runDir, `executor-credentials-${attemptId}`), dev: null, ino: null }, scope_seal: scope.seal });
+  writeCleanupObligation(value.runDir, attemptId, { processes: [identity], staged_input_root: null, scope_seal: scope.seal });
   await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "settle exact zombie" });
   assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
   assert.equal(fs.existsSync(path.join(value.runDir, `attempt-${attemptId}.result.json`)), true);
   assert.equal(processDead(parent.pid), false, "recovery must not signal a process outside the exact obligation");
 });
 
-test("a credential-root pathname swap is quarantined, preserved as evidence, and never deleted", { timeout: 30_000 }, async (t) => {
+test("a staged-input-root pathname swap is quarantined, preserved as evidence, and never deleted", { timeout: 30_000 }, async (t) => {
   const value = roots("root-swap"), attemptId = "root-swap", capability = lock(value, attemptId);
   t.after(() => { try { host.releaseRunLock(capability); } catch {} });
-  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
-  fs.mkdirSync(credentialRoot, { mode: 0o700 });
-  fs.writeFileSync(path.join(credentialRoot, "auth.json"), "bound-secret", { mode: 0o600 });
-  const bound = fs.lstatSync(credentialRoot), stashed = `${credentialRoot}.stashed`;
+  const stagedRoot = stagedInputRoot(t);
+  fs.writeFileSync(path.join(stagedRoot, "input.md"), "bound-input", { mode: 0o600 });
+  const bound = fs.lstatSync(stagedRoot), stashed = `${stagedRoot}.stashed`;
+  t.after(() => fs.rmSync(stashed, { recursive: true, force: true }));
   writeCleanupObligation(value.runDir, attemptId, {
-    processes: [], credential_root: { path: credentialRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
+    processes: [], staged_input_root: { path: stagedRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
   });
   const realRename = fs.renameSync;
   fs.renameSync = function swapBeforeQuarantine(from, to) {
-    if (String(from) === credentialRoot) {
+    if (String(from) === stagedRoot) {
       fs.renameSync = realRename;
       realRename(from, stashed);
       fs.mkdirSync(from, { mode: 0o700 });
@@ -253,58 +257,57 @@ test("a credential-root pathname swap is quarantined, preserved as evidence, and
   };
   let failure;
   try {
-    await assert.rejects(host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "settle a swapped credential root" }),
+    await assert.rejects(host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "settle a swapped staged input root" }),
       (error) => { failure = error; return error.code === "HOST_CLEANUP_INCOMPLETE" && /was replaced before quarantined removal/.test(error.message); });
   } finally { fs.renameSync = realRename; }
   assert.equal(fs.existsSync(failure.quarantinePath), true, "the swapped tree is preserved as evidence");
   assert.equal(fs.readFileSync(path.join(failure.quarantinePath, "planted"), "utf8"), "attacker");
-  assert.equal(path.dirname(failure.quarantinePath), value.runDir);
-  assert.equal(fs.readFileSync(path.join(stashed, "auth.json"), "utf8"), "bound-secret");
+  assert.equal(path.dirname(failure.quarantinePath), path.dirname(stagedRoot));
+  assert.equal(fs.readFileSync(path.join(stashed, "input.md"), "utf8"), "bound-input");
   assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), false);
 });
 
 // Covers the window where a prior removal quarantined the bound root and then failed to roll it back:
 // the obligation still names the original pathname, which is now absent. Absence must not be read as
-// cleanup success while a sibling quarantine still holds the signed identity and its secret bytes.
-test("an unrolled-back quarantine is reclaimed instead of settling on an absent pathname", async (t) => {
+// cleanup success while a sibling quarantine still holds the signed identity and its staged bytes.
+test("an unrolled-back staged-input quarantine is reclaimed instead of settling on an absent pathname", async (t) => {
   const value = roots("quarantine-orphan"), attemptId = "quarantine-orphan", capability = lock(value, attemptId);
   t.after(() => { try { host.releaseRunLock(capability); } catch {} });
-  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
-  fs.mkdirSync(credentialRoot, { mode: 0o700 });
-  fs.writeFileSync(path.join(credentialRoot, "auth.json"), "bound-secret", { mode: 0o600 });
-  const bound = fs.lstatSync(credentialRoot);
+  const stagedRoot = stagedInputRoot(t);
+  fs.writeFileSync(path.join(stagedRoot, "input.md"), "bound-input", { mode: 0o600 });
+  const bound = fs.lstatSync(stagedRoot);
   writeCleanupObligation(value.runDir, attemptId, {
-    processes: [], credential_root: { path: credentialRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
+    processes: [], staged_input_root: { path: stagedRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
   });
   // Replay a failed removal whose rollback also failed: bound root renamed aside, original pathname gone.
-  const orphan = path.join(value.runDir, `.executor-credentials-${attemptId}.quarantine.${process.pid}.deadbeefdeadbeef`);
-  fs.renameSync(credentialRoot, orphan);
-  assert.equal(fs.existsSync(credentialRoot), false);
+  const orphan = path.join(path.dirname(stagedRoot), `.${path.basename(stagedRoot)}.quarantine.${process.pid}.deadbeefdeadbeef`);
+  fs.renameSync(stagedRoot, orphan);
+  assert.equal(fs.existsSync(stagedRoot), false);
   assert.equal(fs.lstatSync(orphan).ino, bound.ino, "the quarantine must still carry the signed identity");
 
   await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "reclaim an orphaned quarantine" });
 
-  assert.equal(fs.existsSync(orphan), false, "the secret-bearing quarantine must be removed, not orphaned");
-  assert.equal(fs.readdirSync(value.runDir).some((name) => name.includes(".quarantine.")), false);
+  assert.equal(fs.existsSync(orphan), false, "the staged-input quarantine must be removed, not orphaned");
+  assert.equal(fs.readdirSync(path.dirname(stagedRoot)).some((name) => name.includes(`${path.basename(stagedRoot)}.quarantine.`)), false);
   assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), true);
   assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
 });
 
 // Reclaim must not delete by pathname. Between the identity check and the removal, a racing process can
 // move the real quarantine away and leave a decoy at that name; the removal must land on neither.
-test("a reclaimed quarantine swapped before removal is preserved, not deleted", { timeout: 30_000 }, async (t) => {
+test("a reclaimed staged-input quarantine swapped before removal is preserved, not deleted", { timeout: 30_000 }, async (t) => {
   const value = roots("quarantine-reclaim-swap"), attemptId = "quarantine-reclaim-swap", capability = lock(value, attemptId);
   t.after(() => { try { host.releaseRunLock(capability); } catch {} });
-  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
-  fs.mkdirSync(credentialRoot, { mode: 0o700 });
-  fs.writeFileSync(path.join(credentialRoot, "auth.json"), "bound-secret", { mode: 0o600 });
-  const bound = fs.lstatSync(credentialRoot);
+  const stagedRoot = stagedInputRoot(t);
+  fs.writeFileSync(path.join(stagedRoot, "input.md"), "bound-input", { mode: 0o600 });
+  const bound = fs.lstatSync(stagedRoot);
   writeCleanupObligation(value.runDir, attemptId, {
-    processes: [], credential_root: { path: credentialRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
+    processes: [], staged_input_root: { path: stagedRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
   });
-  const orphan = path.join(value.runDir, `.executor-credentials-${attemptId}.quarantine.${process.pid}.abadcafeabadcafe`);
-  fs.renameSync(credentialRoot, orphan);
-  const stashed = path.join(value.runDir, "stashed-real-quarantine");
+  const orphan = path.join(path.dirname(stagedRoot), `.${path.basename(stagedRoot)}.quarantine.${process.pid}.abadcafeabadcafe`);
+  fs.renameSync(stagedRoot, orphan);
+  const stashed = path.join(path.dirname(stagedRoot), "stashed-real-quarantine");
+  t.after(() => fs.rmSync(stashed, { recursive: true, force: true }));
 
   const realRename = fs.renameSync;
   fs.renameSync = function swapReclaimedQuarantine(from, to) {
@@ -321,7 +324,7 @@ test("a reclaimed quarantine swapped before removal is preserved, not deleted", 
     await assert.rejects(host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "reclaim a swapped quarantine" }),
       (error) => { failure = error; return error.code === "HOST_CLEANUP_INCOMPLETE" && /was replaced before quarantined removal/.test(error.message); });
   } finally { fs.renameSync = realRename; }
-  assert.equal(fs.readFileSync(path.join(stashed, "auth.json"), "utf8"), "bound-secret", "the real secret tree must not be deleted");
+  assert.equal(fs.readFileSync(path.join(stashed, "input.md"), "utf8"), "bound-input", "the real staged tree must not be deleted");
   assert.equal(fs.existsSync(failure.quarantinePath), true, "the decoy is preserved as evidence");
   assert.equal(fs.readFileSync(path.join(failure.quarantinePath, "planted"), "utf8"), "attacker");
   assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), false, "settled must not be published");
@@ -330,18 +333,18 @@ test("a reclaimed quarantine swapped before removal is preserved, not deleted", 
 // Removal unlinks a pathname, so a rename racing the delete can leave the bound tree alive under another
 // quarantine name while the delete still returns success. Settling must depend on a post-condition scan,
 // not on the delete's return value.
-test("a bound tree surviving removal under a quarantine name blocks settling", async (t) => {
+test("a staged-input tree surviving removal under a quarantine name blocks settling", async (t) => {
   const value = roots("quarantine-survives"), attemptId = "quarantine-survives", capability = lock(value, attemptId);
   t.after(() => { try { host.releaseRunLock(capability); } catch {} });
-  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
-  fs.mkdirSync(credentialRoot, { mode: 0o700 });
-  fs.writeFileSync(path.join(credentialRoot, "auth.json"), "bound-secret", { mode: 0o600 });
-  const bound = fs.lstatSync(credentialRoot);
+  const stagedRoot = stagedInputRoot(t);
+  fs.writeFileSync(path.join(stagedRoot, "input.md"), "bound-input", { mode: 0o600 });
+  const bound = fs.lstatSync(stagedRoot);
   writeCleanupObligation(value.runDir, attemptId, {
-    processes: [], credential_root: { path: credentialRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
+    processes: [], staged_input_root: { path: stagedRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
   });
   // Race the delete: move the verified tree to another quarantine name so the rmSync unlinks nothing.
-  const survivor = path.join(value.runDir, `.executor-credentials-${attemptId}.quarantine.${process.pid}.5ur5170r5ur5170r`);
+  const survivor = path.join(path.dirname(stagedRoot), `.${path.basename(stagedRoot)}.quarantine.${process.pid}.5ur5170r5ur5170r`);
+  t.after(() => fs.rmSync(survivor, { recursive: true, force: true }));
   const realRm = fs.rmSync;
   fs.rmSync = function renameInsteadOfRemoving(target, options) {
     if (String(target).includes(".quarantine.")) { fs.rmSync = realRm; fs.renameSync(target, survivor); return undefined; }
@@ -351,26 +354,26 @@ test("a bound tree surviving removal under a quarantine name blocks settling", a
     await assert.rejects(host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "settle after a racing rename" }),
       (error) => error.code === "HOST_CLEANUP_INCOMPLETE" && /survived removal under a quarantine name/.test(error.message));
   } finally { fs.rmSync = realRm; }
-  assert.equal(fs.readFileSync(path.join(survivor, "auth.json"), "utf8"), "bound-secret", "the surviving tree is retained as evidence");
+  assert.equal(fs.readFileSync(path.join(survivor, "input.md"), "utf8"), "bound-input", "the surviving tree is retained as evidence");
   assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), false, "settled must not be published");
 });
 
 // A quarantine whose identity does not match the signed binding is someone else's tree. It must be left
-// untouched and must not be mistaken for the bound root.
-test("a quarantine that does not match the signed identity is not reclaimed", async (t) => {
+// untouched and must not be mistaken for the bound staged-input root.
+test("a staged-input quarantine that does not match the signed identity is not reclaimed", async (t) => {
   const value = roots("quarantine-foreign"), attemptId = "quarantine-foreign", capability = lock(value, attemptId);
   t.after(() => { try { host.releaseRunLock(capability); } catch {} });
-  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
-  fs.mkdirSync(credentialRoot, { mode: 0o700 });
-  const bound = fs.lstatSync(credentialRoot);
+  const stagedRoot = stagedInputRoot(t);
+  const bound = fs.lstatSync(stagedRoot);
   writeCleanupObligation(value.runDir, attemptId, {
-    processes: [], credential_root: { path: credentialRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
+    processes: [], staged_input_root: { path: stagedRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
   });
-  const displaced = path.join(value.runDir, ".displaced-bound-root");
-  fs.renameSync(credentialRoot, displaced);
+  const displaced = path.join(path.dirname(stagedRoot), ".displaced-staged-input-root");
+  fs.renameSync(stagedRoot, displaced);
   t.after(() => fs.rmSync(displaced, { recursive: true, force: true }));
-  const foreign = path.join(value.runDir, `.executor-credentials-${attemptId}.quarantine.${process.pid}.00000000000000ff`);
+  const foreign = path.join(path.dirname(stagedRoot), `.${path.basename(stagedRoot)}.quarantine.${process.pid}.00000000000000ff`);
   fs.mkdirSync(foreign, { mode: 0o700 });
+  t.after(() => fs.rmSync(foreign, { recursive: true, force: true }));
   fs.writeFileSync(path.join(foreign, "unrelated"), "not-ours", { mode: 0o600 });
   assert.notEqual(fs.lstatSync(foreign).ino, bound.ino);
 
@@ -380,26 +383,40 @@ test("a quarantine that does not match the signed identity is not reclaimed", as
   assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
 });
 
-test("a quarantine removal failure rolls the bound root back for convergent recovery", async (t) => {
+test("a staged-input quarantine removal failure rolls the bound root back for convergent recovery", async (t) => {
   const value = roots("quarantine-rm-failure"), attemptId = "quarantine-rm-failure", capability = lock(value, attemptId);
   t.after(() => { try { host.releaseRunLock(capability); } catch {} });
-  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
-  fs.mkdirSync(credentialRoot, { mode: 0o700 }); fs.writeFileSync(path.join(credentialRoot, "auth.json"), "bound-secret", { mode: 0o600 });
-  const bound = fs.lstatSync(credentialRoot);
+  const stagedRoot = stagedInputRoot(t);
+  fs.writeFileSync(path.join(stagedRoot, "input.md"), "bound-input", { mode: 0o600 });
+  const bound = fs.lstatSync(stagedRoot);
   writeCleanupObligation(value.runDir, attemptId, {
-    processes: [], credential_root: { path: credentialRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
+    processes: [], staged_input_root: { path: stagedRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
   });
   await assert.rejects(host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "inject quarantine removal failure",
-    fault(stage) { if (stage === "credential_after_quarantine") throw new Error("injected rm failure"); } }),
+    fault(stage) { if (stage === "staged_input_after_quarantine") throw new Error("injected rm failure"); } }),
   (error) => error.code === "HOST_CLEANUP_INCOMPLETE" && /rolled back/.test(error.message));
-  assert.equal(fs.readFileSync(path.join(credentialRoot, "auth.json"), "utf8"), "bound-secret");
-  assert.equal(fs.readdirSync(value.runDir).some((name) => name.includes(".quarantine.")), false);
+  assert.equal(fs.readFileSync(path.join(stagedRoot, "input.md"), "utf8"), "bound-input");
+  assert.equal(fs.readdirSync(path.dirname(stagedRoot)).some((name) => name.includes(`${path.basename(stagedRoot)}.quarantine.`)), false);
   assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), false);
   assert.notEqual(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
   await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "retry rolled-back cleanup" });
   assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
-  assert.equal(fs.existsSync(credentialRoot), false);
-  assert.equal(fs.readdirSync(value.runDir).some((name) => name.includes("auth.json") || name.includes(".quarantine.")), false);
+  assert.equal(fs.existsSync(stagedRoot), false);
+  assert.equal(fs.readdirSync(path.dirname(stagedRoot)).some((name) => name.includes(`${path.basename(stagedRoot)}.quarantine.`)), false);
+});
+
+test("cleanup artifacts reject legacy roots, unknown keys, and unknown kinds", async (t) => {
+  for (const [label, obligation, kind] of [
+    ["legacy-root", { processes: [], scope_seal: null, staged_input_root: null, credential_root: null }, "executor"],
+    ["unknown-key", { processes: [], scope_seal: null, staged_input_root: null, extra: true }, "executor"],
+    ["unknown-kind", { processes: [], scope_seal: null, staged_input_root: null }, "legacy"],
+  ]) {
+    const value = roots(`cleanup-schema-${label}`), attemptId = `cleanup-schema-${label}`, capability = lock(value, attemptId);
+    t.after(() => { try { host.releaseRunLock(capability); } catch {} });
+    writeCleanupObligation(value.runDir, attemptId, obligation, kind);
+    await assert.rejects(host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: `reject ${label}` }),
+      (error) => error.code === "HOST_ARTIFACT_INVALID" && /cleanup obligation is invalid/.test(error.message));
+  }
 });
 
 test("config claim starts the executor exactly once and terminal bytes are authenticated", async () => {
@@ -469,25 +486,56 @@ test("cancel terminates the executor process group and descendants within a boun
   host.releaseRunLock(capability);
 });
 
-test("executor inherits only the minimal host environment plus explicit adapter entries", async () => {
+test("executor inherits ambient host auth/config while blocking Relay and runtime injection", async () => {
   const value = roots("env-canary"), attemptId = "env-canary", capability = lock(value, attemptId);
   const marker = path.join(value.worktree, "environment.txt"), barrier = path.join(value.runDir, "env.release");
   const previous = process.env.RELAY_PARENT_SECRET_CANARY;
   process.env.RELAY_PARENT_SECRET_CANARY = "must-not-cross";
   try {
-    const script = `require('fs').writeFileSync(${JSON.stringify(marker)},[process.env.RELAY_PARENT_SECRET_CANARY||'missing',process.env.RELAY_EXPLICIT_SAFE||'missing',process.env.RELAY_EPHEMERAL_TOKEN||'missing'].join(':'))`;
+    const script = `require('fs').writeFileSync(${JSON.stringify(marker)},[process.env.RELAY_PARENT_SECRET_CANARY||'missing',process.env.EXPLICIT_SAFE||'missing'].join(':'))`;
     const receipt = host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", script],
-      trustedWorktreeRoot: value.worktree, cwd: value.worktree, executorEnv: { RELAY_EXPLICIT_SAFE: "allowed" }, ephemeralEnv: { RELAY_EPHEMERAL_TOKEN: "one-shot" }, testGateBarrierPath: barrier, lockContext: capability });
+      trustedWorktreeRoot: value.worktree, cwd: value.worktree, executorEnv: { EXPLICIT_SAFE: "allowed" }, testGateBarrierPath: barrier, lockContext: capability });
     const running = JSON.parse(fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.running.json`)));
-    assert.doesNotMatch(spawnSync("/bin/ps", ["eww", "-p", `${running.supervisor.pid},${running.executor.pid}`], { encoding: "utf8" }).stdout, /one-shot/);
+    assert.doesNotMatch(spawnSync("/bin/ps", ["eww", "-p", `${running.supervisor.pid},${running.executor.pid}`], { encoding: "utf8" }).stdout, /must-not-cross/);
     fs.writeFileSync(barrier, "release", { mode: 0o600 });
     const result = await host.waitForTerminalResult(receipt);
     assert.equal(result.status, "completed");
-    assert.equal(fs.readFileSync(marker, "utf8"), "missing:allowed:one-shot");
-    assert.doesNotMatch(fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.config.json`), "utf8"), /must-not-cross|one-shot/);
+    assert.equal(fs.readFileSync(marker, "utf8"), "missing:allowed");
+    const config = JSON.parse(fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.config.json`), "utf8"));
+    assert.equal(Object.hasOwn(config, "ambient_env"), false);
+    assert.equal(Object.hasOwn(config, "executor_env"), false);
+    assert.doesNotMatch(JSON.stringify(config), /must-not-cross/);
     assert.equal(fs.readdirSync(value.runDir).some((name) => name.startsWith(".host-secret-")), false);
   } finally {
     if (previous === undefined) delete process.env.RELAY_PARENT_SECRET_CANARY; else process.env.RELAY_PARENT_SECRET_CANARY = previous;
+    host.releaseRunLock(capability);
+  }
+});
+
+test("host ambient sanitizer preserves CLI session values and rejects startup injection", () => {
+  const safe = host.hostInvocation.ambientEnvironment({ HOME: "/tmp/home", XDG_CONFIG_HOME: "/tmp/config", SSL_CERT_FILE: "/tmp/ca.pem",
+    RELAY_PROCESS_SCOPE: "forged", RELAY_ARBITRARY_INJECTION: "forged", NODE_OPTIONS: "--require=evil", LD_PRELOAD: "evil", BASH_ENV: "/tmp/evil" }, "test ambient");
+  assert.deepEqual(safe, { HOME: "/tmp/home", XDG_CONFIG_HOME: "/tmp/config", SSL_CERT_FILE: "/tmp/ca.pem" });
+  assert.throws(() => host.hostInvocation.ambientEnvironment({}, "test ambient", { NODE_PATH: "/tmp/evil" }), /invalid environment entry/);
+});
+
+test("ambient host payload has no named-file window before supervisor spawn", () => {
+  const value = roots("secret-fd"), attemptId = "secret-fd", capability = lock(value, attemptId), marker = "ambient-secret-must-not-persist";
+  const previous = process.env.HOST_SECRET_PRESPAWN;
+  process.env.HOST_SECRET_PRESPAWN = marker;
+  try {
+    assert.throws(() => host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", "0"],
+      trustedWorktreeRoot: value.worktree, cwd: value.worktree, lockContext: capability,
+      testBeforeSupervisorSpawn({ runDir, configPath }) {
+        assert.equal(runDir, value.runDir);
+        assert.equal(fs.readdirSync(runDir).some((name) => name.startsWith(".host-secret-")), false);
+        assert.doesNotMatch(fs.readFileSync(configPath, "utf8"), new RegExp(marker));
+        throw new Error("injected pre-spawn failure");
+      },
+    }), /injected pre-spawn failure/);
+    assert.equal(fs.readdirSync(value.runDir).some((name) => name.startsWith(".host-secret-")), false);
+  } finally {
+    if (previous === undefined) delete process.env.HOST_SECRET_PRESPAWN; else process.env.HOST_SECRET_PRESPAWN = previous;
     host.releaseRunLock(capability);
   }
 });
@@ -626,169 +674,25 @@ test("bound prompt reaches native executor only through exact stdin bytes and me
   } finally { host.releaseRunLock(capability); }
 });
 
-test("credential request stages exact private HOME/XDG files and keeps sources and values out of durable and argv surfaces", async () => {
-  const value = roots("credentials"), attemptId = "credentials", capability = lock(value, attemptId);
-  const source = path.join(value.root, "auth.json"), proof = path.join(value.worktree, "credential-proof.json");
-  const secret = "credential-secret-7f1d", envSecret = "environment-secret-3a9c";
-  fs.writeFileSync(source, secret, { mode: 0o600 }); fs.chmodSync(source, 0o600);
-  const metadata = { files: [{ id: "auth", targetRoot: "home", targetRel: ".tool/auth.json", access: "read" }], envHints: [] };
-  const script = [
-    "const fs=require('fs'),path=require('path');",
-    "const cache=path.join(process.env.HOME,'.tool/cache/state.json');fs.mkdirSync(path.dirname(cache),{recursive:true});fs.writeFileSync(cache,'state');",
-    "let authWrite='written';try{fs.writeFileSync(path.join(process.env.HOME,'.tool/auth.json'),'changed')}catch(e){authWrite='denied:'+e.code}",
-    "fs.writeFileSync(process.argv[1],JSON.stringify({home:process.env.HOME,xdg:process.env.XDG_CONFIG_HOME,data:process.env.XDG_DATA_HOME,",
-    "file:fs.readFileSync(path.join(process.env.HOME,'.tool/auth.json'),'utf8'),cache:fs.readFileSync(cache,'utf8'),authWrite,env:process.env.TOOL_API_KEY,modes:[fs.statSync(process.env.HOME).mode&511,fs.statSync(path.join(process.env.HOME,'.tool/auth.json')).mode&511]}));",
-  ].join("");
+test("host preserves ambient HOME/XDG and auth environment without serializing them", async () => {
+  const value = roots("ambient-env"), attemptId = "ambient-env", capability = lock(value, attemptId);
+  const proof = path.join(value.worktree, "ambient-proof.json"), ambient = "ambient-auth-canary";
+  const previous = { auth: process.env.AMBIENT_AUTH_CANARY, relay: process.env.RELAY_PARENT_SECRET_CANARY };
+  process.env.AMBIENT_AUTH_CANARY = ambient; process.env.RELAY_PARENT_SECRET_CANARY = "must-not-cross";
   try {
+    const script = "require('fs').writeFileSync(process.argv[1],JSON.stringify({home:process.env.HOME,config:process.env.XDG_CONFIG_HOME,data:process.env.XDG_DATA_HOME,auth:process.env.AMBIENT_AUTH_CANARY,relay:process.env.RELAY_PARENT_SECRET_CANARY||null}))";
     const receipt = host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", script, proof],
-      trustedWorktreeRoot: value.worktree, cwd: value.worktree, credentialRequest: { metadata, envNames: ["TOOL_API_KEY"], fileSpecs: [`auth=${source}`], env: { TOOL_API_KEY: envSecret } }, lockContext: capability });
-    const configPath = path.join(value.runDir, `host-attempt-${attemptId}.config.json`), configText = fs.readFileSync(configPath, "utf8"), config = JSON.parse(configText);
-    assert.deepEqual(config.credentials, [{ id: "auth", targetRoot: "home", targetRel: ".tool/auth.json", access: "read", size: Buffer.byteLength(secret), sha: crypto.createHash("sha256").update(secret).digest("hex") }]);
-    assert.doesNotMatch(configText, new RegExp(`${secret}|${envSecret}|${source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-    assert.doesNotMatch(JSON.stringify(config.args), new RegExp(`${secret}|${envSecret}|${source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+      trustedWorktreeRoot: value.worktree, cwd: value.worktree, lockContext: capability });
+    const configText = fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.config.json`), "utf8");
+    assert.doesNotMatch(configText, new RegExp(`${ambient}|must-not-cross`));
     assert.equal((await host.waitForTerminalResult(receipt)).status, "completed");
     const observed = JSON.parse(fs.readFileSync(proof, "utf8"));
-    // The trusted-local path no longer fabricates a filesystem boundary around
-    // staged credentials. Their source binding and post-run cleanup remain until
-    // #1233 removes staging altogether.
-    assert.equal(observed.file, "changed"); assert.equal(observed.cache, "state"); assert.equal(observed.authWrite, "written"); assert.equal(observed.env, envSecret); assert.deepEqual(observed.modes, [0o700, 0o600]);
-    assert.match(observed.home, /executor-credentials-credentials\/home$/); assert.match(observed.xdg, /executor-credentials-credentials\/xdg-config$/); assert.match(observed.data, /executor-credentials-credentials\/xdg-data$/);
-    assert.equal(fs.existsSync(path.dirname(observed.home)), false);
-    for (const name of fs.readdirSync(value.runDir).filter((name) => /\.(?:json|log)$/.test(name))) {
-      const text = fs.readFileSync(path.join(value.runDir, name), "utf8"); assert.doesNotMatch(text, new RegExp(`${secret}|${envSecret}`), name);
-    }
-  } finally { host.releaseRunLock(capability); }
-});
-
-test("private environment paths use distinct short attempt roots and clean exactly", async () => {
-  const value = roots("private-env-paths"), observed = [];
-  const declarations = [{ key: "TOOL_CONFIG_DIR", root: "home", relative: ".tool" }, { key: "TOOL_DATA_DIR", root: "scratch", relative: "tool-data" }];
-  for (const attemptId of ["private-path-a", "private-path-b"]) {
-    const capability = lock(value, attemptId), proof = path.join(value.worktree, `${attemptId}.json`);
-    try {
-      const script = "const fs=require('fs');fs.writeFileSync(process.argv[1],JSON.stringify({home:process.env.HOME,config:process.env.TOOL_CONFIG_DIR,data:process.env.TOOL_DATA_DIR}));";
-      const receipt = host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", script, proof],
-        trustedWorktreeRoot: value.worktree, cwd: value.worktree, privateEnvPaths: declarations, lockContext: capability });
-      const config = JSON.parse(fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.config.json`), "utf8"));
-      assert.deepEqual(config.private_env_paths, declarations); assert.ok(Buffer.byteLength(config.credential_root) <= 64); assert.match(config.credential_root, /\/relay-[0-9a-f]{32}$/);
-      assert.equal((await host.waitForTerminalResult(receipt)).status, "completed"); const output = JSON.parse(fs.readFileSync(proof, "utf8")); observed.push(output);
-      assert.equal(output.config, path.join(output.home, ".tool")); assert.match(output.data, /\/scratch\/tool-data$/); assert.ok(Buffer.byteLength(output.data) <= 83);
-      assert.equal(fs.existsSync(config.credential_root), false);
-    } finally { host.releaseRunLock(capability); }
-  }
-  assert.notEqual(path.dirname(observed[0].home), path.dirname(observed[1].home));
-  const longAttempt = "private-reject-length", longCapability = lock(value, longAttempt);
-  try {
-    const receipt = host.launchLocalSupervisor({ runDir: value.runDir, attemptId: longAttempt, command: process.execPath, args: ["-e", "0"], trustedWorktreeRoot: value.worktree,
-      cwd: value.worktree, privateEnvPaths: [{ key: "TOOL_DATA_DIR", root: "scratch", relative: "x".repeat(80) }], lockContext: longCapability });
-    const terminal = await host.waitForTerminalResult(receipt); assert.equal(terminal.status, "spawn_error"); assert.match(terminal.error, /short-path limit/);
-    assert.equal(fs.existsSync(JSON.parse(fs.readFileSync(path.join(value.runDir, `host-attempt-${longAttempt}.config.json`), "utf8")).credential_root), false);
-  } finally { host.releaseRunLock(longCapability); }
-  for (const privateEnvPaths of [[{ key: "TOOL_DATA_DIR", root: "scratch", relative: "/tmp/escape" }], declarations]) {
-    const attemptId = `private-reject-${privateEnvPaths.length}`, capability = lock(value, attemptId);
-    try { assert.throws(() => host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", "0"], trustedWorktreeRoot: value.worktree,
-      cwd: value.worktree, privateEnvPaths, ...(privateEnvPaths.length > 1 ? { executorEnv: { TOOL_DATA_DIR: "/tmp/caller" } } : {}), lockContext: capability }),
-    (error) => error.code === "INVALID_INVOCATION"); } finally { host.releaseRunLock(capability); }
-  }
-});
-
-test("credential sources and catalog selections fail closed before supervisor artifacts", () => {
-  const metadata = { files: [{ id: "auth", targetRoot: "home", targetRel: ".tool/auth.json", access: "read" }], envHints: ["TOOL_API_KEY"] };
-  for (const kind of ["world", "symlink", "fifo"]) {
-    const value = roots(`credential-${kind}`), attemptId = `credential-${kind}`, capability = lock(value, attemptId), source = path.join(value.root, "source");
-    try {
-      if (kind === "world") fs.writeFileSync(source, "secret", { mode: 0o644 });
-      else if (kind === "symlink") { const target = path.join(value.root, "target"); fs.writeFileSync(target, "secret", { mode: 0o600 }); fs.symlinkSync(target, source); }
-      else spawnSync("mkfifo", [source]);
-      assert.throws(() => host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", "0"], trustedWorktreeRoot: value.worktree, cwd: value.worktree,
-        credentialRequest: { metadata, fileSpecs: [`auth=${source}`] }, lockContext: capability }), (error) => ["UNTRUSTED_CREDENTIAL", "INVALID_CREDENTIAL"].includes(error.code));
-      assert.equal(fs.readdirSync(value.runDir).some((name) => name.includes(`host-attempt-${attemptId}`)), false);
-    } finally { host.releaseRunLock(capability); }
-  }
-});
-
-test("credential source inode/content swap between prepare and bind fails before config publication", () => {
-  const value = roots("credential-swap"), attemptId = "credential-swap", capability = lock(value, attemptId);
-  const source = path.join(value.root, "source"), replacement = path.join(value.root, "replacement");
-  fs.writeFileSync(source, "first-secret", { mode: 0o600 }); fs.writeFileSync(replacement, "second-secret", { mode: 0o600 });
-  const metadata = { files: [{ id: "auth", targetRoot: "home", targetRel: ".tool/auth.json", access: "read" }], envHints: [] };
-  try {
-    assert.throws(() => host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", "0"],
-      trustedWorktreeRoot: value.worktree, cwd: value.worktree, credentialRequest: { metadata, fileSpecs: [`auth=${source}`] },
-      testCredentialPrepared: () => fs.renameSync(replacement, source), lockContext: capability }), (error) => error.code === "CREDENTIAL_CHANGED");
-    assert.equal(fs.readdirSync(value.runDir).some((name) => name.includes(`host-attempt-${attemptId}`)), false);
-  } finally { host.releaseRunLock(capability); }
-});
-
-test("partial credential prepare failure zeroes already-read source buffers", () => {
-  const value = roots("credential-partial"), attemptId = "credential-partial", capability = lock(value, attemptId);
-  const first = path.join(value.root, "first"), second = path.join(value.root, "second"), secret = "first-partial-secret";
-  fs.writeFileSync(first, secret, { mode: 0o600 }); fs.writeFileSync(second, "unsafe", { mode: 0o644 });
-  const metadata = { files: [
-    { id: "first", targetRoot: "home", targetRel: ".tool/first", access: "read" },
-    { id: "second", targetRoot: "home", targetRel: ".tool/second", access: "read" },
-  ], envHints: [] };
-  const originalRead = fs.readFileSync; let captured = null;
-  fs.readFileSync = function readAndCapture(target, ...args) {
-    const bytes = originalRead.call(this, target, ...args);
-    if (Number.isInteger(target) && Buffer.isBuffer(bytes) && bytes.toString("utf8") === secret) captured = bytes;
-    return bytes;
-  };
-  try {
-    assert.throws(() => host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", "0"],
-      trustedWorktreeRoot: value.worktree, cwd: value.worktree, credentialRequest: { metadata, fileSpecs: [`first=${first}`, `second=${second}`] }, lockContext: capability }),
-    (error) => error.code === "UNTRUSTED_CREDENTIAL");
-    assert.ok(captured); assert.equal(captured.every((byte) => byte === 0), true);
-    assert.equal(fs.readdirSync(value.runDir).some((name) => name.includes(`host-attempt-${attemptId}`)), false);
-  } finally { fs.readFileSync = originalRead; host.releaseRunLock(capability); }
-});
-
-test("cleanup-incomplete recovery settles exact obligations and converges after a crash", async () => {
-  const value = roots("credential-cleanup"), attemptId = "credential-cleanup", capability = lock(value, attemptId);
-  const marker = path.join(value.runDir, "cleanup.fail"); fs.writeFileSync(marker, "fail", { mode: 0o600 });
-  try {
-    const receipt = host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", "0"],
-      trustedWorktreeRoot: value.worktree, cwd: value.worktree, testCleanupFailurePath: marker, lockContext: capability });
-    await assert.rejects(host.waitForTerminalResult(receipt, { timeoutMs: 10_000 }), (error) => {
-      assert.equal(error.code, "HOST_CLEANUP_INCOMPLETE"); assert.match(error.cleanup_sha256, /^[0-9a-f]{64}$/); return true;
-    });
-    const cleanupPath = path.join(value.runDir, `host-attempt-${attemptId}.cleanup-incomplete.json`), cleanup = JSON.parse(fs.readFileSync(cleanupPath, "utf8"));
-    assert.match(cleanup.auth_sha256, /^[0-9a-f]{64}$/); assert.match(cleanup.error, /cleanup failed/);
-    assert.equal(cleanup.obligation.credential_root.path, path.join(value.runDir, `executor-credentials-${attemptId}`));
-    assert.ok(Number.isInteger(cleanup.obligation.credential_root.dev));
-    assert.ok(cleanup.obligation.processes.every((identity) => Number.isInteger(identity.pid) && identity.started_at));
-    assert.equal(fs.existsSync(receipt.result_path), false);
-    fs.rmSync(marker, { force: true });
-    // The recorded supervisor/executor are short-lived; a same-second PID reuse (macOS lstart is
-    // second-resolution) can transiently make the exact reap look like a foreign unscoped process,
-    // which the host correctly refuses to signal (HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED, see the dedicated
-    // "a same-second PID reuse without the inherited scope token" test above). Production recovery
-    // re-observes and retries, so this test does too: the reused pid exits within a second and the
-    // retry converges. This is not a timeout widening; the transient bind failure is a first-class
-    // recovery-observable state and convergence is still asserted below.
-    const settleRetrying = async (fault) => {
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        try {
-          return await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "recover cleanup", ...(fault ? { fault } : {}) });
-        } catch (error) {
-          if (error.code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED") {
-            await new Promise((resolve) => setTimeout(resolve, 100));
-            continue;
-          }
-          throw error;
-        }
-      }
-      assert.fail("cleanup settle did not converge across 10 re-observations");
-    };
-    await assert.rejects(settleRetrying((stage) => { if (stage === "after_settled") throw new Error("crash after settled proof"); }), /crash after settled proof/);
-    assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), true);
-    assert.equal(fs.existsSync(receipt.result_path), false);
-    await settleRetrying();
-    assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
-    assert.equal((await host.waitForTerminalResult(receipt)).status, "failed");
-    assert.equal(fs.existsSync(cleanup.obligation.credential_root.path), false);
+    assert.equal(observed.home, process.env.HOME); assert.equal(observed.config, process.env.XDG_CONFIG_HOME);
+    assert.equal(observed.data, process.env.XDG_DATA_HOME); assert.equal(observed.auth, ambient); assert.equal(observed.relay, null);
   } finally {
-    fs.rmSync(marker, { force: true }); fs.rmSync(path.join(value.runDir, `executor-credentials-${attemptId}`), { recursive: true, force: true }); try { host.releaseRunLock(capability); } catch {}
+    if (previous.auth === undefined) delete process.env.AMBIENT_AUTH_CANARY; else process.env.AMBIENT_AUTH_CANARY = previous.auth;
+    if (previous.relay === undefined) delete process.env.RELAY_PARENT_SECRET_CANARY; else process.env.RELAY_PARENT_SECRET_CANARY = previous.relay;
+    host.releaseRunLock(capability);
   }
 });
 
@@ -796,11 +700,9 @@ test("pre-exec environment injection keys fail before supervisor launch", () => 
   const value = roots("env-injection"), capability = lock(value, "env-injection"), marker = path.join(value.worktree, "injected");
   const options = { runDir: value.runDir, attemptId: "env-injection", command: process.execPath, args: ["-e", "0"], trustedWorktreeRoot: value.worktree, cwd: value.worktree, lockContext: capability };
   try {
-    for (const key of ["SSL_CERT_FILE", "NODE_OPTIONS", "NODE_PATH", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "BASH_ENV", "ENV", "ZDOTDIR", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "LUA_INIT", "PHPRC", "PHP_INI_SCAN_DIR", "PYTHONSTARTUP", "PYTHONPATH", "PERL5OPT", "RUBYOPT", "GEM_HOME"])
+    for (const key of ["RELAY_EXPLICIT_SAFE", "NODE_OPTIONS", "NODE_PATH", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "BASH_ENV", "ENV", "ZDOTDIR", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "LUA_INIT", "PHPRC", "PHP_INI_SCAN_DIR", "PYTHONSTARTUP", "PYTHONPATH", "PERL5OPT", "RUBYOPT", "GEM_HOME"])
       assert.throws(() => host.launchLocalSupervisor({ ...options, executorEnv: { [key]: marker } }), (error) => error.code === "INVALID_INVOCATION", key);
-    assert.throws(() => host.launchLocalSupervisor({ ...options, ephemeralEnv: { NODE_OPTIONS: marker } }), (error) => error.code === "INVALID_INVOCATION");
-    fs.writeFileSync(path.join(value.worktree, ".zshenv"), `print -r -- $RELAY_EPHEMERAL_TOKEN > ${marker}\n`);
-    assert.throws(() => host.launchLocalSupervisor({ ...options, command: "/bin/zsh", args: ["-c", ":"], executorEnv: { ZDOTDIR: value.worktree }, ephemeralEnv: { RELAY_EPHEMERAL_TOKEN: "pre-sandbox-secret" } }), (error) => error.code === "INVALID_INVOCATION");
+    assert.doesNotThrow(() => host.launchLocalSupervisor({ ...options, executorEnv: { SSL_CERT_FILE: marker } }));
     assert.equal(fs.existsSync(marker), false);
   } finally { host.releaseRunLock(capability); }
 });

@@ -3,7 +3,6 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { credentialRequest: normalizeCredentialRequest } = require("./adapter-contract");
 const host = require("./host");
 
 const RUN_VERSION = 3;
@@ -371,10 +370,13 @@ function boundedEnvironment(overrides = {}, allowlist = REVIEW_ENV) {
   }
   return env;
 }
+function ambientEnvironment(overrides = {}) {
+  return host.hostInvocation.ambientEnvironment(process.env, "ambient process environment", overrides);
+}
 function isolatedFailureReason(result, outcome) {
   if (result.error?.code === "ETIMEDOUT") return "invocation_timeout";
   const stderr = String(result.stderr || "");
-  if (/not authenticated|not logged in|authentication|credentials? required|api[_ -]?key.{0,80}(?:missing|required|not set)|unauthorized|forbidden/i.test(stderr)) return "credentials_unavailable";
+  if (/not authenticated|not logged in|authentication|credentials? required|api[_ -]?key.{0,80}(?:missing|required|not set)|unauthorized|forbidden/i.test(stderr)) return "ambient_auth_unavailable";
   if (/sqlite_readonly|readonly database|operation not permitted|permission denied|filesystem\.open|sandbox/i.test(stderr)) return "execution_environment_unavailable";
   if (result.signal) return "invocation_cancelled";
   if (Number.isInteger(result.status) && result.status !== 0) return "cli_nonzero_exit";
@@ -399,12 +401,10 @@ function attachReviewInputError(error, inputBindingError) {
   if (!error.cause) error.cause = inputBindingError;
   return error;
 }
-function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, parseOutcome, envAllowlist = REVIEW_ENV, stdinBinding = null, inputBindings = [], credentials = null, processScope = null }) {
+function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, parseOutcome, envAllowlist = REVIEW_ENV, useAmbientEnvironment = false, stdinBinding = null, inputBindings = [], processScope = null }) {
   if (!Array.isArray(invocation?.args) || invocation.args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) throw new Error("hosted invocation requires string argv values");
-  const childEnv = boundedEnvironment(env, envAllowlist); childEnv.HOME = credentials?.roots.home || writeRoot; childEnv.XDG_CONFIG_HOME = credentials?.roots.xdg_config || writeRoot;
-  childEnv.XDG_DATA_HOME = credentials?.roots.xdg_data || writeRoot; childEnv.TMPDIR = writeRoot;
-  Object.assign(childEnv, credentials?.environment || {});
-  Object.assign(childEnv, host.hostInvocation.privatePathEnvironment(invocation.privateEnvPaths, credentials?.roots || {}, childEnv, "INVALID_INVOCATION"));
+  const childEnv = useAmbientEnvironment ? ambientEnvironment(env) : boundedEnvironment(env, envAllowlist);
+  if (useAmbientEnvironment) childEnv.TMPDIR = writeRoot;
   processScope ||= host.hostInvocation.beginProcessScope(); Object.assign(childEnv, processScope.env);
   const runtime = host.hostInvocation.bindRuntimeFiles({ command: invocation.command, env: childEnv, runtimeDependencies: invocation.runtimeDependencies });
   const runtimeError = (error) => { error.executed_runtime = runtime.runtime_files; return error; };
@@ -427,7 +427,7 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
   try { host.hostInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
     runtimeDependencies: invocation.runtimeDependencies, env: childEnv, reenumerate: false }); }
   catch (error) { runtimeIntegrityError = error; }
-  // The process-group reap must run even when the scope audit throws or times out, or a credential-holding
+  // The process-group reap must run even when the scope audit throws or times out, or a reviewer
   // descendant would outlive the reviewer. Both audit failures are aggregated and reported together.
   const auditErrors = [];
   let scopedAudit = null, processGroupAudit = null;
@@ -475,28 +475,6 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
     runtime_audit: Object.freeze({ pgid: result.pid || null, process_group_absent: true, process_scope_remaining: 0, scope_seal: processScope.seal, quiet_window_ms: 250 }) });
 }
 
-function stageReviewerCredentials(stage, request) {
-  request ||= { metadata: {}, envNames: [], fileSpecs: [], env: {} }; const normalized = normalizeCredentialRequest(request.metadata, request);
-  const root = path.join(stage, "reviewer-credentials"), roots = { home: path.join(root, "home"), xdg_config: path.join(root, "xdg-config"), xdg_data: path.join(root, "xdg-data"), scratch: path.join(root, "scratch") };
-  fs.mkdirSync(root, { mode: 0o700 }); for (const value of Object.values(roots)) fs.mkdirSync(value, { mode: 0o700 });
-  const sources = new Map(normalized.fileSpecs.map((spec) => [spec.slice(0, spec.indexOf("=")), spec.slice(spec.indexOf("=") + 1)]));
-  const readable = [], writable = [], readonly = [], environment = {};
-  try {
-    for (const name of normalized.envNames) {
-      if (typeof request.env?.[name] !== "string") throw new Error(`credential environment value is missing: ${name}`);
-      environment[name] = request.env[name];
-    }
-    for (const item of normalized.metadata.files) {
-      const source = sources.get(item.id); if (!source) continue;
-      const bytes = host.hostInvocation.readOwnerCredential(source, `credential '${item.id}'`), target = path.join(roots[item.targetRoot], item.targetRel);
-      if (!contained(roots[item.targetRoot], target)) { bytes.fill(0); throw new Error("credential target escapes its private root"); }
-      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 }); fs.chmodSync(path.dirname(target), 0o700);
-      try { fs.writeFileSync(target, bytes, { flag: "wx", mode: 0o600 }); } finally { bytes.fill(0); }
-      readable.push(target); if (item.access === "read_write") writable.push(target); else readonly.push(target);
-    }
-    return { root, roots, readable, writable, readonly, environment };
-  } catch (error) { for (const key of Object.keys(environment)) delete environment[key]; throw error; }
-}
 function invokeExternalObserver({ observer, request, timeoutMs = 120000 }) {
   const stage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-observer-")));
   try {
@@ -520,7 +498,7 @@ function invokeExternalObserver({ observer, request, timeoutMs = 120000 }) {
       } }).output;
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }
-function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutcome, timeoutMs, env, credentialRequest = null }) {
+function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutcome, timeoutMs, env }) {
   const record = readRunRecord({ runDir });
   let diff, prompt;
   try {
@@ -562,11 +540,10 @@ function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutc
     executed_prompt_sha256: stagedBindings.prompt.sha256,
     request_sha256: digest(Buffer.from(JSON.stringify({ run_id: record.run_id, reviewed_sha: request.reviewed_sha, ...paths }))) });
     const resultPath = path.join(output, "reviewer-result.json");
-    const credentials = stageReviewerCredentials(stage, credentialRequest);
     const invocation = buildInvocation(Object.freeze({ cwd: inputs, ...paths, promptBytes: Buffer.from(stagedBindings.prompt.bytes), requestPath: null, resultPath, schemaPath }));
     for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
     outcome = runHosted({ invocation: { ...invocation, resultPath }, readRoot: inputs, writeRoot: output, timeoutMs, env, parseOutcome, stdinBinding: stagedBindings.prompt,
-      inputBindings: Object.entries(stagedBindings), credentials, processScope });
+      inputBindings: Object.entries(stagedBindings), processScope, useAmbientEnvironment: true });
     for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
   } catch (error) { if (binding) error.review_binding = binding; failure = error; const audit = error.runtime_audit;
     preserveStage = Boolean(audit && !(audit.process_group_absent === true && audit.process_scope_remaining === 0));

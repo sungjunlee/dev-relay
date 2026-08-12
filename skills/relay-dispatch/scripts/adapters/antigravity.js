@@ -23,10 +23,7 @@ module.exports = createNativeAdapter({
   name: "antigravity",
   timeoutMs: 1800000,
   outputProtocol: (phase) => phase === "primary_review" ? "json_result" : "text_stdout",
-  metadata: { cliBinary: "agy", cliBinaryEnv: "RELAY_ANTIGRAVITY_BIN", outputProtocol: "phase-specific", providerDefault: "google", providerFromModel: true, promptTransport: "argv_visible", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", credentialTransport: "explicit_bundle", runtimeDependencies: { executableParent: null, interpreterParent: null }, promptTransportWarning: "prompt content is visible in the local process list; bounded to less than 256 KiB", credentials: { files: [
-    { id: "oauth", targetRoot: "home", targetRel: ".gemini/oauth_creds.json", access: "read_write", recommendedSource: "~/.gemini/oauth_creds.json" },
-    { id: "config", targetRoot: "home", targetRel: ".gemini/config/config.json", access: "read_write", recommendedSource: "~/.gemini/config/config.json" },
-  ], envHints: [] } },
+  metadata: { cliBinary: "agy", cliBinaryEnv: "RELAY_ANTIGRAVITY_BIN", outputProtocol: "phase-specific", providerDefault: "google", providerFromModel: true, promptTransport: "argv_visible", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", runtimeDependencies: { executableParent: null, interpreterParent: null }, promptTransportWarning: "prompt content is visible in the local process list; bounded to less than 256 KiB" },
   phases: {
     // `agy --sandbox` does not provide a verifiable tool-network block.
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "declaration_only", cancellation: "process", structuredOutput: "text", commandExecution: true },

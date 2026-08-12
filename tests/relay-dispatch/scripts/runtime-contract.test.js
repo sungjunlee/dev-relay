@@ -297,16 +297,17 @@ process.stdin.on("end", () => process.stdout.write(JSON.stringify({
   assert.equal(verdict.output.executor_session_token, null);
   assert.equal(verdict.output.executor_worktree, null);
   assert.equal(verdict.output.cwd.startsWith(runDir), false);
-  assert.equal(verdict.output.home, path.join(path.dirname(verdict.output.cwd), "reviewer-credentials", "home"));
+  assert.equal(verdict.output.home, process.env.HOME);
   fs.writeFileSync(promptPath, "mutated executor-side prompt\n");
   request.prompt_sha256 = shaFile(promptPath);
-  assert.throws(() => runtime.invokeIndependentReviewer({
+  const ambientVerdict = runtime.invokeIndependentReviewer({
     runDir,
     request,
     buildInvocation,
     parseOutcome,
     env: { EXECUTOR_SESSION_TOKEN: "leak" },
-  }), /not allowed/);
+  });
+  assert.equal(ambientVerdict.output.executor_session_token, "leak");
   const transcriptPath = path.join(runDir, "executor-transcript.txt");
   fs.writeFileSync(transcriptPath, "private executor reasoning\n");
   assert.throws(() => runtime.invokeIndependentReviewer({

@@ -183,8 +183,8 @@ starts as a Relay run.
   never before its authoritative signed close.
 - Signals are bound to the inherited process-scope marker and revalidated
   immediately before delivery; unverifiable targets fail closed.
-- Signed credential roots are removed by rename-to-quarantine and dev/ino
-  revalidation; a swapped path is preserved as evidence, never deleted.
+- Signed staged review-input roots are removed by rename-to-quarantine and
+  dev/ino revalidation; a swapped path is preserved as evidence, never deleted.
 - External GitHub and merge observations use a fresh nonce-bound observer only
   on the GitHub route; local delivery has no forge observation.
 - PR comments, mutable files, prior prompts, executor transcripts, and legacy

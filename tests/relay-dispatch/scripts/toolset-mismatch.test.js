@@ -87,9 +87,7 @@ function probeDescriptor(dispatchPhase) {
     metadata: {
       cliBinary: "probe", outputProtocol: "text_stdout", promptTransport: "stdin",
       processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required",
-      credentialTransport: "explicit_bundle",
       runtimeDependencies: { executableParent: null, interpreterParent: null },
-      credentials: { files: [], envHints: [] },
     },
     phases: { dispatch: dispatchPhase, primary_review: { supported: false, reason: "probe" } },
     buildDispatch: () => ({ command: "probe", args: [], cwd: "/" }),

@@ -8,13 +8,11 @@ const path = require("node:path");
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const TESTS_ROOT = path.join(REPO_ROOT, "tests");
 
-// These are permanent environment boundaries: nine macOS sandbox canaries and
+// These are permanent environment boundaries: seven live adapter canaries and
 // two opt-in live executor checks. Every other Relay test must always run.
 const ALLOWED_SKIPS = new Set([
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: two production phase cells pass only with explicit credentials and exact nonce evidence",
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: provisioned authentication failure is failed, never skipped or not_run",
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: dispatch cleanup-incomplete is settled before canary fixtures are removed",
-  "relay-dispatch/scripts/adapter-live-canary.test.js :: unsettleable dispatch cleanup preserves signed evidence and aborts the canary",
+  "relay-dispatch/scripts/adapter-live-canary.test.js :: two production phase cells use the ambient CLI session and exact nonce evidence",
+  "relay-dispatch/scripts/adapter-live-canary.test.js :: ambient authentication failure is failed, never skipped or not_run",
   "relay-dispatch/scripts/adapter-live-canary.test.js :: a post-receipt timeout is cancelled and settled before canary fixture deletion",
   "relay-dispatch/scripts/adapter-live-canary.test.js :: an invalid post-receipt terminal aborts with a typed cause and destroys no evidence",
   "relay-dispatch/scripts/adapter-live-canary.test.js :: dispatch and review cells use phase-pristine fixtures",

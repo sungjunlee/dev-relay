@@ -16,12 +16,7 @@ module.exports = createNativeAdapter({
   name: "pi",
   timeoutMs: 1800000,
   outputProtocol: (phase) => phase === "primary_review" ? "json_result" : "text_stdout",
-  metadata: { cliBinary: "pi", cliBinaryEnv: "RELAY_PI_BIN", outputProtocol: "phase-specific", providerDefault: "pi", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", credentialTransport: "explicit_bundle", runtimeDependencies: { executableParent: 1, interpreterParent: null },
-    credentials: { files: [
-      { id: "auth", targetRoot: "home", targetRel: ".pi/agent/auth.json", access: "read_write", recommendedSource: "~/.pi/agent/auth.json" },
-      { id: "settings", targetRoot: "home", targetRel: ".pi/agent/settings.json", access: "read_write", recommendedSource: "~/.pi/agent/settings.json" },
-      { id: "models", targetRoot: "home", targetRel: ".pi/agent/models.json", access: "read", recommendedSource: "~/.pi/agent/models.json" },
-    ], envHints: ["QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_CN_API_KEY"] } },
+  metadata: { cliBinary: "pi", cliBinaryEnv: "RELAY_PI_BIN", outputProtocol: "phase-specific", providerDefault: "pi", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", runtimeDependencies: { executableParent: 1, interpreterParent: null } },
   phases: {
     // buildDispatch pins --tools read,grep,find,ls,write,edit: no shell, no command execution.
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "native", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text", commandExecution: false },

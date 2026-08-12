@@ -12,12 +12,7 @@ module.exports = createNativeAdapter({
   name: "opencode",
   timeoutMs: 1800000,
   outputProtocol: (phase) => phase === "primary_review" ? "json_result" : "text_stdout",
-  metadata: { cliBinary: "opencode", outputProtocol: "phase-specific", providerDefault: "opencode", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", credentialTransport: "explicit_bundle", runtimeDependencies: { executableParent: null, interpreterParent: null },
-    credentials: { files: [
-      { id: "auth", targetRoot: "xdg_data", targetRel: "opencode/auth.json", access: "read_write", recommendedSource: "~/.local/share/opencode/auth.json" },
-      { id: "config_json", targetRoot: "xdg_config", targetRel: "opencode/opencode.json", access: "read", recommendedSource: "~/.config/opencode/opencode.json" },
-      { id: "config_jsonc", targetRoot: "xdg_config", targetRel: "opencode/opencode.jsonc", access: "read", recommendedSource: "~/.config/opencode/opencode.jsonc" },
-    ], envHints: [] } },
+  metadata: { cliBinary: "opencode", outputProtocol: "phase-specific", providerDefault: "opencode", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", runtimeDependencies: { executableParent: null, interpreterParent: null } },
   phases: {
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text", commandExecution: true },
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "json" },

@@ -65,8 +65,7 @@ Essential flags:
 - `--executor, -e` and `--model, -m` select execution. Resume cannot replace the executor bound in `run.json`.
 - `--sandbox`, `--network-access`, `--timeout`, `--reasoning`, and `--copy` configure the attempt. Copy inputs must be regular files contained by the repository.
 - Provider control-plane transport is always available to the trusted CLI. `--network-access` governs model/tool networking: `disabled` requires an adapter-native deny and fails closed for adapters that cannot enforce one; `enabled` explicitly permits the adapter's network-capable tools.
-- `--credential-env NAME` and `--credential-file ID=/absolute/source` explicitly opt a credential into a foreground attempt. They are repeatable, adapter-declared, and incompatible with `--detach`.
-- Unattended Claude Max runs require an operator-generated `CLAUDE_CODE_OAUTH_TOKEN` selected with `--credential-env`; Relay never extracts the macOS Keychain login.
+- CLI authentication, HOME, XDG config, and supported token variables come from the operator's ambient local environment. Credential selector flags were removed and fail as unknown options; Relay never copies auth files or records their paths.
 - Every adapter declares whether its dispatch toolset can execute commands. A prompt demanding command execution (fenced shell block, `node --test`, `npm test`/`npm run`, `npx`, `git commit`/`push`/`rebase`/`merge`, or an imperative "run"/"execute" next to a backticked command) is rejected with `TOOLSET_MISMATCH` for a no-shell executor (`pi`, `claude`) before any durable state exists. `--allow-toolset-mismatch` downgrades it to a stderr warning.
 - `--fleet-id` requires typed `--ownership-json` with exactly `sprint`, `track`, and `component`; parent and ownership digest are immutable.
 - `--detach` starts a detached dispatch supervisor, prints a receipt, and returns before executor completion.

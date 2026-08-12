@@ -128,14 +128,10 @@ node skills/relay-config/scripts/relay-config.js \
 The release-only adapter canary lives in the test suite; it is
 intentionally not an installed operator command. See the [adapter platform](../skills/relay-dispatch/references/agent-adapter-platform.md).
 
-Release evidence is all-or-nothing across 13 required cells (seven dispatch and
-six declared primary-review cells). Run it only with explicit per-phase
-credential selectors, for example
-`--credential-env codex:dispatch:OPENAI_API_KEY`; repeat the selector for the
-review phase and for every adapter. Missing credentials or CLIs are reported as
-`not_run_*`, exit nonzero, and cannot be treated as a release pass. The runner
-prints only credential environment names/file IDs and cryptographic digests,
-never values or source paths.
+The release-only adapter canary invokes each CLI with the operator's ambient
+local authentication and configuration. Missing authentication or CLIs remain
+non-release evidence; the runner never receives credential values or source
+paths as arguments.
 
 ### Prompt and credential limits
 
@@ -143,24 +139,12 @@ Claude, Codex, OpenCode, Pi, and Cursor receive prompts over digest-bound stdin.
 Cline and Antigravity are the two argv-visible exceptions: prompt text may be
 visible in the local process list, and Relay rejects prompts at 256 KiB.
 
-Provider credentials are never selected implicitly. A foreground dispatch may
-opt in an environment value with repeatable `--credential-env NAME` or a
-declared adapter credential file with repeatable
-`--credential-file ID=/absolute/source`, for example:
-
-```bash
-node skills/relay-dispatch/scripts/dispatch.js . \
-  --executor codex --credential-env OPENAI_API_KEY \
-  --credential-file auth=/absolute/path/to/auth.json \
-  -b issue-42 --prompt-file /tmp/dispatch.md --rubric-file /tmp/rubric.yaml
-```
-
-Credential flags cannot be combined with `--detach`; this keeps source paths
-out of detached argv. Primary review accepts the same repeatable flags and
-adapter file IDs. It copies selected files into a private, short-lived HOME/XDG
-tree and exposes only the named environment values; it never searches the
-operator's HOME. A reviewer without explicit usable credentials stops as
-credentials unavailable.
+Provider authentication is ambient local CLI state: HOME, XDG configuration,
+keychain-backed sessions, and supported token variables remain visible exactly
+as in direct use. Relay neither copies auth files nor rewrites HOME/XDG.
+`--credential-env` and `--credential-file` are retired unknown options. Review
+still stages only its immutable prompt/diff/criteria/schema bundle and removes
+that exact bound staging root during cleanup/recovery.
 
 ### Process containment: `inherited_scope_no_daemon`
 

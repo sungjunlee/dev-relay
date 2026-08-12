@@ -215,22 +215,19 @@ function writeAuthenticatedCancelledResult(f, owner) {
 }
 
 function writeAuthenticatedCleanup(f, owner) {
-  const credentialRoot = path.join(f.runDir, `executor-credentials-${owner.attempt_id}`);
-  fs.mkdirSync(credentialRoot, { mode: 0o700 });
-  fs.writeFileSync(path.join(credentialRoot, "secret"), "test-only", { mode: 0o600 });
-  const stat = fs.statSync(credentialRoot), identity = {
+  const identity = {
     pid: owner.process.pid, pgid: owner.process.pgid, started_at: owner.process.started_at,
   };
   const unsigned = {
-    v: 2, attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_handle: owner.host_handle,
+    v: 2, kind: "executor", attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_handle: owner.host_handle,
     identities: { supervisor: identity, executor: null }, error: "injected cleanup obligation",
     terminal: { status: "failed", exit_code: 1, signal: null },
-    obligation: { processes: [identity], credential_root: { path: credentialRoot, dev: stat.dev, ino: stat.ino } },
+    obligation: { processes: [identity], staged_input_root: null, scope_seal: null },
     observed_at: new Date().toISOString(),
   };
   const marker = { ...unsigned, auth_sha256: crypto.createHmac("sha256", owner.secret).update(JSON.stringify(unsigned)).digest("hex") };
   fs.writeFileSync(path.join(f.runDir, `host-attempt-${owner.attempt_id}.cleanup-incomplete.json`), `${JSON.stringify(marker)}\n`, { mode: 0o600 });
-  return credentialRoot;
+  return null;
 }
 
 function createForeignUnknownOwner(f, attemptId) {
@@ -379,7 +376,7 @@ test("canonical recover settles an authenticated cleanup obligation and records 
   const f = fixture("cleanup-obligation");
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   await childJsonAndExit(startOwner(f, { attemptId: "cleanup-owner", exit: true }));
-  const owner = rawOwner(f.runDir), credentialRoot = writeAuthenticatedCleanup(f, owner);
+  const owner = rawOwner(f.runDir); writeAuthenticatedCleanup(f, owner);
   await withFakeGh(f, async () => {
     const inspected = await runtime.inspectRun({ runDir: f.runDir });
     assert.equal(inspected.observations.host.cleanup_pending, true);
@@ -390,7 +387,6 @@ test("canonical recover settles an authenticated cleanup obligation and records 
     });
     assert.equal(recovered.status, "converged");
     assert.deepEqual(recovered.applied.map((entry) => entry.step), ["close_dead_attempt"]);
-    assert.equal(fs.existsSync(credentialRoot), false);
     assert.equal(fs.existsSync(path.join(f.runDir, "host-attempt-cleanup-owner.cleanup-settled.json")), true);
     assert.equal(fs.existsSync(path.join(f.runDir, "attempt-cleanup-owner.result.json")), true);
     assert.equal(factsFor(f).filter((entry) => entry.type === "attempt_interrupted" && entry.attempt_id === "cleanup-owner").length, 1);
