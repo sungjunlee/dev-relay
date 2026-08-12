@@ -40,6 +40,12 @@ const IDLE = "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)";
 // `lstart` has one-second resolution, so an unrelated process occupying a recorded PID yields a matching
 // {pid, pgid, started_at} triple. Only the inherited scope token separates the two.
 function liveIdentity(pid) {
+  if (process.platform === "linux" && fs.existsSync(`/proc/${pid}/stat`)) {
+    const raw = fs.readFileSync(`/proc/${pid}/stat`, "utf8"), close = raw.lastIndexOf(")"), fields = raw.slice(close + 2).trim().split(/\s+/);
+    const ticks = Number(spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).stdout.trim());
+    const boot = Number(fs.readFileSync("/proc/stat", "utf8").split(/\r?\n/).find((line) => line.startsWith("btime ")).slice(6));
+    return { pid, pgid: Number(fields[2]), started_at: new Date((boot + Number(fields[19]) / ticks) * 1000).toISOString() };
+  }
   const out = spawnSync("/bin/ps", ["-p", String(pid), "-o", "pgid=,lstart="], { encoding: "utf8" }).stdout.trim();
   const match = out.match(/^(\d+)\s+(.*)$/);
   assert.ok(match, `no ps row for ${pid}`);
@@ -83,17 +89,17 @@ function writeCleanupObligation(runDir, attemptId, obligation) {
 }
 
 test("a same-second PID reuse without the inherited scope token is never signalled", { timeout: 30_000 }, async (t) => {
-  const scope = host.sandboxInvocation.beginProcessScope();
+  const scope = host.hostInvocation.beginProcessScope();
   const foreign = spawnIdle({ PATH: process.env.PATH }), member = spawnIdle({ PATH: process.env.PATH, ...scope.env });
   t.after(() => { for (const child of [foreign, member]) if (!processDead(child.pid)) try { process.kill(-child.pid, "SIGKILL"); } catch {} });
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(liveIdentity(foreign.pid).pgid, foreign.pid, "the foreign process leads its own group");
 
-  const foreignAudit = host.sandboxInvocation.reapProcessGroup(foreign.pid, scope.seal);
+  const foreignAudit = host.hostInvocation.reapProcessGroup(foreign.pid, scope.seal);
   assert.deepEqual(foreignAudit, { survived_terminal: false, absent: false, unverified: true });
   assert.equal(processDead(foreign.pid), false, "an unrelated same-PID group must never be signalled");
 
-  const scopedAudit = host.sandboxInvocation.reapProcessGroup(member.pid, scope.seal);
+  const scopedAudit = host.hostInvocation.reapProcessGroup(member.pid, scope.seal);
   assert.equal(scopedAudit.survived_terminal, true);
   assert.equal(scopedAudit.absent, true);
   assert.equal(scopedAudit.unverified, false);
@@ -102,7 +108,7 @@ test("a same-second PID reuse without the inherited scope token is never signall
 });
 
 test("group reap signals only individually scope-verified PIDs and preserves an unrelated PGID member", { timeout: 30_000 }, async (t) => {
-  const scope = host.sandboxInvocation.beginProcessScope(), value = roots("mixed-pgid"), pidsPath = path.join(value.root, "pids.json");
+  const scope = host.hostInvocation.beginProcessScope(), value = roots("mixed-pgid"), pidsPath = path.join(value.root, "pids.json");
   const leaderScript = [
     "const {spawn}=require('child_process'),fs=require('fs');",
     `const child=spawn(process.execPath,['-e',${JSON.stringify(IDLE)}],{env:{PATH:process.env.PATH},stdio:'ignore'});`,
@@ -117,7 +123,7 @@ test("group reap signals only individually scope-verified PIDs and preserves an 
   assert.equal(liveIdentity(pids.leader).pgid, pids.leader);
   assert.equal(liveIdentity(pids.outsider).pgid, pids.leader, "the outsider intentionally shares the leader PGID");
 
-  const audit = host.sandboxInvocation.reapProcessGroup(pids.leader, scope.seal);
+  const audit = host.hostInvocation.reapProcessGroup(pids.leader, scope.seal);
   assert.equal(audit.survived_terminal, true);
   assert.equal(audit.absent, false);
   assert.equal(audit.unverified, true);
@@ -127,7 +133,7 @@ test("group reap signals only individually scope-verified PIDs and preserves an 
 
 test("lost cleanup scope proof requires exact external action and then converges", { timeout: 30_000 }, async (t) => {
   const value = roots("scope-loss"), attemptId = "scope-loss", capability = lock(value, attemptId);
-  const scope = host.sandboxInvocation.beginProcessScope(), marker = path.join(value.root, "inherited-scope.txt");
+  const scope = host.hostInvocation.beginProcessScope(), marker = path.join(value.root, "inherited-scope.txt");
   const foreign = spawnScopeDroppingIdle({ PATH: process.env.PATH, ...scope.env }, marker);
   t.after(() => { if (!processDead(foreign.pid)) try { process.kill(-foreign.pid, "SIGKILL"); } catch {} try { host.releaseRunLock(capability); } catch {} });
   await waitForFile(marker);
@@ -160,9 +166,50 @@ test("lost cleanup scope proof requires exact external action and then converges
   assert.equal(fs.existsSync(path.join(value.runDir, `attempt-${attemptId}.result.json`)), true);
 });
 
+test("Linux cleanup retains stat identity when proc cmdline is unreadable", { timeout: 30_000 }, async (t) => {
+  if (process.platform !== "linux") return;
+  const value = roots("linux-redacted-cmdline"), attemptId = "linux-redacted-cmdline", capability = lock(value, attemptId);
+  const scope = host.hostInvocation.beginProcessScope(), marker = path.join(value.root, "inherited-scope.txt");
+  const foreign = spawnScopeDroppingIdle({ PATH: process.env.PATH, ...scope.env }, marker);
+  t.after(() => { if (!processDead(foreign.pid)) try { process.kill(-foreign.pid, "SIGKILL"); } catch {} try { host.releaseRunLock(capability); } catch {} });
+  await waitForFile(marker);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
+  writeCleanupObligation(value.runDir, attemptId, {
+    processes: [liveIdentity(foreign.pid)], credential_root: { path: credentialRoot, dev: null, ino: null },
+    scope_seal: scope.seal,
+  });
+  const realReadFile = fs.readFileSync;
+  fs.readFileSync = function redactCmdline(filePath, ...args) {
+    if (filePath === `/proc/${foreign.pid}/cmdline`) { const error = new Error("redacted"); error.code = "EACCES"; throw error; }
+    return realReadFile.call(this, filePath, ...args);
+  };
+  try {
+    await assert.rejects(
+      host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "do not lose redacted live identity" }),
+      (error) => error.code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED" && error.process_identity?.pid === foreign.pid,
+    );
+  } finally { fs.readFileSync = realReadFile; }
+  assert.equal(processDead(foreign.pid), false);
+  assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), false);
+});
+
+test("Linux process identity ignores a PATH-shadowed getconf", () => {
+  if (process.platform !== "linux") return;
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-shadow-getconf-")));
+  const shadow = path.join(root, "getconf"), marker = path.join(root, "shadow-called");
+  fs.writeFileSync(shadow, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nprintf 999999999999\\n\n`, { mode: 0o755 });
+  const modulePath = path.resolve(__dirname, "../../../skills/relay-dispatch/scripts/host.js");
+  const child = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(modulePath)}).hostInvocation.beginProcessScope()`], {
+    encoding: "utf8", env: { ...process.env, PATH: `${root}${path.delimiter}${process.env.PATH}` },
+  });
+  try { assert.equal(child.status, 0, child.stderr); assert.equal(fs.existsSync(marker), false); }
+  finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("cleanup recovery treats an exact zombie as gone even when ps redacts its scope environment", { timeout: 30_000 }, async (t) => {
   const value = roots("zombie-cleanup"), attemptId = "zombie-cleanup", capability = lock(value, attemptId);
-  const scope = host.sandboxInvocation.beginProcessScope(), pidsPath = path.join(value.root, "zombie.json");
+  const scope = host.hostInvocation.beginProcessScope(), pidsPath = path.join(value.root, "zombie.json");
   const parentScript = [
     "const {spawn}=require('child_process'),fs=require('fs');",
     "const child=spawn(process.execPath,['-e','setTimeout(()=>process.exit(0),500)'],{stdio:'ignore'});",
@@ -319,7 +366,9 @@ test("a quarantine that does not match the signed identity is not reclaimed", as
   writeCleanupObligation(value.runDir, attemptId, {
     processes: [], credential_root: { path: credentialRoot, dev: bound.dev, ino: bound.ino }, scope_seal: null,
   });
-  fs.rmSync(credentialRoot, { recursive: true, force: true });
+  const displaced = path.join(value.runDir, ".displaced-bound-root");
+  fs.renameSync(credentialRoot, displaced);
+  t.after(() => fs.rmSync(displaced, { recursive: true, force: true }));
   const foreign = path.join(value.runDir, `.executor-credentials-${attemptId}.quarantine.${process.pid}.00000000000000ff`);
   fs.mkdirSync(foreign, { mode: 0o700 });
   fs.writeFileSync(path.join(foreign, "unrelated"), "not-ours", { mode: 0o600 });
@@ -418,42 +467,6 @@ test("cancel terminates the executor process group and descendants within a boun
   assert.equal(processDead(identities.worker), true);
   assert.equal(processDead(identities.child), true);
   host.releaseRunLock(capability);
-});
-
-test("sandbox grants only declared input/result/temp paths and never HOME, ownership, siblings, or opaque argv paths", () => {
-  const value = roots("sandbox"), ownership = path.join(value.runDir, "ownership"); fs.mkdirSync(ownership, { mode: 0o700 });
-  const allowed = path.join(value.runDir, "allowed.txt"), sibling = path.join(value.runDir, "sibling.txt"), secret = path.join(ownership, "secret");
-  const hostileModelPath = path.join(value.runDir, "model-secret.txt"), proof = path.join(value.runDir, "proof.json"), tmp = path.join(value.runDir, "tmp");
-  fs.writeFileSync(allowed, "allowed"); fs.writeFileSync(sibling, "sibling"); fs.writeFileSync(secret, "secret", { mode: 0o600 });
-  fs.writeFileSync(hostileModelPath, "model-secret"); fs.mkdirSync(tmp);
-  const script = [
-    "const fs=require('fs');const [allowed,sibling,secret,model,proof]=process.argv.slice(1);",
-    "const read=p=>{try{return fs.readFileSync(p,'utf8')}catch(e){return 'denied:'+e.code}};",
-    "const write=p=>{try{fs.writeFileSync(p,'x');return 'written'}catch(e){return 'denied:'+e.code}};",
-    "fs.writeFileSync(proof,JSON.stringify({allowed:read(allowed),sibling:read(sibling),secret:read(secret),model:read(model),sibling_write:write(sibling),home:read(process.env.HOME+'/nonexistent-secret')}));",
-  ].join("");
-  const invocation = host.sandboxInvocation({ role: "executor", command: process.execPath,
-    args: ["-e", script, allowed, sibling, secret, hostileModelPath, proof, "--model", hostileModelPath],
-    readFiles: [allowed], writeFiles: [proof], writeRoots: [tmp], ownershipDir: ownership });
-  const result = spawnSync(invocation.command, invocation.args, { cwd: value.worktree, env: invocation.env, encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr);
-  const observed = JSON.parse(fs.readFileSync(proof, "utf8"));
-  assert.equal(observed.allowed, "allowed");
-  for (const key of ["sibling", "secret", "model", "sibling_write", "home"]) assert.match(observed[key], /^denied:/, key);
-});
-
-test("a reviewer executable under HOME/bin does not widen reads to HOME", () => {
-  const value = roots("reviewer-home"), fakeHome = path.join(value.root, "home"), bin = path.join(fakeHome, "bin");
-  fs.mkdirSync(fakeHome); fs.mkdirSync(bin);
-  const secret = path.join(fakeHome, "secret.txt"), reviewer = path.join(bin, "reviewer"), proof = path.join(value.runDir, "reviewer-proof.txt");
-  fs.writeFileSync(secret, "home-secret");
-  fs.writeFileSync(reviewer, "#!/bin/sh\nif value=$(/bin/cat \"$HOME/secret.txt\" 2>/dev/null); then /usr/bin/printf '%s' \"$value\" > \"$1\"; else /usr/bin/printf denied > \"$1\"; fi\n");
-  fs.chmodSync(reviewer, 0o755);
-  const invocation = host.sandboxInvocation({ role: "reviewer", command: reviewer, args: [proof], writeFiles: [proof],
-    env: { ...process.env, HOME: fakeHome }, networkAccess: "disabled" });
-  const result = spawnSync(invocation.command, invocation.args, { cwd: value.worktree, env: invocation.env, encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.readFileSync(proof, "utf8"), "denied");
 });
 
 test("executor inherits only the minimal host environment plus explicit adapter entries", async () => {
@@ -573,88 +586,6 @@ test("an unrelated post-baseline process with only the worktree argv is never si
   assert.equal(processDead(unrelated.pid), false);
 });
 
-test("an executable directly under HOME is literal-readable without widening HOME", () => {
-  const value = roots("home-root-executable"), fakeHome = path.join(value.root, "home"); fs.mkdirSync(fakeHome);
-  const secret = path.join(fakeHome, "secret.txt"), executable = path.join(fakeHome, "executor"), proof = path.join(value.runDir, "proof.txt");
-  fs.writeFileSync(secret, "home-secret");
-  fs.writeFileSync(executable, "#!/bin/sh\nif /bin/cat \"$HOME/secret.txt\" > \"$1\" 2>/dev/null; then exit 0; else /usr/bin/printf denied > \"$1\"; fi\n");
-  fs.chmodSync(executable, 0o755);
-  const invocation = host.sandboxInvocation({ role: "executor", command: executable, args: [proof], writeFiles: [proof],
-    env: { ...process.env, HOME: fakeHome } });
-  const result = spawnSync(invocation.command, invocation.args, { cwd: value.worktree, env: invocation.env, encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.readFileSync(proof, "utf8"), "denied");
-});
-
-test("a narrow package root inside HOME is readable without exposing package siblings or HOME", () => {
-  const value = roots("declared-home-runtime"), fakeHome = path.join(value.root, "home"), bundle = path.join(fakeHome, ".tool"), bin = path.join(bundle, "bin");
-  fs.mkdirSync(bin, { recursive: true });
-  const dependency = path.join(bin, "dependency.txt"), secret = path.join(bundle, "secret.txt"), executable = path.join(bin, "executor"), proof = path.join(value.runDir, "proof.txt");
-  fs.writeFileSync(dependency, "runtime-dependency"); fs.writeFileSync(secret, "adjacent-secret");
-  fs.writeFileSync(executable, "#!/bin/sh\nread_file(){ /bin/cat \"$1\" 2>/dev/null || /usr/bin/printf denied; }\n/usr/bin/printf '%s|%s' \"$(read_file \"$1\")\" \"$(read_file \"$2\")\" > \"$3\"\n");
-  fs.chmodSync(executable, 0o755);
-  let invocation = host.sandboxInvocation({ role: "executor", command: executable, args: [dependency, secret, proof], writeFiles: [proof], env: { ...process.env, HOME: fakeHome } });
-  assert.equal(spawnSync(invocation.command, invocation.args, { cwd: value.worktree, env: invocation.env }).status, 0);
-  assert.equal(fs.readFileSync(proof, "utf8"), "denied|denied");
-  invocation = host.sandboxInvocation({ role: "executor", command: executable, args: [dependency, secret, proof], writeFiles: [proof],
-    runtimeDependencies: { executableParent: 0, interpreterParent: null }, env: { ...process.env, HOME: fakeHome } });
-  assert.equal(spawnSync(invocation.command, invocation.args, { cwd: value.worktree, env: invocation.env }).status, 0);
-  assert.equal(fs.readFileSync(proof, "utf8"), "runtime-dependency|denied");
-  assert.throws(() => host.sandboxInvocation({ role: "executor", command: executable, args: [proof], writeFiles: [proof],
-    runtimeDependencies: { executableParent: 1, interpreterParent: null }, env: { ...process.env, HOME: bundle } }),
-  (error) => error.code === "INVALID_INVOCATION");
-});
-
-test("a missing system CA bundle fails typed instead of raw ENOENT", () => {
-  const original = fs.realpathSync;
-  fs.realpathSync = function systemCaAbsent(target, ...args) {
-    if (target === "/etc/ssl/cert.pem") { const error = new Error(`ENOENT: no such file or directory, realpath '${target}'`); error.code = "ENOENT"; throw error; }
-    return original.call(this, target, ...args);
-  };
-  try {
-    assert.throws(() => host.sandboxInvocation({ role: "executor", command: process.execPath, networkAccess: "enabled" }),
-      (error) => error.code === "UNTRUSTED_SYSTEM_CA" && /absent/.test(error.message));
-  } finally { fs.realpathSync = original; }
-});
-
-test("network policy is explicit and grants only transport and per-user trust Mach services, never Keychain", () => {
-  const value = roots("network-profile"), proof = path.join(value.runDir, "network-proof.json");
-  const disabled = host.sandboxInvocation({ role: "executor", command: process.execPath, readRoots: [value.worktree], networkAccess: "disabled" }).args[1];
-  const script = "const fs=require('fs');let sibling='readable';try{fs.readFileSync('/private/etc/hosts')}catch(e){sibling='denied:'+e.code}fs.writeFileSync(process.argv[1],JSON.stringify({ca:process.env.SSL_CERT_FILE,certificate:fs.readFileSync(process.env.SSL_CERT_FILE,'utf8').includes('BEGIN CERTIFICATE'),sibling}))";
-  const invocation = host.sandboxInvocation({ role: "executor", command: process.execPath, args: ["-e", script, proof], readRoots: [value.worktree], writeFiles: [proof], networkAccess: "enabled" });
-  const enabled = invocation.args[1], ca = fs.realpathSync("/etc/ssl/cert.pem");
-  assert.doesNotMatch(disabled, /allow network|SystemConfiguration\.configd|opendirectoryd\.libinfo|trustd/);
-  assert.match(enabled, /allow network/); assert.match(enabled, /SystemConfiguration\.configd/); assert.match(enabled, /opendirectoryd\.libinfo/);
-  assert.match(enabled, /\(global-name "com\.apple\.trustd\.agent"\)/);
-  assert.match(enabled, new RegExp(`literal "${ca.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
-  assert.doesNotMatch(enabled, /\(subpath "\/(?:private\/)?etc/);
-  assert.doesNotMatch(enabled, /com\.apple\.trustd"|securityd|SecurityServer|keychain|mach-lookup.*regex|mach-lookup.*global-prefix/);
-  assert.equal(Object.hasOwn(host.sandboxInvocation({ role: "executor", command: process.execPath, networkAccess: "disabled" }).env, "SSL_CERT_FILE"), false);
-  assert.equal(spawnSync(invocation.command, invocation.args, { cwd: value.worktree, env: invocation.env }).status, 0);
-  const observed = JSON.parse(fs.readFileSync(proof, "utf8"));
-  assert.equal(observed.ca, ca); assert.equal(observed.certificate, true); assert.match(observed.sibling, /^denied:/);
-  assert.throws(() => host.sandboxInvocation({ role: "executor", command: process.execPath, networkAccess: "enabled", env: { ...process.env, SSL_CERT_FILE: proof } }),
-    (error) => error.code === "INVALID_INVOCATION" && /host-reserved/.test(error.message));
-});
-
-test("offline trust evaluation needs exactly the per-user trust agent lookup", () => {
-  const value = roots("offline-trust"), certificate = path.join(value.worktree, "root.pem");
-  const match = fs.readFileSync("/etc/ssl/cert.pem", "utf8").match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/);
-  assert.ok(match, "the trusted root-owned CA literal contains a certificate");
-  fs.writeFileSync(certificate, `${match[0]}\n`, { mode: 0o600 });
-  const options = { role: "executor", command: "/usr/bin/security",
-    args: ["verify-cert", "-c", certificate, "-r", certificate, "-N", "-L", "-l", "-q"], readFiles: [certificate] };
-  const disabled = host.sandboxInvocation({ ...options, networkAccess: "disabled" });
-  const enabled = host.sandboxInvocation({ ...options, networkAccess: "enabled" });
-  const exactAgentOnly = { ...disabled, args: [...disabled.args] };
-  exactAgentOnly.args[1] = exactAgentOnly.args[1].replace("(allow file-read-metadata)",
-    '(allow file-read-metadata)(allow mach-lookup (global-name "com.apple.trustd.agent"))');
-  const run = (invocation) => spawnSync(invocation.command, invocation.args, { cwd: value.worktree, env: invocation.env, encoding: "utf8" });
-  assert.notEqual(run(disabled).status, 0, "offline trust fails without the agent lookup");
-  assert.equal(run(enabled).status, 0, "network-enabled policy permits offline trust evaluation");
-  assert.equal(run(exactAgentOnly).status, 0, "the exact agent lookup alone permits the same offline trust evaluation");
-});
-
 test("staged input bytes remain bound when the caller path mutates after launch", async () => {
   const value = roots("input-binding"), attemptId = "input-binding", capability = lock(value, attemptId);
   const input = path.join(value.runDir, "prompt.md"), proof = path.join(value.worktree, "observed.txt");
@@ -717,7 +648,10 @@ test("credential request stages exact private HOME/XDG files and keeps sources a
     assert.doesNotMatch(JSON.stringify(config.args), new RegExp(`${secret}|${envSecret}|${source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     assert.equal((await host.waitForTerminalResult(receipt)).status, "completed");
     const observed = JSON.parse(fs.readFileSync(proof, "utf8"));
-    assert.equal(observed.file, secret); assert.equal(observed.cache, "state"); assert.match(observed.authWrite, /^denied:/); assert.equal(observed.env, envSecret); assert.deepEqual(observed.modes, [0o700, 0o600]);
+    // The trusted-local path no longer fabricates a filesystem boundary around
+    // staged credentials. Their source binding and post-run cleanup remain until
+    // #1233 removes staging altogether.
+    assert.equal(observed.file, "changed"); assert.equal(observed.cache, "state"); assert.equal(observed.authWrite, "written"); assert.equal(observed.env, envSecret); assert.deepEqual(observed.modes, [0o700, 0o600]);
     assert.match(observed.home, /executor-credentials-credentials\/home$/); assert.match(observed.xdg, /executor-credentials-credentials\/xdg-config$/); assert.match(observed.data, /executor-credentials-credentials\/xdg-data$/);
     assert.equal(fs.existsSync(path.dirname(observed.home)), false);
     for (const name of fs.readdirSync(value.runDir).filter((name) => /\.(?:json|log)$/.test(name))) {
@@ -726,7 +660,7 @@ test("credential request stages exact private HOME/XDG files and keeps sources a
   } finally { host.releaseRunLock(capability); }
 });
 
-test("private environment paths use distinct short attempt roots, execute inside the sandbox, and clean exactly", async () => {
+test("private environment paths use distinct short attempt roots and clean exactly", async () => {
   const value = roots("private-env-paths"), observed = [];
   const declarations = [{ key: "TOOL_CONFIG_DIR", root: "home", relative: ".tool" }, { key: "TOOL_DATA_DIR", root: "scratch", relative: "tool-data" }];
   for (const attemptId of ["private-path-a", "private-path-b"]) {

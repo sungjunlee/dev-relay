@@ -22,7 +22,6 @@ const FAKE_CODEX = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-codex.js"
 const FAKE_CURSOR = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-cursor.js");
 const FAKE_CLINE = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-cline.js");
 const CRASH_AFTER_START = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-crash-after-start-preload.js");
-const WRITE_CONTAINMENT_EXECUTOR = path.join(ROOT, "tests/relay-dispatch/fixtures/write-containment-executor.js");
 const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/adapter-runtime-preload.js");
 const RUN_CLAIM_RACE = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-run-claim-race-preload.js");
 
@@ -114,7 +113,8 @@ test("dry-run validates the closed Relay surface while writing zero durable byte
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   assert.equal(json(result.stdout).durable_bytes_written, 0);
   assert.equal(json(result.stdout).invocation.validation, "adapter_build_invocation");
-  assert.equal(json(result.stdout).invocation.launch_boundary, "host_sandbox_required_do_not_execute_raw");
+  assert.equal(json(result.stdout).invocation.launch_boundary, "host_supervisor_required_do_not_execute_raw");
+  assert.deepEqual(json(result.stdout).filesystem_isolation, { requested: "workspace-write", effective: "native", diagnostic: null });
   assert.equal(fs.existsSync(stateDir), false);
   assert.equal(fs.existsSync(value.relayHome), false);
   const cursor = run(value, ["--executor", "cursor", "--branch", "cursor-dry", "--prompt", "x", "--rubric-file", value.rubric, "--dry-run", "--json"]);
@@ -680,81 +680,24 @@ test("dispatch persists immutable bindings and exact attempt facts but never aut
   assert.deepEqual(output.inspection.recommended_action, independentlyInspected.recommended_action);
 });
 
-test("the actual executor process tree enforces filesystem/service boundaries and exposes enabled transport honestly", async () => {
-  const value = fixture("write-containment");
-  installNodeFixture(WRITE_CONTAINMENT_EXECUTOR, path.join(value.root, "bin", "codex"));
-  const activeTarget = path.join(value.repo, "active-checkout-escape.txt");
-  const siblingTarget = path.join(value.root, "sibling-escape.txt");
-  const outsideTarget = path.join(os.tmpdir(), `relay-outside-escape-${crypto.randomUUID()}.txt`);
-  const server = spawn(process.execPath, ["-e", "const net=require('net');const s=net.createServer(x=>x.end());s.listen(0,'127.0.0.1',()=>console.log(s.address().port));"], { stdio: ["ignore", "pipe", "inherit"] });
-  const port = await new Promise((resolve, reject) => {
-    let text = "";
-    server.stdout.on("data", (chunk) => {
-      text += chunk;
-      if (text.includes("\n")) resolve(Number(text.trim()));
-    });
-    server.once("error", reject);
-    server.once("exit", (code) => { if (!text.includes("\n")) reject(new Error(`network probe server exited ${code}`)); });
-  });
-  try {
-    fs.writeFileSync(value.prompt, JSON.stringify({ active: activeTarget, sibling: siblingTarget, outside: outsideTarget, port }));
-    const result = run(value, ["--branch", "contained", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
-      ...value.env,
-    });
-    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
-    const output = json(result.stdout);
-    const proof = JSON.parse(fs.readFileSync(path.join(output.worktree, "containment-proof.json"), "utf8"));
-    assert.equal(proof.worktree, "written");
-    assert.equal(proof.temp, "written");
-    assert.match(proof.active, /^denied:/);
-    assert.match(proof.sibling, /^denied:/);
-    assert.match(proof.outside, /^denied:/);
-    assert.equal(proof.network, "connected");
-    assert.match(proof.apple_event, /^denied:/);
-    for (const label of ["git_add", "git_commit", "git_ref", "git_config", "git_hook"]) {
-      assert.match(proof[label], /^denied:/, `${label} must stay owned by canonical recovery`);
-    }
-    assert.equal(path.dirname(proof.tempdir), output.run_dir);
-    assert.match(path.basename(proof.tempdir), /^executor-tmp-dispatch-/);
-    assert.equal(fs.existsSync(activeTarget), false);
-    assert.equal(fs.existsSync(siblingTarget), false);
-    assert.equal(fs.existsSync(outsideTarget), false);
-    assert.equal(output.outcome.status, "succeeded");
-  } finally {
-    server.kill("SIGTERM");
-  }
-});
-
-test("read-only dispatch denies worktree writes while retaining only result and private temp writes", () => {
-  const value = fixture("read-only-containment");
-  installNodeFixture(WRITE_CONTAINMENT_EXECUTOR, path.join(value.root, "bin", "codex"));
-  fs.writeFileSync(value.prompt, JSON.stringify({ active: path.join(value.repo, "active.txt"), sibling: path.join(value.root, "sibling.txt"),
-    outside: path.join(os.tmpdir(), `relay-readonly-${crypto.randomUUID()}`), proof_in_result: true }));
-  const result = run(value, ["--branch", "read-only-contained", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--sandbox", "read-only", "--json"], value.env);
-  assert.equal(result.status, 0, result.stderr);
+test("trusted-local dispatch needs no Relay sandbox admission and reports native capability", () => {
+  const value = fixture("native-host");
+  const result = run(value, ["--branch", "native-host", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const output = json(result.stdout);
-  const proof = JSON.parse(output.outcome.output);
-  assert.match(proof.worktree, /^denied:/);
-  assert.equal(proof.temp, "written");
-  for (const label of ["git_add", "git_commit", "git_ref", "git_config", "git_hook"]) {
-    assert.match(proof[label], /^denied:/, `${label} must stay owned by canonical recovery`);
-  }
-  assert.equal(fs.existsSync(path.join(output.worktree, "worktree-write.txt")), false);
+  assert.deepEqual(output.filesystem_isolation, { requested: "workspace-write", effective: "native", diagnostic: null });
+  assert.equal(output.outcome.status, "succeeded");
+  assert.equal(fs.existsSync(path.join(output.worktree, "executor-change.txt")), true);
+  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, "skills/relay-dispatch/scripts/host.js"), "utf8"), /sandbox-exec/);
 });
 
-test("executor dispatch fails closed on hosts without an enforceable write boundary", () => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-no-sandbox-")));
-  assert.throws(
-    () => host.sandboxInvocation({
-      role: "executor",
-      command: process.execPath,
-      args: ["-e", ""],
-      readRoots: [root],
-      writeRoots: [root],
-      platform: "linux",
-    }),
-    (error) => error.code === "EXECUTOR_WRITE_ISOLATION_UNAVAILABLE",
-  );
+test("a no-sandbox adapter remains dry-runnable with a visible diagnostic", () => {
+  const value = fixture("no-native-sandbox");
+  const result = run(value, ["--executor", "pi", "--branch", "no-native-sandbox", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--dry-run", "--json"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(json(result.stdout).filesystem_isolation, {
+    requested: "unavailable", effective: "none", diagnostic: "pi has no native filesystem sandbox; continuing directly on the trusted local host.",
+  });
 });
 
 test("an empty adapter result cannot turn an exit-zero host result into a completed attempt", () => {

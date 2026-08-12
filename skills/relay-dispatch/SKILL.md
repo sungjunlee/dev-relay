@@ -2,7 +2,7 @@
 name: relay-dispatch
 argument-hint: "<repo-path> (-b <branch> | --run-id <id>) -p <prompt> [options]"
 description: Dispatch implementation tasks via worktree isolation. Use when delegating work to an executor, running background dispatches, or parallelizing independent tasks.
-compatibility: Requires executor CLI, git, Node.js 18+, and macOS sandbox-exec for local executor write isolation.
+compatibility: Requires executor CLI, git, and Node.js 18+ on a trusted local development host.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-review, relay-merge"
   keywords: "디스패치, 실행, dispatch, executor, worktree"
@@ -70,28 +70,28 @@ Essential flags:
 - Every adapter declares whether its dispatch toolset can execute commands. A prompt demanding command execution (fenced shell block, `node --test`, `npm test`/`npm run`, `npx`, `git commit`/`push`/`rebase`/`merge`, or an imperative "run"/"execute" next to a backticked command) is rejected with `TOOLSET_MISMATCH` for a no-shell executor (`pi`, `claude`) before any durable state exists. `--allow-toolset-mismatch` downgrades it to a stderr warning.
 - `--fleet-id` requires typed `--ownership-json` with exactly `sprint`, `track`, and `component`; parent and ownership digest are immutable.
 - `--detach` starts a detached dispatch supervisor, prints a receipt, and returns before executor completion.
-- `--dry-run` is a zero-write preflight for inputs, branch, capabilities, registration support, and invocation shape. Its argv is diagnostic and must never be launched raw: production always wraps it in the host sandbox.
+- `--dry-run` is a zero-write preflight for inputs, branch, capabilities, registration support, and invocation shape. Its argv is diagnostic and must never be launched raw: production always uses the host supervisor.
 - Dispatch admits itself. There is no writer generation, cutover flag, or migration overlay: a new run is claimed by a non-recursive `mkdir` on its run directory, which fails closed if the directory already exists.
 - `--json` returns structured output for orchestration.
 
 The durable layout is `~/.relay/runs/<repo-slug>/<run-id>/`: immutable `run.json`, `done-criteria.md`, and `rubric.yaml`; append-only `events.jsonl`; and per-attempt prompt, log, and result artifacts. Retired routing hints and readiness identity flags do not participate in dispatch.
 
-The actual executor process tree runs under a host-enforced macOS
-`sandbox-exec` boundary. `workspace-write` permits writes only inside the
-retained worktree, the exact attempt result artifact, and attempt-private
-temp/HOME/XDG directories; read-only credential copies remain exact write denies. The exact `/dev/null` device is available only for descendant
-stdio, and `read-only` omits worktree writes. The `osascript` AppleEvent entry
-point, active checkouts, sibling
-worktrees, home, broad temp, and other paths are never writable. Unsupported platforms fail closed before any
-executor process starts; the run record, prompt, and `attempt_started` fact are already durable by then, so the
-run is recoverable rather than silently unisolated.
+Relay runs directly on the trusted local host; it has no filesystem admission
+or profile compiler. `--sandbox` is passed only to an adapter that can express
+native filesystem isolation (Codex requests `workspace-write` or `read-only`,
+Cursor requests `enabled`, Claude enables its documented Bash sandbox, and
+Antigravity keeps its declared flag). Pi, OpenCode, and Cline run directly.
+Foreground and dry-run JSON return the non-durable `filesystem_isolation`
+requested/effective diagnostic; missing or declaration-only isolation never
+rejects dispatch. Use an external container or VM for a hostile-worker threat
+model.
 
-Executor attempts intentionally cannot write linked-worktree Git administration,
-objects, refs, config, or hooks. They leave reviewable dirty worktree bytes; only
-the canonical `relay-recover recover` operation may commit, publish them on the
-GitHub route, record verification, or close the local Reviewed Result.
+Executor attempts preserve immutable input staging, executable binding,
+timeout/cancellation, inherited-scope cleanup, and durable facts. Relay itself
+never commits, publishes on the GitHub route, records verification, or closes a
+local result; those lifecycle actions belong to canonical `relay-recover recover`.
 
-JSON uses snake_case. Foreground output includes `status`, `run_id`, `run_dir`, `worktree`, `attempt_id`, `host_handle`, `host_status`, `outcome`, and `inspection`. A detached launch receipt includes `status: "dispatched"`, those durable identities, `dispatcher_pid`, and the initial `inspection`. Per-attempt log paths are recorded in `attempt_started`.
+JSON uses snake_case. Foreground output includes `status`, `run_id`, `run_dir`, `worktree`, `attempt_id`, `host_handle`, `host_status`, `outcome`, `inspection`, and non-durable `filesystem_isolation`. A detached launch receipt includes `status: "dispatched"`, those durable identities, `dispatcher_pid`, and the initial `inspection`. Per-attempt log paths are recorded in `attempt_started`.
 
 ### Timeout guidance
 

@@ -38,14 +38,14 @@ A new run binds its reviewer in immutable `run.json`. An explicit review model
 applies to that invocation; otherwise the adapter default is used. Historical
 `model_hints` data is inert and never participates in selection.
 
-| Reviewer | Invocation and isolation |
+| Reviewer | Invocation and filesystem capability |
 | --- | --- |
-| `codex` | Ephemeral native read-only review with schema output. |
-| `claude` | Safe/no-session-persistence mode with read-only tool access. |
-| `opencode` | Prompt-only review inside the runtime's read-only OS boundary. |
-| `pi` | `read,grep,find,ls` tool allowlist inside the runtime's read-only OS boundary. |
-| `antigravity` | `agy` CLI only, inside the runtime's read-only OS boundary. |
-| `cursor` | Agent ask mode; parses the wrapper `result` field. |
+| `codex` | Ephemeral native `read-only` review with schema output. |
+| `claude` | Dispatch uses settings-based native Bash with no unsandboxed fallback; primary review uses `--safe-mode`, `Read` only, and explicitly marks native isolation `not_requested`. |
+| `opencode` | Prompt-only review; no native filesystem sandbox. |
+| `pi` | `read,grep,find,ls` tool allowlist; no native filesystem sandbox. |
+| `antigravity` | `agy` CLI with its declared, unverified `--sandbox`. |
+| `cursor` | Agent ask mode with native sandbox enabled. |
 
 Cline remains a dispatch executor. It is not a primary reviewer because a
 healthy strict-verdict live canary has not established that capability.
@@ -67,7 +67,7 @@ diagnostic fallback, timeout, sandbox/authentication failure, or unexecuted cell
 keeps the evidence `incomplete_non_release` and makes the command exit nonzero.
 
 Each dispatch cell crosses `host.launchLocalSupervisor` and must create one
-nonce-bound artifact without any other repository, Git, or outside mutation.
+nonce-bound artifact.
 Each review cell crosses `runStore.invokeIndependentReviewer`, must return that
 run's nonce through an exact JSON schema, and must leave the repository
 unchanged. These are the production isolation entry boundaries; the runner does
@@ -85,23 +85,25 @@ archived as superseded (2026-08-07, #1153) and the next canary run regenerates
 current evidence under `docs/plans/relay-runtime-core-reset-vnext/`; it is
 intentionally incomplete until operators provision every required cell.
 
-The outer host boundary permits the trusted CLI's remote provider control-plane
-transport. `networkAccess` separately describes model/tool networking and must
+The trusted local CLI's remote provider control-plane transport is available.
+`networkAccess` separately describes model/tool networking and must
 be enforced by native adapter policy. Pi exposes a native constrained tool set;
 Claude, Codex, Cursor, Antigravity, OpenCode, and Cline are informational
 only because their installed CLI flags do not prove that every internal or
 server-side or managed-policy tool is network-disabled. A phase without a native deny fails
 closed when tool networking is disabled. Enabling tool networking is an
-explicit authorization, not a claim that sandbox-exec can distinguish provider
-sockets from arbitrary child-process sockets.
+explicit authorization.
 
-The host/run-store `sandbox-exec` profile is also the authoritative filesystem
-boundary. Codex runs its nested CLI sandbox as `danger-full-access`, and Cursor
-runs its nested sandbox as `disabled`, because either nested sandbox rejects
-paths already constrained by the outer profile. The requested Relay
-`workspace-write` or `read-only` policy remains enforced by that outer profile.
-These argv descriptors are unsafe to launch by themselves; dry-run exposes
-them only as diagnostics and marks the required host boundary explicitly.
+Relay owns no filesystem profile or platform admission. Codex requests its
+native `workspace-write` dispatch or `read-only` review sandbox, Cursor enables
+its native sandbox, Claude enables its documented Bash sandbox for dispatch
+only and uses safe-mode Read-only primary review, and Antigravity retains its
+declared flag. Pi, OpenCode, and Cline run directly. The foreground
+and dry-run `filesystem_isolation` diagnostic reports the static
+requested/effective capability; absence or declaration-only support is visible
+but never an admission failure. These argv descriptors still require the host
+supervisor for immutable staging, executable binding, timeout/cancellation, and
+scope-safe cleanup.
 
 ## Prompt and credential transport
 
@@ -124,9 +126,12 @@ session files remain typed `credentials_unavailable` evidence.
 Sources are validated as exact private regular files and staged into an
 attempt-private HOME/XDG root, then removed after the process tree terminates.
 
-Claude runs both phases with `--safe-mode`: customizations are disabled while
-authentication, model selection, built-in tools, and permissions remain
-available. An unattended Claude Max canary requires the operator to generate a
+Claude dispatch runs with `--settings` that enables its native Bash sandbox and
+permits Bash while `allowUnsandboxedCommands:false` blocks automatic fallback.
+Claude primary review instead uses `--safe-mode`, permits only `Read`, and
+explicitly disallows `Bash`, `Write`, and `Edit`; its native-isolation
+diagnostic is `not_requested`. An unattended Claude Max canary requires
+the operator to generate a
 long-lived token with `claude setup-token` and explicitly select
 `CLAUDE_CODE_OAUTH_TOKEN` for both phase cells. Relay never extracts the macOS
 Keychain login, and `--bare` is not used because it rejects subscription OAuth.
@@ -150,21 +155,10 @@ explicitly requested credentials must stop as unavailable.
 | `cursor` | Yes, experimental | Yes, experimental |
 | `cline` | Yes | No |
 
-All commands are built as argv arrays. Adapters that cannot represent requested
-sandbox, read-only, or network behavior must fail closed or surface an explicit
-capability warning. A fake-binary test is contract evidence, not proof that a
+All commands are built as argv arrays. Adapters that cannot represent a requested
+tool-network behavior fail closed; filesystem isolation absence instead emits the
+foreground diagnostic. A fake-binary test is contract evidence, not proof that a
 live provider integration is healthy.
-
-Dispatch containment is independent of adapter-native flags. On macOS the host
-wraps the actual executor process tree with `/usr/bin/sandbox-exec`, permitting
-writes only to the retained worktree (for `workspace-write`), its exact result
-artifact, an attempt-private temp directory selected through
-`TMPDIR`/`TMP`/`TEMP`, plus the exact `/dev/null` endpoint needed for descendant
-stdio. The `osascript` AppleEvent entry point, active checkouts, sibling worktrees,
-home, broad temp, and arbitrary outside paths remain read-only. A platform without that enforceable
-boundary fails with `EXECUTOR_WRITE_ISOLATION_UNAVAILABLE`; Relay does not claim
-that a prompt or cwd check is isolation. All seven adapters remain registered
-under the same host boundary.
 
 ### `inherited_scope_no_daemon`
 
@@ -184,7 +178,7 @@ sandbox guarantee:
   group. This prevents natural PID reuse and mixed-PGID collateral kills; it is
   not unforgeable against a malicious same-UID process, which can inspect peer
   environments. Such a process is outside this cooperative adapter boundary.
-- `sandbox-exec` **cannot prevent** a CLI from calling `setsid`, clearing its
+- A filesystem policy cannot prevent a CLI from calling `setsid`, clearing its
   environment, or exec'ing a helper with a scrubbed environment. A CLI that does
   so is outside the contract: the host reports the survivors as
   `cleanup_incomplete` with their exact identities and fails closed instead of

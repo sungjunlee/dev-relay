@@ -24,8 +24,8 @@ module.exports = createNativeAdapter({
     ], envHints: ["QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_CN_API_KEY"] } },
   phases: {
     // buildDispatch pins --tools read,grep,find,ls,write,edit: no shell, no command execution.
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "native", cancellation: "process", structuredOutput: "text", commandExecution: false },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "native", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "native", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text", commandExecution: false },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "native", filesystemIsolation: "none", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, model, reasoning }) {

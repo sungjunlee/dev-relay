@@ -169,9 +169,9 @@ Every supported executor and reviewer CLI runs under the cooperative
 `RELAY_PROCESS_SCOPE` marker; supported CLIs must preserve it in every process
 they start and must not daemonize, `setsid` away, or clear it.
 
-`sandbox-exec` cannot prevent a CLI from calling `setsid` or clearing its
-environment, so containment is enforced by verification rather than by
-prevention. macOS reports process start time only to the second, which cannot
+The direct trusted-local host does not prevent a CLI from calling `setsid` or
+clearing its environment, so containment is enforced by verification rather
+than by prevention. macOS reports process start time only to the second, which cannot
 separate a same-second PID reuse, so the host revalidates the scope marker
 immediately before every signal and signals only verified individual PIDs—never
 an entire process group. This protects against natural PID reuse and unrelated

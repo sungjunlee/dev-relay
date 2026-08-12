@@ -2,7 +2,7 @@
 name: relay
 argument-hint: "[task, issue, or natural-language handoff]"
 description: Use when a GitHub issue, sprint item, task description, or natural-language handoff should be implemented through autonomous executor dispatch; GitHub stops at ready_to_merge, while local delivery closes as reviewed_result_ready.
-compatibility: Requires Claude Code or Codex, git, Node.js 18+; gh CLI is needed only for the supported GitHub route. Linux independent isolation requires Node.js 22+.
+compatibility: Requires Claude Code or Codex, git, and Node.js 18+; gh CLI is needed only for the supported GitHub route. Relay launches directly on the trusted local host on supported OSes.
 metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, relay-fleet, dev-backlog"
   keywords: "릴레이, 자동 실행, plan, dispatch, review, merge, relay cycle"
@@ -96,7 +96,7 @@ Capture `run_id`, `run_dir`, and the current action key. The immutable record is
 
 **MANDATORY. Do NOT skip this step.**
 
-**Verify before review — orchestrator-enforced for shell-free completion.** When the dispatched executor's dispatch capability declares no command-execution tool (today Claude and Pi; resolve with `relay-config check --executor <name> --phase dispatch --json`), the executor returned observation checks, not executed-test claims. Before invoking relay-review, the orchestrator performs each returned verification against the retained worktree and states the result; if the executor returned a stuck note, that becomes the blocking reason instead. Review must not begin on unverified changes. This is the orchestrator's obligation, not the executor's prompt — the executor-facing template cannot enforce it.
+**Verify before review — orchestrator-enforced for shell-free completion.** When the dispatched executor's dispatch capability declares no command-execution tool (today Pi; resolve with `relay-config check --executor <name> --phase dispatch --json`), the executor returned observation checks, not executed-test claims. Before invoking relay-review, the orchestrator performs each returned verification against the retained worktree and states the result; if the executor returned a stuck note, that becomes the blocking reason instead. Review must not begin on unverified changes. This is the orchestrator's obligation, not the executor's prompt — the executor-facing template cannot enforce it.
 
 Invoke relay-review only when inspection recommends `review`:
 

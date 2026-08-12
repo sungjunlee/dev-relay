@@ -19,7 +19,7 @@ skills/relay-dispatch/scripts/
   recover.js               production observer + idempotent recovery/close
   run-store.js             immutable run/artifact trust boundary
   facts.js                 append-only facts + merge authorization
-  host.js                  lock, detached host, cancellation, sandbox
+  host.js                  lock, detached host, runtime binding, process-scope cleanup
   adapter-contract.js, exec.js
   adapters/                registry + seven retained native executors
 ```

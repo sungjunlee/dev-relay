@@ -2,7 +2,7 @@
 name: relay-merge
 argument-hint: "[run-id]"
 description: Explicitly merge a Relay run after exact-SHA independent review, record provenance, and clean up its retained worktree.
-compatibility: Requires gh CLI, git, and Node.js 22+; macOS sandbox-exec is required for isolated external merge observation.
+compatibility: Requires gh CLI, git, and Node.js 22+; external merge observation uses the direct trusted-local host on supported OSes.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-review, dev-backlog"
   keywords: "머지, 병합, merge, finalize, cleanup"

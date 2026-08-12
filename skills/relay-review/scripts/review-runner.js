@@ -11,7 +11,7 @@ const path = require("path");
 const { parseArgs } = require("util");
 
 const { getAdapter } = require("../../relay-dispatch/scripts/adapters");
-const { credentialRequest, validateCapabilities } = require("../../relay-dispatch/scripts/adapter-contract");
+const { credentialRequest, filesystemIsolationDiagnostic, validateCapabilities } = require("../../relay-dispatch/scripts/adapter-contract");
 const facts = require("../../relay-dispatch/scripts/facts");
 const host = require("../../relay-dispatch/scripts/host");
 const { inspectProductionRun } = require("../../relay-dispatch/scripts/recover");
@@ -362,6 +362,11 @@ function runRecordDigest(record) {
   return crypto.createHash("sha256").update(JSON.stringify(record)).digest("hex");
 }
 
+function hasReviewInputBindingError(error) {
+  return error?.code === "REVIEW_INPUT_BINDING_CHANGED"
+    || error?.review_input_error?.code === "REVIEW_INPUT_BINDING_CHANGED";
+}
+
 function productionServices() {
   function withRunLock(runDir, callback) {
     const canonical = fs.realpathSync(runDir);
@@ -397,7 +402,9 @@ async function runReview(cli, overrides = {}) {
     fail(`reviewer override is not part of the Relay contract; immutable binding is '${record.roles.reviewer}'`, "REVIEWER_BINDING_MISMATCH");
   }
   const adapter = getAdapter(reviewer);
-  validateCapabilities(adapter, "primary_review", { readOnly: true, networkAccess: cli.values["network-access"] });
+  const capabilityRequest = { readOnly: true, networkAccess: cli.values["network-access"] };
+  validateCapabilities(adapter, "primary_review", capabilityRequest);
+  const filesystemIsolation = filesystemIsolationDiagnostic(adapter, "primary_review", capabilityRequest);
   let requestedCredentials;
   try { requestedCredentials = credentialRequest(adapter.metadata.credentials, { envNames: cli.values["credential-env"], fileSpecs: cli.values["credential-file"] }); }
   catch (error) { fail(error.message, "INVALID_CREDENTIAL"); }
@@ -446,6 +453,7 @@ async function runReview(cli, overrides = {}) {
     });
   } catch (error) {
     if (error.review_evidence_preserved) throw error;
+    if (hasReviewInputBindingError(error)) throw error;
     stagedBinding = error.review_binding || null;
     executedRuntime = normalizeExecutedRuntime(error.executed_runtime);
     const reviewerResultFailure = error.code === "REVIEW_RESULT_INVALID"
@@ -577,6 +585,7 @@ async function runReview(cli, overrides = {}) {
     pr_number: binding.prNumber,
     review_artifact: written.artifactPath,
     recommended_action: inspection.recommended_action,
+    filesystem_isolation: filesystemIsolation,
   };
 }
 

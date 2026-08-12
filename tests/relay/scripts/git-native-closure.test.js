@@ -62,14 +62,6 @@ function assertNoRemoteEffects(value) {
   assert.equal(fs.existsSync(value.ghMarker), false, "the no-origin route must never execute gh");
 }
 
-function assertSupportedDispatchOrPlatformRefusal(dispatched, value) {
-  if (process.platform === "darwin") return true;
-  assert.equal(dispatched.status, 1, dispatched.stderr);
-  assert.equal(JSON.parse(dispatched.stderr).code, "EXECUTOR_WRITE_ISOLATION_UNAVAILABLE");
-  assertNoRemoteEffects(value);
-  return false;
-}
-
 test("#1206 real no-origin journey reaches one terminal reviewed result without forge or transport", (t) => {
   const value = fixture(); t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
   const env = { ...process.env, RELAY_HOME: value.relayHome, RELAY_WORKTREE_BASE: path.join(value.relayHome, "worktrees"),
@@ -78,7 +70,6 @@ test("#1206 real no-origin journey reaches one terminal reviewed result without 
   assert.equal(route.status, 0, route.stderr); assert.equal(JSON.parse(route.stdout).source.route, "local-reviewed-result");
   const dispatched = run(DISPATCH, [value.repo, "--branch", "issue-1206-closure", "--issue-number", "1206", "--prompt-file", value.prompt,
     "--rubric-file", value.rubric, "--executor", "cursor", "--network-access", "enabled", "--json"], env);
-  if (!assertSupportedDispatchOrPlatformRefusal(dispatched, value)) return;
   assert.equal(dispatched.status, 0, dispatched.stderr);
   const launch = JSON.parse(dispatched.stdout);
   const inspect = () => { const result = run(RECOVER, ["inspect", "--run-dir", launch.run_dir, "--json"], env); assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout); };
@@ -217,7 +208,6 @@ async function crashMatrixJourney(cut, t) {
   ];
   const dispatched = run(DISPATCH, dispatchArgs,
     cut === "post-attempt" ? crashAfterFactEnv(env, "attempt_finished", 81) : env);
-  if (!assertSupportedDispatchOrPlatformRefusal(dispatched, value)) return;
   let launch;
   if (cut === "post-attempt") {
     assert.equal(dispatched.status, 81, dispatched.stderr);

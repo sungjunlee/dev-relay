@@ -1,7 +1,7 @@
 ---
 name: relay-fleet
 description: Drive an immutable cohort of already-planned relay leaves through fan-out and derived status.
-compatibility: Requires git, gh CLI, Node.js 18+, and sibling skills; Linux independent isolation requires Node.js 22+.
+compatibility: Requires git, gh CLI, Node.js 18+, and sibling skills; Relay launches directly on the trusted local host on supported OSes.
 argument-hint: --fleet-id <id> --leaves-file <path>
 metadata:
   related-skills: relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge

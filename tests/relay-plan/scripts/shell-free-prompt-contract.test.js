@@ -1,4 +1,4 @@
-// #1168 item 5: executors whose dispatch toolset has no command-execution tool (pi, claude) were
+// #1168 item 5: an executor whose dispatch toolset has no command-execution tool (Pi today) was
 // override-only under the #1158 toolset gate, because the base prompt template demands verification
 // the executor cannot perform. The shell-free contract moves verification to the orchestrator.
 // These assertions bind the contract's substance, not only the detector literals it avoids.
