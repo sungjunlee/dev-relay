@@ -9,6 +9,7 @@ const mergeGateResponse = (fixture) => ({
   mergeable: fixture.mergeable || "MERGEABLE",
   statusCheckRollup: fixture.statusCheckRollup || [],
   headRefOid: fixture.headRefOid || "a".repeat(40),
+  baseRefOid: fixture.baseRefOid || "b".repeat(40),
   title: fixture.title || "Fixture PR",
 });
 
@@ -60,7 +61,7 @@ const PR_VIEW_JSON_REGISTRY = Object.freeze({
     const state = loadState();
     return { state: state.state, mergeCommit: state.mergeCommit };
   },
-  "number,state,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus": finalizeResponse,
+  "number,state,headRefName,headRefOid,baseRefName,baseRefOid,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus": finalizeResponse,
   "comments,commits,mergeable,statusCheckRollup": mergeGateResponse,
   "baseRefName,comments,commits,mergeable,statusCheckRollup": mergeGateResponse,
   "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid": mergeGateResponse,

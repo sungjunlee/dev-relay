@@ -97,6 +97,7 @@ function payload(type) {
     },
     review_recorded: {
       round: 1, verdict: "pass", reviewed_sha: SHA2,
+      base_sha: SHA,
       done_criteria_sha256: HASH, reviewer: "claude",
       review_artifact: "/r/review.json", override: null,
     },
@@ -420,6 +421,12 @@ test("appending a review verdict without executed runtime evidence fails closed"
       (error) => error.code === "INVALID_FACT" && /executed_runtime is required when appending review_recorded/.test(error.message),
     );
     assert.equal(readFacts({ eventsPath }).facts.length, 0, "the rejected verdict must not reach the journal");
+    const missingBase = fact("review_recorded");
+    delete missingBase.payload.base_sha;
+    assert.throws(
+      () => appendFact({ eventsPath, fact: { ...missingBase, payload: { ...missingBase.payload, executed_runtime } }, lockContext: lock }),
+      (error) => error.code === "INVALID_FACT" && /base_sha is required when appending review_recorded/.test(error.message),
+    );
     const bound = fact("review_recorded");
     appendFact({ eventsPath, fact: { ...bound, payload: { ...bound.payload, executed_runtime } }, lockContext: lock });
     assert.equal(readFacts({ eventsPath }).facts.at(-1).payload.executed_runtime.executable.ino, 2);

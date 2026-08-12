@@ -51,7 +51,7 @@ const PAYLOAD_SCHEMAS = Object.freeze({
     required: [
       "round", "verdict", "reviewed_sha", "done_criteria_sha256",
       "reviewer", "review_artifact", "override",
-    ], optional: ["executed_runtime", "escalation_kind", "retry_of_event_id"],
+    ], optional: ["base_sha", "executed_runtime", "escalation_kind", "retry_of_event_id"],
   },
   // Optional above so historical journals stay readable; required below on every append this runtime makes.
   recovery_applied: {
@@ -75,7 +75,7 @@ const PAYLOAD_SCHEMAS = Object.freeze({
 // Fields that are schema-optional so historical journals keep parsing, but that this runtime must
 // never append without. Enforced on the append path only; readers stay tolerant of older facts.
 const APPEND_REQUIRED_EVIDENCE = Object.freeze({
-  review_recorded: Object.freeze(["executed_runtime"]),
+  review_recorded: Object.freeze(["base_sha", "executed_runtime"]),
 });
 
 const ATTEMPT_TYPES = new Set([
@@ -250,6 +250,7 @@ function validatePayload(type, payload, { allowFutureFields = false, appending =
       integer(payload.round, "payload.round", { minimum: 1 });
       if (!REVIEW_VERDICTS.has(payload.verdict)) fail("INVALID_FACT", "payload.verdict is invalid");
       sha(payload.reviewed_sha, "payload.reviewed_sha");
+      if (payload.base_sha !== undefined) sha(payload.base_sha, "payload.base_sha");
       sha(payload.done_criteria_sha256, "payload.done_criteria_sha256", { sha256: true });
       string(payload.reviewer, "payload.reviewer");
       string(payload.review_artifact, "payload.review_artifact");

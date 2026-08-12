@@ -152,7 +152,7 @@ function verificationFact() {
   };
 }
 
-function reviewFact({ eventId, verdict = "escalated", escalationKind, retryOfEventId } = {}) {
+function reviewFact({ eventId, verdict = "escalated", escalationKind, retryOfEventId, baseSha } = {}) {
   return {
     event_id: eventId,
     run_id: "issue-1135-test",
@@ -163,6 +163,7 @@ function reviewFact({ eventId, verdict = "escalated", escalationKind, retryOfEve
       round: retryOfEventId ? 2 : 1,
       verdict,
       reviewed_sha: HEAD,
+      ...(baseSha ? { base_sha: baseSha } : {}),
       done_criteria_sha256: HASH,
       reviewer: "claude",
       review_artifact: "/run/review.json",
@@ -501,7 +502,7 @@ test("inspect exposes one retry for a runtime escalation and exhausts that subje
     git: { ...publicationObservations().git, reviewable_work: false },
     github: {
       ...publicationObservations().github,
-      matching_pr_count: 1, pr_number: 42, pr_state: "OPEN", pr_head_sha: HEAD,
+      matching_pr_count: 1, pr_number: 42, pr_state: "OPEN", pr_head_sha: HEAD, pr_base_sha: START,
     },
   });
   const firstFact = reviewFact({ eventId: "review-runtime-1", escalationKind: "runtime_failure" });
@@ -536,6 +537,7 @@ test("inspect accepts the immediate single passing retry", async () => {
   const retryPass = reviewFact({
     eventId: "review-runtime-pass-2",
     verdict: "pass",
+    baseSha: START,
     retryOfEventId: firstFact.event_id,
   });
   const result = await inspectRun(harness({
@@ -544,6 +546,23 @@ test("inspect accepts the immediate single passing retry", async () => {
   }));
   assert.equal(result.derived.action, "merge");
   assert.equal(result.derived.reason, "ready_to_merge");
+});
+
+test("a historical passing GitHub review without base evidence derives one fresh review", async () => {
+  const observations = publicationObservations({
+    git: { ...publicationObservations().git, reviewable_work: false },
+    github: {
+      ...publicationObservations().github,
+      matching_pr_count: 1, pr_number: 42, pr_state: "OPEN",
+      pr_head_sha: HEAD, pr_base_sha: START,
+    },
+  });
+  const result = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), reviewFact({ eventId: "historical-pass", verdict: "pass" })],
+    observations,
+  }));
+  assert.equal(result.derived.action, "review");
+  assert.equal(result.derived.reason, "review_base_evidence_missing");
 });
 
 test("inspect rejects a passing retry without a matching initial runtime failure", async () => {

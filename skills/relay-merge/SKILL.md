@@ -75,13 +75,24 @@ intent. If a crash leaves that intent but GitHub proves neither the exact merge
 nor a queued request, finalize fails with an ambiguous-outcome error and
 requires canonical recovery instead of risking a duplicate call.
 
-The final preflight rechecks the immutable configured base and source SHA. The
+The final preflight rechecks the immutable configured base and source SHA. If
+the base commit advanced since review, finalize requires the reviewed base to
+be its ancestor and compares the exact reviewed Git path set with GitHub's base
+advance paths. Zero overlap remains mergeable; overlap fails typed and requires
+updating the branch onto the current base, then canonical verification and
+review. Path overlap is a proxy, so semantic conflicts across different paths
+remain outside this proof. GitHub compare caps file evidence at 300 entries;
+that boundary and incomplete commit pagination fail closed.
+
+The
 GitHub merge API provides an atomic expected-source-SHA guard
 (`--match-head-commit`) but no expected-base compare-and-swap. Therefore a base
 retarget detected before the request fails closed, while the remaining
 post-check/pre-request base nanorace—in which an external collaborator changes
 PR metadata—is a documented GitHub platform threat boundary, not a weakened
 source-SHA or configured-base invariant.
+Merge-queue/base movement after a request is rechecked on resume, but Relay
+cannot undo an externally completed merge.
 
 ### 3. Optional post-merge project updates
 

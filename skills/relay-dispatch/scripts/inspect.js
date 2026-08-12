@@ -616,6 +616,14 @@ function foldRunFacts({
         diagnostics,
       });
     }
+    if (!latestReview.payload.base_sha) {
+      return withGithubAvailability(result("review", "review_base_evidence_missing", {
+        head_sha: headSha,
+        reviewed_sha: latestReview.payload.reviewed_sha,
+        pr_number: prNumber,
+        diagnostics: [...diagnostics, { code: "review_base_evidence_missing", event_id: latestReview.event_id }],
+      }), githubFacts);
+    }
     return withGithubAvailability(result("merge", "ready_to_merge", {
       head_sha: headSha,
       reviewed_sha: latestReview.payload.reviewed_sha,

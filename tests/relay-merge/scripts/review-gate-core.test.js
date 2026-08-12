@@ -7,6 +7,7 @@ const { requireMergeAction } = require("../../../skills/relay-merge/scripts/revi
 
 const head = "a".repeat(40);
 const tree = "b".repeat(40);
+const base = "e".repeat(40);
 const criteria = "c".repeat(64);
 const record = {
   repo: { remote: "owner/repo" },
@@ -31,6 +32,7 @@ function inspection() {
         head_ref: "issue-42",
         base_ref: "main",
         pr_head_sha: head,
+        pr_base_sha: base,
       },
       git: {
         head_sha: head,
@@ -42,7 +44,7 @@ function inspection() {
     facts: [
       { type: "pull_request_recorded", payload: { pr_number: 42, repo: "owner/repo", head_ref: "issue-42", base_ref: "main", head_sha: head } },
       { type: "verification_recorded", payload: { status: "passed", exit_code: 0, head_sha: head, tree_sha: tree, done_criteria_sha256: criteria } },
-      { type: "review_recorded", payload: { verdict: "lgtm", reviewed_sha: head, done_criteria_sha256: criteria, reviewer: "codex" } },
+      { type: "review_recorded", payload: { verdict: "lgtm", reviewed_sha: head, base_sha: base, done_criteria_sha256: criteria, reviewer: "codex" } },
     ],
   };
 }
@@ -51,6 +53,8 @@ test("merge gate binds live PR, remote/worktree head, verification, review, and 
   const binding = requireMergeAction(inspection(), record);
   assert.equal(binding.head, head);
   assert.equal(binding.prNumber, 42);
+  assert.equal(binding.reviewedBase, base);
+  assert.equal(binding.liveBase, base);
 });
 
 test("merge gate rejects mutable observation, review, and verification drift", () => {

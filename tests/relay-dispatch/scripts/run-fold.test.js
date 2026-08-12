@@ -88,7 +88,7 @@ function verification(index = 4, overrides = {}) {
 
 function review(verdict, index = 4, reviewedSha = HEAD, hash = HASH) {
   return fact("review_recorded", index, {
-    round: 1, verdict, reviewed_sha: reviewedSha, done_criteria_sha256: hash,
+    round: 1, verdict, reviewed_sha: reviewedSha, base_sha: START, done_criteria_sha256: hash,
     reviewer: "claude", review_artifact: "/r/review.json", override: null,
   });
 }
@@ -99,6 +99,7 @@ function livePrFacts(prNumber = 42, overrides = {}) {
     pr_number: prNumber,
     repo: "owner/repo",
     pr_head_sha: HEAD,
+    pr_base_sha: START,
     head_ref: "work",
     base_ref: "main",
     pr_state: "OPEN",
@@ -745,19 +746,19 @@ test("#1209 freezes GitHub action, reason, and action-key contracts", async () =
     ["publication recovery", [started(), finished()], publication,
       "recover", "publication_incomplete", "17783b1eb88a4ae0bedfd64c697c7280d8bebf6cf2649e244228de1c61ae722a"],
     ["review", baseFacts, { ...publication, github: open },
-      "review", "review_missing", "4d8ae47b98c90b1ba1b7c0c81abea2f29f934b9d8e38f3e7e320fec0bceb1354"],
+      "review", "review_missing", "1663d8b5a357664e54e8582010ab03c140142e588392a9129a69413da6e59596"],
     ["stale review", [...baseFacts, review("pass", 5, START)], { ...publication, github: open },
-      "review", "review_stale", "bfca830e29b3f3108cb7f61fda91d2197ab8115bab12942f45267e1e6da3018d"],
+      "review", "review_stale", "6daf7d4139abde3abf9fa3fe4fe8c8ade2e23dc8aa531d60f2ac429f8c939eb5"],
     ["ready to merge", [...baseFacts, review("pass", 5)], { ...publication, github: open },
-      "merge", "ready_to_merge", "d0a837542d6801de5c0205e3c2f0a0ff9e2536f66a36309440cbeca3819816bd"],
+      "merge", "ready_to_merge", "24a67bb5446a87f71475db6bddf0b5c7fab192768e274e00cc7c1ed4ec37c6a4"],
     ["externally merged", [started(), finished(), pr()], {
       ...publication,
       github: { ...open, pr_state: "MERGED", merge_sha: TARGET },
-    }, "recover", "merged_pr_unrecorded", "5b3a7c5628fafee5c631bbd798eee56c7dce2ace4e22b28db502ddeae300ac53"],
+    }, "recover", "merged_pr_unrecorded", "a5ccad2aeb73aeeaa275c8912365bbae2c740e6b25d3b372b516de840a617f2b"],
     ["GitHub unavailable", baseFacts, {
       ...publication,
       github: { ...open, available: false },
-    }, "none", "github_unavailable", "3d5880c22fafe7de50341e9271c1e7e644ed288f280421220b4341f75d8e948e"],
+    }, "none", "github_unavailable", "2c9bb31af3f937cf3a7cf884fe5eae7045ee77752830a0ab7dfbea1b9b3b99cb"],
     ["merge conflict observation", [started(), finished()], {
       ...publication,
       git: { ...publication.git, remote_relation: "diverged" },
