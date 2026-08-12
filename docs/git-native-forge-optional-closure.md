@@ -8,7 +8,7 @@ non-Git executor, publication system, or generic forge framework.
 | --- | --- |
 | Implementation PRs | #1213 (#1209), #1223 (#1207), #1224 (#1208), #1226 (#1205) merged; #1206 closure is in flight in this PR. |
 | Full local gate | 634 total: 632 pass, 0 fail, 2 credential-gated live-canary skips (781.966 seconds). |
-| GitHub Actions | The preceding implementation corpus was 9/9 green; the closure PR reruns the matrix. Ubuntu asserts the intentional typed isolation refusal rather than bypassing macOS `sandbox-exec`. |
+| GitHub Actions | Closure PR: 9/9 required test jobs green. Ubuntu asserts the intentional typed isolation refusal rather than bypassing macOS `sandbox-exec`. |
 | Runtime baseline | `0f23fb2`: 16 files / 6,226 LOC → 16 / 6,845 (+619: milestone +540, interleaved hardening +79). |
 | Test growth | Milestone test corpus: +1,465 lines before closure; this closure adds 389 test/fixture LOC (318 + 20 + 51). |
 | Closure matrix | 6/6 scenarios green inside the final serialized gate: one uninterrupted journey plus five hard-exit/retry cuts. |
