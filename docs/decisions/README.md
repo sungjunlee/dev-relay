@@ -29,6 +29,7 @@ form; they are decisions all the same.
 | [2026-07-21-risk-adaptive-observation-window.md](./2026-07-21-risk-adaptive-observation-window.md) | Bounded observation window per risk class |
 | [2026-08-03-migration-overlay-disposition.md](./2026-08-03-migration-overlay-disposition.md) | Delete the migration overlay; vNext admits itself via an atomic run-dir `mkdir` |
 | [2026-08-03-harness-complexity-criterion.md](./2026-08-03-harness-complexity-criterion.md) | What earns its size, and the tripwires that say otherwise |
+| [2026-08-12-trusted-local-execution-contract.md](./2026-08-12-trusted-local-execution-contract.md) | One trusted-local execution path with native-when-available isolation; seven-adapter capability inventory; settle-before-cutover rule; supersedes `#1141`/`#1158` |
 
 ## When to add an ADR
 
