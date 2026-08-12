@@ -12,6 +12,17 @@ module.exports = createNativeAdapter({
   name: "opencode",
   timeoutMs: 1800000,
   outputProtocol: (phase) => phase === "primary_review" ? "json_result" : "text_stdout",
+  // Literal stderr substrings that definitively mean the model provider is unavailable
+  // (quota/billing exhaustion) rather than transiently overloaded. The supervisor matches
+  // them against lowercased stderr and force-cancels a live attempt that would otherwise
+  // burn its full timeout; these literals travel only inside the integrity-bound host config.
+  providerUnavailableSignals: [
+    "insufficient_quota",
+    "quota exceeded",
+    "quota_exceeded",
+    "billing hard limit",
+    "billing_hard_limit_reached",
+  ],
   metadata: { cliBinary: "opencode", outputProtocol: "phase-specific", providerDefault: "opencode", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", runtimeDependencies: { executableParent: null, interpreterParent: null } },
   phases: {
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text", commandExecution: true },

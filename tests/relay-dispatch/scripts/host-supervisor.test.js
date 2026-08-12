@@ -10,6 +10,8 @@ const path = require("path");
 
 const host = require("../../../skills/relay-dispatch/scripts/host");
 
+const FAKE_OPENCODE = path.join(__dirname, "../fixtures/fake-opencode.js");
+
 function roots(label) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-supervisor-${label}-`)));
   const runDir = path.join(root, "run"), worktree = path.join(root, "worktree");
@@ -771,4 +773,104 @@ test("cleanup deadline cannot publish a pending completed outcome", () => {
   assert.doesNotMatch(source, /Date\.now\(\) >= end\)[^\n]*finish\(pendingClose/);
   assert.match(source, /Date\.now\(\) >= end\)[^\n]*cleanupIncomplete/);
   assert.doesNotMatch(source, /process group cleanup bound elapsed[^\n]*status:\s*"failed"/);
+});
+
+// #1242: a fake OpenCode that prints a definitive provider-unavailable signal on stderr and then
+// stays alive must be force-cancelled well before its configured timeout, with the executor process
+// group reaped and no cleanup obligation left open.
+test("a recognized provider-unavailable stderr signal cancels a live dispatch attempt before its timeout", { timeout: 30_000 }, async () => {
+  const value = roots("opencode-quota-dispatch"), attemptId = "opencode-quota-dispatch", capability = lock(value, attemptId);
+  const started = Date.now();
+  const receipt = host.launchLocalSupervisor({
+    runDir: value.runDir, attemptId, command: process.execPath,
+    args: [FAKE_OPENCODE, "run", "--auto", "--print-logs", "--log-level", "ERROR", "--pure", "--dir", value.worktree],
+    trustedWorktreeRoot: value.worktree, cwd: value.worktree,
+    timeoutMs: 20_000, cancelGraceMs: 200,
+    phase: "dispatch",
+    providerUnavailableSignals: ["insufficient_quota", "quota exceeded"],
+    executorEnv: { FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_SIGNAL: "Anthropic API error 429: insufficient_quota" },
+    lockContext: capability,
+  });
+  const config = JSON.parse(fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.config.json`), "utf8"));
+  assert.equal(config.phase, "dispatch");
+  assert.deepEqual(config.provider_unavailable_signals, ["insufficient_quota", "quota exceeded"]);
+  const result = await host.waitForTerminalResult(receipt, { timeoutMs: 10_000 });
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.termination, "provider_unavailable");
+  assert.ok(Date.now() - started < 10_000, `early termination must beat the 20s timeout (elapsed ${Date.now() - started}ms)`);
+  assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-incomplete.json`)), false);
+  const running = JSON.parse(fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.running.json`), "utf8"));
+  const end = Date.now() + 5_000;
+  while (Date.now() < end && (!processDead(running.supervisor.pid) || !processDead(running.executor.pid))) await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(processDead(running.supervisor.pid), true, "the supervisor must exit after early termination");
+  assert.equal(processDead(running.executor.pid), true, "the executor gate must be reaped");
+  host.releaseRunLock(capability);
+});
+
+// The same early-termination behavior applies to a primary-review-shaped invocation: the phase
+// travels inside the integrity-bound supervisor config, and the watcher is phase-agnostic.
+test("a recognized provider-unavailable stderr signal cancels a live primary-review attempt before its timeout", { timeout: 30_000 }, async () => {
+  const value = roots("opencode-quota-review"), attemptId = "opencode-quota-review", capability = lock(value, attemptId);
+  const started = Date.now();
+  const receipt = host.launchLocalSupervisor({
+    runDir: value.runDir, attemptId, command: process.execPath,
+    args: [FAKE_OPENCODE, "run", "--auto", "--print-logs", "--log-level", "ERROR", "--pure"],
+    trustedWorktreeRoot: value.worktree, cwd: value.worktree,
+    timeoutMs: 20_000, cancelGraceMs: 200,
+    phase: "primary_review",
+    providerUnavailableSignals: ["insufficient_quota"],
+    executorEnv: { FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_SIGNAL: "insufficient_quota" },
+    lockContext: capability,
+  });
+  const config = JSON.parse(fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.config.json`), "utf8"));
+  assert.equal(config.phase, "primary_review");
+  const result = await host.waitForTerminalResult(receipt, { timeoutMs: 10_000 });
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.termination, "provider_unavailable");
+  assert.ok(Date.now() - started < 10_000, `early termination must beat the 20s timeout (elapsed ${Date.now() - started}ms)`);
+  assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-incomplete.json`)), false);
+  host.releaseRunLock(capability);
+});
+
+// Unrecognized stderr is not a provider-unavailable signal: the attempt keeps its existing
+// timeout behavior and fails closed as timed_out, never cancelled early.
+test("unrecognized stderr does not shorten a live attempt's timeout", { timeout: 30_000 }, async () => {
+  const value = roots("opencode-unrecognized"), attemptId = "opencode-unrecognized", capability = lock(value, attemptId);
+  const started = Date.now();
+  const receipt = host.launchLocalSupervisor({
+    runDir: value.runDir, attemptId, command: process.execPath,
+    args: [FAKE_OPENCODE, "run", "--pure", "--dir", value.worktree],
+    trustedWorktreeRoot: value.worktree, cwd: value.worktree,
+    timeoutMs: 2_000, cancelGraceMs: 200,
+    providerUnavailableSignals: ["insufficient_quota"],
+    executorEnv: { FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_SIGNAL: "provider is having a bad day" },
+    lockContext: capability,
+  });
+  const result = await host.waitForTerminalResult(receipt, { timeoutMs: 15_000 });
+  assert.equal(result.status, "timed_out");
+  assert.equal(result.termination, undefined);
+  assert.ok(Date.now() - started >= 1_500, `unrecognized stderr must not cancel early (elapsed ${Date.now() - started}ms)`);
+  host.releaseRunLock(capability);
+});
+
+// A recognized signal followed by a self-exit is not double-terminated: the natural gate outcome
+// (failed, exit 2, no signal) wins unchanged and no process-scope error is produced.
+test("a self-exiting fake that emits a recognized signal keeps its natural outcome", { timeout: 30_000 }, async () => {
+  const value = roots("opencode-self-exit"), attemptId = "opencode-self-exit", capability = lock(value, attemptId);
+  const receipt = host.launchLocalSupervisor({
+    runDir: value.runDir, attemptId, command: process.execPath,
+    args: [FAKE_OPENCODE, "run", "--pure", "--dir", value.worktree],
+    trustedWorktreeRoot: value.worktree, cwd: value.worktree,
+    timeoutMs: 20_000, cancelGraceMs: 1_000,
+    providerUnavailableSignals: ["insufficient_quota"],
+    executorEnv: { FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_EXIT_CODE: "2", FAKE_OPENCODE_EXIT_DELAY_MS: "300" },
+    lockContext: capability,
+  });
+  const result = await host.waitForTerminalResult(receipt, { timeoutMs: 10_000 });
+  assert.equal(result.status, "failed");
+  assert.equal(result.exit_code, 2);
+  assert.equal(result.signal, null);
+  assert.equal(result.termination, undefined);
+  assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-incomplete.json`)), false);
+  host.releaseRunLock(capability);
 });

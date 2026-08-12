@@ -553,9 +553,43 @@ test("production dispatch and review integration contain no concrete executor-na
   const files = [
     path.join(__dirname, "../../../skills/relay-dispatch/scripts/dispatch.js"),
     path.join(__dirname, "../../../skills/relay-review/scripts/review-runner.js"),
+    path.join(__dirname, "../../../skills/relay-dispatch/scripts/host.js"),
+    path.join(__dirname, "../../../skills/relay-dispatch/scripts/adapter-contract.js"),
   ];
   const branchPattern = /(?:===|!==|case)\s*["'](?:codex|claude|cursor|opencode|pi|antigravity|cline)["']/;
   for (const file of files) assert.doesNotMatch(fs.readFileSync(file, "utf8"), branchPattern, file);
+});
+
+test("provider-unavailable stderr signals are adapter-owned literal declarations consumed generically", () => {
+  const opencode = getAdapter("opencode");
+  assert.ok(Array.isArray(opencode.providerUnavailableSignals));
+  assert.ok(opencode.providerUnavailableSignals.length > 0, "opencode must declare its provider-unavailable signals");
+  assert.ok(Object.isFrozen(opencode.providerUnavailableSignals));
+  assert.ok(opencode.providerUnavailableSignals.every((signal) => (
+    typeof signal === "string" && signal.length > 0 && signal === signal.toLowerCase() && !/[\u0000-\u001f]/.test(signal)
+  )));
+  for (const name of listAdapters().filter((value) => value !== "opencode")) {
+    assert.deepEqual(getAdapter(name).providerUnavailableSignals, [], name);
+  }
+  const create = (signals) => contract.createNativeAdapter({
+    name: "signal-fixture",
+    timeoutMs: 1_000,
+    providerUnavailableSignals: signals,
+    metadata: {
+      cliBinary: "fixture", processContainment: contract.PROCESS_CONTAINMENT,
+      providerTransport: "remote_required",
+      runtimeDependencies: { executableParent: null, interpreterParent: null },
+    },
+    phases: { dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text", commandExecution: true } },
+    outputProtocol: "text_stdout",
+    buildDispatch: () => ({ command: "fixture", args: [], cwd }),
+  });
+  assert.deepEqual(create(["Insufficient_Quota", "Quota Exceeded"]).providerUnavailableSignals, ["insufficient_quota", "quota exceeded"]);
+  assert.deepEqual(create(undefined).providerUnavailableSignals, []);
+  assert.throws(() => create([7]), /providerUnavailableSignals/);
+  assert.throws(() => create([""]), /providerUnavailableSignals/);
+  assert.throws(() => create(["line\nbreak"]), /providerUnavailableSignals/);
+  assert.throws(() => create(["dup", "dup"]), /must not repeat/);
 });
 
 test("native adapter sources have no reverse imports into relay-review", () => {
