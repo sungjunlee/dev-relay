@@ -140,7 +140,7 @@ built-in executors are Claude, Codex, OpenCode, Pi, Antigravity, Cursor, and
 Cline. Every descriptor lives in `scripts/adapters/` and is registered in
 `adapters/index.js`; its four-method contract declares argv construction,
 capabilities, output parsing, and metadata. Cline is dispatch-only until its
-strict primary-review canary passes. No adapter owns run storage,
+structured primary-review output contract is registered. No adapter owns run storage,
 publication, app registration, or a private lifecycle.
 
 The host owns only durable lock/ownership, detached supervisor launch,

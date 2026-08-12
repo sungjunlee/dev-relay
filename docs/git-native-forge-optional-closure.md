@@ -7,8 +7,8 @@ non-Git executor, publication system, or generic forge framework.
 | Evidence | Result |
 | --- | --- |
 | Implementation PRs | #1213 (#1209), #1223 (#1207), #1224 (#1208), #1226 (#1205) merged; #1206 closure is in flight in this PR. |
-| Full local gate | 634 total: 632 pass, 0 fail, 2 credential-gated live-canary skips (781.966 seconds). |
-| GitHub Actions | Historical closure PR: 9/9 required jobs green. #1232 targets the same trusted-local native route on Ubuntu; PR evidence is pending. |
+| Full local gate | Historical closure: 634 total, 632 pass, 0 fail, and 2 opt-in provider-canary skips (781.966 seconds). Those canaries were retired by #1234 and are not part of the current gate. |
+| GitHub Actions | Historical closure PR: 9/9 required jobs green. #1232 PR #1238 later passed all 11 checks, including the Ubuntu trusted-local production-seam job. |
 | Runtime baseline | `0f23fb2`: 16 files / 6,226 LOC → 16 / 6,845 (+619: milestone +540, interleaved hardening +79). |
 | Test growth | Milestone test corpus: +1,465 lines before closure; this closure adds 389 test/fixture LOC (318 + 20 + 51). |
 | Closure matrix | 6/6 scenarios green inside the final serialized gate: one uninterrupted journey plus five hard-exit/retry cuts. |
@@ -24,9 +24,8 @@ surgery, exact-once attempt/verification/review/close facts, and one receipt
 per recovery action.
 
 The six lifecycle scenarios pass locally on macOS through the trusted-local
-native route. #1232 makes the same journey mandatory in Ubuntu CI; record that
-result after the PR job is green. Both paths require zero forge or
-remote-transport effects.
+native route. #1232 added the Ubuntu trusted-local production-seam job and PR
+#1238 passed it. Both paths require zero forge or remote-transport effects.
 
 ## Crash and compatibility matrix
 

@@ -16,8 +16,8 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-dir <absolute-r
 The repository identity derived from the Git common directory and the selected
 source route (GitHub identity, or the immutable local identity when no remote
 exists) must equal `run.json`. Local review requires no forge observation;
-GitHub review requires the exact live PR identity and explicit reviewer
-credentials/network access. The runner reads Done Criteria only from the frozen
+GitHub review requires the exact live PR identity and the reviewer's ordinary
+ambient CLI authentication/network access. The runner reads Done Criteria only from the frozen
 run-local path and verifies its hash through `run-store`.
 
 ## Inputs and artifacts

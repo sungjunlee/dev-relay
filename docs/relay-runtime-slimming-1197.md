@@ -27,8 +27,8 @@ adapter descriptors:
 
 - `recover.js`: inspect-before-write, same-action reinspection under lock, and
   the sole general lifecycle writer.
-- `host.js`: capability locks, detached supervision, cancellation, credential
-  staging, and enforced write isolation.
+- `host.js`: capability locks, detached supervision, cancellation, runtime
+  binding, and process-scope cleanup.
 - `dispatch.js`: worktree containment and dispatch-only orchestration, including
   the independently fixed worktree-base creation boundary from #1191.
 - `facts.js`, `run-store.js`, and `inspect.js`: append-only facts, immutable
@@ -43,8 +43,9 @@ closure rather than a cosmetic line target.
 
 ## Verification
 
-- Full serialized local gate: 585 tests, 583 pass, 0 fail, 2 expected opt-in
-  live-canary skips.
+- Full serialized local gate at that historical snapshot: 585 tests, 583 pass,
+  0 fail, and 2 opt-in live-provider skips. Those canaries were retired by
+  #1234 and are not part of the current gate.
 - PR #1202 GitHub matrix: all nine suites green after the final review fix.
 - Independent adversarial review: LGTM, no remaining P1/P2.
 - The surviving direct guards fail closed on CI job/runner drift, vacuous test

@@ -1,7 +1,7 @@
 # Recovery Utility
 
-Relay Dispatch installs no standalone worktree, cleanup, close-run, or live
-canary CLI. Those former operator surfaces duplicated lifecycle ownership and
+Relay Dispatch installs no standalone worktree, cleanup, close-run, or external
+provider-health CLI. Those former operator surfaces duplicated lifecycle ownership and
 are intentionally retired.
 
 For an interrupted or externally changed run, inspect current facts and apply
@@ -13,7 +13,6 @@ node skills/relay/scripts/relay-recover.js recover --repo . --run-id <run-id> \
   --reason "publish the reviewed branch" --json
 ```
 
-Release-only adapter evidence belongs under `tests/relay-dispatch/`; it is not
-part of the installed skill surface. The test runner preserves a bounded
-read-only adapter canary: CLI probe, invocation, timeout, outcome parsing, and no-mutation
-checks for every registered executor.
+Adapter argv, capability, timeout, outcome-parsing, and no-mutation contracts
+belong under `tests/relay-dispatch/`; they use fake executables and are not an
+operator-facing provider-health command.

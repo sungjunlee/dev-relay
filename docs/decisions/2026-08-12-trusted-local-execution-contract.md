@@ -1,6 +1,6 @@
 # Trusted-local execution contract
 
-**Status:** Accepted 2026-08-12; `#1232` and `#1233` implemented · Issue `#1231` · Epic `#1230` · Milestone "Trusted-local native Relay"
+**Status:** Accepted 2026-08-12; `#1232`, `#1233`, and `#1234` implemented · Issue `#1231` · Epic `#1230` · Milestone "Trusted-local native Relay"
 **Supersedes:** the mandatory Relay-owned isolation + staged-credential policy of `#1141` and the dispatch-availability policy derived from it in `#1158` ([Supersession](#supersession-of-1141-and-1158)).
 **Runtime status:** `#1232` has removed Relay-owned `sandbox-exec` and its
 non-darwin admission failure. Dispatch, review, observer, and recovery launch
@@ -18,7 +18,7 @@ trusted-local, native-first path under four constraints: atomic host/adapter
 replacement, preserved immutable review inputs and under-lock reinspection,
 preserved process identity/cleanup/recovery, and settlement of existing
 credential-root cleanup obligations before their reader is deleted. This record
-freezes the contract and the exact native capability inventory for `#1232`–`#1235`.
+freezes the contract and the native capability inventory used by `#1232`–`#1234`.
 
 ## Decision
 
@@ -61,22 +61,25 @@ Worktree-only dispatch; immutable `run.json` and append-only `events.jsonl` thro
 New `cleanup_incomplete` records carry process identities and, for review, an
 exact `obligation.staged_input_root` (path plus dev/ino binding).
 
-**Inventory (2026-08-12, this host):** 109 `host-attempt-*.cleanup-incomplete.json` markers under `~/.relay/runs`, all carrying `credential_root` obligations and every one matched by a `cleanup-settled.json` marker — zero open credential-root obligations at acceptance time.
+**Inventory (2026-08-12, this host):** 109 pre-cutover
+`host-attempt-*.cleanup-incomplete.json` markers under `~/.relay/runs`, every
+one matched by a `cleanup-settled.json` marker — zero open obligations at
+acceptance time.
 
 **Cutover:** the pre-cutover inventory is settled (109 markers, 109 settled,
-zero open). Historical credential-root artifacts are inert history: no
-compatibility reader or migration overlay remains. New recovery removes only
+zero open). Historical cleanup artifacts are inert history: no compatibility
+reader or migration overlay remains. New recovery removes only
 the signed staged review-input root after exact process settlement.
 
 ## Consequences
 
 - `#1232` (implemented): atomically removes the outer `sandbox-exec` boundary; Codex/Cursor request their native sandboxes; adds the visible capability diagnostic of §3.
 - `#1233` (implemented): moves all seven adapters to ambient HOME/auth/config and deletes credential staging after the §6 rule was satisfied.
-- `#1234` (tracked follow-up): retires the test-only 13-cell gate and its obsolete tests/docs; it does not own runtime authentication behavior. `#1235` dogfoods all seven adapters and closes the migration.
+- `#1234` (implemented): retires the provider-credential-dependent 13-cell release gate and its obsolete tests/docs. Static adapter argv contracts and the nonblocking native-isolation diagnostic remain; `#1235` dogfoods normal operator use without becoming a release gate.
 
 ## Supersession of #1141 and #1158
 
-`#1141`'s mandatory staged-credential/Relay-owned isolation policy and `#1158`'s availability framing are superseded; both issues were closed with superseding comments on 2026-08-12. Their live evidence remains linked: canary failures (`docs/archive/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-01.json` … `-03.json`), and `#1158`'s per-executor mechanism table (Keychain-bound cursor auth, cline cookie store, incomplete agy OAuth), which motivates ambient HOME in §1 and the unverified markings in §2. The retired 13-cell matrix remains described in `skills/relay-dispatch/references/agent-adapter-platform.md` until `#1234`.
+`#1141`'s mandatory staged-credential/Relay-owned isolation policy and `#1158`'s availability framing are superseded; both issues were closed with superseding comments on 2026-08-12. Their live evidence remains archived only: canary failures (`docs/archive/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-01.json` … `-03.json`) and `#1158`'s per-executor mechanism table (Keychain-bound cursor auth, cline cookie store, incomplete agy OAuth). They explain the move to ambient HOME in §1 and do not form a current release condition.
 
 ## Evidence
 

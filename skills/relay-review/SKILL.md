@@ -20,8 +20,8 @@ metadata:
 
 The selected route is inherited from the immutable run evidence. Local review
 does not fetch, call `gh`, or require forge credentials. GitHub review requires
-the exact live PR observation plus the reviewer's explicit adapter network and
-credential prerequisites.
+the exact live PR observation plus the reviewer's ordinary ambient CLI
+authentication and network availability.
 
 Do not use this skill to plan work, dispatch an executor, repair publication, or merge. Use `relay-plan`, `relay-dispatch`, `relay-recover`, or `relay-merge` respectively.
 
@@ -40,7 +40,7 @@ flags are unknown. `--reviewer` may only repeat the
 immutable `run.json` reviewer binding; Relay does not implement mutable
 reviewer swaps or routing precedence.
 
-Supported primary-review bindings are Codex, Claude, OpenCode, Pi, Antigravity, and Cursor. Cline remains dispatch-only until its strict review canary is proven. The same flat adapter descriptor used for dispatch declares this capability.
+Supported primary-review bindings are Codex, Claude, OpenCode, Pi, Antigravity, and Cursor. Cline remains dispatch-only because it has no registered structured primary-review output contract. The same flat adapter descriptor used for dispatch declares this capability.
 
 The immutable binding can be repeated explicitly as `--reviewer codex`, `--reviewer claude`, `--reviewer opencode`, `--reviewer pi`, `--reviewer antigravity`, or `--reviewer cursor`. These flags validate the existing binding; they never replace it.
 

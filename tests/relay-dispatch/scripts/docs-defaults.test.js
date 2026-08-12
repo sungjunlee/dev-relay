@@ -289,13 +289,13 @@ test("operator guide teaches default and manual workflows before adapter readine
   assert.ok(manualPhaseIndex < matrixIndex, "manual phase control must appear before adapter readiness");
 });
 
-test("operator docs keep live adapter evidence test-only", () => {
+test("operator docs keep provider health outside the installed surface", () => {
   const docs = [
     readRepoFile("docs/relay-operator-guide.md"),
     readRepoFile("skills/relay-dispatch/references/operator-utilities.md"),
   ].join("\n");
 
   assert.doesNotMatch(docs, /adapter-live-canary\.js|live-dogfood\.js/);
-  assert.match(docs, /release-only/i);
-  assert.match(docs, /read-only adapter canary/i);
+  assert.doesNotMatch(docs, /release-only|provider canary/i);
+  assert.match(docs, /fake executables/i);
 });

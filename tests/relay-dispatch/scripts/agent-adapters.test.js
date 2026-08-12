@@ -32,10 +32,9 @@ test("registry fails closed for unknown adapters and phases", () => {
   assert.equal(getAdapter("codex").capabilities({ phase: "advisory_review" }).supported, false);
 });
 
-// The registry requires all seven descriptors literally and eagerly. That is deliberate: canary release
-// provenance enumerates a complete static production entry-point closure, which a lazy or dynamic loader
-// would defeat. Loading the registry must therefore load every native adapter, not just the one asked for.
-test("registry statically loads every native adapter for a complete source closure", () => {
+// The registry requires all seven descriptors literally and eagerly so the
+// closed adapter surface cannot depend on lazy or dynamic loading.
+test("registry statically loads every native adapter", () => {
   const registryPath = require.resolve("../../../skills/relay-dispatch/scripts/adapters");
   const nativePaths = NAMES.map((name) => require.resolve(`../../../skills/relay-dispatch/scripts/adapters/${name}`));
   delete require.cache[registryPath];

@@ -53,9 +53,9 @@ See `rubric-trust-model.md` for the audit template.
 
 Prefer deterministic project commands and exact expected outcomes. State the
 scope of a measurement honestly: a focused E2E repetition is not a full-suite
-flake claim. New tests must be registered in the generated test ledger;
-runtime scripts and cross-skill imports must appear in the generated runtime
-inventory.
+flake claim. Keep tests under `tests/<skill>/`; direct CI-matrix equality,
+script reachability, and scoped/full test commands are the checked-in
+verification surfaces. There is no generated test ledger or runtime inventory.
 
 ## Keep it small
 
