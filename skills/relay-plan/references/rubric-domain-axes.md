@@ -222,7 +222,7 @@ Prefer tests for behavior preservation, `rg` for deleted symbols, dependency gra
 
 Security candidate axes for trust boundaries, secrets, inputs, files, dependencies, and auditability.
 
-> See also: `rubric-trust-model.md` for auth-boundary tasks in the relay runtime itself (manifest anchors, trust roots, gate callsites). That reference adds a distinct enforcement-layer / authentication-factor check on top of this file.
+> See also: `rubric-trust-model.md` for auth-boundary tasks in the relay runtime itself (immutable run anchors, trust roots, gate callsites). That reference adds a distinct enforcement-layer / authentication-factor check on top of this file.
 
 ### Candidate Axis Library
 

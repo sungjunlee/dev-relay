@@ -10,8 +10,9 @@ metadata:
 
 # Relay Merge
 
-Use only after `relay-review` records a passing verdict. Merge remains an
-explicit operator action; review bypasses and mutable-state overrides are not
+Use only for the supported GitHub route after `relay-review` records a passing verdict. A
+local Reviewed Result closes through canonical recovery and never enters this
+skill. Merge remains an explicit operator action; review bypasses and mutable-state overrides are not
 part of the Relay contract.
 
 ## Inputs
@@ -41,7 +42,7 @@ identify the same commit:
 - independent review fact and frozen Done Criteria hash.
 
 If the derived action is not `merge`, follow that action. Never synthesize a
-merge override from a PR comment, old manifest state, or missing evidence.
+merge override from a PR comment, retired state, or missing evidence.
 
 ### 2. Explicit merge and cleanup
 

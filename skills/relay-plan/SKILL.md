@@ -2,7 +2,7 @@
 name: relay-plan
 argument-hint: "[task, issue, or ready handoff]"
 description: Use when a relay run needs its review anchor, evaluation channels, or dispatch prompt — always before relay-dispatch, whether AC are explicit, vague, or missing.
-compatibility: Requires gh CLI.
+compatibility: Requires Git and Node.js 18+; gh CLI is needed only for the supported GitHub route.
 metadata:
   related-skills: "relay, relay-ready, relay-dispatch, relay-review, dev-backlog"
   keywords: "계획, 평가, 루브릭, planning, evaluation, rubric, dispatch prompt"
@@ -25,7 +25,7 @@ metadata:
 - Shaping an ambiguous task before planning — use `relay-ready`
 - Delegating implementation to an executor — use `relay-dispatch`
 - Reviewing executor output — use `relay-review`
-- Merging a reviewed PR — use `relay-merge`
+- Landing a reviewed GitHub change — use `relay-merge`
 
 `relay-plan` emits handoff artifacts only; `relay` or an operator runs `relay-dispatch`.
 
@@ -33,10 +33,15 @@ metadata:
 
 ### 1. Read the task
 
+Consume the route selected by `/relay`'s source gate before reading task
+evidence. A no-remote Git checkout is local Reviewed Result delivery and must
+use local task text or the user description without a forge lookup. The
+supported GitHub route may use `gh` for issue text after the source gate.
+
 Read the normalized task source (try in order, use first that succeeds):
 - Relay-ready handoff brief: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
 - Local task file: `backlog/tasks/{PREFIX}-{N} - {Title}.md`
-- GitHub: `gh issue view <N>`
+- GitHub on the selected GitHub route: `gh issue view <N>`
 - User-provided description
 
 If `relay-ready` produced a handoff brief, treat it as the source of truth instead of re-reading the raw request.

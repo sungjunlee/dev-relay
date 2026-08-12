@@ -1,8 +1,8 @@
 ---
 name: relay
 argument-hint: "[task, issue, or natural-language handoff]"
-description: Use when a GitHub issue, sprint item, task description, or natural-language handoff should be implemented through autonomous executor dispatch; stops at ready_to_merge — merge only on explicit request.
-compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+; Linux independent isolation requires Node.js 22+.
+description: Use when a GitHub issue, sprint item, task description, or natural-language handoff should be implemented through autonomous executor dispatch; GitHub stops at ready_to_merge, while local delivery closes as reviewed_result_ready.
+compatibility: Requires Claude Code or Codex, git, Node.js 18+; gh CLI is needed only for the supported GitHub route. Linux independent isolation requires Node.js 22+.
 metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, relay-fleet, dev-backlog"
   keywords: "릴레이, 자동 실행, plan, dispatch, review, merge, relay cycle"
@@ -14,7 +14,7 @@ metadata:
 
 # Dev Relay
 
-Execute the plan -> dispatch -> review cycle. Stop at `ready_to_merge` unless the user explicitly asks to merge. The public/internal/optional skill tiers are defined in `../../references/operator-surface.md`.
+Execute the plan -> dispatch -> review cycle. GitHub delivery stops at `ready_to_merge` unless the user explicitly asks to merge; local delivery runs canonical recovery and stops at terminal `reviewed_result_ready`. The public/internal/optional skill tiers are defined in `../../references/operator-surface.md`.
 
 ## Role Defaults
 
@@ -24,18 +24,37 @@ Execute the plan -> dispatch -> review cycle. Stop at `ready_to_merge` unless th
 
 Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and review through `review-runner --reviewer codex`. Assigned `run.json` roles stay immutable; acting reviewer data is recorded separately.
 
-## Step 1: Re-Anchor
+## Step 1: Source and Re-Anchor
 
-Run `git fetch origin`. Task evidence: collect the first available source—local task file, `gh issue view <N>`, or user description—and use its `track:` or `component:` value as the sprint ownership handle. If no issue number, use a descriptive branch name and skip issue-close in merge.
-
-Sprint tracking is optional; when in use, resolve ownership per [sprint-integration.md](references/sprint-integration.md).
-
-Run the route preflight. It answers one question: does this issue already have a PR or an in-flight Relay run?
+Classify the repository before any fetch, forge lookup, worktree, run-directory,
+or executor effect. Relay requires Git and never runs `git init` for you. Run
+the route preflight first; it performs the read-only source gate and then
+route-specific in-flight checks (the existing duplicate-PR guard on GitHub and
+local-only run facts without a remote):
 
 ```bash
 PREFLIGHT=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
   --stage route --repo . --issue-number "$ISSUE_NUMBER" --branch "$BRANCH" --json)
 ```
+
+If `source.route` is `local-reviewed-result`, use local task text or the user
+description and do not run `git fetch`, `gh issue view`, or any PR lookup. The
+run continues through Git verification, independent review, and canonical
+Reviewed Result closure without a forge. If `source.route` is `github`, use
+the reported `source.remote_name` for the existing re-anchor fetch, then use
+`gh issue view <N>` when issue text is needed. That route retains its current
+GitHub deduplication and requires authenticated GitHub access plus the selected
+executor/reviewer's explicit network and credential prerequisites. GitLab and
+other forges are unsupported; configure GitHub, remove all remotes for local
+delivery, or use direct `delegate`. A `SOURCE_NOT_GIT` error recommends
+explicit `git init` or direct `delegate`.
+
+Task evidence is the first available source after that gate: local task file,
+GitHub issue on the GitHub route, or user description. Use its `track:` or
+`component:` value as the sprint ownership handle. If no issue number, use a
+descriptive branch name and skip issue-close in merge.
+
+Sprint tracking is optional; when in use, resolve ownership per [sprint-integration.md](references/sprint-integration.md).
 
 Follow `inflight.instruction` whenever `inflight.route != "continue"`; that dedup guard is binding and the route table lives in [preflight-guards.md](references/preflight-guards.md). On `continue`, judge readiness yourself using the checklist in `../relay-ready/SKILL.md`; no script scores it. When that judgment is `needs_split`, route through proposal-first relay-ready shaping, and the accepted handoff becomes the relay-plan source of truth before any dispatch.
 
@@ -71,7 +90,7 @@ Follow `inspection.recommended_action` exactly:
 - `redispatch` → call dispatch with the immutable `run_id`; all other resume attempts fail before writing.
 - `wait` → keep polling; `operator_attention` or `none` → stop and resolve the blocker.
 
-Capture `run_id`, `run_dir`, and the current action key. The immutable record is `~/.relay/runs/<repo-slug>/<run-id>/run.json`; lifecycle state is folded from `events.jsonl` plus live observations, not mutated in a manifest. For in-flight writes, resolve ownership per the same [sprint-integration.md](references/sprint-integration.md) contract.
+Capture `run_id`, `run_dir`, and the current action key. The immutable record is `~/.relay/runs/<repo-slug>/<run-id>/run.json`; lifecycle state is folded from `events.jsonl` plus live observations, never stored as mutable lifecycle state. For in-flight writes, resolve ownership per the same [sprint-integration.md](references/sprint-integration.md) contract.
 
 ## Step 4: Review (relay-review)
 
@@ -88,15 +107,15 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
 
 Invoke **relay-review** in an isolated context. It records immutable review evidence and facts while keeping frozen Done Criteria as the review anchor. A requested change remains blocking until the corrected HEAD receives a passing primary review. Do NOT review inline.
 
-The runner returns `verdict` and a fresh `recommended_action`. `lgtm` must recommend `merge` before Step 5. `changes_requested` must recommend `redispatch`; send a new prompt through `dispatch --run-id`, follow any recovery needed to republish the corrected HEAD, then review again. A runtime invocation failure may recommend one explicit `review` retry bound to that failure; a second failure, model-returned `escalated`, `operator_attention`, or a mismatched action stops for investigation.
+The runner returns `verdict` and a fresh `recommended_action`. On the GitHub route, `lgtm` must recommend `merge` before Step 5. On the local route, `lgtm` must recommend `recover`; run canonical recovery with that action key to append the terminal `reviewed_result_ready` result. `changes_requested` must recommend `redispatch`; send a new prompt through `dispatch --run-id`, follow any recovery needed to publish the corrected GitHub revision or retain the corrected local commit, then review again. A runtime invocation failure may recommend one explicit `review` retry bound to that failure; a second failure, model-returned `escalated`, `operator_attention`, or a mismatched action stops for investigation.
 
-## Step 5: Ready to Merge
+## Step 5: Finish the Selected Route
 
-If relay-review returns LGTM, the review runner should already have recorded `ready_to_merge`. Do not mark the sprint task complete yet. Only run relay-merge when the user explicitly wants to land the PR. Create follow-up issues if discovered during review.
+For `source.route=github`, LGTM must derive `merge/ready_to_merge`; stop there until the user explicitly authorizes `relay-merge`. For `source.route=local-reviewed-result`, LGTM must derive `recover/reviewed_result_ready`; run that exact recovery action and stop only after inspection reports the terminal Reviewed Result. Create follow-up issues if discovered during review.
 
 ## Batch Mode
 
 When multiple independent tasks are ready, prepare a `relay-fleet` batch but preserve `/relay`'s `ready_to_merge` stop until the user explicitly authorizes landing it; after authorization, `relay-fleet` is the default parallel batch drive. See `references/batch-mode.md` for the remaining conflict-recovery note and the "when in doubt, run sequentially" principle.
 ## Summary Checklist
 
-Verify Done Criteria fully implemented, relay-review LGTM/audit comment, `ready_to_merge` state, and any sprint/follow-up updates per [sprint-integration.md](references/sprint-integration.md). For a shell-free executor, orchestrator-performed verification (Step 4) must be recorded before review.
+Verify Done Criteria fully implemented, relay-review LGTM/audit evidence, and the selected route's exact finish state: `ready_to_merge` for GitHub or terminal `reviewed_result_ready` for local delivery. Then apply any sprint/follow-up updates per [sprint-integration.md](references/sprint-integration.md). For a shell-free executor, orchestrator-performed verification (Step 4) must be recorded before review.

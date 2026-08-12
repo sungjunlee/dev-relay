@@ -57,7 +57,7 @@ Choose the implementation, exploration, test, and repair sequence that best fits
 - Implement every Done Criteria outcome within the stated scope boundaries.
 - Run relevant verification and fix failures found.
 - Capture concise verification evidence expected by the run: commands and result summaries plus concrete artifact references for the Done Criteria.
-- Treat tests, manifests, PR description text, and executor reports as proxy signals, not proof by themselves; point to the implementation or reviewable artifact that makes each outcome independently verifiable.
+- Treat tests, run records, PR description text, and executor reports as proxy signals, not proof by themselves; point to the implementation or reviewable artifact that makes each outcome independently verifiable.
 - Completion requires both the captured evidence and reviewable dirty-worktree changes. Do not write linked-worktree Git administration, objects, refs, config, or hooks.
 
 ## When Satisfied

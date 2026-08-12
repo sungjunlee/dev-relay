@@ -59,7 +59,7 @@ Choose the reading, analysis, and editing sequence that best fits the task.
 - Do not claim, imply, or summarize any test, build, lint, type-check, or other check result. Reporting an outcome you did not observe is fabrication, not evidence.
 - For every Done Criteria item, return the verification described under Returned Verification: its target and its observable pass condition.
 - Where an item is settled by reading rather than by a check, point at the file plus the lines or symbol that make it independently verifiable.
-- Treat manifests, PR description text, and your own report as proxy signals, not proof by themselves.
+- Treat run records, PR description text, and your own report as proxy signals, not proof by themselves.
 - If an item cannot be reached with a read-and-edit toolset, stop and return a concrete stuck note naming the item, what blocks it, and what you did change. An honestly partial result outranks a fabricated complete one.
 - Leave Git administration to the orchestrator: do not stage, publish, open a pull request, or otherwise write branch history, objects, refs, config, or hooks in the linked worktree.
 

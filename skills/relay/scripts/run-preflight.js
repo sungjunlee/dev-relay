@@ -4,7 +4,11 @@
 const { execFileSync } = require("child_process");
 const path = require("path");
 
-const { inspectProductionRun, recoverProductionRun } = require("../../relay-dispatch/scripts/recover");
+const {
+  classifyRepositorySource,
+  inspectProductionRun,
+  recoverProductionRun,
+} = require("../../relay-dispatch/scripts/recover");
 const {
   canonicalRepoRoot,
   readRunCandidates,
@@ -14,7 +18,7 @@ const {
 const INFLIGHT_ROUTE_INSTRUCTIONS = {
   "existing-open-pr": "Review the existing open PR instead of planning or dispatching a new run.",
   "existing-merged-pr": "Mark the sprint item done if present and stop because the PR is already merged.",
-  "inflight-run": "Resume or inspect the existing inflight run and continue from its manifest state.",
+  "inflight-run": "Resume or inspect the existing inflight run and continue from its immutable run facts.",
   attention: "Stop before planning or dispatch and inspect the inflight-run scanner failure.",
   continue: "Continue to readiness handling before planning or dispatch.",
 };
@@ -164,13 +168,25 @@ function checkPullRequest(repoRoot, branch) {
   }
 }
 
-async function scanInflightRuns(repoRoot, issueNumber) {
+function requireSupportedSource(source) {
+  if (source.kind !== "unsupported") return source;
+  throw Object.assign(
+    new Error(`${source.message}. Relay currently supports GitHub or a no-remote local Git repository; GitLab and other forges are not implemented. Configure a supported GitHub remote, remove the remotes for local delivery, or use direct \`delegate\`.`),
+    { code: "SOURCE_UNSUPPORTED_REMOTE" },
+  );
+}
+
+async function scanInflightRuns(repoRoot, issueNumber, { localOnly = false } = {}) {
   const prefix = `issue-${issueNumber}`;
+  const localIdentity = `local/${path.basename(repoRoot)}`;
   const candidates = readRunCandidates(repoRoot).filter(({ record }) => (
+    (!localOnly || record.repo.remote === localIdentity)
+    && (
     record.run_id === prefix
     || record.run_id.startsWith(`${prefix}-`)
     || record.git.branch === prefix
     || record.git.branch.startsWith(`${prefix}-`)
+    )
   ));
   const inspected = await Promise.all(candidates.map(async ({ runDir, record }) => ({
     runDir,
@@ -263,12 +279,24 @@ function routeFromInflight({ prCheck, runCheck }) {
 }
 
 async function runRouteStage(cliArgs) {
-  const repoRoot = canonicalRepoRoot(cliArgs.getArg("--repo") || ".");
+  const source = requireSupportedSource(classifyRepositorySource(cliArgs.getArg("--repo") || "."));
+  const repoRoot = canonicalRepoRoot(source.repoRoot);
   const issueNumber = parsePositiveInteger(cliArgs.getArg("--issue-number"), "--issue-number");
   const branch = normalizeBlank(cliArgs.getArg("--branch")) || (issueNumber ? `issue-${issueNumber}` : null);
 
-  const prCheck = checkPullRequest(repoRoot, branch);
-  const runCheck = await checkInflightRuns(repoRoot, issueNumber);
+  const prCheck = source.kind === "local"
+    ? {
+      status: "skipped",
+      reason: "local_reviewed_result_route",
+      command: null,
+      pr: null,
+      candidates: [],
+    }
+    : checkPullRequest(repoRoot, branch);
+  const scanner = source.kind === "local"
+    ? (root, issue) => scanInflightRuns(root, issue, { localOnly: true })
+    : scanInflightRuns;
+  const runCheck = await checkInflightRuns(repoRoot, issueNumber, scanner);
   const inflight = {
     issueNumber,
     branch,
@@ -281,6 +309,10 @@ async function runRouteStage(cliArgs) {
     ok: inflight.route !== "attention",
     stage: "route",
     repo: repoRoot,
+    source: {
+      route: source.route,
+      ...(source.remote_name ? { remote_name: source.remote_name } : {}),
+    },
     inflight,
   };
 }
@@ -482,6 +514,7 @@ if (require.main === module) {
   }).catch((error) => {
     process.stdout.write(`${JSON.stringify({
       ok: false,
+      code: error.code || "PREFLIGHT_FAILED",
       error: error.message,
     })}\n`);
     process.exitCode = 1;

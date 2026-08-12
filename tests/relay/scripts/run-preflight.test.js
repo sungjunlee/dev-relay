@@ -18,41 +18,56 @@ const {
 
 const ROOT = path.resolve(__dirname, "../../..");
 const SCRIPT = path.join(ROOT, "skills/relay/scripts/run-preflight.js");
+const RELAY_SKILL = path.join(ROOT, "skills/relay/SKILL.md");
 
 function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function fixture() {
+function fixture({ remoteUrl = null } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-preflight-")));
   const repo = path.join(root, "repo");
-  const remote = path.join(root, "remote.git");
   const relayHome = path.join(root, "relay-home");
   fs.mkdirSync(repo);
-  execFileSync("git", ["init", "--bare", remote], { stdio: "ignore" });
   execFileSync("git", ["init", "-b", "main", repo], { stdio: "ignore" });
   git(repo, ["config", "user.name", "Preflight Test"]);
   git(repo, ["config", "user.email", "preflight@example.test"]);
   fs.writeFileSync(path.join(repo, "README.md"), "base\n");
   git(repo, ["add", "README.md"]);
   git(repo, ["commit", "-m", "base"]);
-  git(repo, ["remote", "add", "origin", remote]);
-  git(repo, ["push", "-u", "origin", "main"]);
+  if (remoteUrl) git(repo, ["remote", "add", "origin", remoteUrl]);
   const canonical = fs.realpathSync(repo);
   const slug = `${path.basename(canonical)}-${crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 8)}`;
   const runs = path.join(relayHome, "runs", slug);
   const worktreeBase = path.join(relayHome, "worktrees");
-  fs.mkdirSync(worktreeBase, { recursive: true });
   const gh = path.join(root, "gh.js");
-  fs.writeFileSync(gh, "#!/usr/bin/env node\nprocess.stdout.write('[]')\n");
+  const ghLog = path.join(root, "gh.log");
+  fs.writeFileSync(gh, `#!/usr/bin/env node
+const fs = require("fs");
+fs.appendFileSync(${JSON.stringify(ghLog)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.stdout.write(process.env.RELAY_PREFLIGHT_GH_OUTPUT || "[]");
+`);
   fs.chmodSync(gh, 0o755);
-  return { root, repo: canonical, remote, relayHome, runs, worktreeBase, gh };
+  const gitBin = path.join(root, "git.js");
+  const gitLog = path.join(root, "git.log");
+  fs.writeFileSync(gitBin, `#!/usr/bin/env node
+const fs = require("fs");
+const { spawnSync } = require("child_process");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(gitLog)}, JSON.stringify(args) + "\\n");
+if (args.some((arg) => ["fetch", "ls-remote", "push"].includes(arg))) process.exit(91);
+const result = spawnSync("/usr/bin/git", args, { encoding: "utf8", stdio: "inherit" });
+process.exit(result.status === null ? 92 : result.status);
+`);
+  fs.chmodSync(gitBin, 0o755);
+  return { root, repo: canonical, remote: remoteUrl ? "preflight/repo" : "local/repo", relayHome, runs, worktreeBase, gh, ghLog, gitBin, gitLog };
 }
 
 function createRun(value, issue = 802) {
   const runId = `issue-${issue}-20260801000000001`;
   const runDir = path.join(value.runs, runId);
   const worktree = path.join(value.worktreeBase, runId);
+  fs.mkdirSync(value.worktreeBase, { recursive: true });
   fs.mkdirSync(runDir, { recursive: true });
   execFileSync("git", ["-C", value.repo, "worktree", "add", "-b", `issue-${issue}`, worktree, "main"], { stdio: "ignore" });
   const source = path.join(runDir, "source.md");
@@ -73,11 +88,23 @@ function createRun(value, issue = 802) {
   return { runId, runDir };
 }
 
-function run(value, args) {
+function run(value, args, extraEnv = {}) {
   return spawnSync(process.execPath, [SCRIPT, ...args, "--json"], {
     encoding: "utf8",
-    env: { ...process.env, RELAY_HOME: value.relayHome, RELAY_GH_BIN: value.gh },
+    env: {
+      ...process.env,
+      RELAY_HOME: value.relayHome,
+      RELAY_GH_BIN: value.gh,
+      RELAY_GIT_BIN: value.gitBin,
+      ...extraEnv,
+    },
   });
+}
+
+function assertNoTransportCalls(value) {
+  if (!fs.existsSync(value.gitLog)) return;
+  const gitCalls = fs.readFileSync(value.gitLog, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.deepEqual(gitCalls.filter((args) => args.some((arg) => ["fetch", "ls-remote", "push"].includes(arg))), []);
 }
 
 test("route stage emits only the inflight dedup guard, never a readiness envelope", () => {
@@ -86,9 +113,10 @@ test("route stage emits only the inflight dedup guard, never a readiness envelop
   const result = run(value, ["--stage", "route", "--repo", value.repo, "--issue-number", "805"]);
   assert.equal(result.status, 0, result.stderr);
   const payload = JSON.parse(result.stdout);
-  assert.deepEqual(Object.keys(payload), ["ok", "stage", "repo", "inflight"]);
+  assert.deepEqual(Object.keys(payload), ["ok", "stage", "repo", "source", "inflight"]);
   assert.equal(payload.ok, true);
   assert.equal(payload.stage, "route");
+  assert.equal(payload.source.route, "local-reviewed-result");
   assert.deepEqual(Object.keys(payload.inflight), [
     "issueNumber", "branch", "pull_request", "run", "route", "instruction", "next_action", "prNumber", "runId",
   ]);
@@ -96,6 +124,9 @@ test("route stage emits only the inflight dedup guard, never a readiness envelop
   assert.equal(payload.inflight.next_action, "resume_or_inspect_inflight_run");
   assert.equal(payload.inflight.branch, "issue-805");
   assert.equal(payload.inflight.runId, created.runId);
+  assert.equal(fs.existsSync(value.ghLog), false, "local in-flight inspection must not invoke gh");
+  const gitCalls = fs.readFileSync(value.gitLog, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.deepEqual(gitCalls.filter((args) => args.some((arg) => ["fetch", "ls-remote", "push"].includes(arg))), []);
 });
 
 test("route stage with no PR and no inflight run continues without readiness plumbing", () => {
@@ -105,9 +136,92 @@ test("route stage with no PR and no inflight run continues without readiness plu
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.inflight.route, "continue");
   assert.equal(payload.inflight.next_action, "continue_to_readiness");
-  assert.equal(payload.inflight.pull_request.status, "not_found");
+  assert.equal(payload.inflight.pull_request.status, "skipped");
+  assert.equal(payload.inflight.pull_request.reason, "local_reviewed_result_route");
   assert.equal(payload.inflight.run.status, "not_found");
   assert.equal("readiness" in payload, false);
+});
+
+test("no-origin route selects local reviewed-result before GitHub or transport effects", () => {
+  const value = fixture();
+  const result = run(value, ["--stage", "route", "--repo", value.repo, "--issue-number", "902"]);
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.source.route, "local-reviewed-result");
+  assert.equal(fs.existsSync(value.ghLog), false, "local route must not invoke gh");
+  assert.equal(fs.existsSync(value.gitLog), true);
+  assertNoTransportCalls(value);
+  assert.equal(fs.existsSync(value.runs), false, "route classification must not create a run directory");
+});
+
+test("supported GitHub route preserves the duplicate-PR preflight after classification", () => {
+  const value = fixture({ remoteUrl: "https://github.com/preflight/repo.git" });
+  const result = run(value, ["--stage", "route", "--repo", value.repo, "--issue-number", "903"], {
+    RELAY_PREFLIGHT_GH_OUTPUT: JSON.stringify([{
+      number: 73,
+      state: "OPEN",
+      mergedAt: null,
+      headRefName: "issue-903",
+      url: "https://github.com/preflight/repo/pull/73",
+    }]),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.source.route, "github");
+  assert.equal(payload.inflight.route, "existing-open-pr");
+  assert.equal(payload.inflight.prNumber, 73);
+  assert.equal(fs.existsSync(value.ghLog), true);
+  const gitCalls = fs.readFileSync(value.gitLog, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.deepEqual(gitCalls.filter((args) => args.some((arg) => ["fetch", "ls-remote", "push"].includes(arg))), []);
+});
+
+test("non-Git directories fail with an actionable typed error before any Relay or forge effect", () => {
+  const value = fixture();
+  const nonGit = path.join(value.root, "not-a-repo");
+  fs.mkdirSync(nonGit);
+  const result = run(value, ["--stage", "route", "--repo", nonGit, "--issue-number", "904"]);
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.code, "SOURCE_NOT_GIT");
+  assert.match(payload.error, /git init/);
+  assert.match(payload.error, /delegate/);
+  assert.equal(fs.existsSync(value.ghLog), false);
+  assert.equal(fs.existsSync(value.relayHome), false);
+  assertNoTransportCalls(value);
+});
+
+test("unsupported forge remotes fail closed before PR lookup or run-directory effects", () => {
+  const value = fixture({ remoteUrl: "https://gitlab.example.test/preflight/repo.git" });
+  const result = run(value, ["--stage", "route", "--repo", value.repo, "--issue-number", "905"]);
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.code, "SOURCE_UNSUPPORTED_REMOTE");
+  assert.match(payload.error, /GitHub/);
+  assert.match(payload.error, /GitLab/);
+  assert.match(payload.error, /remove|configure|delegate/i);
+  assert.equal(fs.existsSync(value.ghLog), false);
+  assert.equal(fs.existsSync(value.runs), false);
+  assertNoTransportCalls(value);
+});
+
+test("relative local remotes are unsupported instead of being treated as GitHub shorthand", () => {
+  const value = fixture({ remoteUrl: "preflight/repo" });
+  const result = run(value, ["--stage", "route", "--repo", value.repo, "--issue-number", "906"]);
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.code, "SOURCE_UNSUPPORTED_REMOTE");
+  assert.equal(fs.existsSync(value.ghLog), false);
+  assert.equal(fs.existsSync(value.runs), false);
+  assertNoTransportCalls(value);
+});
+
+test("public Relay guidance finishes local and GitHub routes through their distinct canonical actions", () => {
+  const source = fs.readFileSync(RELAY_SKILL, "utf8");
+  assert.match(source, /description:[^\n]+GitHub stops at ready_to_merge[^\n]+local delivery closes as reviewed_result_ready/);
+  assert.match(source, /GitHub delivery stops at `ready_to_merge`[^\n]+local delivery[^\n]+terminal `reviewed_result_ready`/);
+  assert.match(source, /source\.route=github[^\n]+merge\/ready_to_merge/);
+  assert.match(source, /source\.route=local-reviewed-result[^\n]+recover\/reviewed_result_ready/);
+  assert.match(source, /terminal `reviewed_result_ready` for local delivery/);
 });
 
 test("retired readiness route flags fail closed instead of being silently ignored", () => {

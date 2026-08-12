@@ -148,6 +148,18 @@ function normalizedRemoteIdentity(value, worktree) {
     return `unknown:${remote}`;
   }
 }
+function normalizedConfiguredRemoteIdentity(value, worktree) {
+  const remote = String(value || "").trim().replace(/\/$/, "");
+  const match = remote.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/i)
+    || remote.match(/^(?:ssh:\/\/git@|https?:\/\/)github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/i);
+  if (match) return `github:${match[1].replace(/\.git$/i, "").toLowerCase()}`;
+  try {
+    const candidate = path.isAbsolute(remote) ? remote : path.resolve(worktree, remote);
+    return `file:${fs.realpathSync(candidate)}`;
+  } catch {
+    return `unknown:${remote}`;
+  }
+}
 function configuredRemotes(worktree) {
   const names = execGit(worktree, ["--no-optional-locks", "remote"])
     .split(/\r?\n/).filter(Boolean);
@@ -171,7 +183,7 @@ function classifyDelivery(runRecord, worktree, remotes, trackedRemote) {
   const origin = remotes.find((remote) => remote.name === "origin") || null;
   const tracked = remotes.find((remote) => remote.name === trackedRemote) || null;
   const exactGithubUrls = (urls) => urls.length > 0 && urls.every((url) => {
-    const identity = normalizedRemoteIdentity(url, worktree);
+    const identity = normalizedConfiguredRemoteIdentity(url, worktree);
     return identity.startsWith("github:") && identity === expected;
   });
   if (origin && tracked
@@ -181,6 +193,63 @@ function classifyDelivery(runRecord, worktree, remotes, trackedRemote) {
     && exactGithubUrls(tracked.push_urls)
   ) return { kind: "github" };
   return { kind: "unsupported", message: "delivery requires an identity-matching GitHub origin or an exact no-remote local identity" };
+}
+function sourceRepositoryIdentity(repoRoot, worktree, remotes) {
+  const originUrl = remotes.find((remote) => remote.name === "origin")?.fetch_urls[0] || null;
+  if (!originUrl) return `local/${path.basename(repoRoot)}`;
+  const normalized = normalizedConfiguredRemoteIdentity(originUrl, worktree);
+  return normalized.startsWith("github:")
+    ? normalized.slice("github:".length)
+    : originUrl;
+}
+function classifyRepositorySource(input) {
+  let checkout;
+  try {
+    checkout = fs.realpathSync(path.resolve(input));
+  } catch (error) {
+    throw Object.assign(
+      new Error("Relay requires a Git repository. Run `git init` explicitly, or use direct `delegate` for non-Git work."),
+      { code: "SOURCE_NOT_GIT", cause: error },
+    );
+  }
+  let repoRoot;
+  try {
+    const commonDir = execGit(checkout, ["--no-optional-locks", "rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    repoRoot = fs.realpathSync(path.dirname(fs.realpathSync(path.resolve(checkout, commonDir))));
+  } catch (error) {
+    throw Object.assign(
+      new Error("Relay requires a Git repository. Run `git init` explicitly, or use direct `delegate` for non-Git work."),
+      { code: "SOURCE_NOT_GIT", cause: error },
+    );
+  }
+
+  let remotes;
+  let trackedRemote;
+  try {
+    remotes = configuredRemotes(checkout);
+    const branch = execGit(checkout, ["--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"]);
+    trackedRemote = remotes.length ? resolveBranchRemote(checkout, branch) : null;
+  } catch (error) {
+    throw Object.assign(
+      new Error(`Relay could not validate Git remotes before execution: ${commandFailure(error)}. Configure a supported GitHub remote or remove all remotes for local delivery.`),
+      { code: "SOURCE_UNSUPPORTED_REMOTE", cause: error },
+    );
+  }
+
+  const remote = sourceRepositoryIdentity(repoRoot, checkout, remotes);
+  const delivery = classifyDelivery(
+    { repo: { root: repoRoot, remote } },
+    checkout,
+    remotes,
+    trackedRemote,
+  );
+  return {
+    route: delivery.kind === "local" ? "local-reviewed-result" : delivery.kind === "github" ? "github" : null,
+    remote_name: delivery.kind === "github" ? trackedRemote : null,
+    repoRoot,
+    kind: delivery.kind,
+    ...(delivery.kind === "unsupported" ? { message: delivery.message } : {}),
+  };
 }
 function selectGithubPr(rows, { remote, branch, baseBranch, localHeadSha = null, recordedPrNumber = null }) {
   const headRepo = (row) => row?.headRepository?.nameWithOwner
@@ -1761,6 +1830,7 @@ module.exports = {
   recoverRun,
   recoverProductionRun,
   observeProduction,
+  classifyRepositorySource,
   __testing: {
     assertCleanVerificationObservation,
     commitVerifiedStaging,

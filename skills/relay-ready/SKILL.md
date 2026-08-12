@@ -25,7 +25,7 @@ metadata:
 - Authoring rubrics or dispatch prompts — use `relay-plan`
 - Delegating implementation work — use `relay-dispatch`
 - Reviewing executor output — use `relay-review`
-- Merging a reviewed PR — use `relay-merge`
+- Landing a reviewed GitHub change — use `relay-merge`
 
 ## Readiness Judgment
 

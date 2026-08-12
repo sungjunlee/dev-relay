@@ -6,9 +6,9 @@ Use this reference when a task touches a relay gate, resolver selector, recovery
 
 1. **Split visibility from enforcement.** If an invariant must be visible to the operator and must block unsafe progress, write separate factors for the prompt/warning layer and the state-transition or gate layer. Prompt text is not a gate.
 
-2. **Validate the trust root, not only the derived field.** Path containment, anchor, and manifest-field factors need companion factors for the base value that makes the check meaningful. Enumerate sibling fields in the same manifest scope when they feed the same filesystem, GitHub, dispatch, review, merge, or cleanup consumer.
+2. **Validate the trust root, not only the derived field.** Path containment, anchor, and immutable-run-field factors need companion factors for the base value that makes the check meaningful. Enumerate sibling fields in the same run-record scope when they feed the same filesystem, GitHub, dispatch, review, merge, or cleanup consumer.
 
-3. **Enumerate the state axis.** For state-machine-gated behavior, list every relevant state at the enforcement point. Prefer an explicit whitelist for allowed states when stale or tampered manifests must fail closed.
+3. **Enumerate the state axis.** For derived-action-gated behavior, list every relevant action at the enforcement point. Prefer an explicit whitelist for allowed actions when stale or tampered run records must fail closed.
 
 4. **Audit sibling selectors and call sites.** When fixing one resolver selector or helper call site, enumerate every selector that feeds the same downstream match set and every call site of the affected helper in the same file. A fix scoped only to the surfaced call site is usually undersized.
 
