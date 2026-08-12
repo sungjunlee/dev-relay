@@ -428,12 +428,18 @@ test("base movement allows zero reviewed-path overlap and rejects unsafe or inco
     assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced), { code: "MERGE_BASE_EVIDENCE_INCOMPLETE" });
     writeComparison(comparison());
     const malformedGit = path.join(value.root, "malformed-git.js");
-    fs.writeFileSync(malformedGit, '#!/usr/bin/env node\nprocess.stdout.write(Buffer.from("M999\\0file.txt\\0"));\n', { mode: 0o755 });
+    fs.writeFileSync(malformedGit, '#!/usr/bin/env node\nprocess.stdout.write(Buffer.from(process.env.RELAY_TEST_GIT_BYTES, "base64"));\n', { mode: 0o755 });
     const priorGit = process.env.RELAY_GIT_BIN;
     process.env.RELAY_GIT_BIN = malformedGit;
     try {
+      process.env.RELAY_TEST_GIT_BYTES = Buffer.from("R076\0file.txt\0renamed.txt\0").toString("base64");
+      writeComparison(comparison({ files: [{ filename: "file.txt" }] }));
+      assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced),
+        (error) => error.code === "MERGE_BASE_PATH_OVERLAP" && error.collision_paths[0] === "file.txt");
+      process.env.RELAY_TEST_GIT_BYTES = Buffer.from("M999\0file.txt\0").toString("base64");
       assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced), { code: "MERGE_BASE_EVIDENCE_INCOMPLETE" });
     } finally {
+      delete process.env.RELAY_TEST_GIT_BYTES;
       if (priorGit === undefined) delete process.env.RELAY_GIT_BIN;
       else process.env.RELAY_GIT_BIN = priorGit;
     }

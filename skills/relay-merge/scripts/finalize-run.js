@@ -119,7 +119,8 @@ function reviewedDiffPaths(bytes) {
   const paths = [];
   for (let index = 0; index < fields.length;) {
     const status = fields[index++];
-    if (!/^(?:[ADMTUXB]|[RC](?:100|[0-9]{1,2}))$/.test(status)) {
+    const scored = /^([RC])([0-9]{1,3})$/.exec(status);
+    if (!/^[ADMTUXB]$/.test(status) && (!scored || Number(scored[2]) > 100)) {
       fail("Git path evidence contains an invalid status", "MERGE_BASE_EVIDENCE_INCOMPLETE");
     }
     const count = /^[RC]/.test(status) ? 2 : 1;
