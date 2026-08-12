@@ -26,16 +26,38 @@ function canonicalRepository(input) {
   return fs.realpathSync(path.dirname(fs.realpathSync(path.resolve(checkout, result.stdout.trim()))));
 }
 
+// Resolve platform aliases (notably macOS /tmp -> /private/tmp) before a
+// caller records a durable path. Only the existing prefix is followed; the
+// worktree writer separately lstat-walks its Relay-owned suffix before writing.
+function canonicalPathPrefix(value, label) {
+  if (typeof value !== "string" || !path.isAbsolute(value)) fail("INVALID_RELAY_PATH", `${label} must be absolute`);
+  const resolved = path.resolve(value);
+  try {
+    if (fs.lstatSync(resolved).isSymbolicLink()) fail("INVALID_RELAY_PATH", `${label} must not be a symlink`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  let prefix = resolved;
+  while (!fs.existsSync(prefix)) {
+    const parent = path.dirname(prefix);
+    if (parent === prefix) fail("INVALID_RELAY_PATH", `${label} has no existing parent`);
+    prefix = parent;
+  }
+  const canonicalPrefix = fs.realpathSync(prefix);
+  if (!fs.statSync(canonicalPrefix).isDirectory()) fail("INVALID_RELAY_PATH", `${label} existing prefix must be a directory`);
+  const suffix = path.relative(prefix, resolved);
+  if (suffix.startsWith("..") || path.isAbsolute(suffix)) fail("INVALID_RELAY_PATH", `${label} escapes its existing prefix`);
+  return suffix ? path.join(canonicalPrefix, suffix) : canonicalPrefix;
+}
+
 function relayHome() {
   const value = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
-  if (!path.isAbsolute(value)) fail("INVALID_RELAY_PATH", "RELAY_HOME must be absolute");
-  return path.resolve(value);
+  return canonicalPathPrefix(value, "RELAY_HOME");
 }
 
 function relayWorktreeBase() {
   const value = process.env.RELAY_WORKTREE_BASE || path.join(relayHome(), "worktrees");
-  if (!path.isAbsolute(value)) fail("INVALID_RELAY_PATH", "RELAY_WORKTREE_BASE must be absolute");
-  return path.resolve(value);
+  return canonicalPathPrefix(value, "RELAY_WORKTREE_BASE");
 }
 
 function resolveRunDirectory(repository, runId) {
@@ -43,9 +65,8 @@ function resolveRunDirectory(repository, runId) {
   if (typeof runId !== "string" || !RUN_ID_RE.test(runId)) fail("INVALID_RUN_ID", "runId must be one safe path segment");
   const base = path.basename(root).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
   const slug = `${base}-${crypto.createHash("sha256").update(root).digest("hex").slice(0, 8)}`;
-  const runs = process.env.RELAY_RUNS_BASE || path.join(relayHome(), "runs");
-  if (!path.isAbsolute(runs)) fail("INVALID_RELAY_PATH", "RELAY_RUNS_BASE must be absolute");
-  return path.join(path.resolve(runs), slug, runId);
+  const runs = canonicalPathPrefix(process.env.RELAY_RUNS_BASE || path.join(relayHome(), "runs"), "RELAY_RUNS_BASE");
+  return path.join(runs, slug, runId);
 }
 
 function isPlainObject(value) {

@@ -19,9 +19,9 @@ module.exports = createNativeAdapter({
   },
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, model }) {
-    return { command: "opencode", args: ["run", "--pure", "--dir", cwd, ...(model ? ["-m", model] : [])], cwd, stdinPath: promptPath, stdinSha256: promptSha256 };
+    return { command: "opencode", args: ["run", "--auto", "--print-logs", "--log-level", "ERROR", "--pure", "--dir", cwd, ...(model ? ["-m", model] : [])], cwd, stdinPath: promptPath, stdinSha256: promptSha256 };
   },
   buildReview({ cwd, promptPath, promptSha256, model }) {
-    return { command: process.env.RELAY_OPENCODE_BIN || "opencode", args: ["run", "--pure", ...(model ? ["-m", model] : [])], cwd, stdinPath: promptPath, stdinSha256: promptSha256 };
+    return { command: process.env.RELAY_OPENCODE_BIN || "opencode", args: ["run", "--auto", "--print-logs", "--log-level", "ERROR", "--pure", ...(model ? ["-m", model] : [])], cwd, stdinPath: promptPath, stdinSha256: promptSha256 };
   },
 });

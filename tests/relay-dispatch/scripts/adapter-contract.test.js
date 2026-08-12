@@ -210,6 +210,18 @@ test("supported primary review roles build direct read-only CLI invocations, nev
   }
 });
 
+test("OpenCode dispatch and review use the current non-interactive diagnostic argv", () => {
+  const adapter = getAdapter("opencode");
+  assert.deepEqual(invocationFor(adapter).args, [
+    "run", "--auto", "--print-logs", "--log-level", "ERROR", "--pure", "--dir", cwd,
+    "-m", "provider/model; literally-not-a-shell-command",
+  ]);
+  assert.deepEqual(invocationFor(adapter, "primary_review").args, [
+    "run", "--auto", "--print-logs", "--log-level", "ERROR", "--pure",
+    "-m", "provider/model; literally-not-a-shell-command",
+  ]);
+});
+
 test("native invocation requires trusted prompt bytes and rejects invalid UTF-8 without reopening promptPath", () => {
   const adapter = getAdapter("codex");
   const input = {
@@ -251,7 +263,8 @@ test("all adapters classify transcript success, failure, timeout, and cancellati
     fs.writeFileSync(stdoutPath, fixture.error);
     assert.equal(adapter.parseOutcome({ exitCode: 2, stdoutPath, stderrPath, resultPath }).status, "failed", name);
     fs.writeFileSync(stdoutPath, fixture.empty);
-    assert.equal(adapter.parseOutcome({ exitCode: 0, stdoutPath, stderrPath, resultPath }).status, name === "cline" ? "failed" : "empty", `${name} empty golden`);
+    assert.equal(adapter.parseOutcome({ exitCode: 0, stdoutPath, stderrPath, resultPath }).status,
+      ["antigravity", "cline"].includes(name) ? "failed" : "empty", `${name} empty golden`);
     assert.equal(adapter.parseOutcome({ exitCode: 0, timedOut: true, stdoutPath, stderrPath, resultPath }).status, "timed_out", name);
     assert.equal(adapter.parseOutcome({ exitCode: 0, signal: "SIGTERM", stdoutPath, stderrPath, resultPath }).status, "cancelled", name);
   }
@@ -310,9 +323,9 @@ test("all seven native adapters preserve full dispatch argv order and policy inp
     codex: { command: "codex", args: ["exec", "-C", cwd, "--color", "never", "-o", resultPath, "-c", "model_reasoning_effort=high", "-m", model, "--sandbox", "workspace-write", "-"] },
     claude: { command: "claude", args: ["-p", "--settings", claudeSandbox, "--output-format", "text", "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash", "--disallowedTools", "WebFetch,WebSearch,Agent", "--model", model] },
     cursor: { command: "agent", args: ["--print", "--trust", "--auto-review", "--workspace", cwd, "--output-format", "text", "--sandbox", "enabled", "--model", model] },
-    opencode: { command: "opencode", args: ["run", "--pure", "--dir", cwd, "-m", model] },
+    opencode: { command: "opencode", args: ["run", "--auto", "--print-logs", "--log-level", "ERROR", "--pure", "--dir", cwd, "-m", model] },
     pi: { command: "pi", args: ["--no-session", "--no-context-files", "--no-extensions", "--no-skills", "--tools", "read,grep,find,ls,write,edit", "--model", model, "--thinking", "high", "--print"] },
-    antigravity: { command: "agy", args: ["--prompt", antigravityPrompt, "--print-timeout", "123s", "--mode", "accept-edits", "--disable-slash-commands", "--sandbox"] },
+    antigravity: { command: "agy", args: ["--prompt", antigravityPrompt, "--print-timeout", "123s", "--mode", "accept-edits", "--output-format", "json", "--disable-slash-commands", "--sandbox"] },
     cline: { command: "cline", args: ["--json", "-P", "provider", "-m", model, "--cwd", cwd, "--auto-approve", "true", "--timeout", "123", clinePrompt] },
   };
   for (const [name, expected] of Object.entries(golden)) {
@@ -460,7 +473,41 @@ test("Antigravity review transports exact staged prompt bytes as one argv value"
   assert.notEqual(promptIndex, -1);
   assert.equal(invocation.args[promptIndex + 1], prompt);
   assert.equal(invocation.args.some((value) => value === `@${promptPath}`), false);
-  assert.deepEqual(invocation.args.slice(-5), ["--output-format", "text", "--mode", "plan", "--disable-slash-commands", "--sandbox"].slice(-5));
+  assert.deepEqual(invocation.args, [
+    "--add-dir", cwd,
+    "--prompt", prompt,
+    "--print-timeout", "123s",
+    "--output-format", "json",
+    "--json-schema", schemaPath,
+    "--mode", "plan",
+    "--sandbox",
+  ]);
+  assert.equal(invocation.args.includes("--disable-slash-commands"), false);
+});
+
+test("Antigravity accepts only its JSON SUCCESS envelope and extracts structured review output", () => {
+  const adapter = getAdapter("antigravity");
+  fs.writeFileSync(stdoutPath, JSON.stringify({ status: "SUCCESS", message: "completed bounded work" }));
+  const dispatchOutcome = adapter.parseOutcome({ phase: "dispatch", exitCode: 0, stdoutPath, stderrPath, resultPath });
+  assert.equal(dispatchOutcome.status, "succeeded");
+  assert.deepEqual(dispatchOutcome.output, { status: "SUCCESS", message: "completed bounded work" });
+
+  fs.writeFileSync(stdoutPath, JSON.stringify({ status: "SUCCESS", structured_output: { verdict: "pass", summary: "looks good", issues: [] } }));
+  const reviewOutcome = adapter.parseOutcome({ phase: "primary_review", exitCode: 0, stdoutPath, stderrPath, resultPath });
+  assert.equal(reviewOutcome.status, "succeeded");
+  assert.deepEqual(reviewOutcome.output, { verdict: "pass", summary: "looks good", issues: [] });
+
+  fs.writeFileSync(stdoutPath, "");
+  assert.notEqual(adapter.parseOutcome({ phase: "primary_review", exitCode: 0, stdoutPath, stderrPath, resultPath }).status, "succeeded", "empty output stays fail-closed");
+  for (const value of [
+    "not JSON",
+    JSON.stringify({ status: "FAILURE", message: "provider rejected" }),
+    JSON.stringify({ status: "SUCCESS" }),
+    JSON.stringify({ status: "SUCCESS", structured_output: "not an object" }),
+  ]) {
+    fs.writeFileSync(stdoutPath, value);
+    assert.equal(adapter.parseOutcome({ phase: "primary_review", exitCode: 0, stdoutPath, stderrPath, resultPath }).status, "failed", value);
+  }
 });
 
 test("Antigravity rejects prompts above its conservative argv budget before process-list exposure", () => {

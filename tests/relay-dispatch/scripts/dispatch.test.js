@@ -67,12 +67,19 @@ function fixture(label, { objectFormat = "sha1" } = {}) {
   fs.writeFileSync(prompt, "Implement the requested change.\n");
   fs.writeFileSync(rubric, "done_criteria:\n  - change is reviewable\n");
   installNodeFixture(FAKE_CODEX, path.join(bin, "codex"));
+  const fakePi = path.join(bin, "pi");
+  fs.writeFileSync(fakePi, `#!${process.execPath}
+"use strict";
+if (process.env.PI_FIXTURE_FAIL_NO_WORK === "1") process.exit(1);
+require("fs").writeFileSync(require("path").join(process.cwd(), "executor-change.txt"), "review me\\n");
+process.stdout.write("fake pi completed\\n");
+`, { mode: 0o755 });
   installNodeFixture(FAKE_CURSOR, path.join(bin, "agent"));
   const fakeCline = path.join(bin, "node_modules", "cline", "bin", "cline"); fs.mkdirSync(path.dirname(fakeCline), { recursive: true }); installNodeFixture(FAKE_CLINE, fakeCline);
   const env = { ...process.env, RELAY_HOME: relayHome, RELAY_CURSOR_AGENT_BIN: path.join(bin, "agent"), RELAY_CLINE_BIN: fakeCline,
     NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${ADAPTER_RUNTIME_PRELOAD}`].filter(Boolean).join(" "),
     PATH: `${bin}${path.delimiter}${process.env.PATH}` };
-  return { root, repo, remote, relayHome, prompt, rubric, env };
+  return { root, repo, remote, relayHome, prompt, rubric, fakePi, env };
 }
 
 function run(value, args, env = value.env) {
@@ -586,7 +593,7 @@ test("a symlinked worktree base is rejected before Relay writes through it", () 
 
   const result = run(value, ["--branch", "base-symlink-br", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
   assert.notEqual(result.status, 0, result.stdout);
-  assert.match(result.stderr, /worktree base contains a symlink/, "the pre-creation validation names the symlink");
+  assert.match(result.stderr, /must not be a symlink|worktree base contains a symlink/, "the pre-creation validation names the symlink");
   assert.deepEqual(fs.readdirSync(target), [], "nothing was written through the symlinked base");
   assert.equal(git(value.repo, ["branch", "--list", "base-symlink-br"]), "", "no branch is left behind");
   assert.equal(git(value.repo, ["worktree", "list"]).includes("base-symlink-br"), false, "no worktree is registered");
@@ -600,7 +607,7 @@ test("a symlinked Relay home is rejected before Relay writes through it", () => 
 
   const result = run(value, ["--branch", "home-symlink-br", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
   assert.notEqual(result.status, 0, result.stdout);
-  assert.match(result.stderr, /worktree base contains a symlink/, "the Relay-owned ancestor is rejected");
+  assert.match(result.stderr, /must not be a symlink|worktree base contains a symlink/, "the Relay-owned ancestor is rejected");
   assert.deepEqual(fs.readdirSync(target), [], "nothing was written through the symlinked Relay home");
   assert.equal(git(value.repo, ["branch", "--list", "home-symlink-br"]), "", "no branch is left behind");
   assert.equal(git(value.repo, ["worktree", "list"]).includes("home-symlink-br"), false, "no worktree is registered");
@@ -621,6 +628,35 @@ test("a stable symlink prefix before an explicit Relay worktree base remains val
   const output = json(result.stdout);
   assert.equal(output.worktree.startsWith(`${fs.realpathSync(stableTarget)}${path.sep}`), true,
     "the stable prefix is canonicalized before Relay creates its owned suffix");
+});
+
+test("a /tmp alias canonicalizes every Relay base before branch or worktree creation", () => {
+  const value = fixture("tmp-alias-bases");
+  const aliasHome = path.join("/tmp", `relay-dispatch-alias-${crypto.randomUUID()}`);
+  const expectedHome = path.join(fs.realpathSync("/tmp"), path.basename(aliasHome));
+  const aliasRuns = path.join(aliasHome, "runs");
+  const aliasWorktrees = path.join(aliasHome, "worktrees");
+  const result = run(value, ["--branch", "tmp-alias-br", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env, RELAY_HOME: aliasHome, RELAY_RUNS_BASE: aliasRuns, RELAY_WORKTREE_BASE: aliasWorktrees,
+  });
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(output.run_dir.startsWith(`${expectedHome}${path.sep}`), true, "run directory uses the canonical /tmp target");
+  assert.equal(output.worktree.startsWith(`${expectedHome}${path.sep}worktrees${path.sep}`), true, "worktree uses the canonical /tmp target");
+  assert.match(git(value.repo, ["branch", "--list", "tmp-alias-br"]), /tmp-alias-br/);
+});
+
+test("a non-directory explicit runs base fails before branch, worktree, or run creation", () => {
+  const value = fixture("runs-base-file");
+  const blocked = path.join(value.root, "runs-base-file");
+  fs.writeFileSync(blocked, "not a directory\n");
+  const result = run(value, ["--branch", "runs-base-file-br", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env, RELAY_RUNS_BASE: blocked,
+  });
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /RELAY_RUNS_BASE existing prefix must be a directory/);
+  assert.equal(git(value.repo, ["branch", "--list", "runs-base-file-br"]), "", "no branch is left behind");
+  assert.equal(git(value.repo, ["worktree", "list"]).includes("runs-base-file-br"), false, "no worktree is registered");
 });
 
 test("attempt_started is durable before executor gate launch, so a launch-window crash cannot orphan work", () => {
@@ -874,4 +910,46 @@ test("a denied resume writes no prompt, attempt, or fact before failing closed",
   assert.equal(json(unreadable.stderr).code, "RUN_ARTIFACT_MISSING");
   assert.deepEqual(fs.readdirSync(output.run_dir).sort(), beforeFiles);
   assert.deepEqual(facts.readFacts({ eventsPath }).facts, beforeFacts);
+});
+
+test("resume without --executor resolves the immutable Pi adapter and appends a Pi attempt", () => {
+  const value = fixture("resume-bound-pi");
+  git(value.repo, ["remote", "remove", "origin"]);
+  const first = run(value, ["--branch", "resume-bound-pi", "--executor", "pi", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env, RELAY_PI_BIN: value.fakePi, PI_FIXTURE_FAIL_NO_WORK: "1",
+  });
+  assert.equal(first.status, 1, `${first.stderr}\n${first.stdout}`);
+  const output = json(first.stdout);
+  assert.equal(output.status, "failed");
+  assert.equal(output.inspection.recommended_action.kind, "redispatch");
+  assert.equal(output.inspection.derived.reason, "attempt_failed_no_work");
+  const eventsPath = path.join(output.run_dir, "events.jsonl");
+  const beforeAttempts = facts.readFacts({ eventsPath }).facts.filter((fact) => fact.type.startsWith("attempt_")).length;
+  const resumed = run(value, ["--run-id", output.run_id, "--prompt", "write the requested bounded file", "--network-access", "enabled", "--json"], {
+    ...value.env, RELAY_PI_BIN: value.fakePi,
+  });
+  assert.equal(resumed.status, 0, `${resumed.stderr}\n${resumed.stdout}`);
+  assert.equal(json(resumed.stdout).status, "completed");
+  const afterAttempts = facts.readFacts({ eventsPath }).facts.filter((fact) => fact.type.startsWith("attempt_")).length;
+  assert.equal(afterAttempts, beforeAttempts + 2, "the bound Pi resume wrote one complete second attempt");
+  const started = facts.readFacts({ eventsPath }).facts.filter((fact) => fact.type === "attempt_started");
+  assert.equal(started.at(-1).payload.executor, "pi");
+});
+
+test("explicit resume executor mismatch fails before prompt, attempt, or fact writes", () => {
+  const value = fixture("resume-explicit-mismatch");
+  const first = run(value, ["--branch", "resume-explicit-mismatch", "--executor", "pi", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env, RELAY_PI_BIN: value.fakePi,
+  });
+  assert.equal(first.status, 0, first.stderr);
+  const output = json(first.stdout);
+  const beforeFiles = fs.readdirSync(output.run_dir).sort();
+  const beforeFacts = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") }).facts;
+  const mismatch = run(value, ["--run-id", output.run_id, "--executor", "codex", "--prompt", "retry", "--json"], {
+    ...value.env, RELAY_PI_BIN: value.fakePi,
+  });
+  assert.notEqual(mismatch.status, 0, mismatch.stdout);
+  assert.equal(json(mismatch.stderr).code, "RUN_EXECUTOR_MISMATCH");
+  assert.deepEqual(fs.readdirSync(output.run_dir).sort(), beforeFiles);
+  assert.deepEqual(facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") }).facts, beforeFacts);
 });
