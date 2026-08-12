@@ -336,11 +336,48 @@ function hostInvocation({ command, args = [], env = process.env } = {}) {
   if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) fail("args must be string argv", "INVALID_INVOCATION");
   return Object.freeze({ command: resolveExecutable(command, env), args: [...args], env: { ...env } });
 }
+let linuxClockTicks = null;
+let linuxBootSeconds = null;
+function linuxProcessRows({ environment = false, pid = null } = {}) {
+  if (linuxClockTicks === null) {
+    linuxClockTicks = Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8", timeout: 5_000 }).trim());
+    const bootLine = fs.readFileSync("/proc/stat", "utf8").split(/\r?\n/).find((line) => line.startsWith("btime "));
+    linuxBootSeconds = Number(bootLine?.slice(6));
+    if (!Number.isFinite(linuxClockTicks) || linuxClockTicks <= 0 || !Number.isFinite(linuxBootSeconds)) {
+      fail("Linux process clock metadata is unavailable", "HOST_IDENTITY_UNAVAILABLE");
+    }
+  }
+  const pids = pid === null ? fs.readdirSync("/proc").filter((name) => /^\d+$/.test(name)) : [String(pid)];
+  const rows = [];
+  for (const name of pids) {
+    try {
+      const raw = fs.readFileSync(`/proc/${name}/stat`, "utf8"), close = raw.lastIndexOf(")");
+      if (close < 0) continue;
+      const fields = raw.slice(close + 2).trim().split(/\s+/), observedPid = Number(raw.slice(0, raw.indexOf(" ")));
+      const state = fields[0], ppid = Number(fields[1]), pgid = Number(fields[2]), startedTicks = Number(fields[19]);
+      if (![observedPid, ppid, pgid, startedTicks].every(Number.isFinite)) continue;
+      const command = fs.readFileSync(`/proc/${name}/cmdline`).toString("utf8").split("\0").filter(Boolean).join(" ");
+      let scope = null;
+      if (environment) {
+        try {
+          const entries = fs.readFileSync(`/proc/${name}/environ`).toString("utf8").split("\0");
+          const value = entries.find((entry) => entry.startsWith(`${PROCESS_SCOPE_KEY}=`));
+          scope = value?.slice(PROCESS_SCOPE_KEY.length + 1) || null;
+        } catch { /* another user's environment is intentionally unreadable */ }
+      }
+      const startedAt = new Date((linuxBootSeconds + startedTicks / linuxClockTicks) * 1000).toISOString();
+      rows.push({ pid: observedPid, ppid, pgid, command, scope,
+        identity: Object.freeze({ pid: observedPid, pgid, state, started_at: startedAt }) });
+    } catch { /* process exited between /proc enumeration and observation */ }
+  }
+  return rows;
+}
 // macOS exposes only second-resolution `lstart` (no kern.proc.pid start microseconds through a safe CLI),
 // so a same-second PID reuse is indistinguishable by identity alone. Every signal target is therefore also
 // bound to a random inherited scope token (`inherited_scope_no_daemon`) and revalidated immediately before
 // delivery; an unverifiable target is never signalled. This is PID-reuse safety, not a same-UID adversary boundary.
 function processRows({ environment = false, pid = null } = {}) {
+  if (process.platform === "linux" && fs.existsSync("/proc/stat")) return linuxProcessRows({ environment, pid });
   const output = execFileSync("/bin/ps", [...(environment ? ["eww"] : []), ...(pid === null ? ["-ax"] : ["-p", String(pid)]),
     "-o", "pid=,ppid=,pgid=,state=,lstart=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, maxBuffer: 8 << 20 });
   return output.split(/\r?\n/).map((line) => PS_ROW_RE.exec(line)).filter(Boolean).map((match) => {
