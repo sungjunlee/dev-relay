@@ -166,6 +166,34 @@ test("lost cleanup scope proof requires exact external action and then converges
   assert.equal(fs.existsSync(path.join(value.runDir, `attempt-${attemptId}.result.json`)), true);
 });
 
+test("Linux cleanup retains stat identity when proc cmdline is unreadable", { timeout: 30_000 }, async (t) => {
+  if (process.platform !== "linux") return;
+  const value = roots("linux-redacted-cmdline"), attemptId = "linux-redacted-cmdline", capability = lock(value, attemptId);
+  const scope = host.hostInvocation.beginProcessScope(), marker = path.join(value.root, "inherited-scope.txt");
+  const foreign = spawnScopeDroppingIdle({ PATH: process.env.PATH, ...scope.env }, marker);
+  t.after(() => { if (!processDead(foreign.pid)) try { process.kill(-foreign.pid, "SIGKILL"); } catch {} try { host.releaseRunLock(capability); } catch {} });
+  await waitForFile(marker);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
+  writeCleanupObligation(value.runDir, attemptId, {
+    processes: [liveIdentity(foreign.pid)], credential_root: { path: credentialRoot, dev: null, ino: null },
+    scope_seal: scope.seal,
+  });
+  const realReadFile = fs.readFileSync;
+  fs.readFileSync = function redactCmdline(filePath, ...args) {
+    if (filePath === `/proc/${foreign.pid}/cmdline`) { const error = new Error("redacted"); error.code = "EACCES"; throw error; }
+    return realReadFile.call(this, filePath, ...args);
+  };
+  try {
+    await assert.rejects(
+      host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "do not lose redacted live identity" }),
+      (error) => error.code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED" && error.process_identity?.pid === foreign.pid,
+    );
+  } finally { fs.readFileSync = realReadFile; }
+  assert.equal(processDead(foreign.pid), false);
+  assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), false);
+});
+
 test("cleanup recovery treats an exact zombie as gone even when ps redacts its scope environment", { timeout: 30_000 }, async (t) => {
   const value = roots("zombie-cleanup"), attemptId = "zombie-cleanup", capability = lock(value, attemptId);
   const scope = host.hostInvocation.beginProcessScope(), pidsPath = path.join(value.root, "zombie.json");

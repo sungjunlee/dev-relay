@@ -340,12 +340,14 @@ let linuxClockTicks = null;
 let linuxBootSeconds = null;
 function linuxProcessRows({ environment = false, pid = null } = {}) {
   if (linuxClockTicks === null) {
-    linuxClockTicks = Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8", timeout: 5_000 }).trim());
+    const clockTicks = Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8", timeout: 5_000 }).trim());
     const bootLine = fs.readFileSync("/proc/stat", "utf8").split(/\r?\n/).find((line) => line.startsWith("btime "));
-    linuxBootSeconds = Number(bootLine?.slice(6));
-    if (!Number.isFinite(linuxClockTicks) || linuxClockTicks <= 0 || !Number.isFinite(linuxBootSeconds)) {
+    const bootSeconds = Number(bootLine?.slice(6));
+    if (!Number.isFinite(clockTicks) || clockTicks <= 0 || !Number.isFinite(bootSeconds)) {
       fail("Linux process clock metadata is unavailable", "HOST_IDENTITY_UNAVAILABLE");
     }
+    linuxClockTicks = clockTicks;
+    linuxBootSeconds = bootSeconds;
   }
   const pids = pid === null ? fs.readdirSync("/proc").filter((name) => /^\d+$/.test(name)) : [String(pid)];
   const rows = [];
@@ -356,7 +358,7 @@ function linuxProcessRows({ environment = false, pid = null } = {}) {
       const fields = raw.slice(close + 2).trim().split(/\s+/), observedPid = Number(raw.slice(0, raw.indexOf(" ")));
       const state = fields[0], ppid = Number(fields[1]), pgid = Number(fields[2]), startedTicks = Number(fields[19]);
       if (![observedPid, ppid, pgid, startedTicks].every(Number.isFinite)) continue;
-      const command = fs.readFileSync(`/proc/${name}/cmdline`).toString("utf8").split("\0").filter(Boolean).join(" ");
+      const command = "";
       let scope = null;
       if (environment) {
         try {
