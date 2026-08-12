@@ -11,7 +11,7 @@ const path = require("path");
 const { parseArgs: parseNodeArgs } = require("util");
 
 const { getAdapter, listAdapters } = require("./adapters");
-const { assertInvocationShape, credentialRequest: validateCredentialRequest, filesystemIsolationDiagnostic, validateCapabilities } = require("./adapter-contract");
+const { assertInvocationShape, filesystemIsolationDiagnostic, validateCapabilities } = require("./adapter-contract");
 const facts = require("./facts");
 const host = require("./host");
 const recover = require("./recover");
@@ -31,8 +31,6 @@ const OPTIONS = Object.freeze({
   "network-access": { type: "string", default: "disabled" },
   timeout: { type: "string" },
   reasoning: { type: "string" },
-  "credential-env": { type: "string", multiple: true, default: [] },
-  "credential-file": { type: "string", multiple: true, default: [] },
   copy: { type: "string" },
   "issue-number": { type: "string" },
   "fleet-id": { type: "string" },
@@ -280,11 +278,6 @@ function validateCopyInputs(repoRoot, copyValue) {
   return inputs;
 }
 
-function credentialRequest(adapter, values) {
-  try { return validateCredentialRequest(adapter.metadata.credentials, { envNames: values["credential-env"] || [], fileSpecs: values["credential-file"] || [] }); }
-  catch (error) { fail(error.message, "INVALID_CREDENTIAL"); }
-}
-
 function copyInputs(repoRoot, worktree, copyValue) {
   const copied = [];
   for (const opened of validateCopyInputs(repoRoot, copyValue)) {
@@ -473,7 +466,7 @@ function dryRunInvocation({ cli, identity, adapter, inputs }) {
     });
     return { command: invocation.command, args: [...invocation.args], cwd: invocation.cwd, validation: "adapter_build_invocation",
       launch_boundary: "host_supervisor_required_do_not_execute_raw",
-      prompt_transport: adapter.metadata.promptTransport, network_access: invocation.networkAccess, tool_network_access: invocation.toolNetworkAccess, private_env_paths: invocation.privateEnvPaths };
+      prompt_transport: adapter.metadata.promptTransport, network_access: invocation.networkAccess, tool_network_access: invocation.toolNetworkAccess };
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
@@ -585,9 +578,6 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
     });
     startSha = git(record.git.worktree, ["rev-parse", "HEAD"]);
     timeoutMs = (cli.timeoutSeconds || adapter.defaults.timeoutMs / 1000) * 1000;
-    const requestedCredentials = credentialRequest(adapter, cli.values);
-    // The durable attempt intent deliberately precedes credential reads. launchLocalSupervisor binds them next,
-    // under this same run lock and before publishing config or spawning any host/executor process.
     facts.appendFact({ eventsPath: path.join(runDir, "events.jsonl"), lockContext, fact: attemptFact({
       runId: cli.runId, attemptId, type: "attempt_started", actor,
       payload: { executor: adapter.name, model: cli.values.model || null, start_sha: startSha, host_kind: "local_supervisor", host_handle: lockContext.host_handle, stdout_path: stdoutPath, stderr_path: stderrPath, result_path: resultPath, timeout_ms: timeoutMs },
@@ -604,9 +594,7 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
       executorSandbox: cli.values.sandbox,
       executorNetworkAccess: cli.values["network-access"],
       runtimeDependencies: invocation.runtimeDependencies,
-      privateEnvPaths: invocation.privateEnvPaths,
       timeoutMs,
-      credentialRequest: { metadata: requestedCredentials.metadata, envNames: requestedCredentials.envNames, fileSpecs: requestedCredentials.fileSpecs, env: process.env },
       processContainment: adapter.metadata.processContainment,
       lockContext,
     });
@@ -628,7 +616,7 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
 
 async function recoverIncompleteHostCleanup(started, hostError) {
   // A signed cleanup obligation is the only authority to reap a scoped
-  // executor and remove its staged credentials. Never release this owner by
+  // executor and remove its staged input. Never release this owner by
   // hand: breakStaleRunLock verifies and settles that exact obligation first.
   const inspection = host.inspectOwnership({ runDir: started.runDir });
   try {
@@ -653,7 +641,7 @@ async function finishAttempt({ cli, adapter, started }) {
       terminal = settled.terminal; finalizerLock = settled.lockContext;
     } else if (new Set(["HOST_RESULT_TIMEOUT", "HOST_RESULT_MISMATCH"]).has(error.code)) {
       // These have no signed cleanup obligation. Retain the owner and evidence
-      // for canonical recovery rather than guessing that credentials are gone.
+      // for canonical recovery rather than guessing that the host is gone.
       throw error;
     } else {
       const observed = observeAttemptWorktree(started.record.git.worktree);
@@ -703,7 +691,6 @@ async function executeForeground(cli, overrides = {}) {
   }
   const inspectRun = overrides.inspectRun || recover.inspectProductionRun;
   const identity = repositoryIdentity(canonicalCheckout(cli.repo));
-  const requestedCredentials = credentialRequest(adapter, cli.values);
   const capabilityRequest = { sandbox: cli.values.sandbox, readOnly: cli.values.sandbox === "read-only", networkAccess: cli.values["network-access"] };
   validateCapabilities(adapter, "dispatch", capabilityRequest);
   const filesystemIsolation = filesystemIsolationDiagnostic(adapter, "dispatch", capabilityRequest);
@@ -715,7 +702,7 @@ async function executeForeground(cli, overrides = {}) {
   const inputs = loadInputs(cli, prompt);
   if (cli.values["dry-run"]) {
     const invocation = dryRunInvocation({ cli, identity, adapter, inputs });
-    return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, credential_request: requestedCredentials.summary, filesystem_isolation: filesystemIsolation, durable_bytes_written: 0, invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
+    return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, filesystem_isolation: filesystemIsolation, durable_bytes_written: 0, invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
   }
   const started = await startAttempt({ cli, identity, adapter, prompt: inputs.prompt, rubric: inputs.rubric, criteria: inputs.criteria, resumeInspection, inspectRun });
   const launch = { status: "dispatched", run_id: cli.runId, run_dir: started.runDir, worktree: started.record.git.worktree, attempt_id: started.attemptId, host_handle: started.receipt.host_handle, filesystem_isolation: filesystemIsolation };
@@ -733,7 +720,6 @@ function processLive(pid) {
 }
 
 async function executeDetached(cli, argv) {
-  if ((cli.values["credential-env"] || []).length || (cli.values["credential-file"] || []).length) fail("credential options require foreground dispatch so source paths are not copied into another process argv", "INVALID_CREDENTIAL");
   const notifyPath = path.join(os.tmpdir(), `relay-dispatch-${crypto.randomUUID()}.json`);
   const env = { ...process.env, RELAY_DISPATCH_INTERNAL_RUN_ID: cli.runId, RELAY_DISPATCH_NOTIFY_PATH: notifyPath };
   const childArgs = argv.filter((arg) => arg !== "--detach");
@@ -782,4 +768,4 @@ async function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main().then((code) => { process.exitCode = code; });
 
-module.exports = { assertDispatchToolset, assertResumeInspection, credentialRequest, detectCommandExecutionDemand, dryRunInvocation, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, startAttempt, validateCopyInputs };
+module.exports = { assertDispatchToolset, assertResumeInspection, detectCommandExecutionDemand, dryRunInvocation, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, startAttempt, validateCopyInputs };

@@ -34,9 +34,9 @@ node skills/relay-review/scripts/review-runner.js \
   --json
 ```
 
-Optional inputs are `--model <opaque-model>`, `--timeout <seconds>`, repeated
-`--credential-env NAME`, and repeated declared
-`--credential-file ID=/absolute/source`. `--reviewer` may only repeat the
+Optional inputs are `--model <opaque-model>` and `--timeout <seconds>`. CLI
+authentication and HOME/XDG configuration remain ambient; credential selector
+flags are unknown. `--reviewer` may only repeat the
 immutable `run.json` reviewer binding; Relay does not implement mutable
 reviewer swaps or routing precedence.
 
@@ -66,10 +66,9 @@ The reviewer returns only:
 
 ## Execution and failure behavior
 
-- Credentials are explicit only: repeat `--credential-env NAME` or a declared
-  adapter `--credential-file ID=/absolute/source`. Sources must be canonical,
-  owner-only regular files. They are copied into a private staged HOME/XDG tree
-  and removed after invocation; GitHub tokens are never inherited.
+- Authentication and HOME/XDG configuration are ambient user-local CLI state.
+  Relay does not copy credential files, rewrite HOME/XDG, or serialize auth
+  values or source paths. The review input bundle is still separately staged.
 - GitHub-route reviewers use `--network-access enabled` (the default); selecting `disabled` fails before invocation. Enabled transport is unrestricted reviewer-process network and does not claim provider-only or tool-network separation. Local review has no forge transport requirement.
 - Relay runs directly on the trusted local host. It requests the adapter's native filesystem isolation where available; absent or declaration-only isolation is returned as a non-durable `filesystem_isolation` diagnostic and does not reject review.
 - The staged prompt, diff, criteria, schema, and executable bindings are rechecked after invocation. Any mutation or drift yields no review fact.

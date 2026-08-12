@@ -5,42 +5,16 @@ const { spawnSync } = require("child_process");
 const PHASES = Object.freeze(["dispatch", "primary_review"]);
 const OUTPUT_PROTOCOLS = Object.freeze(["text_stdout", "json_result", "jsonl_run_result"]);
 const SHA256_RE = /^[0-9a-f]{64}$/;
-const CREDENTIAL_ROOTS = new Set(["home", "xdg_config", "xdg_data"]);
-const CREDENTIAL_ACCESS = new Set(["read", "read_write"]);
 const FILESYSTEM_ISOLATION = new Set(["native", "native_bash", "declaration_only", "not_requested", "none"]);
 const NATIVE_FILESYSTEM_REQUESTS = new Set(["workspace-write", "read-only", "enabled"]);
 // Supported CLIs must preserve the inherited scope marker and must not daemonize
 // or clear it from descendants; host cleanup relies on that contract.
 const PROCESS_CONTAINMENT = "inherited_scope_no_daemon";
-const CREDENTIAL_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RESERVED_CREDENTIAL_ENV = /^(?:HOME|PATH|TMPDIR|TMP|TEMP|XDG_CONFIG_HOME|XDG_DATA_HOME|RELAY_PROCESS_SCOPE|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PHPRC|PHP_INI_SCAN_DIR|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|PERL5DB|RUBYOPT|RUBYLIB|GEM_HOME|GEM_PATH|GCONV_PATH|LOCPATH|NLSPATH)$|^(?:DYLD|LD)_|^LUA_(?:INIT|PATH|CPATH)(?:_.*)?$|^RELAY_/;
 const RUNTIME_PARENT_KEYS = ["executableParent", "interpreterParent"];
-const PRIVATE_ENV_ROOTS = new Set([...CREDENTIAL_ROOTS, "scratch"]);
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child); return Object.freeze(value);
-}
-
-function normalizeCredentialMetadata(credentials = {}) {
-  const files = credentials.files || [], envHints = credentials.envHints || [];
-  if (!Array.isArray(files) || !Array.isArray(envHints) || envHints.some((name) => typeof name !== "string" || !CREDENTIAL_ENV_RE.test(name) || RESERVED_CREDENTIAL_ENV.test(name))) {
-    throw new Error("adapter credential metadata must contain files and environment-name hints");
-  }
-  const ids = new Set(), targets = new Set();
-  for (const file of files) {
-    const keys = Object.keys(file || {}).sort().join(",");
-    if (keys !== "access,id,recommendedSource,targetRel,targetRoot" || !/^[a-z][a-z0-9_-]*$/.test(file.id || "")
-      || !CREDENTIAL_ROOTS.has(file.targetRoot) || !CREDENTIAL_ACCESS.has(file.access)
-      || typeof file.recommendedSource !== "string" || typeof file.targetRel !== "string" || path.isAbsolute(file.targetRel)
-      || !file.targetRel || file.targetRel.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) {
-      throw new Error("adapter credential file metadata is invalid");
-    }
-    const target = `${file.targetRoot}:${file.targetRel}`;
-    if (ids.has(file.id) || targets.has(target)) throw new Error("adapter credential metadata contains an id or target collision");
-    ids.add(file.id); targets.add(target);
-  }
-  return deepFreeze({ files: files.map((file) => ({ ...file })), envHints: [...envHints] });
 }
 
 function normalizeRuntimeDependencies(value = {}) {
@@ -49,42 +23,6 @@ function normalizeRuntimeDependencies(value = {}) {
   for (const key of RUNTIME_PARENT_KEYS) {
     const depth = value[key]; if (depth !== null && (!Number.isInteger(depth) || depth < 0 || depth > 2)) throw new Error("adapter runtime dependency parent depth is invalid"); normalized[key] = depth;
   } return Object.freeze(normalized);
-}
-function normalizePrivateEnvPaths(value = []) {
-  if (!Array.isArray(value)) throw new Error("adapter private environment paths must be an array");
-  const keys = new Set(); return deepFreeze(value.map((item) => {
-    if (!item || Object.keys(item).sort().join(",") !== "key,relative,root" || !CREDENTIAL_ENV_RE.test(item.key || "") || RESERVED_CREDENTIAL_ENV.test(item.key)
-      || keys.has(item.key) || !PRIVATE_ENV_ROOTS.has(item.root) || typeof item.relative !== "string" || path.isAbsolute(item.relative)
-      || !item.relative || item.relative.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) throw new Error("adapter private environment path is invalid");
-    keys.add(item.key); return { ...item };
-  }));
-}
-// This is deliberately value-free: callers use it before a dry run or before
-// opening any credential source.  The host/reviewer own the later byte trust
-// boundary, while both phases share one catalog and argv grammar.
-function credentialRequest(metadata = {}, { envNames = [], fileSpecs = [] } = {}) {
-  const credentials = normalizeCredentialMetadata(metadata);
-  if (!Array.isArray(envNames) || !Array.isArray(fileSpecs)) throw new Error("credential options must be arrays");
-  const files = new Map(credentials.files.map((item) => [item.id, item]));
-  const seenEnv = new Set(), seenIds = new Set(), seenTargets = new Set(), ids = [];
-  for (const name of envNames) {
-    if (typeof name !== "string" || !CREDENTIAL_ENV_RE.test(name) || RESERVED_CREDENTIAL_ENV.test(name) || seenEnv.has(name)) {
-      throw new Error("credential environment name is unsafe, reserved, or duplicated");
-    }
-    seenEnv.add(name);
-  }
-  for (const spec of fileSpecs) {
-    const equals = typeof spec === "string" ? spec.indexOf("=") : -1;
-    const id = equals > 0 ? spec.slice(0, equals) : "", source = equals > 0 ? spec.slice(equals + 1) : "", item = files.get(id);
-    if (!item || !path.isAbsolute(source) || path.resolve(source) !== source) {
-      throw new Error("credential file must be a declared ID=/absolute/source");
-    }
-    const target = `${item.targetRoot}:${item.targetRel}`;
-    if (seenIds.has(id) || seenTargets.has(target)) throw new Error("credential file contains an id or target collision");
-    seenIds.add(id); seenTargets.add(target); ids.push(id);
-  }
-  return Object.freeze({ metadata: credentials, envNames: Object.freeze([...seenEnv]), fileSpecs: Object.freeze([...fileSpecs]),
-    summary: Object.freeze({ env_names: Object.freeze([...seenEnv]), file_ids: Object.freeze(ids) }) });
 }
 
 class AdapterCapabilityError extends Error {
@@ -112,7 +50,7 @@ function decodeTrustedPrompt(promptBytes) {
 
 function normalizeInvocationShape(invocation) {
   if (!invocation || typeof invocation !== "object") throw new Error("adapter invocation must be an object");
-  if (Object.keys(invocation).some((key) => !["command", "args", "cwd", "stdinPath", "stdinSha256", "privateEnvPaths"].includes(key))) throw new Error("adapter invocation contains unsupported metadata");
+  if (Object.keys(invocation).some((key) => !["command", "args", "cwd", "stdinPath", "stdinSha256"].includes(key))) throw new Error("adapter invocation contains unsupported metadata");
   if (typeof invocation.command !== "string" || !invocation.command || invocation.command.includes("\n")) throw new Error("adapter invocation command must be one executable argv value");
   if (!Array.isArray(invocation.args) || invocation.args.some((value) => typeof value !== "string" || value.includes("\0"))) throw new Error("adapter invocation args must be an array of string argv values");
   requireAbsolutePath(invocation.cwd, "adapter invocation cwd");
@@ -121,7 +59,6 @@ function normalizeInvocationShape(invocation) {
     command: invocation.command,
     args: Object.freeze([...invocation.args]),
     cwd: invocation.cwd,
-    privateEnvPaths: normalizePrivateEnvPaths(invocation.privateEnvPaths),
     ...(invocation.stdinPath ? {
       stdinPath: requireAbsolutePath(invocation.stdinPath, "adapter invocation stdinPath"),
       stdinSha256: SHA256_RE.test(invocation.stdinSha256 || "")
@@ -339,21 +276,20 @@ function createNativeAdapter({
   if (phaseMetadata.dispatch?.supported && typeof phaseMetadata.dispatch.commandExecution !== "boolean") {
     throw new Error("native adapter dispatch phase must declare commandExecution");
   }
-  if (!new Set(["explicit_bundle", "unrepresentable"]).has(metadata.credentialTransport)) throw new Error("native adapter credential transport declaration is invalid");
   const runtimeDependencies = normalizeRuntimeDependencies(metadata.runtimeDependencies);
   const bindInvocationPolicy = (invocation, toolNetworkAccess) => Object.freeze({ ...invocation, networkAccess: "enabled", toolNetworkAccess, runtimeDependencies });
   return Object.freeze({
     name,
     defaults: Object.freeze({ timeoutMs }),
-    metadata: deepFreeze({ ...metadata, runtimeDependencies, credentials: normalizeCredentialMetadata(metadata.credentials) }),
+    metadata: deepFreeze({ ...metadata, runtimeDependencies }),
     probe({ env = process.env, timeoutMs: probeTimeoutMs = 5000, spawn = spawnSync } = {}) {
       const binary = env[metadata.cliBinaryEnv] || cliBinary;
       return probeBinary(binary, { env, timeoutMs: probeTimeoutMs, spawn });
     },
     capabilities({ phase, request = null }) {
       const value = phaseMetadata[phase];
-      if (!value) return Object.freeze({ supported: false, reason: "unknown phase", credentialTransport: metadata.credentialTransport });
-      let capability = { ...value, credentialTransport: metadata.credentialTransport };
+      if (!value) return Object.freeze({ supported: false, reason: "unknown phase" });
+      let capability = { ...value };
       if (value.supported && phase === "dispatch" && request && validateDispatch) {
         const validation = validateDispatch({
           sandbox: request.sandbox || (request.readOnly ? "read-only" : "workspace-write"),
@@ -394,12 +330,10 @@ module.exports = {
   PHASES,
   assertInvocationShape: normalizeInvocationShape,
   createNativeAdapter,
-  credentialRequest,
   filesystemIsolationDiagnostic,
   decodeTrustedPrompt,
   formatAdapterPhase,
   makeParseOutcome,
-  normalizePrivateEnvPaths,
   parseOutput,
   parseJsonObject,
   probeBinary,

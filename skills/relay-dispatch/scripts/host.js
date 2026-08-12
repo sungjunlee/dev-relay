@@ -5,7 +5,6 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { normalizePrivateEnvPaths } = require("./adapter-contract");
 
 const OWNERSHIP = "ownership";
 const OWNER_RE = /^(\d{12})\.owner\.json$/;
@@ -14,6 +13,7 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out", "spaw
 const BREAK_PROBE_MS = 10_000;
 const PROCESS_SCOPE_KEY = "RELAY_PROCESS_SCOPE";
 const PROCESS_CONTRACT = "inherited_scope_no_daemon";
+const AMBIENT_ENVIRONMENT_INJECTION = /^(?:RELAY_.*|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PHPRC|PHP_INI_SCAN_DIR|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|PERL5DB|RUBYOPT|RUBYLIB|GEM_HOME|GEM_PATH|GCONV_PATH|LOCPATH|NLSPATH)$|^(?:DYLD|LD)_|^LUA_(?:INIT|PATH|CPATH)(?:_.*)?$/;
 const PS_ROW_RE = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/;
 const SCOPE_RE = new RegExp(`(?:^|\\s)${PROCESS_SCOPE_KEY}=([0-9a-f]{64})(?=\\s|$)`);
 const issuedLocks = new WeakSet();
@@ -24,8 +24,6 @@ const issuedInspections = new WeakSet();
 const inspectionStates = new WeakMap();
 const issuedProcessScopes = new WeakSet();
 const processScopeStates = new WeakMap();
-const issuedCredentialBundles = new WeakSet();
-const credentialBundleStates = new WeakMap();
 
 class HostError extends Error {
   constructor(message, code, details = {}) {
@@ -48,20 +46,6 @@ function verifySigned(value, secret, field = "auth_sha256") {
 function safeAttempt(attemptId) {
   if (typeof attemptId !== "string" || !ATTEMPT_RE.test(attemptId)) fail("invalid attempt id", "INVALID_ATTEMPT_ID");
   return attemptId;
-}
-function normalizedPrivatePaths(value, code = "INVALID_INVOCATION") { try { return normalizePrivateEnvPaths(value); } catch (cause) { fail(cause.message, code, { cause }); } }
-function attemptPrivateRoot(runDir, owner, short) {
-  const parent = canonicalDir(short ? fs.realpathSync("/tmp") : runDir, "executor private parent"), name = short ? `relay-${sha256(`${owner.lock_id}:${owner.attempt_id}`).slice(0, 32)}` : `executor-credentials-${owner.attempt_id}`;
-  const target = path.join(parent, name);
-  if (short && Buffer.byteLength(target) > 64) fail("short private root exceeds 64 bytes", "INVALID_INVOCATION"); return target;
-}
-function privatePathEnvironment(declarations, roots, environment, code) {
-  const values = {}; for (const item of normalizedPrivatePaths(declarations, code)) {
-    if (Object.hasOwn(environment, item.key)) fail("private environment path collides with caller environment", code);
-    const root = roots[item.root], target = root && path.resolve(root, item.relative), relative = root && path.relative(root, target);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || (item.root === "scratch" && Buffer.byteLength(target) > 83)) fail("private environment path escapes its root or exceeds the short-path limit", code);
-    fs.mkdirSync(target, { recursive: true, mode: 0o700 }); fs.chmodSync(target, 0o700); values[item.key] = target;
-  } return values;
 }
 function canonicalDir(value, label) {
   if (typeof value !== "string" || !path.isAbsolute(value)) fail(`${label} must be absolute`, "INVALID_PATH");
@@ -135,17 +119,8 @@ function resolveExecutable(command, env = process.env) {
   fail(`executable not found: ${command}`, "INVALID_INVOCATION");
 }
 function environmentEntries(value, label) {
-  if (value === undefined) return {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${label} must be an object`, "INVALID_INVOCATION");
-  const result = {};
-  for (const [key, entry] of Object.entries(value)) {
-    const injection = /^(?:SSL_CERT_FILE|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PHPRC|PHP_INI_SCAN_DIR|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|PERL5DB|RUBYOPT|RUBYLIB|GEM_HOME|GEM_PATH|GCONV_PATH|LOCPATH|NLSPATH)$|^(?:DYLD|LD)_|^LUA_(?:INIT|PATH|CPATH)(?:_.*)?$/.test(key);
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || injection || typeof entry !== "string" || entry.includes("\0")) {
-      fail(`${label} contains an invalid environment entry`, "INVALID_INVOCATION");
-    }
-    result[key] = entry;
-  }
-  return result;
+  try { return ambientEnvironment({}, label, value === undefined ? {} : value); }
+  catch (error) { fail(error.message, "INVALID_INVOCATION"); }
 }
 function minimalEnvironment(source = process.env) {
   const result = {};
@@ -155,6 +130,21 @@ function minimalEnvironment(source = process.env) {
     }
   }
   return result;
+}
+// Ambient CLI auth/config may flow through the host's unlinked FD, but runtime
+// startup injection never does. The sanitizer owns no durable values.
+function ambientEnvironment(source = process.env, label = "ambient environment", overrides = {}) {
+  if (!source || typeof source !== "object" || Array.isArray(source) || !overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const safe = {}, valid = (key, value) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)
+    && !AMBIENT_ENVIRONMENT_INJECTION.test(key) && typeof value === "string" && !value.includes("\0");
+  for (const [key, value] of Object.entries(source)) if (valid(key, value)) safe[key] = value;
+  for (const [key, value] of Object.entries(overrides)) {
+    if (!valid(key, value)) throw new Error(`${label} contains an invalid environment entry`);
+    safe[key] = value;
+  }
+  return safe;
 }
 function regularFileBinding(filePath, label, { canonical = true } = {}) {
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
@@ -174,73 +164,6 @@ function verifyFileBinding(binding, label) {
     fail(`${label} changed after launch`, "HOST_INPUT_CHANGED");
   }
   return observed.path;
-}
-function credentialSource(filePath, label) {
-  if (typeof filePath !== "string" || !path.isAbsolute(filePath) || path.resolve(filePath) !== filePath) fail(`${label} source must be absolute and canonical`, "INVALID_CREDENTIAL");
-  let fd;
-  try {
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
-    const before = fs.fstatSync(fd), named = fs.lstatSync(filePath);
-    if (!before.isFile() || named.isSymbolicLink() || before.dev !== named.dev || before.ino !== named.ino || fs.realpathSync(filePath) !== filePath
-      || (typeof process.getuid === "function" && before.uid !== process.getuid()) || (before.mode & 0o077) !== 0) fail(`${label} source must be a current-user owner-only regular file`, "UNTRUSTED_CREDENTIAL");
-    const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd), renamed = fs.lstatSync(filePath);
-    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs
-      || before.ctimeMs !== after.ctimeMs || after.dev !== renamed.dev || after.ino !== renamed.ino || renamed.isSymbolicLink() || bytes.length !== after.size) {
-      bytes.fill(0); fail(`${label} source changed while read`, "CREDENTIAL_CHANGED");
-    }
-    return { path: filePath, dev: before.dev, ino: before.ino, size: bytes.length, sha: sha256(bytes), bytes };
-  } catch (error) {
-    if (error instanceof HostError) throw error;
-    fail(`${label} source is unavailable`, "UNTRUSTED_CREDENTIAL");
-  } finally { if (fd !== undefined) fs.closeSync(fd); }
-}
-function prepareCredentialBundle({ metadata = {}, envNames = [], fileSpecs = [], env = process.env } = {}) {
-  if (!Array.isArray(envNames) || !Array.isArray(fileSpecs)) fail("credential options must be arrays", "INVALID_CREDENTIAL");
-  const catalog = new Map((metadata.files || []).map((item) => [item.id, item])), seenEnv = new Set(), seenId = new Set(), seenTarget = new Set(), values = {}, files = [];
-  for (const name of envNames) {
-    if (seenEnv.has(name) || /^(?:HOME|PATH|TMPDIR|TMP|TEMP|XDG_CONFIG_HOME|XDG_DATA_HOME|RELAY_PROCESS_SCOPE)$|^RELAY_/.test(name || "")) fail(`credential environment name is reserved or duplicated: ${name}`, "INVALID_CREDENTIAL");
-    environmentEntries({ [name]: "checked" }, "credential environment");
-    if (typeof env[name] !== "string") fail(`credential environment value is missing: ${name}`, "CREDENTIAL_MISSING");
-    seenEnv.add(name); values[name] = env[name];
-  }
-  try { for (const spec of fileSpecs) {
-    if (typeof spec !== "string") fail("credential file must be ID=/absolute/source", "INVALID_CREDENTIAL");
-    const equals = spec.indexOf("="), id = spec.slice(0, equals), sourcePath = spec.slice(equals + 1), item = catalog.get(id);
-    if (equals < 1 || !item) fail(`unknown credential file id: ${id || spec}`, "INVALID_CREDENTIAL");
-    if (!/^[a-z][a-z0-9_-]*$/.test(item.id || "") || !["home", "xdg_config", "xdg_data"].includes(item.targetRoot)
-      || !["read", "read_write"].includes(item.access) || typeof item.targetRel !== "string" || path.isAbsolute(item.targetRel)
-      || !item.targetRel || item.targetRel.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) fail("credential target metadata is invalid", "INVALID_CREDENTIAL");
-    const target = `${item.targetRoot}:${item.targetRel}`;
-    if (seenId.has(id) || seenTarget.has(target)) fail("credential file id or target collision", "INVALID_CREDENTIAL");
-    seenId.add(id); seenTarget.add(target);
-    files.push({ ...item, source: credentialSource(sourcePath, `credential '${id}'`) });
-  } } catch (error) {
-    for (const item of files) item.source.bytes.fill(0);
-    for (const key of Object.keys(values)) { values[key] = ""; delete values[key]; }
-    throw error;
-  }
-  const bundle = Object.freeze({ env_names: Object.freeze([...seenEnv]), files: Object.freeze(files.map(({ source, recommendedSource, ...item }) => Object.freeze({ ...item, size: source.size, sha: source.sha }))) });
-  issuedCredentialBundles.add(bundle); credentialBundleStates.set(bundle, { values, files }); return bundle;
-}
-function credentialState(bundle) {
-  if (!bundle) return { values: {}, files: [], publicFiles: [], envNames: [] };
-  if (!issuedCredentialBundles.has(bundle)) fail("issued credential bundle required", "INVALID_CREDENTIAL");
-  const state = credentialBundleStates.get(bundle), files = [];
-  try {
-    for (const item of state.files) {
-      const fresh = credentialSource(item.source.path, `credential '${item.id}'`);
-      if (fresh.dev !== item.source.dev || fresh.ino !== item.source.ino || fresh.size !== item.source.size || fresh.sha !== item.source.sha) {
-        fresh.bytes.fill(0); fail(`credential '${item.id}' changed after validation`, "CREDENTIAL_CHANGED");
-      }
-      files.push({ ...item, source: fresh });
-    }
-    return { values: { ...state.values }, files, publicFiles: bundle.files, envNames: bundle.env_names };
-  } catch (error) { for (const item of files) item.source.bytes.fill(0); throw error; }
-  finally {
-    for (const item of state.files) item.source.bytes.fill(0);
-    for (const key of Object.keys(state.values)) { state.values[key] = ""; delete state.values[key]; }
-    credentialBundleStates.delete(bundle); issuedCredentialBundles.delete(bundle);
-  }
 }
 function shebangExecutables(executable, env) {
   const found = [], seen = new Set(); let current = executable;
@@ -497,7 +420,7 @@ function auditProcessScope(capability) {
 }
 hostInvocation.beginProcessScope = beginProcessScope;
 hostInvocation.auditProcessScope = auditProcessScope;
-hostInvocation.privatePathEnvironment = privatePathEnvironment;
+hostInvocation.ambientEnvironment = ambientEnvironment;
 hostInvocation.bindRegularFile = (filePath, label) => regularFileBinding(filePath, label, { canonical: false });
 hostInvocation.bindRuntimeFiles = ({ command, env = process.env, runtimeDependencies = { executableParent: null, interpreterParent: null } } = {}) => {
   const prepared = runtimeBindingSet(command, env, runtimeDependencies);
@@ -505,7 +428,6 @@ hostInvocation.bindRuntimeFiles = ({ command, env = process.env, runtimeDependen
 };
 hostInvocation.verifyRuntimeFiles = ({ command, runtimeFiles, runtimeDependencies = { executableParent: null, interpreterParent: null }, env = process.env, reenumerate = true } = {}) =>
   verifyRuntimeFileBindings({ command, runtimeFiles, runtimeDependencies, environment: env, reenumerate });
-hostInvocation.readOwnerCredential = (filePath, label) => credentialSource(filePath, label).bytes;
 hostInvocation.removeBoundDirectory = removeBoundDirectory;
 function waitForProcessGroupAbsence(pgid, timeoutMs) { return Boolean(pollUntil(() => !groupExists(pgid), timeoutMs, 10)); }
 function reapProcessGroup(pgid, seal) {
@@ -717,12 +639,19 @@ function inspectOwnership({ runDir } = {}) {
   return inspection;
 }
 function cleanupObligation(value, runDir, owner) {
-  const obligation = value?.obligation, reviewerRoot = value?.kind === "reviewer" && typeof obligation?.credential_root?.path === "string"
-    && path.dirname(obligation.credential_root.path) === fs.realpathSync("/tmp") && /^relay-review-[A-Za-z0-9_-]+$/.test(path.basename(obligation.credential_root.path));
-  const expectedRoots = reviewerRoot ? [obligation.credential_root.path] : [attemptPrivateRoot(runDir, owner, false), attemptPrivateRoot(runDir, owner, true)];
-  if (!obligation || !Array.isArray(obligation.processes) || !obligation.credential_root || !expectedRoots.includes(obligation.credential_root.path)
-    || !((obligation.credential_root.dev === null && obligation.credential_root.ino === null)
-      || (Number.isInteger(obligation.credential_root.dev) && Number.isInteger(obligation.credential_root.ino)))) fail("cleanup obligation is invalid", "HOST_ARTIFACT_INVALID");
+  void runDir; void owner;
+  const obligation = value?.obligation, staged = obligation?.staged_input_root;
+  if (!value || !["executor", "reviewer"].includes(value.kind)
+    || !obligation || typeof obligation !== "object" || Array.isArray(obligation)
+    || Object.keys(obligation).sort().join(",") !== "processes,scope_seal,staged_input_root") {
+    fail("cleanup obligation is invalid", "HOST_ARTIFACT_INVALID");
+  }
+  const reviewerRoot = value.kind === "reviewer" && staged && typeof staged.path === "string"
+    && path.dirname(staged.path) === fs.realpathSync("/tmp") && /^relay-review-[A-Za-z0-9_-]+$/.test(path.basename(staged.path));
+  if (!Array.isArray(obligation.processes) || (value.kind === "reviewer" ? !reviewerRoot : staged !== null)
+    || (value.kind === "reviewer" && (!Number.isInteger(staged.dev) || !Number.isInteger(staged.ino)))) {
+    fail("cleanup obligation is invalid", "HOST_ARTIFACT_INVALID");
+  }
   const identities = value.identities, terminal = value.terminal;
   if (!identities || (value.kind !== "reviewer" && !identities.supervisor) || (identities.executor !== null && !identities.executor)) fail("cleanup host identities are invalid", "HOST_ARTIFACT_INVALID");
   if (identities.supervisor) exactIdentity(identities.supervisor, "cleanup supervisor"); if (identities.executor) exactIdentity(identities.executor, "cleanup executor");
@@ -732,7 +661,7 @@ function cleanupObligation(value, runDir, owner) {
   if (seal !== null && !/^[0-9a-f]{64}$/.test(seal)) fail("cleanup process scope seal is invalid", "HOST_ARTIFACT_INVALID");
   if (!terminal || !["completed", "failed", "cancelled", "timed_out", "spawn_error"].includes(terminal.status)
     || (terminal.exit_code !== null && !Number.isInteger(terminal.exit_code)) || (terminal.signal !== null && typeof terminal.signal !== "string")) fail("cleanup terminal context is invalid", "HOST_ARTIFACT_INVALID");
-  return { kind: value.kind || "executor", processes, credential_root: { ...obligation.credential_root }, scope_seal: seal, terminal };
+  return { kind: value.kind, processes, staged_input_root: staged ? { ...staged } : null, scope_seal: seal, terminal };
 }
 function identityGone(identity, timeoutMs) {
   return Boolean(pollUntil(() => { const row = probeRow(identity.pid); return !sameProcess(row?.identity, identity) || /^Z/.test(row.identity.state); }, timeoutMs));
@@ -823,21 +752,22 @@ function removeBoundDirectory(target, expected, label, { fault, reclaim = true }
   }
   syncDir(path.dirname(target)); return true;
 }
-function removeExactCredentialRoot(root, runDir, owner, fault) {
+function removeExactStagedInputRoot(root, fault) {
+  if (!root) return;
   const target = root.path, reviewerRoot = path.dirname(target) === fs.realpathSync("/tmp") && /^relay-review-[A-Za-z0-9_-]+$/.test(path.basename(target));
-  if (![attemptPrivateRoot(runDir, owner, false), attemptPrivateRoot(runDir, owner, true)].includes(target) && !reviewerRoot) fail("cleanup credential root is outside the attempt boundary", "HOST_ARTIFACT_INVALID");
+  if (!reviewerRoot) fail("cleanup staged input root is outside the review staging boundary", "HOST_ARTIFACT_INVALID");
   if (root.dev === null) {
-    if (fs.existsSync(target)) fail("credential root identity changed before recovery", "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
+    if (fs.existsSync(target)) fail("staged input root identity changed before recovery", "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect" });
     return;
   }
   const binding = { dev: root.dev, ino: root.ino };
-  removeBoundDirectory(target, binding, "cleanup credential root",
-    { fault: fault ? (stage) => fault(`credential_${stage}`) : null });
+  removeBoundDirectory(target, binding, "cleanup staged input root",
+    { fault: fault ? (stage) => fault(`staged_input_${stage}`) : null });
   // Removal unlinks a pathname, so a rename racing the delete could leave the bound tree alive under a
   // quarantine name while the delete still reported success. Settling is only honest if nothing carrying
   // the signed identity survives, so re-scan and fail closed instead of trusting the delete's return.
   const surviving = quarantineSiblings(target, binding);
-  if (surviving.length) fail("cleanup credential root survived removal under a quarantine name", "HOST_CLEANUP_INCOMPLETE",
+  if (surviving.length) fail("cleanup staged input root survived removal under a quarantine name", "HOST_CLEANUP_INCOMPLETE",
     { recommended_action: "inspect", quarantinePath: surviving[0] });
 }
 function settleCleanup({ state, cleanupPath, fault, terminalStatus = "failed" }) {
@@ -847,7 +777,7 @@ function settleCleanup({ state, cleanupPath, fault, terminalStatus = "failed" })
   const obligation = cleanupObligation(read.value, state.runDir, owner), paths = attemptPaths(state.runDir, owner.attempt_id);
   for (const identity of obligation.processes) reapExactIdentity(identity, obligation.scope_seal);
   if (obligation.kind === "reviewer") reapSealedScope(obligation.scope_seal);
-  removeExactCredentialRoot(obligation.credential_root, state.runDir, owner, fault); fault?.("after_cleanup");
+  removeExactStagedInputRoot(obligation.staged_input_root, fault); fault?.("after_cleanup");
   const settledBody = { v: 2, attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_handle: owner.host_handle,
     cleanup_sha256: sha256(read.bytes), settled_at: new Date().toISOString() };
   if (!publishOnce(paths.settled, signed(settledBody, owner.secret))) readBoundArtifact(paths.settled, "cleanup settled", owner, { cleanup_sha256: settledBody.cleanup_sha256 });
@@ -866,7 +796,7 @@ function retainReviewerCleanup(capability, { root, binding, scopeSeal } = {}) {
   const paths = attemptPaths(state.runDir, state.owner.attempt_id), body = { v: 2, kind: "reviewer", attempt_id: state.owner.attempt_id,
     lock_id: state.owner.lock_id, host_handle: state.owner.host_handle, identities: { supervisor: null, executor: null }, error: "reviewer cleanup pending",
     terminal: { status: "failed", exit_code: null, signal: null }, obligation: { processes: [],
-      credential_root: { path: root, dev: binding.dev, ino: binding.ino }, scope_seal: scopeSeal }, observed_at: new Date().toISOString() };
+      staged_input_root: { path: root, dev: binding.dev, ino: binding.ino }, scope_seal: scopeSeal }, observed_at: new Date().toISOString() };
   if (!publishOnce(paths.cleanup, signed(body, state.owner.secret))) readBoundArtifact(paths.cleanup, "cleanup-incomplete status", state.owner);
   return Object.freeze({ path: paths.cleanup, complete(terminalStatus) {
     const resultPath = settleCleanup({ state, cleanupPath: paths.cleanup, terminalStatus });
@@ -928,8 +858,8 @@ function waitForStartup({ child, paths, owner, configSha, timeoutMs }) {
 }
 function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedWorktreeRoot, cwd, stdoutPath, stderrPath, resultPath,
   inputFiles = [], stdinPath = null, stdinSha256 = null, executorResultPath = null, executorSandbox = "workspace-write", executorNetworkAccess = "disabled", timeoutMs = 30_000,
-  cancelGraceMs = 1_000, supervisorStartupTimeoutMs = 30_000, executorEnv = {}, ephemeralEnv = {}, credentialRequest = null, processContainment = PROCESS_CONTRACT,
-  runtimeDependencies = { executableParent: null, interpreterParent: null }, privateEnvPaths = [], testCredentialPrepared = null, testCleanupFailurePath = null, testGateBarrierPath = null, lockContext } = {}) {
+  cancelGraceMs = 1_000, supervisorStartupTimeoutMs = 30_000, executorEnv = {}, processContainment = PROCESS_CONTRACT,
+  runtimeDependencies = { executableParent: null, interpreterParent: null }, testGateBarrierPath = null, testBeforeSupervisorSpawn = null, lockContext } = {}) {
   if (lockContext === undefined) fail("production launch requires a lock capability", "HOST_LOCK_REQUIRED");
   const state = stateFor(lockContext), run = canonicalDir(runDir, "runDir"); assertRunLockHeld(lockContext, run);
   if (attemptId !== state.owner.attempt_id) fail("attempt does not match lock", "HOST_LOCK_IDENTITY_MISMATCH"); safeAttempt(attemptId);
@@ -943,28 +873,20 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   if (Boolean(stdinPath) !== Boolean(stdinSha256) || (stdinSha256 && !/^[0-9a-f]{64}$/.test(stdinSha256))) fail("stdinPath and stdinSha256 must form an exact binding", "INVALID_INVOCATION");
   const declaredInputs = [...new Set([...inputFiles, ...(stdinPath ? [stdinPath] : [])])];
   const inputSources = declaredInputs.map((file) => directChild(run, file, "executor input", { exists: true }));
-  const explicitEnvironment = environmentEntries(executorEnv, "executorEnv"), ephemeralEnvironment = environmentEntries(ephemeralEnv, "ephemeralEnv");
-  const privatePaths = normalizedPrivatePaths(privateEnvPaths);
-  if (Object.hasOwn(explicitEnvironment, PROCESS_SCOPE_KEY) || Object.hasOwn(ephemeralEnvironment, PROCESS_SCOPE_KEY)) fail(`${PROCESS_SCOPE_KEY} is host-reserved`, "INVALID_INVOCATION");
-  ephemeralEnvironment[PROCESS_SCOPE_KEY] = crypto.randomBytes(32).toString("hex");
-  if (Object.keys(ephemeralEnvironment).some((key) => Object.hasOwn(explicitEnvironment, key))) fail("ephemeralEnv keys must be distinct", "INVALID_INVOCATION");
-  if ((testGateBarrierPath || testCredentialPrepared || testCleanupFailurePath) && !process.env.NODE_TEST_CONTEXT) fail("test host seam is unavailable", "INVALID_INVOCATION");
-  if (testCredentialPrepared !== null && typeof testCredentialPrepared !== "function") fail("test credential seam is invalid", "INVALID_INVOCATION");
+  const explicitEnvironment = environmentEntries(executorEnv, "executorEnv");
+  if (Object.hasOwn(explicitEnvironment, PROCESS_SCOPE_KEY)) fail(`${PROCESS_SCOPE_KEY} is host-reserved`, "INVALID_INVOCATION");
+  const scopeToken = crypto.randomBytes(32).toString("hex");
+  if ((testGateBarrierPath || testBeforeSupervisorSpawn) && !process.env.NODE_TEST_CONTEXT) fail("test host seam is unavailable", "INVALID_INVOCATION");
+  if (testBeforeSupervisorSpawn !== null && typeof testBeforeSupervisorSpawn !== "function") fail("test host seam is invalid", "INVALID_INVOCATION");
   const gateBarrier = testGateBarrierPath ? directChild(run, testGateBarrierPath, "test gate barrier") : null;
-  const cleanupFailure = testCleanupFailurePath ? directChild(run, testCleanupFailurePath, "test cleanup failure", { exists: true }) : null;
   const runtime = hostInvocation.bindRuntimeFiles({ command, env: process.env, runtimeDependencies });
   const paths = attemptPaths(run, attemptId), stdout = directChild(run, stdoutPath || path.join(run, `attempt-${attemptId}.stdout.log`), "stdout"),
     stderr = directChild(run, stderrPath || path.join(run, `attempt-${attemptId}.stderr.log`), "stderr"),
     result = directChild(run, resultPath || path.join(run, `attempt-${attemptId}.result.json`), "result"),
     executorResult = executorResultPath ? directChild(run, executorResultPath, "executor result") : null,
-    tmp = directChild(run, path.join(run, `executor-tmp-${attemptId}`), "executor tmp", { directory: true }),
-    credentialRoot = directChild(path.dirname(attemptPrivateRoot(run, state.owner, privatePaths.some((item) => item.root === "scratch"))), attemptPrivateRoot(run, state.owner, privatePaths.some((item) => item.root === "scratch")), "executor private root", { directory: true });
-  const preparedCredentials = credentialRequest ? prepareCredentialBundle(credentialRequest) : null;
-  if (testCredentialPrepared) testCredentialPrepared();
-  const credentials = credentialState(preparedCredentials);
-  if (privatePaths.some((item) => Object.hasOwn(explicitEnvironment, item.key) || Object.hasOwn(ephemeralEnvironment, item.key) || credentials.envNames.includes(item.key))) fail("private environment path collides with caller environment", "INVALID_INVOCATION");
+    tmp = directChild(run, path.join(run, `executor-tmp-${attemptId}`), "executor tmp", { directory: true });
   const inputStages = inputSources.map((unused, index) => directChild(run, path.join(run, `host-input-${attemptId}-${index}.bin`), "staged executor input"));
-  for (const target of [paths.config, paths.supervisor, paths.running, paths.cleanup, paths.settled, paths.cancel, stdout, stderr, result, executorResult, credentialRoot, ...inputStages].filter(Boolean)) {
+  for (const target of [paths.config, paths.supervisor, paths.running, paths.cleanup, paths.settled, paths.cancel, stdout, stderr, result, executorResult, ...inputStages].filter(Boolean)) {
     if (fs.existsSync(target)) fail("attempt artifact already exists", "HOST_ATTEMPT_ALREADY_LAUNCHED", { artifactPath: target, recommended_action: "inspect" });
   }
   fs.mkdirSync(tmp, { mode: 0o700 });
@@ -984,28 +906,27 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
     if (argument.startsWith("@") && replacements.has(argument.slice(1))) return `@${replacements.get(argument.slice(1))}`;
     return argument;
   });
-  const executorEnvironment = { ...minimalEnvironment(process.env), ...explicitEnvironment, TMPDIR: tmp, TMP: tmp, TEMP: tmp };
-  const secretPayload = Buffer.from(JSON.stringify({ owner_secret: state.owner.secret, ephemeral_env: ephemeralEnvironment, credential_env: credentials.values,
-    credential_files: credentials.files.map((item) => ({ id: item.id, bytes: item.source.bytes.toString("base64") })) }), "utf8");
-  for (const item of credentials.files) item.source.bytes.fill(0);
-  for (const key of Object.keys(credentials.values)) { credentials.values[key] = ""; delete credentials.values[key]; }
-  if (secretPayload.length > 8 * 1024 * 1024) { secretPayload.fill(0); fail("ephemeral credential payload is too large", "INVALID_INVOCATION"); }
+  const secretPayload = Buffer.from(JSON.stringify({ owner_secret: state.owner.secret,
+    ambient_env: { ...ambientEnvironment(process.env), ...explicitEnvironment, TMPDIR: tmp, TMP: tmp, TEMP: tmp }, scope_token: scopeToken }), "utf8");
+  if (secretPayload.length > 8 * 1024 * 1024) { secretPayload.fill(0); fail("ambient environment payload is too large", "INVALID_INVOCATION"); }
   const config = { v: 2, attempt_id: attemptId, lock_id: state.owner.lock_id, host_kind: "local_supervisor", host_handle: state.owner.host_handle,
     nonce: crypto.randomBytes(32).toString("hex"), command: runtime.command, args: stagedArgs, process_contract: processContainment, input_files: inputBindings,
-    stdin_binding: stdinIndex < 0 ? null : { index: stdinIndex, size: inputBindings[stdinIndex].size, sha256: stdinSha256 }, env: executorEnvironment,
-    ephemeral_env_keys: Object.keys(ephemeralEnvironment), credential_env_keys: credentials.envNames, credentials: credentials.publicFiles, credential_root: credentialRoot, private_env_paths: privatePaths,
-    scope_seal: scopeSeal(ephemeralEnvironment[PROCESS_SCOPE_KEY]),
+    stdin_binding: stdinIndex < 0 ? null : { index: stdinIndex, size: inputBindings[stdinIndex].size, sha256: stdinSha256 },
+    scope_seal: scopeSeal(scopeToken),
     worktree, cwd: worktree, stdout, stderr, result, executor_result: executorResult,
     tmp, sandbox: executorSandbox, network: "enabled", tool_network: executorNetworkAccess, runtime_dependencies: runtimeDependencies, runtime_files: runtime.runtime_files, timeout_ms: timeoutMs, grace_ms: cancelGraceMs,
-    supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier, test_cleanup_failure: cleanupFailure };
+    supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier };
   if (!publishOnce(paths.config, config)) fail("attempt has already been launched", "HOST_ATTEMPT_ALREADY_LAUNCHED");
   const configSha = sha256(fs.readFileSync(paths.config)), stdoutFd = fs.openSync(stdout, "wx", 0o600), stderrFd = fs.openSync(stderr, "wx", 0o600);
   const secretPath = path.join(run, `.host-secret-${attemptId}-${crypto.randomBytes(8).toString("hex")}`), secretFd = fs.openSync(secretPath, "wx+", 0o600);
   let child;
   try {
-    fs.writeFileSync(secretFd, secretPayload); fs.fsyncSync(secretFd); fs.unlinkSync(secretPath); syncDir(run);
+    // Never write ambient session bytes through a named directory entry: create the
+    // private inode, unlink the empty name durably, then fill only the live FD.
+    fs.unlinkSync(secretPath); syncDir(run); fs.writeFileSync(secretFd, secretPayload); fs.fsyncSync(secretFd);
+    testBeforeSupervisorSpawn?.({ runDir: run, configPath: paths.config });
     child = spawn(process.execPath, [__filename, "--supervise", paths.config, configSha], { cwd: run, detached: true,
-      env: { ...minimalEnvironment(process.env), [PROCESS_SCOPE_KEY]: ephemeralEnvironment[PROCESS_SCOPE_KEY] },
+      env: { ...minimalEnvironment(process.env), [PROCESS_SCOPE_KEY]: scopeToken },
       stdio: ["ignore", "ignore", stderrFd, secretFd, stdoutFd, stderrFd] });
   } finally {
     secretPayload.fill(0); try { fs.unlinkSync(secretPath); } catch {}
@@ -1050,44 +971,19 @@ async function waitForTerminalResult(receipt, { timeoutMs = receipt.timeout_ms +
   fail("timed out waiting for terminal result", "HOST_RESULT_TIMEOUT");
 }
 
-function stageCredentials(config, secretFiles, state = {}) {
-  const root = directChild(path.dirname(config.credential_root), config.credential_root, "executor credential root", { directory: true });
-  fs.mkdirSync(root, { mode: 0o700 }); fs.chmodSync(root, 0o700); const rootStat = fs.lstatSync(root);
-  Object.assign(state, { root, binding: { dev: rootStat.dev, ino: rootStat.ino } });
-  const roots = { home: path.join(root, "home"), xdg_config: path.join(root, "xdg-config"), xdg_data: path.join(root, "xdg-data"), scratch: path.join(root, "scratch") };
-  for (const value of Object.values(roots)) fs.mkdirSync(value, { mode: 0o700 });
-  const readable = [], writable = [], readonly = [], secrets = new Map((secretFiles || []).map((item) => [item.id, item.bytes]));
-  for (const item of config.credentials || []) {
-    if (!/^[a-z][a-z0-9_-]*$/.test(item.id || "") || !Object.hasOwn(roots, item.targetRoot) || !["read", "read_write"].includes(item.access)
-      || typeof item.targetRel !== "string" || path.isAbsolute(item.targetRel) || item.targetRel.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) fail("credential target is invalid", "HOST_CONFIG_MISMATCH");
-    const encoded = secrets.get(item.id); if (typeof encoded !== "string") fail("credential bytes are unavailable", "HOST_CONFIG_MISMATCH");
-    const bytes = Buffer.from(encoded, "base64");
-    if (bytes.length !== item.size || sha256(bytes) !== item.sha) { bytes.fill(0); fail("credential bytes do not match binding", "HOST_CONFIG_MISMATCH"); }
-    const target = path.join(roots[item.targetRoot], item.targetRel), relative = path.relative(roots[item.targetRoot], target);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) { bytes.fill(0); fail("credential target escapes root", "HOST_CONFIG_MISMATCH"); }
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-    for (let parent = path.dirname(target); parent.startsWith(root) && parent !== root; parent = path.dirname(parent)) fs.chmodSync(parent, 0o700);
-    fs.writeFileSync(target, bytes, { flag: "wx", mode: 0o600 }); fs.chmodSync(target, 0o600); bytes.fill(0); readable.push(target);
-    if (item.access === "read_write") writable.push(target); else readonly.push(target);
-  }
-  if (secrets.size !== (config.credentials || []).length) fail("credential descriptors do not match payload", "HOST_CONFIG_MISMATCH");
-  return Object.assign(state, { roots, readable, writable, readonly });
-}
-function credentialRootBinding(root, binding = null) { return { path: path.resolve(root), dev: binding?.dev ?? null, ino: binding?.ino ?? null }; }
-function cleanupCredentialRoot(root, config, binding = null) {
-  if (config.test_cleanup_failure && fs.existsSync(config.test_cleanup_failure)) fail("injected cleanup failure", "TEST_CLEANUP_FAILURE");
-  if (!binding) { if (fs.existsSync(root)) fail("credential root binding is unavailable", "HOST_CLEANUP_INCOMPLETE"); return false; }
-  removeBoundDirectory(path.resolve(root), binding, "executor credential root");
-}
-
 function runExecutorGate(configPath, configSha) {
   const bytes = fs.readFileSync(configPath); if (sha256(bytes) !== configSha) fail("gate config mismatch", "HOST_CONFIG_MISMATCH");
   const config = JSON.parse(bytes), release = Buffer.alloc(1), hold = () => {}, ephemeralBytes = fs.readFileSync(5);
   if (config.process_contract !== PROCESS_CONTRACT) fail("executor process containment contract is invalid", "HOST_CONFIG_MISMATCH");
-  if (ephemeralBytes.length > 8 * 1024 * 1024) fail("ephemeral environment payload is invalid", "HOST_CONFIG_MISMATCH");
-  let gateSecrets, ephemeralEnvironment, credentialEnvironment, stagedCredentials = null;
-  try { gateSecrets = JSON.parse(ephemeralBytes.toString("utf8")); ephemeralEnvironment = environmentEntries(gateSecrets.ephemeral_env, "ephemeral environment");
-    credentialEnvironment = environmentEntries(gateSecrets.credential_env, "credential environment"); } finally { ephemeralBytes.fill(0); }
+  if (ephemeralBytes.length > 8 * 1024 * 1024) fail("ambient environment payload is invalid", "HOST_CONFIG_MISMATCH");
+  let gatePayload;
+  try { gatePayload = JSON.parse(ephemeralBytes.toString("utf8")); } finally { ephemeralBytes.fill(0); }
+  const runtimeEnvironment = environmentEntries(gatePayload?.ambient_env, "ambient environment"), scopeToken = gatePayload?.scope_token;
+  if (!/^[0-9a-f]{64}$/.test(scopeToken || "") || scopeToken !== process.env[PROCESS_SCOPE_KEY] || scopeSeal(scopeToken) !== config.scope_seal) {
+    fail("executor process scope is unavailable", "HOST_CONFIG_MISMATCH");
+  }
+  runtimeEnvironment[PROCESS_SCOPE_KEY] = scopeToken;
+  gatePayload = null;
   process.on("SIGTERM", hold); process.on("SIGINT", hold);
   if (fs.readSync(3, release, 0, 1, null) !== 1 || release[0] !== 1) return;
   let settled = false;
@@ -1101,19 +997,6 @@ function runExecutorGate(configPath, configSha) {
       if (!binding || binding.size !== config.stdin_binding.size || binding.sha256 !== config.stdin_binding.sha256) fail("executor stdin binding is invalid", "HOST_CONFIG_MISMATCH");
       stdinBytes = regularFileBinding(inputPaths[config.stdin_binding.index], "executor stdin").bytes;
     }
-    const runtimeEnvironment = environmentEntries(config.env, "config env");
-    if (!Array.isArray(config.ephemeral_env_keys) || config.ephemeral_env_keys.length !== Object.keys(ephemeralEnvironment).length) fail("ephemeral environment keys are invalid", "HOST_CONFIG_MISMATCH");
-    for (const key of config.ephemeral_env_keys) {
-      if (!Object.hasOwn(ephemeralEnvironment, key)) fail("ephemeral environment is unavailable", "HOST_CONFIG_MISMATCH");
-      runtimeEnvironment[key] = ephemeralEnvironment[key];
-    }
-    if (!Array.isArray(config.credential_env_keys) || config.credential_env_keys.length !== Object.keys(credentialEnvironment).length
-      || config.credential_env_keys.some((key) => !Object.hasOwn(credentialEnvironment, key))) fail("credential environment binding is invalid", "HOST_CONFIG_MISMATCH");
-    Object.assign(runtimeEnvironment, credentialEnvironment);
-    stagedCredentials = { root: config.credential_root };
-    stageCredentials(config, gateSecrets.credential_files, stagedCredentials);
-    Object.assign(runtimeEnvironment, privatePathEnvironment(config.private_env_paths, stagedCredentials.roots, runtimeEnvironment, "HOST_CONFIG_MISMATCH"));
-    runtimeEnvironment.HOME = stagedCredentials.roots.home; runtimeEnvironment.XDG_CONFIG_HOME = stagedCredentials.roots.xdg_config; runtimeEnvironment.XDG_DATA_HOME = stagedCredentials.roots.xdg_data;
     const invocation = hostInvocation({ command: config.command, args: config.args, env: runtimeEnvironment });
     // Verify immediately before pathname spawn, then again after it exits.
     // The two observations deliberately do not claim an atomic exec/dyld byte
@@ -1121,8 +1004,6 @@ function runExecutorGate(configPath, configSha) {
     hostInvocation.verifyRuntimeFiles({ command: config.command, runtimeFiles: config.runtime_files, runtimeDependencies: config.runtime_dependencies, env: runtimeEnvironment });
     const baseline = processBaseline(), tracked = new Map(), gateIdentity = fingerprint(process.pid);
     if (!gateIdentity) fail("executor gate identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
-    const scopeToken = runtimeEnvironment[PROCESS_SCOPE_KEY];
-    if (!/^[0-9a-f]{64}$/.test(scopeToken || "") || scopeSeal(scopeToken) !== config.scope_seal) fail("executor process scope is unavailable", "HOST_CONFIG_MISMATCH");
     const worker = spawn(invocation.command, invocation.args, { cwd: config.cwd, env: invocation.env, stdio: [stdinBytes ? "pipe" : "ignore", "inherit", "inherit"] });
     try { verifyInputs(); }
     catch (error) { try { worker.kill("SIGKILL"); } catch {}; if (stdinBytes) stdinBytes.fill(0); throw error; }
@@ -1140,19 +1021,15 @@ function runExecutorGate(configPath, configSha) {
         }
       } catch {}
     }, 10);
-    for (const values of [ephemeralEnvironment, credentialEnvironment]) for (const key of Object.keys(values)) { values[key] = ""; runtimeEnvironment[key] = ""; }
-    gateSecrets = null;
     const finishWorker = (fields) => {
       if (settled) return;
       clearInterval(lineagePoll);
-      const credentialRoot = credentialRootBinding(stagedCredentials.root, stagedCredentials.binding); let cleanupError = null, audit = null;
-      try { cleanupCredentialRoot(stagedCredentials.root, config, stagedCredentials.binding); } catch (error) { cleanupError = error; }
+      let audit = null;
       try {
         audit = escapedProcessAudit({ baseline, tracked, scopeToken, gateIdentity });
-        if (cleanupError || audit.remaining) return publish({ status: "cleanup_incomplete", exit_code: fields.exit_code, signal: fields.signal,
-          error: cleanupError ? `credential cleanup failed: ${cleanupError.message}`
-            : `escaped process audit cleanup incomplete: matched=${audit.matched} reaped=${audit.reaped} remaining=${audit.remaining}`,
-          obligation: { processes: audit.remaining_identities, credential_root: credentialRoot, scope_seal: config.scope_seal } });
+        if (audit.remaining) return publish({ status: "cleanup_incomplete", exit_code: fields.exit_code, signal: fields.signal,
+          error: `escaped process audit cleanup incomplete: matched=${audit.matched} reaped=${audit.reaped} remaining=${audit.remaining}`,
+          obligation: { processes: audit.remaining_identities, staged_input_root: null, scope_seal: config.scope_seal } });
         if (audit.matched) return publish({ status: "failed", exit_code: fields.exit_code, signal: fields.signal,
           error: `escaped process audit failed: matched=${audit.matched} reaped=${audit.reaped} remaining=${audit.remaining}` });
         try { hostInvocation.verifyRuntimeFiles({ command: config.command, runtimeFiles: config.runtime_files, runtimeDependencies: config.runtime_dependencies, env: runtimeEnvironment, reenumerate: false }); }
@@ -1162,49 +1039,37 @@ function runExecutorGate(configPath, configSha) {
       } catch (error) {
         const processes = [...tracked.values()].filter((identity) => sameProcess(fingerprint(identity.pid), identity)).map((identity) => exactIdentity(identity));
         return publish({ status: "cleanup_incomplete", exit_code: fields.exit_code, signal: fields.signal,
-          error: `escaped process audit unavailable: ${error.message}`, obligation: { processes, credential_root: credentialRoot, scope_seal: config.scope_seal } });
+          error: `escaped process audit unavailable: ${error.message}`, obligation: { processes, staged_input_root: null, scope_seal: config.scope_seal } });
       }
     };
     worker.once("error", (error) => finishWorker({ status: "spawn_error", exit_code: null, signal: null, error: error.message }));
     worker.once("close", (code, signal) => finishWorker({ status: code === 0 ? "completed" : "failed", exit_code: code, signal: signal || null, error: null }));
-  } catch (error) { for (const values of [ephemeralEnvironment, credentialEnvironment]) if (values) for (const key of Object.keys(values)) values[key] = "";
-    let cleanupFailed = false;
-    if (stagedCredentials) try { cleanupCredentialRoot(stagedCredentials.root, config, stagedCredentials.binding); } catch { cleanupFailed = true; }
-    publish({ status: cleanupFailed ? "cleanup_incomplete" : "spawn_error", exit_code: null, signal: null, error: cleanupFailed ? "credential cleanup failed" : error.message,
-      ...(cleanupFailed ? { obligation: { processes: [], credential_root: credentialRootBinding(stagedCredentials.root, stagedCredentials.binding), scope_seal: config.scope_seal } } : {}) }); }
+  } catch (error) { publish({ status: "spawn_error", exit_code: null, signal: null, error: error.message }); }
 }
 function runSupervisor(configPath, configSha) {
   const bytes = fs.readFileSync(configPath); if (sha256(bytes) !== configSha) fail("supervisor config mismatch", "HOST_CONFIG_MISMATCH");
   const secretSize = fs.fstatSync(3).size; if (secretSize > 8 * 1024 * 1024) fail("host secret payload is invalid", "HOST_CONFIG_MISMATCH");
   const secretBuffer = Buffer.alloc(secretSize); if (fs.readSync(3, secretBuffer, 0, secretSize, 0) !== secretSize) fail("host secret payload is truncated", "HOST_CONFIG_MISMATCH");
   let secretPayload; try { secretPayload = JSON.parse(secretBuffer.toString("utf8")); } finally { secretBuffer.fill(0); }
-  const secret = secretPayload?.owner_secret, ephemeralEnvironment = environmentEntries(secretPayload?.ephemeral_env || {}, "ephemeral environment"),
-    credentialEnvironment = environmentEntries(secretPayload?.credential_env || {}, "credential environment");
+  const secret = secretPayload?.owner_secret, scopeToken = secretPayload?.scope_token;
   if (!/^[0-9a-f]{64}$/.test(secret)) fail("host secret is invalid", "HOST_CONFIG_MISMATCH");
   const config = JSON.parse(bytes), supervisor = waitFingerprint(process.pid); if (!supervisor) fail("supervisor identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
-  const scopeToken = process.env[PROCESS_SCOPE_KEY];
-  if (scopeSeal(scopeToken) !== config.scope_seal) fail("supervisor process scope is unavailable", "HOST_CONFIG_MISMATCH");
-  if (!Array.isArray(config.ephemeral_env_keys) || config.ephemeral_env_keys.length !== Object.keys(ephemeralEnvironment).length
-    || config.ephemeral_env_keys.some((key) => !Object.hasOwn(ephemeralEnvironment, key))) fail("ephemeral environment binding is invalid", "HOST_CONFIG_MISMATCH");
-  if (!Array.isArray(config.credential_env_keys) || config.credential_env_keys.length !== Object.keys(credentialEnvironment).length
-    || config.credential_env_keys.some((key) => !Object.hasOwn(credentialEnvironment, key))) fail("credential environment binding is invalid", "HOST_CONFIG_MISMATCH");
+  if (!/^[0-9a-f]{64}$/.test(scopeToken || "") || process.env[PROCESS_SCOPE_KEY] !== scopeToken || scopeSeal(scopeToken) !== config.scope_seal) fail("supervisor process scope is unavailable", "HOST_CONFIG_MISMATCH");
   publishOnce(config.supervisor, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
     config_sha256: configSha, nonce: config.nonce, supervisor, started_at: new Date().toISOString() }, secret));
   let child, childClosed = false, executorIdentity = null, finished = false, requested = null, pendingClose = null, deadline, escalation, cancelPoll, barrierPoll, outcome = "", overflow = false;
-  const cleanupCredentials = () => { if (fs.existsSync(config.credential_root)) fail("executor credential root remains without a trusted binding", "HOST_CLEANUP_INCOMPLETE"); };
   const cleanupIncomplete = (error, obligation = null, terminal = {}) => {
     if (finished) return; finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll);
     const priorStatus = TERMINAL.has(terminal.status) ? terminal.status : "failed", provided = obligation?.processes || [];
     const processes = [supervisor, executorIdentity, ...provided].filter(Boolean).map((identity) => exactIdentity(identity));
-    publishOnce(config.cleanup, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
+    publishOnce(config.cleanup, signed({ v: 2, kind: "executor", attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
       identities: { supervisor: exactIdentity(supervisor), executor: executorIdentity ? exactIdentity(executorIdentity) : null },
       error: error.message, terminal: { status: priorStatus, exit_code: terminal.exit_code ?? null, signal: terminal.signal || null },
-      obligation: { processes: [...new Map(processes.map((identity) => [identity.pid, identity])).values()], credential_root: obligation?.credential_root || credentialRootBinding(config.credential_root),
+      obligation: { processes: [...new Map(processes.map((identity) => [identity.pid, identity])).values()], staged_input_root: null,
         scope_seal: config.scope_seal }, observed_at: new Date().toISOString() }, secret));
   };
   function finish(fields) {
     if (finished) return;
-    try { cleanupCredentials(); } catch (error) { return cleanupIncomplete(new Error(`credential cleanup failed: ${error.message}`), null, fields); }
     finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll);
     const body = { attempt_id: config.attempt_id, lock_id: config.lock_id, host_kind: "local_supervisor", host_handle: config.host_handle,
       ...fields, completed_at: new Date().toISOString() };
@@ -1232,9 +1097,8 @@ function runSupervisor(configPath, configSha) {
   try {
     child = spawn(process.execPath, [__filename, "--executor-gate", configPath, configSha], { cwd: config.cwd, detached: true,
       env: { ...minimalEnvironment(process.env), [PROCESS_SCOPE_KEY]: scopeToken }, stdio: ["ignore", 4, 5, "pipe", "pipe", "pipe"] });
-    const ephemeralPipe = Buffer.from(JSON.stringify({ ephemeral_env: ephemeralEnvironment, credential_env: credentialEnvironment, credential_files: secretPayload.credential_files || [] })); child.stdio[5].end(ephemeralPipe, () => ephemeralPipe.fill(0));
-    for (const values of [ephemeralEnvironment, credentialEnvironment]) for (const key of Object.keys(values)) { values[key] = ""; }
-    secretPayload.ephemeral_env = {}; secretPayload.credential_env = {}; secretPayload.credential_files = [];
+    const ambientPipe = Buffer.from(JSON.stringify({ ambient_env: secretPayload.ambient_env, scope_token: scopeToken })); child.stdio[5].end(ambientPipe, () => ambientPipe.fill(0));
+    secretPayload.ambient_env = {};
     child.stdio[4].setEncoding("utf8"); child.stdio[4].on("data", (chunk) => { if (outcome.length + chunk.length > 16_384) overflow = true; else outcome += chunk; });
     const executor = waitFingerprint(child.pid); if (!executor || executor.pgid !== child.pid) fail("executor group identity unavailable", "HOST_IDENTITY_UNAVAILABLE"); executorIdentity = executor;
     config.executor_started_at = executor.started_at;

@@ -62,7 +62,7 @@ therefore disclose prompt content while `agy` is running.
 
 The test-only live runner requires an exact 13-cell matrix: dispatch for all
 seven adapters plus primary review for every adapter that declares it (six at
-present). Every cell must pass; a missing CLI, absent explicit credential,
+present). Every cell must pass; a missing CLI, unavailable ambient login,
 diagnostic fallback, timeout, sandbox/authentication failure, or unexecuted cell
 keeps the evidence `incomplete_non_release` and makes the command exit nonzero.
 
@@ -72,14 +72,14 @@ Each review cell crosses `runStore.invokeIndependentReviewer`, must return that
 run's nonce through an exact JSON schema, and must leave the repository
 unchanged. These are the production isolation entry boundaries; the runner does
 not call `dispatch.js` because that would create lifecycle facts and publication
-work unrelated to an adapter canary. Production CLI credential parsing has its
-own contract tests, and the runner independently parses explicit
-`adapter:phase` credential selectors.
+work unrelated to an adapter canary. The runner performs no credential
+selection: every cell invokes its CLI through the ordinary ambient local
+HOME/XDG session.
 
 Evidence records source-tree and dirty-state digests, runner/runtime hashes,
-platform, executable identity/version, credential environment names and file
-IDs, prompt/invocation/output digests, and boundary/cleanup/process audits. It
-never records credential values or credential source paths, and the recorded
+platform, executable identity/version, prompt/invocation/output digests, and
+boundary/cleanup/process audits. It never records ambient environment values
+or source paths, and the recorded
 executable identity is the basename only — the old absolute-path evidence was
 archived as superseded (2026-08-07, #1153) and the next canary run regenerates
 current evidence under `docs/plans/relay-runtime-core-reset-vnext/`; it is
@@ -105,7 +105,7 @@ but never an admission failure. These argv descriptors still require the host
 supervisor for immutable staging, executable binding, timeout/cancellation, and
 scope-safe cleanup.
 
-## Prompt and credential transport
+## Prompt and ambient CLI sessions
 
 Claude, OpenCode, Pi, Cursor, and Codex transport the exact prompt over stdin
 (`codex` uses its stdin-dash form). Prompt bytes and their SHA-256 binding are
@@ -114,34 +114,25 @@ exceptions because their installed CLIs expose no safe stdin prompt contract;
 both reject prompts at the conservative 256 KiB limit, and their prompt content
 is visible to local process-list readers for the lifetime of the CLI.
 
-Dispatch does not inherit ambient provider credentials. Operators must opt in
-to each value with repeatable `--credential-env NAME` and to each declared
-adapter file with `--credential-file ID=/absolute/source`. Valid file IDs come
-from adapter metadata: Claude and Codex expose `auth` plus their settings/config
-file, OpenCode exposes `auth`, `config_json`, and `config_jsonc`, Pi exposes
-`auth`, `settings`, and `models`, Cursor exposes `cli_config`, Cline exposes
-`providers`, and Antigravity exposes `oauth` plus `config`. Cursor may instead
-use an explicitly selected `CURSOR_API_KEY`. Missing or structurally unsafe
-session files remain typed `credentials_unavailable` evidence.
-Sources are validated as exact private regular files and staged into an
-attempt-private HOME/XDG root, then removed after the process tree terminates.
+Dispatch and review inherit the local user's ordinary CLI session, including
+`HOME`, XDG configuration roots, provider authentication, and custom CA
+configuration. Relay neither copies credential files nor creates a private
+HOME/XDG tree. It removes only narrowly dangerous Relay and runtime-injection
+environment keys before handing that ambient environment to the detached host;
+the values themselves travel only through the host's unlinked secret-FD
+payload and never into durable run artifacts. `--credential-env` and
+`--credential-file` are retired unknown options. An unavailable ambient login
+is a typed authentication failure that the operator fixes with that CLI's
+normal login/setup flow.
 
 Claude dispatch runs with `--settings` that enables its native Bash sandbox and
 permits Bash while `allowUnsandboxedCommands:false` blocks automatic fallback.
 Claude primary review instead uses `--safe-mode`, permits only `Read`, and
 explicitly disallows `Bash`, `Write`, and `Edit`; its native-isolation
-diagnostic is `not_requested`. An unattended Claude Max canary requires
-the operator to generate a
-long-lived token with `claude setup-token` and explicitly select
-`CLAUDE_CODE_OAUTH_TOKEN` for both phase cells. Relay never extracts the macOS
-Keychain login, and `--bare` is not used because it rejects subscription OAuth.
-
-Credential flags are foreground-dispatch only. `--detach` with either flag
-fails closed so credential source paths are never copied into detached process
-argv. Primary review accepts the same repeated flags and catalog, but stages
-selected values only inside its short-lived private HOME/XDG tree. Neither path
-performs discovery or inherits an ambient HOME. A reviewer without the
-explicitly requested credentials must stop as unavailable.
+diagnostic is `not_requested`. An unattended Claude Max canary uses the
+operator's existing Claude CLI login session. Relay never extracts the macOS
+Keychain login,
+and `--bare` is not used because it rejects subscription OAuth.
 
 ## Capability Matrix
 

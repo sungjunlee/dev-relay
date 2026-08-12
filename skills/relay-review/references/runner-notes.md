@@ -71,7 +71,7 @@ retryable runtime escalation.
 
 ## Concurrency
 
-The expensive reviewer call holds a dedicated per-run execution lock. This gives any uncertain process cleanup a signed recovery authority before credential staging can be removed. Persistence later acquires a new per-run lock generation, re-runs inspection, and refuses any changed action, delivery, or head/tree. Concurrent review attempts therefore converge to at most one fact. Nothing is serialized repository-wide: unrelated runs in one repository proceed independently.
+The expensive reviewer call holds a dedicated per-run execution lock. This gives any uncertain process cleanup a signed recovery authority before the exact staged input root can be removed. Persistence later acquires a new per-run lock generation, re-runs inspection, and refuses any changed action, delivery, or head/tree. Concurrent review attempts therefore converge to at most one fact. Nothing is serialized repository-wide: unrelated runs in one repository proceed independently.
 
 ## Direct adapter invocation
 
@@ -90,14 +90,12 @@ The runner rechecks the immutable run digest, exact review binding, and retry
 subject under the run lock. A second failure and model-returned escalation both
 fail closed; Relay never starts an automatic retry loop.
 
-Reviewer authentication is opt-in and uses the same adapter credential catalog
-as dispatch. Repeat `--credential-env NAME` for an exact environment value or
-`--credential-file ID=/absolute/source` for a declared file target. The runtime
-does not discover credentials or inherit an ambient HOME. It validates each
-source as a stable, canonical, current-user owner-only regular file, copies it
-at mode `0600` below a private staged HOME/XDG tree, grants only the declared
-read or read/write file access, and removes the staging tree after invocation.
-An unavailable credential remains a blocking invocation failure.
+Reviewer authentication uses the operator's ambient local CLI HOME/XDG/config
+and supported auth environment. Relay does not copy credentials, rewrite
+HOME/XDG, or serialize credentials/source paths in artifacts, argv, facts, or
+diagnostics. It still stages and binds only the immutable review inputs; that
+exact staged-input root is removed after process settlement and is the sole
+non-process recovery resource.
 
 ## Removed options
 

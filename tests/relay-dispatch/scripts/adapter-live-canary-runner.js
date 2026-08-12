@@ -11,7 +11,7 @@ const { execFileSync } = require("node:child_process");
 const host = require("../../../skills/relay-dispatch/scripts/host");
 const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
 const { ADAPTER_PHASES, getAdapter, listAdapters } = require("../../../skills/relay-dispatch/scripts/adapters");
-const { credentialRequest, resolveAdapterProvider } = require("../../../skills/relay-dispatch/scripts/adapter-contract");
+const { resolveAdapterProvider } = require("../../../skills/relay-dispatch/scripts/adapter-contract");
 
 const PROJECT_ROOT = path.resolve(__dirname, "../../..");
 const PHASES = Object.freeze([ADAPTER_PHASES.DISPATCH, ADAPTER_PHASES.PRIMARY_REVIEW]);
@@ -94,16 +94,12 @@ function classifyFailure(error, provisioned = false) {
   if (error?.code === "HOST_CLEANUP_INCOMPLETE" || error?.runtime_audit?.status === "cleanup_incomplete") {
     return failure("failed", "host_cleanup_incomplete", "cleanup", "HOST_CLEANUP_INCOMPLETE");
   }
-  if (new Set(["UNTRUSTED_CREDENTIAL", "INVALID_CREDENTIAL", "CREDENTIAL_CHANGED", "CREDENTIAL_MISSING"]).has(error?.code)) {
-    return failure("failed", "credential_source_rejected", "credential_staging", error.code);
-  }
-  if (error?.code === "CREDENTIAL_NETWORK_ISOLATION_UNAVAILABLE") return failure("failed", "credential_network_isolation_unavailable", "sandbox", error.code);
-  if (error?.failure_reason === "credentials_unavailable") return provisioned ? failure("failed", "credential_auth_failed", "authentication", "AUTHENTICATION_FAILED") : { status: "not_run", reason: "not_run_credentials_unavailable" };
+  if (error?.failure_reason === "ambient_auth_unavailable") return failure("failed", "ambient_auth_failed", "authentication", "AUTHENTICATION_FAILED");
   if (error?.failure_reason === "execution_environment_unavailable") return failure("failed", "sandbox_environment_failed", "sandbox", "EXECUTION_ENVIRONMENT_UNAVAILABLE");
   if (new Set(["CANARY_OUTPUT_INVALID", "CANARY_NONCE_INVALID"]).has(error?.code)) return failure("failed", "canary_output_invalid", "output", error.code);
   if (/timed.?out|ETIMEDOUT/i.test(detail)) return failure("failed", "invocation_timeout", "timeout", "INVOCATION_TIMEOUT");
   if (/process (?:group|scope) survived|escaped process audit failed/i.test(detail)) return failure("failed", "process_scope_survived", "cleanup", "PROCESS_SCOPE_SURVIVED");
-  if (AUTH_FAILURE.test(detail)) return provisioned ? failure("failed", "credential_auth_failed", "authentication", "AUTHENTICATION_FAILED") : { status: "not_run", reason: "not_run_credentials_unavailable" };
+  if (AUTH_FAILURE.test(detail)) return failure("failed", "ambient_auth_failed", "authentication", "AUTHENTICATION_FAILED");
   if (ENVIRONMENT_FAILURE.test(detail)) return failure("failed", "sandbox_environment_failed", "sandbox", "SANDBOX_DENIED");
   return failure("failed", "invocation_failed", "invocation", error?.code && /^[A-Z][A-Z0-9_]+$/.test(error.code) ? error.code : "INVOCATION_FAILED");
 }
@@ -124,7 +120,7 @@ function probeEvidence(adapter, probe) {
       (adapter.metadata?.cliBinaryEnv && process.env[adapter.metadata.cliBinaryEnv]) || adapter.metadata?.cliBinary || adapter.name,
     ) : null };
 }
-function invocationDigest(invocation) { return sha(Buffer.from(JSON.stringify({ command: path.basename(invocation.command), args: invocation.args, stdin_sha256: invocation.stdinSha256 || null, private_env_paths: invocation.privateEnvPaths }))); }
+function invocationDigest(invocation) { return sha(Buffer.from(JSON.stringify({ command: path.basename(invocation.command), args: invocation.args, stdin_sha256: invocation.stdinSha256 || null }))); }
 function executedRuntimeEvidence(files) {
   if (!Array.isArray(files) || !files.length) throw new Error("canary execution has no authoritative runtime binding");
   const binding = files[0];
@@ -134,14 +130,6 @@ function executedRuntimeEvidence(files) {
   const executable = { basename: path.basename(binding.path), dev: binding.dev, ino: binding.ino, size: binding.size, sha256: binding.sha256 };
   if (["basename", "dev", "ino", "size", "sha256"].some((key) => executable[key] === undefined) || !SHA256_RE.test(executable.sha256 || "")) throw new Error("canary executable runtime binding is invalid");
   return { digest: sha(Buffer.from(JSON.stringify(files))), executable };
-}
-function credentialsFor(adapter, phase, selections) {
-  const key = `${adapter.name}:${phase}`, selected = selections?.[key];
-  if (!selected || (!selected.envNames?.length && !selected.fileSpecs?.length)) return null;
-  const request = credentialRequest(adapter.metadata?.credentials, { envNames: selected.envNames || [], fileSpecs: selected.fileSpecs || [] });
-  const env = Object.fromEntries(request.envNames.map((name) => [name, process.env[name]]));
-  if (Object.values(env).some((value) => typeof value !== "string" || value.length === 0)) return null;
-  return { ...request, env, public: request.summary };
 }
 function phasePrompt(fixture, phase, nonce) {
   const promptPath = path.join(fixture.runDir, `${phase}-${nonce}.prompt.md`);
@@ -159,17 +147,16 @@ function reviewRequest(fixture, prompt, nonce) {
     reviewed_sha: fixture.record.git.start_sha, current_sha: fixture.record.git.start_sha,
     diff_sha256: sha(fs.readFileSync(diffPath)), prompt_sha256: prompt.digest, schema };
 }
-function runReviewAttempt(fixture, adapter, model, timeoutMs, credentials, prompt, nonce, toolNetwork) {
+function runReviewAttempt(fixture, adapter, model, timeoutMs, prompt, nonce, toolNetwork) {
   let invocation;
   const outcome = runStore.invokeIndependentReviewer({ runDir: fixture.runDir, request: reviewRequest(fixture, prompt, nonce), timeoutMs,
-    credentialRequest: credentials,
     buildInvocation: ({ cwd, promptPath, promptBytes, resultPath, schemaPath }) => {
       invocation = adapter.buildInvocation({ phase: ADAPTER_PHASES.PRIMARY_REVIEW, cwd, promptPath, promptBytes,
         resultPath, schemaPath, model, timeoutMs, sandbox: "read-only", networkAccess: toolNetwork.access }); return invocation;
     }, parseOutcome: (input) => adapter.parseOutcome(input) });
   return { outcome, invocation };
 }
-async function runDispatchAttempt(fixture, adapter, model, timeoutMs, credentials, prompt, toolNetwork, onCleanupIncomplete) {
+async function runDispatchAttempt(fixture, adapter, model, timeoutMs, prompt, toolNetwork, onCleanupIncomplete) {
   const attemptId = `canary-${crypto.randomBytes(6).toString("hex")}`, executorResultPath = path.join(fixture.runDir, `${attemptId}.executor-output`);
   const invocation = adapter.buildInvocation({ phase: ADAPTER_PHASES.DISPATCH, cwd: fixture.worktree,
     promptPath: prompt.path, promptBytes: prompt.bytes, resultPath: executorResultPath, model, timeoutMs,
@@ -180,8 +167,7 @@ async function runDispatchAttempt(fixture, adapter, model, timeoutMs, credential
     receipt = host.launchLocalSupervisor({ runDir: fixture.runDir, attemptId, command: invocation.command, args: invocation.args,
       trustedWorktreeRoot: fixture.worktree, cwd: invocation.cwd, inputFiles: [prompt.path], stdinPath: invocation.stdinPath,
       stdinSha256: invocation.stdinSha256, executorResultPath, executorSandbox: "workspace-write", executorNetworkAccess: toolNetwork.access,
-      timeoutMs, credentialRequest: credentials, processContainment: adapter.metadata.processContainment, runtimeDependencies: invocation.runtimeDependencies,
-      privateEnvPaths: invocation.privateEnvPaths, testCleanupFailurePath: fixture.testCleanupFailurePath || null, lockContext: capability });
+      timeoutMs, processContainment: adapter.metadata.processContainment, runtimeDependencies: invocation.runtimeDependencies, lockContext: capability });
     terminal = await host.waitForTerminalResult(receipt, { timeoutMs: timeoutMs + 10_000 });
     const outcome = adapter.parseOutcome({ phase: ADAPTER_PHASES.DISPATCH, exitCode: terminal.exit_code, signal: terminal.signal,
       timedOut: terminal.status === "timed_out", cancelled: terminal.status === "cancelled", stdoutPath: receipt.stdout_path,
@@ -221,7 +207,7 @@ function dispatchMutationAssessment(before, after, fixture, prompt, nonce) {
   return { boundary, expected: boundary && exact };
 }
 
-async function runCell(adapter, phase, fixture, { timeoutMs, credentialSelections, onFixture, onError, onCleanupIncomplete }) {
+async function runCell(adapter, phase, fixture, { timeoutMs, onFixture, onError, onCleanupIncomplete }) {
   const model = PRIMARY_MODELS[adapter.name] || null, nonce = crypto.randomBytes(16).toString("hex"), prompt = phasePrompt(fixture, phase, nonce);
   const capability = adapter.capabilities({ phase }), nativeToolNetwork = capability.networkControl === "native";
   const toolNetwork = { access: nativeToolNetwork ? "disabled" : "enabled", enforcement: nativeToolNetwork ? "native" : "unsupported_explicit_enabled" };
@@ -230,17 +216,11 @@ async function runCell(adapter, phase, fixture, { timeoutMs, credentialSelection
     nonce_sha256: sha(Buffer.from(nonce)), prompt_sha256: prompt.digest };
   const probe = adapter.probe({ timeoutMs: Math.min(timeoutMs, 10_000) }), probeRecord = probeEvidence(adapter, probe);
   if (probe.status !== "available") return { ...base, status: "not_run", reason: probe.status === "skipped" ? "not_run_cli_unavailable" : "not_run_probe_failed", probe: probeRecord, checks: {} };
-  if (capability.credentialTransport === "unrepresentable") return { ...base, status: "not_run", reason: "not_run_credentials_unrepresentable",
-    blocker: { type: "credentials_unrepresentable", code: "CREDENTIALS_UNREPRESENTABLE" }, probe: probeRecord, credential_request: { env_names: [], file_ids: [] }, checks: {} };
-  const credentials = credentialsFor(adapter, phase, credentialSelections);
-  if (!credentials) return { ...base, status: "not_run", reason: "not_run_credentials_unavailable", probe: probeRecord,
-    credential_request: { env_names: [], file_ids: [] }, checks: {} };
   const before = snapshotFixture(fixture), started = Date.now(); if (onFixture) onFixture(fixture, adapter, phase);
-  const executionCredentials = adapter.metadata?.providerDefault === "test" ? null : credentials;
   try {
     const execution = phase === ADAPTER_PHASES.DISPATCH
-      ? await runDispatchAttempt(fixture, adapter, model, timeoutMs, executionCredentials, prompt, toolNetwork, onCleanupIncomplete)
-      : runReviewAttempt(fixture, adapter, model, timeoutMs, executionCredentials, prompt, nonce, toolNetwork);
+      ? await runDispatchAttempt(fixture, adapter, model, timeoutMs, prompt, toolNetwork, onCleanupIncomplete)
+      : runReviewAttempt(fixture, adapter, model, timeoutMs, prompt, nonce, toolNetwork);
     if (phase === ADAPTER_PHASES.PRIMARY_REVIEW) validateCanaryVerdict(execution.outcome.output, nonce);
     quietWindow(); const after = snapshotFixture(fixture), dispatchAssessment = phase === ADAPTER_PHASES.DISPATCH
       ? dispatchMutationAssessment(before, after, fixture, prompt, nonce) : null;
@@ -257,7 +237,7 @@ async function runCell(adapter, phase, fixture, { timeoutMs, credentialSelection
       ? fs.readFileSync(path.join(fixture.worktree, prompt.artifactName))
       : Buffer.from(JSON.stringify(execution.outcome.output));
     const executedRuntime = executedRuntimeEvidence(execution.executedRuntime || execution.outcome.executed_runtime);
-    return { ...base, status: "passed", reason: "production_path_passed", probe: probeRecord, credential_request: credentials.public, executed_runtime: executedRuntime,
+    return { ...base, status: "passed", reason: "production_path_passed", probe: probeRecord, executed_runtime: executedRuntime,
       invocation_sha256: invocationDigest(execution.invocation), output_sha256: sha(outputBytes), checks: { boundary: "passed", nonce: "passed",
         cleanup: "passed", process_scope_absent: "passed", elapsed_ms: Date.now() - started } };
   } catch (error) {
@@ -265,11 +245,11 @@ async function runCell(adapter, phase, fixture, { timeoutMs, credentialSelection
     if (onError) onError(error, adapter, phase); quietWindow(); const after = snapshotFixture(fixture), classified = classifyFailure(error, true);
     const boundary = phase === ADAPTER_PHASES.DISPATCH ? dispatchMutationAssessment(before, after, fixture, prompt, nonce).boundary : sameSnapshot(before, after);
     if (!boundary && classified.failure?.type !== "cleanup") Object.assign(classified, { reason: "boundary_mutated", failure: { type: "boundary", code: "BOUNDARY_MUTATED" } });
-    const notStarted = classified.failure?.type === "credential_staging", cleanupFailed = classified.failure?.type === "cleanup", runtimeAudit = error.runtime_audit;
-    const cleanup = notStarted ? "not_started" : cleanupFailed ? "failed" : runtimeAudit?.process_group_absent === true ? "passed" : "unknown";
-    return { ...base, ...classified, probe: probeRecord, credential_request: credentials.public,
+    const cleanupFailed = classified.failure?.type === "cleanup", runtimeAudit = error.runtime_audit;
+    const cleanup = cleanupFailed ? "failed" : runtimeAudit?.process_group_absent === true ? "passed" : "unknown";
+    return { ...base, ...classified, probe: probeRecord,
       checks: { boundary: boundary ? "passed" : "failed", nonce: "failed", cleanup,
-        process_scope_absent: notStarted ? "not_started" : runtimeAudit?.process_group_absent === true ? "passed" : "unknown", elapsed_ms: Date.now() - started },
+        process_scope_absent: runtimeAudit?.process_group_absent === true ? "passed" : "unknown", elapsed_ms: Date.now() - started },
       ...(cleanupFailed ? { cleanup_proof: cleanupProof(error) } : {}) };
   }
 }
@@ -317,7 +297,7 @@ async function runCanaries(options = {}) {
   const descriptors = Object.getOwnPropertyDescriptors(options);
   if (Object.values(descriptors).some((descriptor) => descriptor.get || descriptor.set)) throw new Error("canary options cannot contain accessors");
   const own = Object.fromEntries(Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]));
-  const { timeoutMs = 120_000, credentialSelections = {}, onFixture = null, onError = null, onCleanupIncomplete = null } = own;
+  const { timeoutMs = 120_000, onFixture = null, onError = null, onCleanupIncomplete = null } = own;
   if (onCleanupIncomplete !== null && typeof onCleanupIncomplete !== "function") throw new Error("onCleanupIncomplete must be a function");
   const customMatrix = Object.hasOwn(own, "adapters");
   const productionMatrix = !customMatrix && onFixture === null && onError === null && onCleanupIncomplete === null;
@@ -333,7 +313,7 @@ async function runCanaries(options = {}) {
     for (const adapter of adapters) {
       for (const phase of PHASES) if (phase === ADAPTER_PHASES.DISPATCH || adapter.capabilities({ phase }).supported) {
         const fixture = initializeFixture(root, outsideBase, adapter.name, phase);
-        results.push(await runCell(adapter, phase, fixture, { timeoutMs, credentialSelections, onFixture, onError, onCleanupIncomplete }));
+        results.push(await runCell(adapter, phase, fixture, { timeoutMs, onFixture, onError, onCleanupIncomplete }));
       }
     }
     const required = requiredMatrix(adapters), completed = results.filter((entry) => entry.status === "passed").map((entry) => `${entry.adapter}:${entry.phase}`);
@@ -389,7 +369,6 @@ function validateReport(report, { requireCurrentSource = false } = {}) {
     if (entry.failure?.type === "cleanup" && !(entry.failure.code === "HOST_CLEANUP_INCOMPLETE" && entry.checks?.cleanup === "failed"
       && entry.cleanup_proof?.reported === true && Object.hasOwn(entry.cleanup_proof, "terminal_status")
       && (!Object.hasOwn(entry.cleanup_proof, "artifact_sha256") || SHA256_RE.test(entry.cleanup_proof.artifact_sha256)))) throw new Error("canary report cleanup proof invalid");
-    if (entry.credential_request && (!Array.isArray(entry.credential_request.env_names) || !Array.isArray(entry.credential_request.file_ids))) throw new Error("canary report credential evidence invalid");
   }
   const passed = report.results.filter((entry) => entry.status === "passed").length, failed = report.results.filter((entry) => entry.status === "failed").length,
     notRun = report.results.filter((entry) => entry.status === "not_run").length, missing = report.policy.required_cells.filter((cell) => {
@@ -409,31 +388,27 @@ function canaryExitCode(report) {
   return FRESH_PRODUCTION_RUNS.has(report) && report.summary.required === report.policy.required_cells.length && report.summary.passed === report.summary.required
     && report.summary.failed === 0 && report.summary.not_run === 0 && report.summary.missing.length === 0 ? 0 : 1;
 }
-function parseCredentialArgs(argv) {
-  const selections = {}, consumed = new Set();
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index]; if (!["--credential-env", "--credential-file"].includes(flag)) continue;
-    const value = argv[index + 1]; if (!value || value.startsWith("--")) throw new Error(`${flag} requires adapter:phase:value`);
-    const match = value.match(/^([a-z0-9-]+):(dispatch|primary_review):(.+)$/); if (!match) throw new Error(`${flag} requires adapter:phase:value`);
-    const key = `${match[1]}:${match[2]}`, selection = selections[key] ||= { envNames: [], fileSpecs: [] };
-    (flag === "--credential-env" ? selection.envNames : selection.fileSpecs).push(match[3]); consumed.add(index); consumed.add(index + 1); index += 1;
-  }
-  return { selections, argv: argv.filter((unused, index) => !consumed.has(index)) };
-}
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write("Usage: node tests/relay-dispatch/scripts/adapter-live-canary-runner.js [--timeout-ms <1..120000>] [--credential-env <adapter:phase:NAME>] [--credential-file <adapter:phase:ID=/absolute/source>] [--output <path>]\n"); return;
+    process.stdout.write("Usage: node tests/relay-dispatch/scripts/adapter-live-canary-runner.js [--timeout-ms <1..120000>] [--output <path>]\n"); return;
   }
-  const parsed = parseCredentialArgs(argv), timeoutIndex = parsed.argv.indexOf("--timeout-ms"), outputIndex = parsed.argv.indexOf("--output");
-  const timeoutMs = timeoutIndex >= 0 ? Number(parsed.argv[timeoutIndex + 1]) : 120_000;
+  let timeoutValue = null, outputPath = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const option = argv[index];
+    if (option !== "--timeout-ms" && option !== "--output") throw new Error(`Unknown option: ${option}`);
+    const value = argv[++index];
+    if (!value || value.startsWith("--")) throw new Error(`${option} requires a value`);
+    if (option === "--timeout-ms") timeoutValue = value; else outputPath = value;
+  }
+  const timeoutMs = timeoutValue === null ? 120_000 : Number(timeoutValue);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) throw new Error("--timeout-ms must be an integer between 1 and 120000");
-  const report = validateReport(await runCanaries({ timeoutMs, credentialSelections: parsed.selections }));
+  const report = validateReport(await runCanaries({ timeoutMs }));
   const exitCode = canaryExitCode(report);
   const outputReport = { ...report, generated_by: "tests/relay-dispatch/scripts/adapter-live-canary-runner.js" };
   const output = `${JSON.stringify(outputReport, null, 2)}\n`;
-  if (outputIndex >= 0) { const outputPath = parsed.argv[outputIndex + 1]; if (!outputPath || outputPath.startsWith("--")) throw new Error("--output requires a file path"); fs.writeFileSync(path.resolve(outputPath), output); }
+  if (outputPath !== null) fs.writeFileSync(path.resolve(outputPath), output);
   process.stdout.write(output); process.exitCode = exitCode;
 }
 
 if (require.main === module) main().catch((error) => { console.error(`Error: ${error.message}`); process.exitCode = 1; });
-module.exports = { canaryExitCode, canonicalRuntimeSha256Keys, classifyFailure, parseCredentialArgs, requiredMatrix, runCanaries, sourceProvenance, validateCanaryVerdict, validateReport };
+module.exports = { canaryExitCode, canonicalRuntimeSha256Keys, classifyFailure, requiredMatrix, runCanaries, sourceProvenance, validateCanaryVerdict, validateReport };

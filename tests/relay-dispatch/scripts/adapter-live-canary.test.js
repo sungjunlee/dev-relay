@@ -7,11 +7,10 @@ const { spawnSync } = require("node:child_process");
 const { makeParseOutcome } = require("../../../skills/relay-dispatch/scripts/adapter-contract");
 const { listAdapters } = require("../../../skills/relay-dispatch/scripts/adapters");
 const host = require("../../../skills/relay-dispatch/scripts/host");
-const { canaryExitCode, canonicalRuntimeSha256Keys, classifyFailure, parseCredentialArgs, requiredMatrix, runCanaries, sourceProvenance, validateCanaryVerdict, validateReport } = require("./adapter-live-canary-runner");
+const { canaryExitCode, canonicalRuntimeSha256Keys, classifyFailure, requiredMatrix, runCanaries, sourceProvenance, validateCanaryVerdict, validateReport } = require("./adapter-live-canary-runner");
 
 const RUNNER = path.join(__dirname, "adapter-live-canary-runner.js");
 function hash(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex"); }
-function selection(...cells) { return Object.fromEntries(cells.map((cell) => [cell, { envNames: ["TEST_CANARY_TOKEN"], fileSpecs: [] }])); }
 
 test("release canary is test-only and requires the exact 7-dispatch plus 6-review matrix", () => {
   assert.equal(fs.existsSync(path.join(__dirname, "../../../skills/relay-dispatch/scripts/adapter-live-canary.js")), false);
@@ -38,8 +37,7 @@ function fakeAdapter(name, mode = "pass", state = {}) {
   return {
     name,
     defaults: { timeoutMs: 10_000 },
-    metadata: { cliBinary: process.execPath, outputProtocol: "phase-specific", providerDefault: "test", processContainment: "inherited_scope_no_daemon",
-      credentials: { files: [], envHints: ["TEST_CANARY_TOKEN"] } },
+    metadata: { cliBinary: process.execPath, outputProtocol: "phase-specific", providerDefault: "test", processContainment: "inherited_scope_no_daemon" },
     probe() { return mode === "unavailable" ? { status: "skipped", error: "CLI not found", raw: null } : { status: "available", error: null, raw: "test 1.0" }; },
     capabilities({ phase }) { return { supported: phase === "dispatch" || (phase === "primary_review" && name !== "cline"), write: phase === "dispatch", readOnly: phase !== "dispatch" }; },
     buildInvocation({ phase, cwd, promptPath, promptBytes }) {
@@ -64,10 +62,8 @@ function fakeAdapter(name, mode = "pass", state = {}) {
   };
 }
 
-test("two production phase cells pass only with explicit credentials and exact nonce evidence", { skip: process.platform !== "darwin" }, async () => {
-  process.env.TEST_CANARY_TOKEN = "unit-secret";
-  const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("healthy")],
-    credentialSelections: selection("healthy:dispatch", "healthy:primary_review") });
+test("two production phase cells use the ambient CLI session and exact nonce evidence", { skip: process.platform !== "darwin" }, async () => {
+  const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("healthy")] });
   assert.equal(report.summary.required, 2);
   assert.equal(report.summary.passed, 2, JSON.stringify(report.results));
   assert.equal(canaryExitCode(report), 1, "a custom matrix is diagnostic and cannot be release evidence");
@@ -77,47 +73,30 @@ test("two production phase cells pass only with explicit credentials and exact n
     assert.match(result.invocation_sha256, /^[a-f0-9]{64}$/); assert.match(result.output_sha256, /^[a-f0-9]{64}$/); assert.match(result.executed_runtime.digest, /^[a-f0-9]{64}$/);
     assert.match(result.executed_runtime.executable.sha256, /^[a-f0-9]{64}$/); assert.equal(typeof result.executed_runtime.executable.basename, "string");
     assert.equal(/[\\/]/.test(result.executed_runtime.executable.basename), false);
-    assert.deepEqual(result.credential_request, { env_names: ["TEST_CANARY_TOKEN"], file_ids: [] });
-    assert.doesNotMatch(JSON.stringify(result), /unit-secret/);
+    assert.equal(Object.hasOwn(result, "credential_request"), false);
   }
 });
 
-test("missing CLI and missing explicit credentials are non-release not_run cells", async () => {
-  const report = await runCanaries({ timeoutMs: 1_000, adapters: [fakeAdapter("missing", "unavailable"), fakeAdapter("unprovisioned")] });
+test("missing CLI is a non-release not_run cell", async () => {
+  const report = await runCanaries({ timeoutMs: 1_000, adapters: [fakeAdapter("missing", "unavailable")] });
   assert.ok(report.results.every((entry) => entry.status === "not_run"));
   assert.ok(report.results.some((entry) => entry.reason === "not_run_cli_unavailable"));
-  assert.ok(report.results.some((entry) => entry.reason === "not_run_credentials_unavailable"));
   assert.equal(canaryExitCode(report), 1);
 });
 
-test("structurally unrepresentable credentials stay typed not_run even when a dummy secret is selected", async () => {
-  const adapter = fakeAdapter("blocked");
-  adapter.capabilities = ({ phase }) => ({ supported: phase === "dispatch" || phase === "primary_review", credentialTransport: "unrepresentable" });
-  process.env.TEST_CANARY_TOKEN = "must-not-be-used";
-  const report = await runCanaries({ timeoutMs: 1_000, adapters: [adapter],
-    credentialSelections: selection("blocked:dispatch", "blocked:primary_review") });
-  assert.ok(report.results.every((entry) => entry.reason === "not_run_credentials_unrepresentable"));
-  assert.ok(report.results.every((entry) => entry.blocker?.code === "CREDENTIALS_UNREPRESENTABLE"));
-  assert.doesNotMatch(JSON.stringify(report), /must-not-be-used/);
-});
-
-test("provisioned authentication failure is failed, never skipped or not_run", { skip: process.platform !== "darwin" }, async () => {
-  process.env.TEST_CANARY_TOKEN = "wrong-secret";
-  const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("auth", "auth")],
-    credentialSelections: selection("auth:dispatch", "auth:primary_review") });
+test("ambient authentication failure is failed, never skipped or not_run", { skip: process.platform !== "darwin" }, async () => {
+  const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("auth", "auth")] });
   assert.ok(report.results.every((entry) => entry.status === "failed"), JSON.stringify(report.results));
-  assert.ok(report.results.every((entry) => entry.reason === "credential_auth_failed"));
+  assert.ok(report.results.every((entry) => entry.reason === "ambient_auth_failed"), JSON.stringify(report.results));
   assert.ok(report.results.every((entry) => entry.checks.boundary === "passed"), JSON.stringify(report.results));
   assert.equal(canaryExitCode(report), 1);
 });
 
-test("typed credential staging failures retain no message or source path", () => {
-  const error = new Error("credential '/private/secret/auth.json' source must be owner-only");
-  error.code = "UNTRUSTED_CREDENTIAL";
+test("ambient authentication failures remain typed without durable values", () => {
+  const error = new Error("authentication token is required");
   const classified = classifyFailure(error, true);
-  assert.deepEqual(classified, { status: "failed", reason: "credential_source_rejected",
-    failure: { type: "credential_staging", code: "UNTRUSTED_CREDENTIAL" } });
-  assert.doesNotMatch(JSON.stringify(classified), /private|secret|auth\.json/);
+  assert.deepEqual(classified, { status: "failed", reason: "ambient_auth_failed",
+    failure: { type: "authentication", code: "AUTHENTICATION_FAILED" } });
 });
 
 test("host cleanup failures remain typed and carry a redacted cleanup proof", () => {
@@ -126,69 +105,11 @@ test("host cleanup failures remain typed and carry a redacted cleanup proof", ()
     failure: { type: "cleanup", code: "HOST_CLEANUP_INCOMPLETE" } });
 });
 
-test("dispatch cleanup-incomplete is settled before canary fixtures are removed", { skip: process.platform !== "darwin", timeout: 20_000 }, async () => {
-  process.env.TEST_CANARY_TOKEN = "unit-secret";
-  let fixtureRoot, settled = false;
-  const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("cleanup-settle")],
-    credentialSelections: selection("cleanup-settle:dispatch", "cleanup-settle:primary_review"),
-    onFixture(fixture, unused, phase) {
-      if (phase !== "dispatch") return;
-      fixtureRoot = fixture.root; fixture.testCleanupFailurePath = path.join(fixture.runDir, "cleanup.fail");
-      fs.writeFileSync(fixture.testCleanupFailurePath, "inject cleanup failure\n", { mode: 0o600 });
-    },
-    onError(error, unused, phase) {
-      if (phase !== "dispatch") return;
-      assert.equal(error.code, "HOST_CLEANUP_INCOMPLETE");
-      assert.equal(host.inspectOwnership({ runDir: path.join(fixtureRoot, "canary-cleanup-settle-dispatch") }).status, "absent");
-      const runDir = path.join(fixtureRoot, "canary-cleanup-settle-dispatch"), names = fs.readdirSync(runDir);
-      assert.ok(names.some((name) => name.endsWith(".cleanup-incomplete.json")));
-      assert.ok(names.some((name) => name.endsWith(".cleanup-settled.json")));
-      assert.ok(names.some((name) => name.endsWith(".result.json")));
-      settled = true;
-    } });
-  assert.equal(settled, true);
-  assert.equal(report.results[0].reason, "host_cleanup_incomplete");
-  assert.equal(fs.existsSync(fixtureRoot), false, "settled fixture may be removed");
-});
-
-test("unsettleable dispatch cleanup preserves signed evidence and aborts the canary", { skip: process.platform !== "darwin", timeout: 20_000 }, async () => {
-  process.env.TEST_CANARY_TOKEN = "unit-secret";
-  let fixture, credentialRoot, displacedRoot;
-  try {
-    await assert.rejects(runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("cleanup-preserve")],
-      credentialSelections: selection("cleanup-preserve:dispatch", "cleanup-preserve:primary_review"),
-      onFixture(value, unused, phase) {
-        if (phase !== "dispatch") return;
-        fixture = value; value.testCleanupFailurePath = path.join(value.runDir, "cleanup.fail");
-        fs.writeFileSync(value.testCleanupFailurePath, "inject cleanup failure\n", { mode: 0o600 });
-      },
-      onCleanupIncomplete(value) {
-        const name = fs.readdirSync(value.runDir).find((entry) => entry.endsWith(".cleanup-incomplete.json"));
-        const cleanup = JSON.parse(fs.readFileSync(path.join(value.runDir, name), "utf8"));
-        credentialRoot = cleanup.obligation.credential_root.path; displacedRoot = `${credentialRoot}.displaced`;
-        fs.renameSync(credentialRoot, displacedRoot); fs.mkdirSync(credentialRoot, { mode: 0o700 });
-      } }), (error) => error.code === "CANARY_CLEANUP_UNSETTLED" && /evidence preserved/.test(error.message));
-    assert.ok(fixture && fs.existsSync(fixture.root));
-    assert.ok(fs.readdirSync(fixture.runDir).some((name) => name.endsWith(".cleanup-incomplete.json")));
-    assert.notEqual(host.inspectOwnership({ runDir: fixture.runDir }).status, "absent");
-    assert.equal(fs.readFileSync(path.join(fixture.outside, "sentinel"), "utf8"), "outside sentinel\n");
-  } finally {
-    if (credentialRoot && displacedRoot && fs.existsSync(displacedRoot)) {
-      fs.rmSync(credentialRoot, { recursive: true, force: true }); fs.renameSync(displacedRoot, credentialRoot);
-      await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: fixture.runDir }), reason: "test cleanup after preserved canary evidence" });
-    }
-    if (fixture) {
-      fs.rmSync(path.dirname(fixture.root), { recursive: true, force: true });
-      fs.rmSync(path.dirname(fixture.outside), { recursive: true, force: true });
-    }
-  }
-});
-
 test("a post-receipt timeout is cancelled and settled before canary fixture deletion", { skip: process.platform !== "darwin", timeout: 20_000 }, async () => {
-  process.env.TEST_CANARY_TOKEN = "unit-secret"; const realWait = host.waitForTerminalResult; let calls = 0, observedAbsent = false;
+  const realWait = host.waitForTerminalResult; let calls = 0, observedAbsent = false;
   host.waitForTerminalResult = async (...args) => { if (calls++ === 0) { await new Promise((resolve) => setTimeout(resolve, 1_000)); const error = new Error("injected result timeout"); error.code = "HOST_RESULT_TIMEOUT"; throw error; } return realWait(...args); };
   try {
-    const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("cline")], credentialSelections: selection("cline:dispatch"),
+    const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("cline")],
       onError(unused, unusedAdapter, unusedPhase) { observedAbsent = true; } });
     assert.equal(report.results[0].status, "failed"); assert.equal(observedAbsent, true); assert.ok(calls >= 2);
   } finally { host.waitForTerminalResult = realWait; }
@@ -205,14 +126,14 @@ test("a post-receipt timeout is cancelled and settled before canary fixture dele
 // intact and destroys no evidence. Cleanup settlement is not asserted: this path publishes no
 // cleanup-incomplete artifact, so `settleCleanup` is never reachable and the check would be vacuous.
 test("an invalid post-receipt terminal aborts with a typed cause and destroys no evidence", { skip: process.platform !== "darwin", timeout: 20_000 }, async () => {
-  process.env.TEST_CANARY_TOKEN = "unit-secret"; const realWait = host.waitForTerminalResult; let fixture, terminalBytes, resultPath, corrupted = false;
+  const realWait = host.waitForTerminalResult; let fixture, terminalBytes, resultPath, corrupted = false;
   host.waitForTerminalResult = async (...args) => {
     if (!corrupted) { await realWait(...args); resultPath = args[0].result_path; terminalBytes = fs.readFileSync(resultPath); fs.writeFileSync(resultPath, "{}\n"); corrupted = true;
       const error = new Error("injected invalid terminal"); error.code = "HOST_ARTIFACT_INVALID"; throw error; }
     return realWait(...args);
   };
   try {
-    await assert.rejects(runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("cline")], credentialSelections: selection("cline:dispatch"), onFixture(value) { fixture = value; } }),
+    await assert.rejects(runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("cline")], onFixture(value) { fixture = value; } }),
       (error) => error.code === "CANARY_CLEANUP_UNSETTLED" && error.preserveCanaryEvidence === true
         && error.originalError instanceof Error && error.originalError.code === "HOST_ARTIFACT_INVALID"
         && error.cause instanceof Error && typeof error.cause.code === "string");
@@ -227,34 +148,27 @@ test("an invalid post-receipt terminal aborts with a typed cause and destroys no
 });
 
 test("dispatch and review cells use phase-pristine fixtures", { skip: process.platform !== "darwin" }, async () => {
-  process.env.TEST_CANARY_TOKEN = "unit-secret";
   const fixtures = [];
   const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("pristine")],
-    credentialSelections: selection("pristine:dispatch", "pristine:primary_review"),
     onFixture(fixture, adapter, phase) { fixtures.push({ phase, root: fixture.root }); } });
   assert.equal(report.summary.passed, 2, JSON.stringify(report.results));
   assert.equal(fixtures.length, 2); assert.notEqual(fixtures[0].root, fixtures[1].root);
 });
 
 test("boundary mutation and stale or fallback nonce cannot produce a pass", { skip: process.platform !== "darwin" }, async () => {
-  process.env.TEST_CANARY_TOKEN = "unit-secret";
   for (const mode of ["wrong-nonce", "fallback-marker"]) {
-    const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("negative", mode)],
-      credentialSelections: selection("negative:dispatch", "negative:primary_review") });
+    const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("negative", mode)] });
     assert.equal(canaryExitCode(report), 1);
     assert.ok(report.results.some((entry) => entry.status === "failed"));
   }
-  const state = {}, report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("mutator", "builder-mutation", state)],
-    credentialSelections: selection("mutator:dispatch", "mutator:primary_review"), onFixture(fixture) { state.target = path.join(fixture.outside, "sentinel"); } });
+  const state = {}, report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter("mutator", "builder-mutation", state)], onFixture(fixture) { state.target = path.join(fixture.outside, "sentinel"); } });
   assert.equal(canaryExitCode(report), 1);
   assert.ok(report.results.some((entry) => entry.reason === "boundary_mutated"));
 });
 
 test("clean exit with a missing or wrong nonce artifact is output failure, not boundary mutation", { skip: process.platform !== "darwin" }, async () => {
-  process.env.TEST_CANARY_TOKEN = "unit-secret";
   for (const mode of ["missing-artifact", "wrong-artifact"]) {
-    const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter(`output-${mode}`, mode)],
-      credentialSelections: selection(`output-${mode}:dispatch`, `output-${mode}:primary_review`) });
+    const report = await runCanaries({ timeoutMs: 10_000, adapters: [fakeAdapter(`output-${mode}`, mode)] });
     const dispatch = report.results.find((entry) => entry.phase === "dispatch");
     assert.equal(dispatch.status, "failed"); assert.equal(dispatch.reason, "canary_output_invalid", JSON.stringify(dispatch));
     assert.deepEqual(dispatch.failure, { type: "output", code: "CANARY_OUTPUT_INVALID" });
@@ -356,22 +270,14 @@ test("current evidence is new-shape only: no checked-in cell leaks an absolute h
   assert.throws(() => validateReport(last), /passed-cell evidence invalid/, "the old absolute-path shape must be rejected");
 });
 
-test("credential CLI grammar is phase-explicit and retains no values in the public selector", () => {
-  const parsed = parseCredentialArgs(["--credential-env", "codex:dispatch:OPENAI_API_KEY", "--credential-file", "codex:primary_review:auth=/private/auth.json",
-    "--credential-env", "claude:dispatch:CLAUDE_CODE_OAUTH_TOKEN", "--credential-env", "claude:primary_review:CLAUDE_CODE_OAUTH_TOKEN", "--timeout-ms", "5"]);
-  assert.deepEqual(parsed.selections, {
-    "codex:dispatch": { envNames: ["OPENAI_API_KEY"], fileSpecs: [] },
-    "codex:primary_review": { envNames: [], fileSpecs: ["auth=/private/auth.json"] },
-    "claude:dispatch": { envNames: ["CLAUDE_CODE_OAUTH_TOKEN"], fileSpecs: [] },
-    "claude:primary_review": { envNames: ["CLAUDE_CODE_OAUTH_TOKEN"], fileSpecs: [] },
-  });
-  assert.deepEqual(parsed.argv, ["--timeout-ms", "5"]);
-  assert.throws(() => parseCredentialArgs(["--credential-env", "codex:OPENAI_API_KEY"]), /adapter:phase:value/);
-});
-
-test("runner help documents explicit phase credentials", () => {
+test("runner rejects retired selectors exactly like other unknown options", () => {
+  const retired = spawnSync(process.execPath, [RUNNER, "--credential-env", "OPENAI_API_KEY"], { encoding: "utf8" });
+  const unknown = spawnSync(process.execPath, [RUNNER, "--not-an-option", "value"], { encoding: "utf8" });
+  assert.equal(retired.status, 1);
+  assert.equal(unknown.status, 1);
+  assert.match(retired.stderr, /^Error: Unknown option: --credential-env\n$/);
+  assert.match(unknown.stderr, /^Error: Unknown option: --not-an-option\n$/);
   const result = spawnSync(process.execPath, [RUNNER, "--help"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /adapter:phase:NAME/);
-  assert.match(result.stdout, /adapter:phase:ID=\/absolute\/source/);
+  assert.match(result.stdout, /--timeout-ms/);
 });

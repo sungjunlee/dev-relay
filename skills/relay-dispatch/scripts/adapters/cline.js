@@ -31,9 +31,7 @@ module.exports = createNativeAdapter({
   name: "cline",
   timeoutMs: 1800000,
   outputProtocol: "jsonl_run_result",
-  metadata: { cliBinary: "cline", cliBinaryEnv: "RELAY_CLINE_BIN", outputProtocol: "jsonl_run_result", providerDefault: "cline-pass", providerFromModel: true, resultErrorLabel: "Cline JSONL", reviewScript: null, promptTransport: "argv_visible", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", credentialTransport: "explicit_bundle", runtimeDependencies: { executableParent: 1, interpreterParent: null }, promptTransportWarning: "installed CLI help declares only a positional prompt; prompt content is visible in the local process list and bounded to less than 256 KiB", credentials: { files: [
-    { id: "providers", targetRoot: "home", targetRel: ".cline/data/settings/providers.json", access: "read_write", recommendedSource: "~/.cline/data/settings/providers.json" },
-  ], envHints: [] } },
+  metadata: { cliBinary: "cline", cliBinaryEnv: "RELAY_CLINE_BIN", outputProtocol: "jsonl_run_result", providerDefault: "cline-pass", providerFromModel: true, resultErrorLabel: "Cline JSONL", reviewScript: null, promptTransport: "argv_visible", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", runtimeDependencies: { executableParent: 1, interpreterParent: null }, promptTransportWarning: "installed CLI help declares only a positional prompt; prompt content is visible in the local process list and bounded to less than 256 KiB" },
   phases: {
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "jsonl", commandExecution: true },
     primary_review: { supported: false, reason: "Cline primary review remains blocked pending a strict live canary" },

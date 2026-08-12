@@ -118,20 +118,12 @@ test("dry-run validates the closed Relay surface while writing zero durable byte
   assert.equal(fs.existsSync(stateDir), false);
   assert.equal(fs.existsSync(value.relayHome), false);
   const cursor = run(value, ["--executor", "cursor", "--branch", "cursor-dry", "--prompt", "x", "--rubric-file", value.rubric, "--dry-run", "--json"]);
-  assert.equal(cursor.status, 0, cursor.stderr); assert.deepEqual(json(cursor.stdout).invocation.private_env_paths,
-    [{ key: "CURSOR_CONFIG_DIR", root: "home", relative: ".cursor" }, { key: "CURSOR_DATA_DIR", root: "scratch", relative: "cursor-data" }]);
-
-  const absentSource = path.join(value.root, "never-read-auth.json");
-  const credentialDryRun = run(value, ["--branch", "credential-dry", "--prompt", "x", "--rubric-file", value.rubric, "--credential-env", "OPENAI_API_KEY",
-    "--credential-file", `auth=${absentSource}`, "--dry-run", "--json"], { ...value.env, OPENAI_API_KEY: undefined });
-  assert.equal(credentialDryRun.status, 0, credentialDryRun.stderr);
-  assert.deepEqual(json(credentialDryRun.stdout).credential_request, { env_names: ["OPENAI_API_KEY"], file_ids: ["auth"] });
-  assert.doesNotMatch(credentialDryRun.stdout + credentialDryRun.stderr, /never-read-auth/);
-  assert.equal(fs.existsSync(absentSource), false);
-  const customEnv = run(value, ["--branch", "custom-env-dry", "--prompt", "x", "--rubric-file", value.rubric,
-    "--credential-env", "CUSTOM_PROVIDER_TOKEN", "--dry-run", "--json"], { ...value.env, CUSTOM_PROVIDER_TOKEN: undefined });
-  assert.equal(customEnv.status, 0, customEnv.stderr);
-  assert.deepEqual(json(customEnv.stdout).credential_request.env_names, ["CUSTOM_PROVIDER_TOKEN"]);
+  assert.equal(cursor.status, 0, cursor.stderr);
+  assert.equal(Object.hasOwn(json(cursor.stdout).invocation, "private_env_paths"), false);
+  const retired = run(value, ["--branch", "retired-credential", "--prompt", "x", "--rubric-file", value.rubric,
+    "--credential-env", "OPENAI_API_KEY", "--dry-run", "--json"]);
+  assert.notEqual(retired.status, 0);
+  assert.match(retired.stderr, /Unknown option/);
 
   git(value.repo, ["branch", "existing-dry"]);
   const existingBranch = run(value, ["--branch", "existing-dry", "--prompt", "x", "--rubric-file", value.rubric, "--dry-run", "--json"]);

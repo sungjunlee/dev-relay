@@ -12,17 +12,12 @@ module.exports = createNativeAdapter({
   metadata: {
     processContainment: "inherited_scope_no_daemon",
     providerTransport: "remote_required",
-    credentialTransport: "explicit_bundle",
     runtimeDependencies: { executableParent: null, interpreterParent: null },
     cliBinary: "claude",
     outputProtocol: "text_stdout",
     providerDefault: "anthropic",
     providerFromModel: true,
     promptTransport: "stdin",
-    credentials: { files: [
-      { id: "auth", targetRoot: "home", targetRel: ".claude/.credentials.json", access: "read_write", recommendedSource: "~/.claude/.credentials.json" },
-      { id: "settings", targetRoot: "home", targetRel: ".claude/settings.json", access: "read", recommendedSource: "~/.claude/settings.json" },
-    ], envHints: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
   },
   phases: {
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "native_bash", cancellation: "process", structuredOutput: "text", commandExecution: true },

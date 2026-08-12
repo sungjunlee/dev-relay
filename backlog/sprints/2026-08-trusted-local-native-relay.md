@@ -13,8 +13,8 @@ Relay uses the developer's ambient CLI authentication and configuration, request
 
 ## Plan
 - [x] #1231 Define the trusted-local execution contract and native capability inventory [PR:#1237]
-- [~] #1232 Atomically replace Relay sandbox-exec with native-when-available execution [branch:issue/1232-native-first-host]
-- [ ] #1233 Use ambient CLI auth/config and retire credential staging safely
+- [x] #1232 Atomically replace Relay sandbox-exec with native-when-available execution [PR:#1238]
+- [~] #1233 Use ambient CLI auth/config and retire credential staging safely [branch:issue/1233-ambient-cli-auth]
 - [ ] #1234 Retire the 13-cell isolation release gate and subtract obsolete tests/docs
 - [ ] #1235 Dogfood ambient native Relay across all seven adapters and close the migration
 - [ ] #1230 Reconcile the epic and milestone after all five leaves close
@@ -31,6 +31,8 @@ Relay uses the developer's ambient CLI authentication and configuration, request
 - #1141 and #1158 are superseded by #1230; their live failure evidence remains historical input.
 
 ## Progress
+- 2026-08-13: #1233 implementation completed and independently reviewed LGTM on Spec, Standards/trust, and simplification axes. Relay now inherits sanitized ambient CLI HOME/XDG/auth without credential copying or public selectors; environment bytes cross only an already-unlinked FD/pipe, executor cleanup is process/scope-only, and reviewer cleanup retains the signed staged-input root. Final pre-merge legacy inventory remained 109 incomplete / 109 credential-root / 109 settled / 0 open / 0 parse errors. Authoritative focused gate passed 159/159 with zero skips; the full serialized gate passed 631 total (629 pass, 2 intentional live-canary skips, 0 fail). Diff: 32 files, +438/-1028.
+- 2026-08-13: #1232 merged via PR #1238 after all 11 checks passed, including the new Ubuntu native-first production-seam job. Started #1233 on `issue/1233-ambient-cli-auth`; pre-cutover inventory found 109/109 cleanup-incomplete records canonically settled and zero open credential-root obligations.
 - 2026-08-12: #1231 merged via PR #1237 after 9/9 CI; issue closed. Started #1232 on `issue/1232-native-first-host`; Luna(max) owns the bounded production/test implementation with cross-family review afterward.
 - 2026-08-12: Started #1231 on `issue/1231-trusted-local-contract`; Qwen 3.8 Max owns the bounded contract/capability documentation implementation, followed by independent review before merge.
 - 2026-08-12: Claude Opus 5 and Pi/Qwen independent reviews converged on the trusted-local native-first direction and identified atomic adapter/host replacement, review-input preservation, process cleanup, and existing cleanup obligations as required boundaries.

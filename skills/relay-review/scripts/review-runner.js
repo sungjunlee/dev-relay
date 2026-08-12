@@ -11,7 +11,7 @@ const path = require("path");
 const { parseArgs } = require("util");
 
 const { getAdapter } = require("../../relay-dispatch/scripts/adapters");
-const { credentialRequest, filesystemIsolationDiagnostic, validateCapabilities } = require("../../relay-dispatch/scripts/adapter-contract");
+const { filesystemIsolationDiagnostic, validateCapabilities } = require("../../relay-dispatch/scripts/adapter-contract");
 const facts = require("../../relay-dispatch/scripts/facts");
 const host = require("../../relay-dispatch/scripts/host");
 const { inspectProductionRun } = require("../../relay-dispatch/scripts/recover");
@@ -27,8 +27,6 @@ const OPTIONS = Object.freeze({
   reviewer: { type: "string" },
   model: { type: "string" },
   timeout: { type: "string" },
-  "credential-env": { type: "string", multiple: true, default: [] },
-  "credential-file": { type: "string", multiple: true, default: [] },
   "network-access": { type: "string", default: "enabled" },
   json: { type: "boolean", default: false },
   help: { type: "boolean", short: "h", default: false },
@@ -73,8 +71,6 @@ function usage() {
     "  --reviewer <name>  Must equal the immutable run reviewer binding.",
     "  --model <name>     Optional opaque model selection for that adapter.",
     "  --timeout <sec>    Reviewer timeout in seconds.",
-    "  --credential-env <name>       Explicit credential environment name (repeatable).",
-    "  --credential-file <id=path>   Declared private credential-file mapping (repeatable).",
     "  --network-access <enabled|disabled>  Model/tool network policy; provider transport remains enabled (default: enabled).",
     "  --json             Emit one JSON object.",
   ].join("\n");
@@ -375,12 +371,11 @@ function productionServices() {
   }
   return {
     inspectRun: (input) => inspectProductionRun(input),
-    invokeReviewer({ runDir, request, adapter, model, timeoutMs, networkAccess, credentialRequest: requestedCredentials }) {
+    invokeReviewer({ runDir, request, adapter, model, timeoutMs, networkAccess }) {
       return runStore.invokeIndependentReviewer({
         runDir,
         request,
         timeoutMs,
-        credentialRequest: requestedCredentials,
         buildInvocation: ({ cwd, promptPath, promptBytes, resultPath, schemaPath }) => adapter.buildInvocation({
           phase: "primary_review", cwd, promptPath, promptBytes, resultPath, schemaPath, model,
           timeoutMs, sandbox: "read-only", networkAccess,
@@ -405,10 +400,6 @@ async function runReview(cli, overrides = {}) {
   const capabilityRequest = { readOnly: true, networkAccess: cli.values["network-access"] };
   validateCapabilities(adapter, "primary_review", capabilityRequest);
   const filesystemIsolation = filesystemIsolationDiagnostic(adapter, "primary_review", capabilityRequest);
-  let requestedCredentials;
-  try { requestedCredentials = credentialRequest(adapter.metadata.credentials, { envNames: cli.values["credential-env"], fileSpecs: cli.values["credential-file"] }); }
-  catch (error) { fail(error.message, "INVALID_CREDENTIAL"); }
-  const credentialEnv = Object.fromEntries(requestedCredentials.envNames.map((name) => [name, process.env[name]]));
   const initial = await services.inspectRun({ runDir });
   if (!/^[0-9a-f]{64}$/.test(String(initial.snapshot?.run_sha256 || ""))) {
     fail("initial inspection is missing a valid run digest", "RUN_RECORD_BINDING_CHANGED");
@@ -437,7 +428,6 @@ async function runReview(cli, overrides = {}) {
       model: cli.values.model || null,
       timeoutMs,
       networkAccess: cli.values["network-access"],
-      credentialRequest: { ...requestedCredentials, env: credentialEnv },
       request: {
         diff_path: diffPath,
         prompt_path: promptPath,

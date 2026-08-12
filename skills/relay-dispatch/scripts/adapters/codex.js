@@ -17,12 +17,7 @@ module.exports = createNativeAdapter({
     promptTransport: "stdin_dash",
     processContainment: "inherited_scope_no_daemon",
     providerTransport: "remote_required",
-    credentialTransport: "explicit_bundle",
     runtimeDependencies: { executableParent: null, interpreterParent: null },
-    credentials: { files: [
-      { id: "auth", targetRoot: "home", targetRel: ".codex/auth.json", access: "read_write", recommendedSource: "~/.codex/auth.json" },
-      { id: "config", targetRoot: "home", targetRel: ".codex/config.toml", access: "read", recommendedSource: "~/.codex/config.toml" },
-    ], envHints: ["OPENAI_API_KEY"] },
   },
   phases: {
     // Codex has no fail-closed tool-network switch; provider transport remains enabled.

@@ -72,17 +72,18 @@ test("new adapter registry preserves exactly the seven supported executors", () 
     assert.ok(adapter.metadata.cliBinary);
     assert.equal(adapter.metadata.processContainment, contract.PROCESS_CONTAINMENT);
     assert.equal(adapter.metadata.providerTransport, "remote_required");
-    assert.equal(adapter.metadata.credentialTransport, "explicit_bundle");
+    assert.equal(Object.hasOwn(adapter.metadata, "credentialTransport"), false);
+    assert.equal(Object.hasOwn(adapter.metadata, "credentials"), false);
     assert.ok(adapter.metadata.runtimeDependencies);
     assert.ok(Number.isInteger(adapter.defaults.timeoutMs));
   }
 });
 
-test("session-backed adapters expose owner-only credential bundles without secret argv", () => {
+test("session-backed adapters rely on the ambient host session without secret argv", () => {
   for (const name of ["antigravity", "cline", "cursor"]) {
     const adapter = getAdapter(name), capability = adapter.capabilities({ phase: "dispatch", request: { sandbox: "workspace-write", networkAccess: "enabled" } });
-    assert.equal(capability.credentialTransport, "explicit_bundle", name);
-    assert.ok(adapter.metadata.credentials.files.length > 0, name);
+    assert.equal(Object.hasOwn(capability, "credentialTransport"), false, name);
+    assert.equal(Object.hasOwn(adapter.metadata, "credentials"), false, name);
     const invocation = invocationFor(adapter); assert.equal(invocation.args.includes("-k"), false, name);
   }
 });
@@ -378,7 +379,7 @@ test("Codex and Cursor request their native sandbox without an outer Relay bound
     assert.equal(codex.args.includes("--skip-git-repo-check"), phase === "primary_review");
     assert.equal(codex.args.includes("--add-dir"), false);
     assert.deepEqual(cursor.args.slice(cursor.args.indexOf("--sandbox"), cursor.args.indexOf("--sandbox") + 2), ["--sandbox", "enabled"]);
-    assert.deepEqual(cursor.privateEnvPaths, [{ key: "CURSOR_CONFIG_DIR", root: "home", relative: ".cursor" }, { key: "CURSOR_DATA_DIR", root: "scratch", relative: "cursor-data" }]);
+    assert.equal(Object.hasOwn(cursor, "privateEnvPaths"), false);
   }
   assert.equal(getAdapter("cursor").capabilities({ phase: "dispatch", request: { sandbox: "read-only", networkAccess: "enabled" } }).supported, true);
   assert.deepEqual(contract.filesystemIsolationDiagnostic(getAdapter("codex"), "dispatch", {
@@ -391,14 +392,8 @@ test("adapter metadata is static and carries no integration side channel", () =>
     const adapter = getAdapter(name);
     assert.equal(Object.hasOwn(adapter, "integrations"), false, name);
     assert.equal(Object.values(adapter.metadata).some((value) => typeof value === "function"), false, `${name} metadata must be static`);
-    assert.ok(Array.isArray(adapter.metadata.credentials.files), `${name} credential files`);
-    assert.ok(Array.isArray(adapter.metadata.credentials.envHints), `${name} credential env hints`);
-    for (const file of adapter.metadata.credentials.files) {
-      assert.deepEqual(Object.keys(file).sort(), ["access", "id", "recommendedSource", "targetRel", "targetRoot"], name);
-    }
+    assert.equal(Object.hasOwn(adapter.metadata, "credentials"), false, `${name} has no credential catalog`);
   }
-  assert.deepEqual(getAdapter("pi").metadata.credentials.envHints, ["QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_CN_API_KEY"]);
-  assert.deepEqual(getAdapter("claude").metadata.credentials.envHints, ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
 });
 
 test("Claude dispatch enables native Bash while primary review is tool-read-only", () => {
@@ -427,32 +422,10 @@ test("Claude dispatch enables native Bash while primary review is tool-read-only
     sandbox: "workspace-write", networkAccess: "disabled" }), /tool network disable/);
 });
 
-test("private environment paths are closed, relative, rooted, and collision-free", () => {
-  const shape = (privateEnvPaths) => ({ command: process.execPath, args: [], cwd, privateEnvPaths });
-  assert.deepEqual(contract.assertInvocationShape(shape([{ key: "TOOL_DIR", root: "scratch", relative: "tool-data" }])).privateEnvPaths,
-    [{ key: "TOOL_DIR", root: "scratch", relative: "tool-data" }]);
-  for (const value of [[{ key: "TOOL_DIR", root: "scratch", relative: "/tmp/escape" }], [{ key: "TOOL_DIR", root: "home", relative: "../escape" }],
-    [{ key: "HOME", root: "home", relative: ".tool" }], [{ key: "TOOL_DIR", root: "outside", relative: ".tool" }],
-    [{ key: "TOOL_DIR", root: "home", relative: ".tool" }, { key: "TOOL_DIR", root: "scratch", relative: "tool" }]]) {
-    assert.throws(() => contract.assertInvocationShape(shape(value)), /private environment path is invalid/);
-  }
-});
-
-test("credential requests are value-free, catalog-bound, and reject reserved or ambiguous inputs", () => {
-  const metadata = getAdapter("codex").metadata.credentials;
-  const missingSource = path.join(root, "not-opened-auth.json");
-  const request = contract.credentialRequest(metadata, {
-    envNames: ["OPENAI_API_KEY"], fileSpecs: [`auth=${missingSource}`],
-  });
-  assert.deepEqual(request.summary, { env_names: ["OPENAI_API_KEY"], file_ids: ["auth"] });
-  assert.equal(fs.existsSync(missingSource), false, "normalization must not open a credential source");
-  for (const name of ["HOME", "NODE_OPTIONS", "NODE_PATH", "BASH_ENV", "PYTHONPATH", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD"])
-    assert.throws(() => contract.credentialRequest(metadata, { envNames: [name] }), /unsafe, reserved/, name);
-  assert.throws(() => contract.credentialRequest({ files: [], envHints: ["NODE_OPTIONS"] }), /metadata/);
-  assert.throws(() => contract.credentialRequest(metadata, { envNames: ["TOKEN", "TOKEN"] }), /duplicated/);
-  assert.throws(() => contract.credentialRequest(metadata, { fileSpecs: [`unknown=${missingSource}`] }), /declared/);
-  assert.throws(() => contract.credentialRequest(metadata, { fileSpecs: ["auth=relative"] }), /absolute/);
-  assert.throws(() => contract.credentialRequest(metadata, { fileSpecs: [`auth=${missingSource}`, `auth=${missingSource}`] }), /collision/);
+test("invocation contract rejects retired private-environment metadata", () => {
+  assert.throws(() => contract.assertInvocationShape({ command: process.execPath, args: [], cwd,
+    privateEnvPaths: [{ key: "TOOL_DIR", root: "scratch", relative: "tool-data" }] }), /unsupported metadata/);
+  assert.equal(Object.hasOwn(contract, "credentialRequest"), false);
 });
 
 test("review invocation is an immutable direct descriptor without hidden lifecycle hooks", () => {
