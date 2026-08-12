@@ -69,6 +69,28 @@ function formatText(result) {
   return lines.join("\n");
 }
 
+function formatFailure(error, json) {
+  const failure = {
+    ok: false,
+    code: error.code || "RECOVERY_FAILED",
+    error: error.message,
+  };
+  if (error.code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED") {
+    failure.recommended_action = error.recommended_action;
+    failure.process_identity = error.process_identity;
+    failure.relay_signalled = false;
+  }
+  if (json) return JSON.stringify(failure);
+  const identity = failure.process_identity;
+  const process = identity
+    ? ` Exact process: pid=${identity.pid}, pgid=${identity.pgid}, started_at=${identity.started_at}.`
+    : "";
+  const next = failure.recommended_action
+    ? " Verify and terminate that exact process outside Relay, then rerun the same canonical recovery."
+    : "";
+  return `relay-recover: ${failure.code}: ${failure.error}.${process}${next}`;
+}
+
 async function main(argv = process.argv.slice(2)) {
   const command = argv[0];
   const rest = argv.slice(1);
@@ -113,7 +135,7 @@ if (require.main === module) {
   main().then((code) => {
     process.exitCode = code;
   }).catch((error) => {
-    console.error(`relay-recover: ${error.message}`);
+    console.error(formatFailure(error, process.argv.slice(2).includes("--json")));
     process.exitCode = 1;
   });
 }

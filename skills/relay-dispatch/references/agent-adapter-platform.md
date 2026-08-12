@@ -193,8 +193,12 @@ sandbox guarantee:
   executor whose descendants are Apple-signed binaries is therefore not
   scope-verifiable and must be treated as contract-violating for containment.
 
-Operators recover a fail-closed cleanup with `relay-recover recover`, which
-settles the signed obligation, or by terminating the reported identities by hand.
+Operators recover a fail-closed cleanup with `relay-recover recover`. If an exact
+recorded identity is still live but its scope marker is no longer provable, Relay
+returns `HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED` without signalling it. The
+operator must independently verify and terminate that exact pid/pgid/start-time
+identity, then rerun canonical recovery so Relay can sign settlement. Killing by
+name or by a stale PID alone is outside the safety contract.
 
 The linked-worktree administration directory, common object store, refs, config,
 and hooks are deliberately outside the executor write set. Executors leave dirty

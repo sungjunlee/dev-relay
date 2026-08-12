@@ -766,7 +766,15 @@ function reapExactIdentity(identity, seal) {
     if (identityGone(identity, 0)) return;
     const sent = signalScoped(identity, signal, seal);
     if (!sent.verified && !sent.absent) {
-      fail("cleanup process could not be bound to the run process scope", "HOST_CLEANUP_INCOMPLETE", { recommended_action: "inspect", pid: identity.pid });
+      fail(
+        "cleanup process is still live but its inherited Relay scope cannot be proven; Relay did not signal it",
+        "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED",
+        {
+          recommended_action: "terminate_exact_process_externally_then_retry",
+          process_identity: { ...identity },
+          relay_signalled: false,
+        },
+      );
     }
     if (identityGone(identity, settleMs)) return;
   }

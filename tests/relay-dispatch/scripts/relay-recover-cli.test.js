@@ -225,7 +225,10 @@ test("canonical CLI fails closed when run.json is absent", (t) => {
     encoding: "utf8",
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /run\.json is missing/);
+  const failure = JSON.parse(result.stderr);
+  assert.equal(failure.ok, false);
+  assert.equal(failure.code, "RUN_RECORD_MISSING");
+  assert.match(failure.error, /run\.json is missing from/);
 });
 
 test("recover CLI requires an explicit audit reason", (t) => {
