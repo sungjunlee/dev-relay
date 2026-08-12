@@ -5,8 +5,11 @@ typed next action from immutable run facts plus live Git/GitHub observation.
 `recover` re-observes under the run lock and converges that action idempotently.
 In the shared vocabulary, recovery-owned Publication places the exact Source
 revision on a remote ref. It is not Change Request creation and does not imply
-Landing; the current GitHub route separately records or creates its forge-owned
-Change Request identity.
+Landing. The source gate permits either a no-remote local Git route or the
+existing identity-matching GitHub route. Local recovery never calls a forge or
+remote transport and closes a reviewed result through the canonical
+`close_reviewed_result` action; GitHub recovery retains its exact PR publication
+and Change Request behavior. Unsupported remotes fail closed.
 
 ```bash
 node skills/relay/scripts/relay-recover.js inspect \
@@ -90,10 +93,4 @@ not read as stronger than it is.
 The removed `reconcile-run`, `recover-commit`, `recover-state`,
 `rebrand-evidence`, and `publish-run` command names are gone entirely.
 `relay-recover.js` accepts only `inspect` and `recover`; every other verb exits
-with `unknown operation`. The temporary argv shim that translated them was
-deleted on 2026-08-03 with the migration overlay, and it never helped: it
-translated argv into a runtime that cannot read a legacy manifest, so
-`--manifest` failed as an unknown flag and `recover-state` failed with ENOENT.
-No standalone legacy script is installed. Retired verbs and their target-state
-and force-policy flags fail closed: there is no alias, no translation, and no
-compatibility parser to accept them.
+with `unknown operation`. No standalone legacy script is installed. Retired verbs and their target-state and force-policy flags fail closed: there is no alias, translation, or compatibility parser to accept them.

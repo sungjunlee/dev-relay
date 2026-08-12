@@ -1,9 +1,8 @@
 # Relay Runtime Architecture
 
-The Relay runtime is an immutable-run system. It deliberately replaces the legacy
-Markdown manifest, mutable lifecycle state, event journal vocabulary, rubric
-sidecars, and executor-specific registration layer with one small durable
-contract and a derived action.
+The Relay runtime is an immutable-run system. It uses one small durable
+contract, append-only facts, and a derived action instead of mutable lifecycle
+state, rubric sidecars, or executor-specific registration layers.
 
 This document describes the shipped Relay runtime. Files under
 [`docs/archive/`](../docs/archive/) and dated plans are historical evidence,
@@ -45,16 +44,21 @@ frozen input -> run.json + done-criteria.md
      dispatch / recover / review / explicit merge or close
 ```
 
-There is no mutable state machine. `inspect` folds immutable facts together
+There is no mutable state machine. The public source gate first classifies the
+checkout: no configured remotes selects local Reviewed Result delivery, while
+an identity-matching GitHub origin selects the retained PR route. Unsupported
+remotes fail before execution. `inspect` then folds immutable facts together
 with fresh Git, GitHub, host, and verification observations and returns one
 typed next action. Writers re-inspect under the per-run lock and require the
 same action key before they make a change.
 
-The normal action sequence is `wait` -> `recover` -> `review` -> `merge`.
-`redispatch`, `close`, `none`, and `operator_attention` are explicit terminal
-or recovery outcomes, not hidden state transitions. Publication and Change
-Request recording are recovery actions; dispatch never commits, pushes, opens a
-PR, or recovers a run.
+The GitHub action sequence is `wait` -> `recover` -> `review` -> `merge`; the
+local sequence is `wait` -> `recover` -> `review` -> `recover` for terminal
+Reviewed Result closure. `redispatch`, `close`, `none`, and
+`operator_attention` are explicit terminal or recovery outcomes, not hidden
+state transitions. GitHub Publication and Change Request recording are
+recovery actions; local closure is also recovery-owned. Dispatch never commits,
+pushes, opens a PR, or recovers a run.
 
 ```text
 relay-review
@@ -78,7 +82,7 @@ The eleven fact types are `attempt_started`, `attempt_finished`,
 `attempt_interrupted`, `verification_recorded`, `lock_acquired`,
 `lock_released`, `pull_request_recorded`, `review_recorded`,
 `recovery_applied`, `merge_recorded`, and `run_closed`. They are the only
-lifecycle evidence. There is no manifest mutation, lifecycle transition API,
+lifecycle evidence. There is no mutable lifecycle record, transition API,
 execution-evidence sidecar, score log, route catalog, or app-registration
 receipt.
 
@@ -100,19 +104,21 @@ node skills/relay/scripts/relay-recover.js recover --repo . --run-id <id> \
   --reason "<why>" --expected-action-key <key> --json
 ```
 
-Recovery alone may close a dead attempt, commit reviewable work, place a branch
-revision on the remote ref (Publication), record/create the exact Change
-Request, record verification, or append `run_closed`.
+Recovery alone may close a dead attempt, commit reviewable work, place a GitHub
+branch revision on the remote ref (Publication), record/create the exact
+Change Request, record verification, or append the local Reviewed Result's
+`run_closed` fact.
 Every recovery step is authorized by a fresh action key and re-observed after
 the side effect. An explicit close carries a durable operator and reason.
 
 `review-runner.js` accepts only a run whose inspection says `review`. It derives
-the ReviewSubject from the immutable Source, exact current Change Request head,
-passed verification tree, current binary diff bytes, and frozen Done Criteria,
-then binds the immutable reviewer into an isolated review bundle and appends one
-`review_recorded` fact. A passing Reviewed Result is `lgtm`; it is terminal
-proof of exact verification plus independent review and does not publish or
-land the revision. Changes requested derive `redispatch`.
+the ReviewSubject from the immutable Source, the exact current GitHub Change
+Request head or fresh local Git head, passed verification tree, current binary
+diff bytes, and frozen Done Criteria, then binds the immutable reviewer into an
+isolated review bundle and appends one `review_recorded` fact. A passing
+Reviewed Result is `lgtm`; it is terminal proof of exact verification plus
+independent review and does not publish or land the revision. Changes requested
+derive `redispatch`.
 
 `gate-check.js` is read-only. `finalize-run.js` is the explicit merge writer:
 it repeats inspection under the run lock, records an HMAC-bound
@@ -130,7 +136,7 @@ built-in executors are Claude, Codex, OpenCode, Pi, Antigravity, Cursor, and
 Cline. Every descriptor lives in `scripts/adapters/` and is registered in
 `adapters/index.js`; its four-method contract declares argv construction,
 capabilities, output parsing, and metadata. Cline is dispatch-only until its
-strict primary-review canary passes. No adapter owns manifest storage,
+strict primary-review canary passes. No adapter owns run storage,
 publication, app registration, or a private lifecycle.
 
 The host owns only durable lock/ownership, detached supervisor launch,
@@ -155,11 +161,10 @@ There is one runtime. The installed dispatch package is the current filesystem
 below `skills/relay-dispatch/scripts/`; no generated inventory or test ledger
 duplicates that source of truth.
 
-The Relay runtime is the only writer. Nothing admits a run, stamps a writer generation, or
-translates retired argv, and retired manifests are not readable — the legacy
-manifest reader went with the runtime reset. A repository that still holds
-legacy state does not migrate; its historical runs stay unreadable and new
-work starts as a Relay run.
+The Relay runtime is the only writer. Nothing admits a run, stamps a writer
+generation, or translates retired argv. Retired run artifacts are not readable;
+a repository that still holds retired state does not migrate, and new work
+starts as a Relay run.
 
 ## Trust boundaries
 
@@ -174,7 +179,8 @@ work starts as a Relay run.
   immediately before delivery; unverifiable targets fail closed.
 - Signed credential roots are removed by rename-to-quarantine and dev/ino
   revalidation; a swapped path is preserved as evidence, never deleted.
-- External GitHub and merge observations use a fresh nonce-bound observer.
+- External GitHub and merge observations use a fresh nonce-bound observer only
+  on the GitHub route; local delivery has no forge observation.
 - PR comments, mutable files, prior prompts, executor transcripts, and legacy
   state are not authorities for Relay actions.
 

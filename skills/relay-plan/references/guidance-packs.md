@@ -50,7 +50,7 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 #### Guidance
 
 - Record changed artifacts, exact checks run, pass/fail results, and known blockers before completion.
-- Treat tests, manifests, logs, and self-reports as evidence signals, not proof by themselves.
+- Treat tests, run records, logs, and self-reports as evidence signals, not proof by themselves.
 - If a required factor remains failing after focused attempts, stop with a concrete stuck note.
 
 #### Rubric still carries
@@ -127,7 +127,7 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 
 #### Use when
 
-- The task touches manifest validation, state transitions, review gates, auth boundaries, trust roots, or fail-closed behavior.
+- The task touches immutable run validation, derived actions, review gates, auth boundaries, trust roots, or fail-closed behavior.
 - Forged, missing, stale, or mismatched inputs could change a protected decision.
 
 #### Do not use when

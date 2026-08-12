@@ -2,7 +2,7 @@
 
 `relay/scripts/run-preflight.js` keeps deterministic guard work outside the
 main `/relay` flow. It prints JSON only, including human-readable next-step
-instructions that the skill follows without carrying route prose inline.
+instructions that the skill follows without carrying source-route prose inline.
 
 ## Route Stage
 
@@ -12,20 +12,38 @@ Run:
 node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route --repo . --issue-number "$ISSUE_NUMBER" --branch "$BRANCH" --json
 ```
 
-The route stage returns `{ok, stage, repo, inflight}` and nothing else. It
-carries no readiness key, no score, and no prompt state; readiness is an
-orchestrator judgment described in `../../relay-ready/SKILL.md`.
+The route stage returns `{ok, stage, repo, source, inflight}`. It carries no
+readiness key, score, or prompt state; readiness is an orchestrator judgment
+described in `../../relay-ready/SKILL.md`.
+
+### Source gate
+
+Source classification is the first route operation. It accepts only a Git
+checkout and returns one of these routes:
+
+- `local-reviewed-result`: no configured Git remotes. The route does not call
+  `gh`, fetch, inspect a PR, or use remote transport; verification and
+  independent review bind the exact local Git result.
+- `github`: the configured origin and tracked remote satisfy the same exact
+  GitHub identity checks used by production recovery. The existing PR and
+  in-flight scans then run, with GitHub authentication and the selected
+  executor/reviewer network and credential requirements explicit.
+
+Non-Git input fails with `SOURCE_NOT_GIT` and recommends explicit `git init` or
+direct `delegate`. A non-GitHub, ambiguous, or otherwise unsupported remote
+fails with `SOURCE_UNSUPPORTED_REMOTE`; Relay does not fall back to local
+delivery and GitLab support is not implemented.
 
 ### In-flight PR/run guard
 
 - Firing condition: an issue-numbered task is entering Step 1 routing.
-- Signals read: `gh pr list --head <branch> --state all --json number,state,mergedAt,headRefName,url`; validated Relay `run.json` records and canonical `runtime.inspectRun` actions for issue-matching runs.
+- Signals read on the GitHub route: `gh pr list --head <branch> --state all --json number,state,mergedAt,headRefName,url`; validated Relay `run.json` records and canonical `runtime.inspectRun` actions for issue-matching runs. The local route reads no forge or remote transport state.
 - Events emitted: none by this guard.
 - Instruction field: every in-flight route includes `inflight.instruction`, a one-sentence operator next action.
 - Branch labels:
   - `existing-open-pr`: `instruction` tells the operator to review the existing open PR instead of planning or dispatching a new run.
   - `existing-merged-pr`: `instruction` tells the operator to mark the sprint item done if present and stop because the PR is already merged.
-  - `inflight-run`: `instruction` tells the operator to resume or inspect the existing run using its derived Relay action.
+  - `inflight-run`: `instruction` tells the operator to resume or inspect the existing immutable run using its derived Relay action.
   - `continue`: `instruction` tells the operator to continue to readiness handling before planning or dispatch.
 
 ### Readiness judgment (orchestrator, not a guard)

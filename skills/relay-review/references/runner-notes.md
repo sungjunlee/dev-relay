@@ -1,6 +1,8 @@
 # Relay Review Runner Notes
 
-`scripts/review-runner.js` is a single Relay path. It does not read a relay manifest, legacy lifecycle events, rubric snapshots, PR-body score logs, execution-evidence sidecars, review budgets, or mutable round state.
+`scripts/review-runner.js` is a single Relay path. It does not read mutable
+lifecycle records, legacy event formats, rubric snapshots, PR-body score logs,
+execution-evidence sidecars, review budgets, or mutable round state.
 
 ## Resolution
 
@@ -11,10 +13,12 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --json
 node skills/relay-review/scripts/review-runner.js --repo . --run-dir <absolute-run-dir> --json
 ```
 
-The repository identity derived from the Git common directory and origin (or
-the immutable local repository identity when no origin exists) must equal
-`run.json`. The runner reads Done Criteria only from the frozen run-local path
-and verifies its hash through `run-store`.
+The repository identity derived from the Git common directory and the selected
+source route (GitHub identity, or the immutable local identity when no remote
+exists) must equal `run.json`. Local review requires no forge observation;
+GitHub review requires the exact live PR identity and explicit reviewer
+credentials/network access. The runner reads Done Criteria only from the frozen
+run-local path and verifies its hash through `run-store`.
 
 ## Inputs and artifacts
 

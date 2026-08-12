@@ -1,6 +1,6 @@
 # Relay Done Criteria and Rubric Patterns
 
-This is current planning guidance. Dated issue examples and retired manifest
+This is current planning guidance. Dated issue examples and retired run-artifact
 surfaces belong in `docs/archive/`; they are not a source of runtime commands.
 
 A TDD-oriented planning hint is planner judgment, never a dispatch or review

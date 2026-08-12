@@ -2,17 +2,37 @@
 
 Relay stores an immutable run record and folds append-only facts into one
 derived action. The action returned by inspection is the authority; do not infer
-state from a PR comment, a legacy manifest, or an executor transcript.
+state from a PR comment, retired run artifacts, or an executor transcript.
+
+## Source Gate
+
+Relay requires Git and never initializes it automatically. Classify the
+checkout before fetching, contacting a forge, creating a worktree or run
+directory, or starting an executor:
+
+```bash
+node skills/relay/scripts/run-preflight.js \
+  --stage route --repo . --issue-number <N> --branch issue-<N> --json
+```
+
+With no configured remotes, the result selects `local-reviewed-result`; do not
+fetch or invoke `gh`, and use local task text or the user description. A
+supported GitHub source retains the existing PR/in-flight dedup scan and may
+fetch the reported remote, use `gh`, and proceed only with explicit executor
+and reviewer network/credential prerequisites. Non-Git input returns
+`SOURCE_NOT_GIT` with explicit `git init` or direct `delegate` remediation.
+Unsupported forges return `SOURCE_UNSUPPORTED_REMOTE`; GitLab is not supported
+and Relay never silently falls back to local delivery.
 
 ## Default Workflow
 
 ```text
-prepare frozen Done Criteria -> dispatch -> inspect -> recover -> review -> merge
-                                      ^                 |
-                                      +--- redispatch ---+
+source gate -> prepare Done Criteria -> dispatch -> inspect -> recover -> review
+                                                                    |       |
+                                      local Reviewed Result <- recover       +-> GitHub merge (explicit)
 ```
 
-1. Dispatch a new immutable run. New runs require a frozen rubric or Done
+1. After the source gate, dispatch a new immutable run. New runs require a frozen rubric or Done
    Criteria source; the run directory is claimed by a non-recursive `mkdir`,
    which fails closed if that run id already exists.
 
@@ -29,8 +49,8 @@ prepare frozen Done Criteria -> dispatch -> inspect -> recover -> review -> merg
    ```
 
 3. When action is `recover`, use the returned action key. This is the sole
-   operation that may commit, push, create/reuse a PR, record verification, or
-   close a dead attempt.
+   operation that may commit, publish the GitHub revision, create/reuse a PR,
+   record verification, close a dead attempt, or close a local Reviewed Result.
 
    ```bash
    node skills/relay/scripts/relay-recover.js recover --repo . --run-id <id> \
@@ -46,9 +66,9 @@ prepare frozen Done Criteria -> dispatch -> inspect -> recover -> review -> merg
 
    A request for changes returns `redispatch`; dispatch again with the same
    `--run-id`, then follow inspection and recovery again. A passing review
-   returns `merge`.
+   returns `merge` on GitHub or `recover` for local Reviewed Result closure.
 
-5. Merge only on explicit operator authority.
+5. On the GitHub route, merge only on explicit operator authority.
 
    ```bash
    node skills/relay-merge/scripts/gate-check.js --repo . --run-id <id> --json
@@ -56,16 +76,18 @@ prepare frozen Done Criteria -> dispatch -> inspect -> recover -> review -> merg
      --repo . --run-id <id> --merge-method squash --json
    ```
 
-`finalize-run` requires the exact current PR source SHA, a passing independent
-review, passed verification for the frozen Done Criteria, and a fresh GitHub
-observation. It has no review or state bypass.
+`finalize-run` is only for the GitHub route. It requires the exact current PR
+source SHA, a passing independent review, passed verification for the frozen
+Done Criteria, and a fresh GitHub observation. Local Reviewed Result delivery
+stops at canonical recovery closure; it has no PR or merge step.
 
 ## Close a run
 
 Closing is not its own verb: use `relay-recover recover` — the only mutating
 operation — with an explicit operator and reason.
-Closing appends a `run_closed` fact and is idempotent only for the same intent;
-it cannot be applied to an already merged run.
+Closing a local Reviewed Result appends a `run_closed` fact and is idempotent
+only for the same intent; a GitHub run instead reaches the explicit merge
+boundary and cannot be closed as a local result.
 
 ## Skills
 
@@ -172,6 +194,6 @@ The Relay runtime is the only writer and there is no migration overlay. The
 installed package is the current filesystem below
 `skills/relay-dispatch/scripts/`; there is no generated inventory to refresh.
 
-Retired legacy manifests are not readable and `relay-recover` exposes only
-`inspect` and `recover`. A repository holding legacy state does not migrate: its
-historical runs stay unreadable, and new work starts as a Relay run.
+Retired run artifacts are not readable and `relay-recover` exposes only
+`inspect` and `recover`. A repository holding retired state does not migrate:
+its historical runs stay unreadable, and new work starts as a Relay run.

@@ -14,6 +14,11 @@ metadata:
 
 # Relay Dispatch
 
+The public `/relay` source gate must select the route before this command. It
+requires a Git checkout, permits no configured remotes for local Reviewed
+Result delivery, and accepts only the exact supported GitHub remote shape for
+the GitHub route. Dispatch itself never initializes Git or selects a forge.
+
 ## Use when
 
 - Delegating implementation to an executor (`codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`, `cline`) via worktree isolation
@@ -69,7 +74,7 @@ Essential flags:
 - Dispatch admits itself. There is no writer generation, cutover flag, or migration overlay: a new run is claimed by a non-recursive `mkdir` on its run directory, which fails closed if the directory already exists.
 - `--json` returns structured output for orchestration.
 
-The durable layout is `~/.relay/runs/<repo-slug>/<run-id>/`: immutable `run.json`, `done-criteria.md`, and `rubric.yaml`; append-only `events.jsonl`; and per-attempt prompt, log, and result artifacts. Legacy manifests, routing hints, and readiness identity flags do not participate in dispatch.
+The durable layout is `~/.relay/runs/<repo-slug>/<run-id>/`: immutable `run.json`, `done-criteria.md`, and `rubric.yaml`; append-only `events.jsonl`; and per-attempt prompt, log, and result artifacts. Retired routing hints and readiness identity flags do not participate in dispatch.
 
 The actual executor process tree runs under a host-enforced macOS
 `sandbox-exec` boundary. `workspace-write` permits writes only inside the
@@ -83,7 +88,8 @@ run is recoverable rather than silently unisolated.
 
 Executor attempts intentionally cannot write linked-worktree Git administration,
 objects, refs, config, or hooks. They leave reviewable dirty worktree bytes; only
-the canonical `relay-recover recover` operation may commit, push, and publish them.
+the canonical `relay-recover recover` operation may commit, publish them on the
+GitHub route, record verification, or close the local Reviewed Result.
 
 JSON uses snake_case. Foreground output includes `status`, `run_id`, `run_dir`, `worktree`, `attempt_id`, `host_handle`, `host_status`, `outcome`, and `inspection`. A detached launch receipt includes `status: "dispatched"`, those durable identities, `dispatcher_pid`, and the initial `inspection`. Per-attempt log paths are recorded in `attempt_started`.
 
@@ -99,8 +105,8 @@ Successful dispatches retain the worktree. A `--run-id` call first performs a re
 
 Publication is not part of dispatch. Dispatch records the executor attempt and
 returns the derived action. Use `relay-recover inspect`, then the idempotent
-`relay-recover recover` operation to commit, push, and create or reuse the
-exact PR authorized by current facts.
+`relay-recover recover` operation to commit and publish the exact GitHub PR
+revision when that route is selected, or to close a reviewed local result.
 
 Claude, Codex, OpenCode, Pi, and Cursor prompts use bound stdin transport.
 Antigravity and Cline are explicit argv-visible exceptions with a 256 KiB
@@ -114,7 +120,7 @@ explicit adapter credential catalog and never discovers an ambient HOME.
 | Timeout or cancellation | Inspect the retained worktree and typed recommendation; never treat it as completed |
 | Executor or output-parse error | Read the attempt logs/result and follow the typed recommendation |
 | Resume denied | Follow `inspection.recommended_action`; dispatch only admits exact `redispatch` |
-| Publication / PR creation failed | Use canonical `relay-recover inspect` and idempotent `recover`; dispatch does not publish |
+| Publication / local closure failed | Use canonical `relay-recover inspect` and idempotent `recover`; dispatch does not publish or close |
 | Branch conflicts | Resolve in worktree or create fresh worktree from updated main |
 | Network/transient error | Wait 30s, retry once. If it fails again, escalate to user |
 
