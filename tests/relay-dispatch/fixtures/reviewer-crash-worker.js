@@ -7,7 +7,7 @@ const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8")), cut = confi
 const die = () => process.kill(process.pid, "SIGKILL");
 if (cut === "pending") { const real = host.retainReviewerCleanup; host.retainReviewerCleanup = (...args) => { const value = real(...args); die(); return value; }; }
 if (cut === "credential") { const real = fs.writeFileSync; fs.writeFileSync = (...args) => { const value = real(...args); if (String(args[0]).includes("reviewer-credentials") && String(args[0]).endsWith("auth.json")) die(); return value; }; }
-if (cut === "pre_spawn") { const real = host.sandboxInvocation.verifyRuntimeFiles; let first = true; host.sandboxInvocation.verifyRuntimeFiles = (...args) => { const value = real(...args); if (first) { first = false; die(); } return value; }; }
+if (cut === "pre_spawn") { const real = host.hostInvocation.verifyRuntimeFiles; let first = true; host.hostInvocation.verifyRuntimeFiles = (...args) => { const value = real(...args); if (first) { first = false; die(); } return value; }; }
 if (cut === "before_cleanup") { const real = host.retainReviewerCleanup; host.retainReviewerCleanup = (...args) => { const value = real(...args); return { ...value, complete: die }; }; }
 const source = cut === "spawned" ? "setInterval(()=>{},1000)" : "process.stdout.write(JSON.stringify({ok:true}))";
 if (cut === "spawned") { const killer = spawn(process.execPath, ["-e", `setTimeout(()=>process.kill(${process.pid},'SIGKILL'),500)`], { detached: true, stdio: "ignore" }); killer.unref(); }

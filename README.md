@@ -39,8 +39,11 @@ npx skills add sungjunlee/dev-relay
 
 Requires Git and Node.js. Authenticated `gh` is needed only for the supported
 GitHub route; a no-remote Git checkout uses local Reviewed Result delivery.
-Local direct executor/reviewer containment is fail-closed and currently
-requires working macOS `sandbox-exec`.
+Executors and reviewers run directly on the trusted local host on every
+supported OS. Relay requests a CLI's native filesystem control where available
+and otherwise returns a nonblocking capability diagnostic; it is not a
+multi-tenant sandbox. Immutable contained review inputs, runtime binding, and
+post-run revalidation remain fail-closed.
 
 ## Quick start
 

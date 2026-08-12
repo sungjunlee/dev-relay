@@ -18,8 +18,6 @@ jobs:
             runner: ubuntu-latest
           - suite: relay-plan
             runner: ubuntu-latest
-          # These suites exercise the production observer boundary, whose
-          # write-isolation contract is intentionally backed by sandbox-exec.
           - suite: relay-dispatch
             runner: macos-latest
           - suite: relay-review
@@ -52,3 +50,21 @@ jobs:
             exit 1
           fi
           node --test --test-concurrency=1 "${files[@]}"
+
+  native-first-linux:
+    name: native-first Linux production seams
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Exercise direct host, dispatch, recover, and review seams
+        run: >-
+          node --test --test-concurrency=1
+          tests/relay-dispatch/scripts/host-supervisor.test.js
+          tests/relay-dispatch/scripts/run-store.test.js
+          tests/relay-dispatch/scripts/dispatch.test.js
+          tests/relay-dispatch/scripts/inspect-recover-blackbox.test.js
+          tests/relay-dispatch/scripts/relay-recover-cli.test.js
+          tests/relay-review/scripts/review-runner.test.js

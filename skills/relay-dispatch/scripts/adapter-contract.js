@@ -7,8 +7,10 @@ const OUTPUT_PROTOCOLS = Object.freeze(["text_stdout", "json_result", "jsonl_run
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const CREDENTIAL_ROOTS = new Set(["home", "xdg_config", "xdg_data"]);
 const CREDENTIAL_ACCESS = new Set(["read", "read_write"]);
-// sandbox-exec cannot forbid setsid(2): supported CLIs must preserve the inherited
-// scope marker and must not daemonize or clear it from descendants.
+const FILESYSTEM_ISOLATION = new Set(["native", "native_bash", "declaration_only", "not_requested", "none"]);
+const NATIVE_FILESYSTEM_REQUESTS = new Set(["workspace-write", "read-only", "enabled"]);
+// Supported CLIs must preserve the inherited scope marker and must not daemonize
+// or clear it from descendants; host cleanup relies on that contract.
 const PROCESS_CONTAINMENT = "inherited_scope_no_daemon";
 const CREDENTIAL_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RESERVED_CREDENTIAL_ENV = /^(?:HOME|PATH|TMPDIR|TMP|TEMP|XDG_CONFIG_HOME|XDG_DATA_HOME|RELAY_PROCESS_SCOPE|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PHPRC|PHP_INI_SCAN_DIR|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|PERL5DB|RUBYOPT|RUBYLIB|GEM_HOME|GEM_PATH|GCONV_PATH|LOCPATH|NLSPATH)$|^(?:DYLD|LD)_|^LUA_(?:INIT|PATH|CPATH)(?:_.*)?$|^RELAY_/;
@@ -216,6 +218,41 @@ function validateCapabilities(adapter, phase, request = {}) {
   return capability;
 }
 
+// This is intentionally derived from a static adapter declaration. It is a
+// foreground diagnostic, not a durable lifecycle fact or an admission check.
+function filesystemIsolationDiagnostic(adapter, phase, request = {}) {
+  const capability = validateCapabilities(adapter, phase, request);
+  const effective = capability.filesystemIsolation || "none";
+  let requested;
+  let diagnostic;
+  switch (effective) {
+    case "native":
+      // `enabled` is an adapter-owned on/off switch (Cursor).  Read/write
+      // modes are operator-facing (Codex), so the diagnostic mirrors argv.
+      requested = capability.filesystemIsolationRequest === "enabled"
+        ? "enabled"
+        : request.readOnly || request.sandbox === "read-only" ? "read-only" : "workspace-write";
+      diagnostic = null;
+      break;
+    case "native_bash":
+      requested = "enabled";
+      diagnostic = `${adapter.name} enables its native Bash sandbox; built-in file tools remain permission-bound rather than filesystem-sandboxed.`;
+      break;
+    case "declaration_only":
+      requested = "enabled";
+      diagnostic = `${adapter.name} declares a native sandbox, but Relay cannot verify filesystem enforcement; continuing on the trusted local host.`;
+      break;
+    case "not_requested":
+      requested = "not_requested";
+      diagnostic = `${adapter.name} native filesystem isolation is not requested for read-only primary review; continuing directly on the trusted local host.`;
+      break;
+    default:
+      requested = "unavailable";
+      diagnostic = `${adapter.name} has no native filesystem sandbox; continuing directly on the trusted local host.`;
+  }
+  return Object.freeze({ requested, effective, diagnostic });
+}
+
 function resolveAdapterProvider(adapter, model) {
   if (adapter.metadata.providerFromModel && typeof model === "string") {
     const separator = model.indexOf("/");
@@ -282,6 +319,21 @@ function createNativeAdapter({
   if (!name || typeof buildDispatch !== "function" || typeof cliBinary !== "string") throw new Error("native adapter requires name, metadata.cliBinary, and buildDispatch");
   if (metadata.processContainment !== PROCESS_CONTAINMENT) throw new Error(`native adapter must declare ${PROCESS_CONTAINMENT} process containment`);
   if (metadata.providerTransport !== "remote_required") throw new Error("native adapter must declare remote_required provider transport");
+  for (const phase of PHASES) {
+    const capability = phaseMetadata[phase];
+    if (!capability?.supported) continue;
+    if (!FILESYSTEM_ISOLATION.has(capability.filesystemIsolation)) {
+      throw new Error(`native adapter ${phase} phase must declare a known filesystemIsolation`);
+    }
+    const hasRequest = Object.hasOwn(capability, "filesystemIsolationRequest");
+    if (capability.filesystemIsolation === "native") {
+      if (!NATIVE_FILESYSTEM_REQUESTS.has(capability.filesystemIsolationRequest)) {
+        throw new Error(`native adapter ${phase} phase must declare a native filesystemIsolationRequest`);
+      }
+    } else if (hasRequest) {
+      throw new Error(`native adapter ${phase} filesystemIsolationRequest is only valid with native filesystemIsolation`);
+    }
+  }
   // Declared, never inferred: dispatch.js rejects a command-demanding prompt for a toolset with no
   // shell, and an adapter that forgot to say which it is would silently become shell-capable.
   if (phaseMetadata.dispatch?.supported && typeof phaseMetadata.dispatch.commandExecution !== "boolean") {
@@ -343,6 +395,7 @@ module.exports = {
   assertInvocationShape: normalizeInvocationShape,
   createNativeAdapter,
   credentialRequest,
+  filesystemIsolationDiagnostic,
   decodeTrustedPrompt,
   formatAdapterPhase,
   makeParseOutcome,

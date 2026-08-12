@@ -39,7 +39,7 @@ function sign(body, secret, field = "result_auth_sha256") {
   return { ...body, [field]: signature };
 }
 
-test("host exposes only the eleven core operations", () => {
+test("host exposes only the trusted-local core operations", () => {
   assert.deepEqual(Object.keys(host).sort(), [
     "acquireRunLock",
     "assertRunLockHeld",
@@ -49,7 +49,7 @@ test("host exposes only the eleven core operations", () => {
     "launchLocalSupervisor",
     "releaseRunLock",
     "retainReviewerCleanup",
-    "sandboxInvocation",
+    "hostInvocation",
     "waitForTerminalResult",
     "withRunLock",
   ].sort());

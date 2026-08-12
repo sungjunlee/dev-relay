@@ -100,12 +100,12 @@ test("every dispatch-capable adapter declares its command-execution toolset expl
   const declared = Object.fromEntries(listAdapters().map((name) =>
     [name, getAdapter(name).capabilities({ phase: "dispatch" }).commandExecution]));
   assert.deepEqual(declared, {
-    claude: false, codex: true, opencode: true, pi: false, antigravity: true, cursor: true, cline: true,
+    claude: true, codex: true, opencode: true, pi: false, antigravity: true, cursor: true, cline: true,
   });
 });
 
 test("a dispatch-capable adapter cannot omit its command-execution declaration", () => {
-  const base = { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" };
+  const base = { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text" };
   assert.throws(() => createNativeAdapter(probeDescriptor(base)), /commandExecution/);
   assert.throws(() => createNativeAdapter(probeDescriptor({ ...base, commandExecution: "no" })), /commandExecution/);
   assert.equal(createNativeAdapter(probeDescriptor({ ...base, commandExecution: false }))
@@ -163,16 +163,13 @@ test("pi rejects a command-demanding prompt-file before claiming any run directo
   assert.equal(git(value.repo, ["branch", "--list", "pi-command"]), "", "no branch may be created");
 });
 
-// DC6-b
-test("claude rejects a command-demanding inline prompt", () => {
+// Claude dispatch now permits Bash inside its native Bash sandbox.
+test("claude accepts a command-demanding inline prompt", () => {
   const value = fixture("claude-inline");
-  const result = run(value, ["--executor", "claude", "--branch", "claude-command", "--prompt", GIT_COMMAND_PROMPT, "--rubric-file", value.rubric]);
-  assert.notEqual(result.status, 0, result.stdout);
-  assert.equal(json(result.stderr).code, "TOOLSET_MISMATCH");
-  assert.match(json(result.stderr).error, /executor 'claude'/);
-  assert.match(json(result.stderr).error, /git commit/);
-  assert.equal(fs.existsSync(value.relayHome), false);
-  assert.equal(git(value.repo, ["branch", "--list", "claude-command"]), "");
+  const result = run(value, ["--executor", "claude", "--branch", "claude-command", "--prompt", GIT_COMMAND_PROMPT, "--rubric-file", value.rubric, "--dry-run"]);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(json(result.stdout).executor, "claude");
+  assert.doesNotMatch(result.stderr, /toolset mismatch/);
 });
 
 // DC3 entry state 4

@@ -26,8 +26,8 @@ module.exports = createNativeAdapter({
   },
   phases: {
     // Codex has no fail-closed tool-network switch; provider transport remains enabled.
-    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "text", commandExecution: true },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "workspace-write", cancellation: "process", structuredOutput: "text", commandExecution: true },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "read-only", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, resultPath, model, sandbox, networkAccess, reasoning }) {
@@ -35,15 +35,13 @@ module.exports = createNativeAdapter({
     if (reasoning) args.push("-c", `model_reasoning_effort=${reasoning}`);
     void networkAccess;
     if (model) args.push("-m", model);
-    // The authoritative host sandbox cannot nest with Codex's sandbox.
-    void sandbox;
-    args.push("--sandbox", "danger-full-access");
+    args.push("--sandbox", sandbox);
     args.push("-");
     return { command: "codex", args, cwd, stdinPath: promptPath, stdinSha256: promptSha256 };
   },
   buildReview({ cwd, promptPath, promptSha256, resultPath, schemaPath, model }) {
     if (!schemaPath) throw new Error("codex primary review requires a staged JSON schema");
-    const args = ["exec", "-C", cwd, "--ephemeral", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--color", "never", "--output-schema", schemaPath, "-o", resultPath];
+    const args = ["exec", "-C", cwd, "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never", "--output-schema", schemaPath, "-o", resultPath];
     if (model) args.push("-m", model);
     args.push("-");
     return { command: "codex", args, cwd, stdinPath: promptPath, stdinSha256: promptSha256 };

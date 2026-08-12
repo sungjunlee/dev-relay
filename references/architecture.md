@@ -90,10 +90,12 @@ receipt.
 
 `dispatch.js` creates a new immutable run or appends a guarded attempt to a
 run whose current action is exactly `redispatch`. It uses the universally
-registered adapter descriptor and a thin local host. On macOS the host uses a
-fail-closed `sandbox-exec` profile that gives the executor only its retained
-worktree, exact declared inputs, exact output artifact, and attempt-private
-temporary space. Unsupported local containment fails before writes.
+registered adapter descriptor and a thin local host. The host launches the
+argv directly on the trusted local machine on every supported OS. An adapter
+may request its own native filesystem control; missing or declaration-only
+control is a foreground diagnostic, not an admission failure. This is not a
+hostile-worker boundary: a direct CLI may read other files the local user can
+read.
 
 `inspect.js` is pure folding logic. `recover.js` supplies the production
 observer and the sole convergent mutation path. The public wrapper is:
@@ -114,8 +116,10 @@ the side effect. An explicit close carries a durable operator and reason.
 `review-runner.js` accepts only a run whose inspection says `review`. It derives
 the ReviewSubject from the immutable Source, the exact current GitHub Change
 Request head or fresh local Git head, passed verification tree, current binary
-diff bytes, and frozen Done Criteria, then binds the immutable reviewer into an
-isolated review bundle and appends one `review_recorded` fact. A passing
+diff bytes, and frozen Done Criteria, then binds the immutable reviewer into a
+contained staged-input bundle and appends one `review_recorded` fact. The
+direct reviewer process is not filesystem-confined by Relay, but Relay binds
+the exact staged paths and revalidates them after the process exits. A passing
 Reviewed Result is `lgtm`; it is terminal proof of exact verification plus
 independent review and does not publish or land the revision. Changes requested
 derive `redispatch`.
@@ -141,15 +145,14 @@ publication, app registration, or a private lifecycle.
 
 The host owns only durable lock/ownership, detached supervisor launch,
 terminal-result observation, bounded cancellation, stale-lock break, and
-sandbox profile construction. It has no business lifecycle policy. The
+runtime executable binding. It has no business lifecycle policy. The
 authoritative signed close is published first and the single `lock_released`
 outcome is materialized after it; a crash in between leaves no durable outcome,
 and the next lock holder replays the canonical one exactly once.
 
 Process containment is the cooperative `inherited_scope_no_daemon` contract:
 supported CLIs must preserve the injected `RELAY_PROCESS_SCOPE` marker and must
-not daemonize or clear it. `sandbox-exec` cannot prevent arbitrary `setsid` or
-environment clearing, so the host revalidates the marker before every signal,
+not daemonize or clear it. The host revalidates the marker before every signal,
 never signals an unverifiable process or group, and reports survivors as a
 signed cleanup obligation. See the
 [adapter platform](../skills/relay-dispatch/references/agent-adapter-platform.md)
@@ -170,6 +173,9 @@ starts as a Relay run.
 
 - `run.json`, Done Criteria, facts, and immutable artifact bytes are validated
   as regular contained files before use.
+- Review receives a direct, contained staged diff/prompt/criteria/schema path,
+  never an executor transcript; a staging mutation, drift, or containment
+  violation fails typed before ordinary runtime escalation and appends no fact.
 - Action keys bind the inspected snapshot and fresh observations; stale writers
   fail closed.
 - Locks are capabilities with inode/owner checks and append durable acquire and

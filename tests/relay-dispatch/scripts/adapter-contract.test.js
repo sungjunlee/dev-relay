@@ -52,7 +52,7 @@ function invocationFor(adapter, phase = "dispatch") {
     schemaPath,
     model: "provider/model; literally-not-a-shell-command",
     timeoutMs: 123456,
-    sandbox: adapter.name === "codex" ? "read-only" : "workspace-write",
+    sandbox: "workspace-write",
     networkAccess: "enabled",
     reasoning: "high",
   });
@@ -171,6 +171,28 @@ test("phase matrix is fail-closed before an invocation is built", () => {
   );
 });
 
+test("adapter filesystem-isolation metadata is a closed static contract", () => {
+  const create = (dispatch) => contract.createNativeAdapter({
+    name: "filesystem-contract-fixture",
+    timeoutMs: 1_000,
+    metadata: {
+      cliBinary: "fixture", processContainment: contract.PROCESS_CONTAINMENT,
+      providerTransport: "remote_required", credentialTransport: "explicit_bundle",
+      runtimeDependencies: { executableParent: null, interpreterParent: null }, credentials: { files: [], envHints: [] },
+    },
+    phases: { dispatch },
+    outputProtocol: "text_stdout",
+    buildDispatch: () => ({ command: "fixture", args: [], cwd }),
+  });
+  const base = { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text", commandExecution: true };
+  assert.doesNotThrow(() => create({ ...base, filesystemIsolation: "native", filesystemIsolationRequest: "workspace-write" }));
+  assert.throws(() => create({ ...base, filesystemIsolation: "natvie", filesystemIsolationRequest: "workspace-write" }), /known filesystemIsolation/);
+  assert.throws(() => create({ ...base, filesystemIsolation: "native" }), /native filesystemIsolationRequest/);
+  assert.throws(() => create({ ...base, filesystemIsolation: "native", filesystemIsolationRequest: "writeable" }), /native filesystemIsolationRequest/);
+  assert.doesNotThrow(() => create({ ...base, filesystemIsolation: "not_requested" }));
+  assert.throws(() => create({ ...base, filesystemIsolation: "none", filesystemIsolationRequest: "read-only" }), /only valid with native/);
+});
+
 test("supported primary review roles build direct read-only CLI invocations, never wrapper or shell commands", () => {
   for (const name of ["codex", "claude", "cursor", "opencode", "pi", "antigravity"]) {
     const phase = "primary_review";
@@ -282,10 +304,11 @@ test("all seven native adapters preserve full dispatch argv order and policy inp
   const opencodePrompt = ["[RELAY WORKTREE BOUNDARY]", `Repository worktree: ${cwd}`, "Run every shell command from that repository worktree.", "Do not read, write, git add, git commit, or create files outside that repository worktree.", "If a tool starts elsewhere, first change directory to the repository worktree before touching files.", "", prompt].join("\n");
   const antigravityPrompt = ["[RELAY WORKTREE BOUNDARY]", `Repository worktree: ${cwd}`, `Before doing anything, run: cd ${cwd}`, "Create and edit source files only in that repository worktree. You may inspect git status, but do not run git add, git commit, git push, or create a PR; canonical relay recovery owns Git metadata and publication.", "Do not create, edit, or report source files under ~/.gemini, scratch directories, or any path outside the repository worktree.", "If a tool starts elsewhere, first change directory to the repository worktree before touching files.", "", prompt].join("\n");
   const clinePrompt = ["[RELAY WORKTREE BOUNDARY]", `Repository worktree: ${cwd}`, "Run every shell command from that repository worktree.", "Do not read, write, git add, git commit, or create files outside that repository worktree.", "Do not use cline --worktree; relay already created and owns this worktree.", "", prompt].join("\n");
+  const claudeSandbox = JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false } });
   const golden = {
-    codex: { command: "codex", args: ["exec", "-C", cwd, "--color", "never", "-o", resultPath, "-c", "model_reasoning_effort=high", "-m", model, "--sandbox", "danger-full-access", "-"] },
-    claude: { command: "claude", args: ["-p", "--safe-mode", "--output-format", "text", "--allowedTools", "Read,Write,Edit,Glob,Grep", "--disallowedTools", "Bash,WebFetch,WebSearch,Agent", "--model", model] },
-    cursor: { command: "agent", args: ["--print", "--trust", "--auto-review", "--workspace", cwd, "--output-format", "text", "--sandbox", "disabled", "--model", model] },
+    codex: { command: "codex", args: ["exec", "-C", cwd, "--color", "never", "-o", resultPath, "-c", "model_reasoning_effort=high", "-m", model, "--sandbox", "workspace-write", "-"] },
+    claude: { command: "claude", args: ["-p", "--settings", claudeSandbox, "--output-format", "text", "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash", "--disallowedTools", "WebFetch,WebSearch,Agent", "--model", model] },
+    cursor: { command: "agent", args: ["--print", "--trust", "--auto-review", "--workspace", cwd, "--output-format", "text", "--sandbox", "enabled", "--model", model] },
     opencode: { command: "opencode", args: ["run", "--pure", "--dir", cwd, "-m", model] },
     pi: { command: "pi", args: ["--no-session", "--no-context-files", "--no-extensions", "--no-skills", "--tools", "read,grep,find,ls,write,edit", "--model", model, "--thinking", "high", "--print"] },
     antigravity: { command: "agy", args: ["--prompt", antigravityPrompt, "--print-timeout", "123s", "--mode", "accept-edits", "--disable-slash-commands", "--sandbox"] },
@@ -318,7 +341,7 @@ test("dry-run uses the same real adapter builder and argv as launch for all seve
       copy: null,
       model: "provider/model; literally-not-a-shell-command",
       reasoning: "high",
-      sandbox: name === "codex" ? "read-only" : "workspace-write",
+      sandbox: "workspace-write",
       "network-access": "enabled",
     };
     const cli = { creating: false, runId: `dry-${name}`, timeoutSeconds: 123, values };
@@ -344,20 +367,23 @@ test("dry-run uses the same real adapter builder and argv as launch for all seve
     assert.equal(actual.cwd, launched.cwd, name);
     assert.deepEqual(normalize(actual.args), normalize(launched.args), name);
     assert.equal(actual.validation, "adapter_build_invocation", name);
-    assert.equal(actual.launch_boundary, "host_sandbox_required_do_not_execute_raw", name);
+    assert.equal(actual.launch_boundary, "host_supervisor_required_do_not_execute_raw", name);
   }
 });
 
-test("Codex and Cursor disable only their nested sandbox under the required host boundary", () => {
+test("Codex and Cursor request their native sandbox without an outer Relay boundary", () => {
   for (const phase of ["dispatch", "primary_review"]) {
     const codex = invocationFor(getAdapter("codex"), phase), cursor = invocationFor(getAdapter("cursor"), phase);
-    assert.deepEqual(codex.args.slice(codex.args.indexOf("--sandbox"), codex.args.indexOf("--sandbox") + 2), ["--sandbox", "danger-full-access"]);
+    assert.deepEqual(codex.args.slice(codex.args.indexOf("--sandbox"), codex.args.indexOf("--sandbox") + 2), ["--sandbox", phase === "primary_review" ? "read-only" : "workspace-write"]);
     assert.equal(codex.args.includes("--skip-git-repo-check"), phase === "primary_review");
     assert.equal(codex.args.includes("--add-dir"), false);
-    assert.deepEqual(cursor.args.slice(cursor.args.indexOf("--sandbox"), cursor.args.indexOf("--sandbox") + 2), ["--sandbox", "disabled"]);
+    assert.deepEqual(cursor.args.slice(cursor.args.indexOf("--sandbox"), cursor.args.indexOf("--sandbox") + 2), ["--sandbox", "enabled"]);
     assert.deepEqual(cursor.privateEnvPaths, [{ key: "CURSOR_CONFIG_DIR", root: "home", relative: ".cursor" }, { key: "CURSOR_DATA_DIR", root: "scratch", relative: "cursor-data" }]);
   }
   assert.equal(getAdapter("cursor").capabilities({ phase: "dispatch", request: { sandbox: "read-only", networkAccess: "enabled" } }).supported, true);
+  assert.deepEqual(contract.filesystemIsolationDiagnostic(getAdapter("codex"), "dispatch", {
+    sandbox: "read-only", readOnly: true, networkAccess: "enabled",
+  }), { requested: "read-only", effective: "native", diagnostic: null });
 });
 
 test("adapter metadata is static and carries no integration side channel", () => {
@@ -375,13 +401,27 @@ test("adapter metadata is static and carries no integration side channel", () =>
   assert.deepEqual(getAdapter("claude").metadata.credentials.envHints, ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
 });
 
-test("Claude disables customizations without disabling explicit OAuth in either phase", () => {
-  for (const phase of ["dispatch", "primary_review"]) {
-    const invocation = invocationFor(getAdapter("claude"), phase);
-    assert.equal(invocation.args.includes("--safe-mode"), true, phase);
-    assert.equal(invocation.args.includes("--bare"), false, phase);
-  }
-  assert.equal(invocationFor(getAdapter("claude"), "primary_review").args.includes("--no-session-persistence"), true);
+test("Claude dispatch enables native Bash while primary review is tool-read-only", () => {
+  const dispatchInvocation = invocationFor(getAdapter("claude"));
+  const reviewInvocation = invocationFor(getAdapter("claude"), "primary_review");
+  assert.equal(dispatchInvocation.args.includes("--settings"), true);
+  assert.equal(dispatchInvocation.args.includes(JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false } })), true);
+  assert.equal(dispatchInvocation.args.some((value) => value.includes("Bash")), true);
+  assert.equal(dispatchInvocation.args.includes("--bare"), false);
+  assert.equal(reviewInvocation.args.includes("--settings"), false);
+  assert.equal(reviewInvocation.args.includes("--safe-mode"), true);
+  assert.equal(reviewInvocation.args.includes("Read,Bash"), false);
+  assert.equal(reviewInvocation.args.includes("Read"), true);
+  assert.equal(reviewInvocation.args.includes("Bash,Write,Edit,WebFetch,WebSearch,Agent"), true);
+  assert.equal(reviewInvocation.args.includes("--no-session-persistence"), true);
+  assert.deepEqual(contract.filesystemIsolationDiagnostic(getAdapter("claude"), "dispatch"), {
+    requested: "enabled", effective: "native_bash",
+    diagnostic: "claude enables its native Bash sandbox; built-in file tools remain permission-bound rather than filesystem-sandboxed.",
+  });
+  assert.deepEqual(contract.filesystemIsolationDiagnostic(getAdapter("claude"), "primary_review", { readOnly: true }), {
+    requested: "not_requested", effective: "not_requested",
+    diagnostic: "claude native filesystem isolation is not requested for read-only primary review; continuing directly on the trusted local host.",
+  });
   assert.equal(getAdapter("claude").capabilities({ phase: "dispatch" }).networkControl, "informational");
   assert.throws(() => getAdapter("claude").buildInvocation({ phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath,
     sandbox: "workspace-write", networkAccess: "disabled" }), /tool network disable/);

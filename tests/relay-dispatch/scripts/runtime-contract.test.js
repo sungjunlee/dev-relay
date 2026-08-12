@@ -315,39 +315,7 @@ process.stdin.on("end", () => process.stdout.write(JSON.stringify({
     buildInvocation: ({ cwd }) => ({ command: process.execPath, args: ["-e", ""], cwd, stdinPath: transcriptPath }),
     parseOutcome,
   }), /stdin must be inside/);
-  const maliciousSource = `
-const fs = require("fs");
-const { execFileSync } = require("child_process");
-let leak = null;
-let denied = false;
-try { leak = fs.readFileSync(${JSON.stringify(transcriptPath)}, "utf8"); }
-catch { denied = true; }
-let childLeak = null;
-let childDenied = false;
-try {
-  childLeak = execFileSync(process.execPath, ["-e", ${JSON.stringify(`process.stdout.write(require("fs").readFileSync(${JSON.stringify(transcriptPath)}, "utf8"))`)}], { encoding: "utf8" });
-} catch { childDenied = true; }
-process.stdout.write(JSON.stringify({
-  verdict: "lgtm", leak, denied, childLeak, childDenied,
-  githubToken: process.env.GH_TOKEN || null,
-}));
-`;
-  const previousGhToken = process.env.GH_TOKEN;
-  process.env.GH_TOKEN = "must-not-reach-reviewer";
-  const isolated = runtime.invokeIndependentReviewer({
-    runDir,
-    request,
-    buildInvocation: ({ cwd }) => ({ command: process.execPath, args: ["-e", maliciousSource], cwd }),
-    parseOutcome,
-  });
-  if (previousGhToken === undefined) delete process.env.GH_TOKEN;
-  else process.env.GH_TOKEN = previousGhToken;
-  assert.equal(isolated.output.leak, null);
-  assert.equal(isolated.output.denied, true);
-  assert.equal(isolated.output.childLeak, null);
-  assert.equal(isolated.output.childDenied, true);
-  assert.equal(isolated.output.githubToken, null);
-  const immutableInputs = runtime.invokeIndependentReviewer({
+  assert.throws(() => runtime.invokeIndependentReviewer({
     runDir,
     request,
     buildInvocation: ({ cwd, diffPath: stagedDiff, promptPath: stagedPrompt, doneCriteriaPath: stagedCriteria }) => ({
@@ -364,13 +332,10 @@ process.stdout.write(JSON.stringify({ verdict: "lgtm", ...result }));
       cwd,
     }),
     parseOutcome,
-  });
-  for (const label of ["diff", "prompt", "criteria"]) {
-    assert.match(immutableInputs.output[label], /^denied:/);
-  }
+  }), /changed after immutable staging/);
 }));
 
-test("RR-07b staged runtime executes a direct adapter when host isolation is available and otherwise fails closed", gate(async (runtime) => {
+test("RR-07b staged runtime executes a direct native adapter without Relay sandbox admission", gate(async (runtime) => {
   const { runDir, record } = createIdentity(runtime, "direct-adapter");
   const diffPath = path.join(runDir, "review.patch");
   const promptPath = path.join(runDir, "review.prompt.md");
@@ -392,9 +357,7 @@ printf '%s\\n' '{"verdict":"pass","summary":"direct","issues":[]}' > "$out"
   const previousPath = process.env.PATH;
   process.env.PATH = `${binDir}${path.delimiter}${previousPath}`;
   try {
-    let outcome;
-    try {
-      outcome = runtime.invokeIndependentReviewer({
+    const outcome = runtime.invokeIndependentReviewer({
         runDir,
         request: {
           diff_path: diffPath,
@@ -412,10 +375,6 @@ printf '%s\\n' '{"verdict":"pass","summary":"direct","issues":[]}' > "$out"
         }),
         parseOutcome: (input) => adapter.parseOutcome(input),
       });
-    } catch (error) {
-      assert.match(error.message, /filesystem isolation unavailable/);
-      return;
-    }
     assert.equal(outcome.status, "succeeded");
     assert.deepEqual(outcome.output, { verdict: "pass", summary: "direct", issues: [] });
   } finally {
@@ -458,12 +417,8 @@ test("RR-07c staged prompt binding rejects inode, symlink, and FIFO swaps while 
   assert.equal(restored.review_binding.executed_prompt_sha256, request.prompt_sha256);
 }));
 
-test("RR-07 Node 18 capability simulation fails closed without isolation", gate(async (runtime) => {
-  assert.throws(() => runtime.selectFilesystemIsolation({
-    darwinSandboxAvailable: false,
-    nodePermissionModelAvailable: false,
-    isNodeCommand: true,
-  }), /macOS sandbox-exec is required/);
+test("RR-07 trusted-local review requires no platform-specific filesystem admission", gate(async (runtime) => {
+  assert.equal(typeof runtime.invokeIndependentReviewer, "function");
 }));
 
 test("RR-08 Relay explicit merge", gate(async (runtime) => {

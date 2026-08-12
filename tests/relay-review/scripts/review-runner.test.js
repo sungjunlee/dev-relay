@@ -873,3 +873,91 @@ test("a prompt or diff swap after staging cannot be bound to the reviewer verdic
     assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
   }
 });
+
+test("a production reviewer that mutates its staged prompt fails closed without a review fact", async () => {
+  const value = await fixture("production-staged-mutation");
+  const bin = path.join(value.root, "bin");
+  fs.mkdirSync(bin);
+  const codex = path.join(bin, "codex");
+  fs.writeFileSync(codex, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const prompt = fs.readdirSync(process.cwd()).find((name) => name.startsWith("review-prompt-"));
+fs.appendFileSync(path.join(process.cwd(), prompt), "mutated by reviewer\\n");
+const output = process.argv[process.argv.indexOf("-o") + 1];
+fs.writeFileSync(output, JSON.stringify({ verdict: "pass", summary: "forged", issues: [] }));
+`, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath}`;
+  try {
+    await assert.rejects(
+      runner.runReview(value.cli, { inspectRun: value.inspectRun }),
+      (error) => error.code === "REVIEW_INPUT_BINDING_CHANGED" && /staged review prompt changed/.test(error.message),
+    );
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+  }
+  assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
+});
+
+test("a staged-input mutation outranks invalid reviewer output and remains zero-fact", async () => {
+  const value = await fixture("production-staged-mutation-invalid-output");
+  const bin = path.join(value.root, "bin");
+  fs.mkdirSync(bin);
+  const codex = path.join(bin, "codex");
+  fs.writeFileSync(codex, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const prompt = fs.readdirSync(process.cwd()).find((name) => name.startsWith("review-prompt-"));
+fs.appendFileSync(path.join(process.cwd(), prompt), "mutated by reviewer\\n");
+const output = process.argv[process.argv.indexOf("-o") + 1];
+fs.writeFileSync(output, "not-json");
+`, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath}`;
+  try {
+    await assert.rejects(
+      runner.runReview(value.cli, { inspectRun: value.inspectRun }),
+      (error) => error.code === "REVIEW_INPUT_BINDING_CHANGED" && /staged review prompt changed/.test(error.message),
+    );
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+  }
+  assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
+});
+
+test("a production staged-input mutation remains zero-fact when a fully reaped reviewer reports a survivor", async () => {
+  const value = await fixture("production-staged-mutation-survivor");
+  const bin = path.join(value.root, "bin");
+  fs.mkdirSync(bin);
+  const codex = path.join(bin, "codex");
+  fs.writeFileSync(codex, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const prompt = fs.readdirSync(process.cwd()).find((name) => name.startsWith("review-prompt-"));
+fs.appendFileSync(path.join(process.cwd(), prompt), "mutated by reviewer\\n");
+const output = process.argv[process.argv.indexOf("-o") + 1];
+fs.writeFileSync(output, JSON.stringify({ verdict: "pass", summary: "forged", issues: [] }));
+`, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const realReap = host.hostInvocation.reapProcessGroup;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath}`;
+  host.hostInvocation.reapProcessGroup = (...args) => ({
+    ...realReap(...args),
+    survived_terminal: true,
+    unverified: false,
+  });
+  try {
+    await assert.rejects(
+      runner.runReview(value.cli, { inspectRun: value.inspectRun }),
+      (error) => error.review_input_error?.code === "REVIEW_INPUT_BINDING_CHANGED"
+        && /staged review prompt changed/.test(error.review_input_error.message)
+        && error.runtime_audit?.process_group_absent === true
+        && error.runtime_audit?.process_scope_remaining === 0,
+    );
+  } finally {
+    host.hostInvocation.reapProcessGroup = realReap;
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+  }
+  assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
+});

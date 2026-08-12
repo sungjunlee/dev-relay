@@ -1,11 +1,9 @@
 const fs = require("fs");
 const { createNativeAdapter } = require("../adapter-contract");
 
-function validateDispatch({ sandbox, networkAccess }) {
-  void networkAccess;
-  const warnings = sandbox === "workspace-write" ? [] : [`--sandbox '${sandbox}' is not supported for Claude executor; using the relay's native tool allowlist`];
-  return { ok: true, warnings };
-}
+const NATIVE_BASH_SANDBOX = JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false } });
+
+function validateDispatch({ sandbox, networkAccess }) { void sandbox; void networkAccess; return { ok: true, warnings: [] }; }
 
 module.exports = createNativeAdapter({
   name: "claude",
@@ -27,13 +25,12 @@ module.exports = createNativeAdapter({
     ], envHints: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
   },
   phases: {
-    // buildDispatch pins --disallowedTools Bash,...: no shell, no command execution.
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text", commandExecution: false },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "native_bash", cancellation: "process", structuredOutput: "text", commandExecution: true },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "not_requested", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, model }) {
-    return { command: "claude", args: ["-p", "--safe-mode", "--output-format", "text", "--allowedTools", "Read,Write,Edit,Glob,Grep", "--disallowedTools", "Bash,WebFetch,WebSearch,Agent", ...(model ? ["--model", model] : [])], cwd, stdinPath: promptPath, stdinSha256: promptSha256 };
+    return { command: "claude", args: ["-p", "--settings", NATIVE_BASH_SANDBOX, "--output-format", "text", "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash", "--disallowedTools", "WebFetch,WebSearch,Agent", ...(model ? ["--model", model] : [])], cwd, stdinPath: promptPath, stdinSha256: promptSha256 };
   },
   buildReview({ cwd, promptPath, promptSha256, schemaPath, model }) {
     if (!schemaPath) throw new Error("claude primary review requires a staged JSON schema");

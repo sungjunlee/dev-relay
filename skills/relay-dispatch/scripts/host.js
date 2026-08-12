@@ -12,7 +12,6 @@ const OWNER_RE = /^(\d{12})\.owner\.json$/;
 const ATTEMPT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,126}[A-Za-z0-9])?$/;
 const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out", "spawn_error"]);
 const BREAK_PROBE_MS = 10_000;
-const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 const PROCESS_SCOPE_KEY = "RELAY_PROCESS_SCOPE";
 const PROCESS_CONTRACT = "inherited_scope_no_daemon";
 const PS_ROW_RE = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/;
@@ -127,7 +126,6 @@ function atomicWrite(target, value) {
     fs.closeSync(fd); fd = undefined; fs.renameSync(temporary, target); syncDir(directory);
   } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {}; try { fs.unlinkSync(temporary); } catch {} }
 }
-function quote(value) { return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"'); }
 function resolveExecutable(command, env = process.env) {
   if (typeof command !== "string" || !command || command.includes("\0") || (!path.isAbsolute(command) && command.includes(path.sep))) {
     fail("command must be a bare name or absolute path", "INVALID_INVOCATION");
@@ -168,25 +166,6 @@ function regularFileBinding(filePath, label, { canonical = true } = {}) {
     const bytes = fs.readFileSync(fd);
     return { path: filePath, size: bytes.length, sha256: sha256(bytes), dev: stat.dev, ino: stat.ino, bytes };
   } finally { fs.closeSync(fd); }
-}
-function trustedSystemCaFile() {
-  let canonical;
-  try { canonical = fs.realpathSync("/etc/ssl/cert.pem"); }
-  catch (error) {
-    // A missing system CA bundle must fail typed like every other trust violation in this function,
-    // not surface as a raw ENOENT that callers cannot classify.
-    if (error.code === "ENOENT") fail("system CA bundle is absent: /etc/ssl/cert.pem", "UNTRUSTED_SYSTEM_CA");
-    throw error;
-  }
-  const fd = fs.openSync(canonical, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-  try {
-    const stat = fs.fstatSync(fd), pathStat = fs.lstatSync(canonical);
-    if (!stat.isFile() || pathStat.isSymbolicLink() || stat.dev !== pathStat.dev || stat.ino !== pathStat.ino
-      || canonical !== path.resolve(canonical) || fs.realpathSync(canonical) !== canonical || stat.uid !== 0 || (stat.mode & 0o022) !== 0)
-      fail("system CA bundle is not a canonical root-owned regular file", "UNTRUSTED_SYSTEM_CA");
-    const header = Buffer.alloc(4096), count = fs.readSync(fd, header, 0, header.length, 0);
-    if (!header.subarray(0, count).includes(Buffer.from("BEGIN CERTIFICATE"))) fail("system CA bundle has no certificate data", "UNTRUSTED_SYSTEM_CA");
-  } finally { fs.closeSync(fd); } return canonical;
 }
 function verifyFileBinding(binding, label) {
   if (!binding || typeof binding !== "object" || typeof binding.path !== "string") fail(`${label} binding is invalid`, "HOST_CONFIG_MISMATCH");
@@ -285,19 +264,6 @@ function shebangExecutables(executable, env) {
   }
   return [...new Set(found)];
 }
-function sandboxFile(value, label, mustExist) {
-  if (typeof value !== "string" || !path.isAbsolute(value)) fail(`${label} must be absolute`, "INVALID_PATH");
-  const resolved = path.resolve(value), parent = canonicalDir(path.dirname(resolved), `${label} parent`);
-  if (path.dirname(resolved) !== parent) fail(`${label} parent must be canonical`, "UNTRUSTED_PATH");
-  try {
-    const stat = fs.lstatSync(resolved);
-    if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(resolved) !== resolved) fail(`${label} is unsafe`, "UNTRUSTED_PATH");
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-    if (mustExist) fail(`${label} does not exist`, "INVALID_PATH");
-  }
-  return resolved;
-}
 function runtimeDependencyRules(executables, declaration = { executableParent: null, interpreterParent: null }, environment = process.env) {
   if (Object.keys(declaration || {}).sort().join(",") !== "executableParent,interpreterParent") fail("runtime dependency declaration is invalid", "INVALID_INVOCATION");
   const rootFor = (file, depth) => {
@@ -362,43 +328,13 @@ function verifyRuntimeFileBindings({ command, runtimeFiles, runtimeDependencies,
     if (current.command !== command || !same) fail("runtime executable closure changed after launch", "HOST_RUNTIME_CHANGED");
   } for (const [index, binding] of runtimeFiles.entries()) verifyFileBinding(binding, `runtime executable dependency ${index}`); return command;
 }
-function sandboxInvocation({ role, command, args = [], readRoots = [], writeRoots = [], readFiles = [], writeFiles = [], denyWriteFiles = [],
-  runtimeDependencies = { executableParent: null, interpreterParent: null }, networkAccess = "disabled", env = process.env, ownershipDir = null, platform = process.platform } = {}) {
-  if (platform !== "darwin") fail("macOS sandbox-exec is required", "EXECUTOR_WRITE_ISOLATION_UNAVAILABLE", { recommended_action: "inspect" });
-  try { fs.accessSync(SANDBOX_EXEC, fs.constants.X_OK); } catch (cause) {
-    fail("macOS sandbox-exec is unavailable", "EXECUTOR_WRITE_ISOLATION_UNAVAILABLE", { cause, recommended_action: "inspect" });
-  }
-  if (!new Set(["executor", "reviewer"]).has(role)) fail("sandbox role is invalid", "INVALID_INVOCATION");
-  if (!new Set(["enabled", "disabled"]).has(networkAccess)) fail("sandbox network policy is invalid", "INVALID_INVOCATION");
-  if (Object.hasOwn(env, "SSL_CERT_FILE")) fail("SSL_CERT_FILE is host-reserved", "INVALID_INVOCATION");
+// Relay executes directly on a trusted local host. Filesystem policy is requested
+// from the selected CLI when available; Relay owns no filesystem admission or
+// profile compiler. Runtime bindings and process-scope cleanup remain separate
+// host guarantees below.
+function hostInvocation({ command, args = [], env = process.env } = {}) {
   if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) fail("args must be string argv", "INVALID_INVOCATION");
-  const executable = resolveExecutable(command, env);
-  const reads = [...new Set(readRoots.map((root) => canonicalDir(root, "sandbox read root")))];
-  const writes = [...new Set(writeRoots.map((root) => canonicalDir(root, "sandbox write root")))];
-  const readableFiles = [...new Set(readFiles.map((file) => sandboxFile(file, "sandbox read file", true)))];
-  const writableFiles = [...new Set(writeFiles.map((file) => sandboxFile(file, "sandbox write file", false)))];
-  const deniedWriteFiles = [...new Set(denyWriteFiles.map((file) => sandboxFile(file, "sandbox denied write file", true)))];
-  const readRules = [...reads.map((root) => `(subpath "${quote(root)}")`), ...readableFiles.map((file) => `(literal "${quote(file)}")`)].join(" ");
-  const writeRules = [...writes.map((root) => `(subpath "${quote(root)}")`), ...writableFiles.map((file) => `(literal "${quote(file)}")`)].join(" ");
-  const denyOwner = ownershipDir ? `(deny file-read* file-write* (subpath "${quote(path.resolve(ownershipDir))}"))` : "";
-  const runtimeExecutables = shebangExecutables(executable, env);
-  const linkedLibraries = darwinLinkedLibraryFiles(runtimeExecutables);
-  const runtimeRules = [...runtimeExecutables.map((item) => `(literal "${quote(item)}")`), ...linkedLibraries.map((item) => `(literal "${quote(item)}")`),
-    ...darwinRuntimeSupportFiles(linkedLibraries).map((item) => `(literal "${quote(item)}")`),
-    ...runtimeDependencyRules(runtimeExecutables, runtimeDependencies, env).map((root) => `(subpath "${quote(root)}")`)].join(" ");
-  const deniedWrites = deniedWriteFiles.map((file) => `(deny file-write* (literal "${quote(file)}"))`).join(" ");
-  const transportMach = networkAccess === "enabled"
-    ? '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd") (global-name "com.apple.system.opendirectoryd.libinfo") (global-name "com.apple.trustd.agent"))'
-    : "";
-  const systemCa = networkAccess === "enabled" ? trustedSystemCaFile() : null;
-  const systemCaRule = systemCa ? `(literal "${quote(systemCa)}")` : "";
-  const profile = [
-    "(version 1)", "(deny default)", "(allow process*)", "(allow process-fork)", "(allow process-exec*)", "(allow signal (target self))", '(deny process-exec (literal "/usr/bin/osascript"))',
-    "(deny appleevent-send)", "(allow sysctl-read)", "(allow file-read-metadata)", transportMach, ...(networkAccess === "enabled" ? ["(allow network*)"] : []),
-    `(allow file-read* ${readRules} (literal "/") ${runtimeRules} ${systemCaRule} (subpath "/System") (subpath "/usr") (subpath "/bin") (subpath "/Library") (subpath "/private/var/db") (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))`,
-    `(allow file-write* ${writeRules} (literal "/dev/null"))`, deniedWrites, denyOwner,
-  ].join("");
-  return Object.freeze({ command: SANDBOX_EXEC, args: ["-p", profile, executable, ...args], env: { ...env, ...(systemCa ? { SSL_CERT_FILE: systemCa } : {}) } });
+  return Object.freeze({ command: resolveExecutable(command, env), args: [...args], env: { ...env } });
 }
 // macOS exposes only second-resolution `lstart` (no kern.proc.pid start microseconds through a safe CLI),
 // so a same-second PID reuse is indistinguishable by identity alone. Every signal target is therefore also
@@ -519,18 +455,18 @@ function auditProcessScope(capability) {
   if (!gateIdentity) fail("process scope audit identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
   return escapedProcessAudit({ baseline: state.baseline, scopeToken: state.token, gateIdentity });
 }
-sandboxInvocation.beginProcessScope = beginProcessScope;
-sandboxInvocation.auditProcessScope = auditProcessScope;
-sandboxInvocation.privatePathEnvironment = privatePathEnvironment;
-sandboxInvocation.bindRegularFile = (filePath, label) => regularFileBinding(filePath, label, { canonical: false });
-sandboxInvocation.bindRuntimeFiles = ({ command, env = process.env, runtimeDependencies = { executableParent: null, interpreterParent: null } } = {}) => {
+hostInvocation.beginProcessScope = beginProcessScope;
+hostInvocation.auditProcessScope = auditProcessScope;
+hostInvocation.privatePathEnvironment = privatePathEnvironment;
+hostInvocation.bindRegularFile = (filePath, label) => regularFileBinding(filePath, label, { canonical: false });
+hostInvocation.bindRuntimeFiles = ({ command, env = process.env, runtimeDependencies = { executableParent: null, interpreterParent: null } } = {}) => {
   const prepared = runtimeBindingSet(command, env, runtimeDependencies);
   return Object.freeze({ command: prepared.command, runtime_files: Object.freeze(prepared.runtimeFiles.map((binding) => Object.freeze({ ...binding }))) });
 };
-sandboxInvocation.verifyRuntimeFiles = ({ command, runtimeFiles, runtimeDependencies = { executableParent: null, interpreterParent: null }, env = process.env, reenumerate = true } = {}) =>
+hostInvocation.verifyRuntimeFiles = ({ command, runtimeFiles, runtimeDependencies = { executableParent: null, interpreterParent: null }, env = process.env, reenumerate = true } = {}) =>
   verifyRuntimeFileBindings({ command, runtimeFiles, runtimeDependencies, environment: env, reenumerate });
-sandboxInvocation.readOwnerCredential = (filePath, label) => credentialSource(filePath, label).bytes;
-sandboxInvocation.removeBoundDirectory = removeBoundDirectory;
+hostInvocation.readOwnerCredential = (filePath, label) => credentialSource(filePath, label).bytes;
+hostInvocation.removeBoundDirectory = removeBoundDirectory;
 function waitForProcessGroupAbsence(pgid, timeoutMs) { return Boolean(pollUntil(() => !groupExists(pgid), timeoutMs, 10)); }
 function reapProcessGroup(pgid, seal) {
   if (!Number.isInteger(pgid) || pgid <= 0 || process.platform === "win32" || !groupExists(pgid)) {
@@ -547,7 +483,7 @@ function reapProcessGroup(pgid, seal) {
   const absent = !groupExists(pgid);
   return { survived_terminal: survived, absent, unverified: !absent && !scopedGroupMembers(pgid, seal).length };
 }
-sandboxInvocation.reapProcessGroup = reapProcessGroup;
+hostInvocation.reapProcessGroup = reapProcessGroup;
 function ownerDirectory(runDir, create = false) {
   const run = canonicalDir(runDir, "runDir"), directory = path.join(run, OWNERSHIP);
   if (create) { try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (error.code !== "EEXIST") throw error; } syncDir(run); }
@@ -976,7 +912,7 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   if (testCredentialPrepared !== null && typeof testCredentialPrepared !== "function") fail("test credential seam is invalid", "INVALID_INVOCATION");
   const gateBarrier = testGateBarrierPath ? directChild(run, testGateBarrierPath, "test gate barrier") : null;
   const cleanupFailure = testCleanupFailurePath ? directChild(run, testCleanupFailurePath, "test cleanup failure", { exists: true }) : null;
-  const runtime = sandboxInvocation.bindRuntimeFiles({ command, env: process.env, runtimeDependencies });
+  const runtime = hostInvocation.bindRuntimeFiles({ command, env: process.env, runtimeDependencies });
   const paths = attemptPaths(run, attemptId), stdout = directChild(run, stdoutPath || path.join(run, `attempt-${attemptId}.stdout.log`), "stdout"),
     stderr = directChild(run, stderrPath || path.join(run, `attempt-${attemptId}.stderr.log`), "stderr"),
     result = directChild(run, resultPath || path.join(run, `attempt-${attemptId}.result.json`), "result"),
@@ -1138,16 +1074,11 @@ function runExecutorGate(configPath, configSha) {
     stageCredentials(config, gateSecrets.credential_files, stagedCredentials);
     Object.assign(runtimeEnvironment, privatePathEnvironment(config.private_env_paths, stagedCredentials.roots, runtimeEnvironment, "HOST_CONFIG_MISMATCH"));
     runtimeEnvironment.HOME = stagedCredentials.roots.home; runtimeEnvironment.XDG_CONFIG_HOME = stagedCredentials.roots.xdg_config; runtimeEnvironment.XDG_DATA_HOME = stagedCredentials.roots.xdg_data;
-    const privateRoots = Object.values(stagedCredentials.roots), writes = [config.tmp, ...privateRoots, ...(config.sandbox === "workspace-write" ? [config.worktree] : [])];
-    const invocation = sandboxInvocation({ role: "executor", command: config.command, args: config.args, readRoots: [config.worktree, ...privateRoots],
-      readFiles: [...inputPaths, ...stagedCredentials.readable], writeRoots: writes, writeFiles: [...(config.executor_result ? [config.executor_result] : []), ...stagedCredentials.writable],
-      denyWriteFiles: stagedCredentials.readonly, runtimeDependencies: config.runtime_dependencies, networkAccess: config.network, ownershipDir: config.ownership,
-      env: runtimeEnvironment });
-    // `sandboxInvocation` resolves Mach-O and support paths for its profile.
+    const invocation = hostInvocation({ command: config.command, args: config.args, env: runtimeEnvironment });
     // Verify immediately before pathname spawn, then again after it exits.
     // The two observations deliberately do not claim an atomic exec/dyld byte
     // pin; any observed closure mutation makes the terminal non-successful.
-    sandboxInvocation.verifyRuntimeFiles({ command: config.command, runtimeFiles: config.runtime_files, runtimeDependencies: config.runtime_dependencies, env: runtimeEnvironment });
+    hostInvocation.verifyRuntimeFiles({ command: config.command, runtimeFiles: config.runtime_files, runtimeDependencies: config.runtime_dependencies, env: runtimeEnvironment });
     const baseline = processBaseline(), tracked = new Map(), gateIdentity = fingerprint(process.pid);
     if (!gateIdentity) fail("executor gate identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
     const scopeToken = runtimeEnvironment[PROCESS_SCOPE_KEY];
@@ -1184,7 +1115,7 @@ function runExecutorGate(configPath, configSha) {
           obligation: { processes: audit.remaining_identities, credential_root: credentialRoot, scope_seal: config.scope_seal } });
         if (audit.matched) return publish({ status: "failed", exit_code: fields.exit_code, signal: fields.signal,
           error: `escaped process audit failed: matched=${audit.matched} reaped=${audit.reaped} remaining=${audit.remaining}` });
-        try { sandboxInvocation.verifyRuntimeFiles({ command: config.command, runtimeFiles: config.runtime_files, runtimeDependencies: config.runtime_dependencies, env: runtimeEnvironment, reenumerate: false }); }
+        try { hostInvocation.verifyRuntimeFiles({ command: config.command, runtimeFiles: config.runtime_files, runtimeDependencies: config.runtime_dependencies, env: runtimeEnvironment, reenumerate: false }); }
         catch (error) { return publish({ status: "failed", exit_code: fields.exit_code, signal: fields.signal,
           error: `runtime executable closure changed during execution: ${error.message}` }); }
         return publish(fields);
@@ -1309,5 +1240,5 @@ module.exports = {
   inspectOwnership,
   breakStaleRunLock,
   retainReviewerCleanup,
-  sandboxInvocation,
+  hostInvocation,
 };

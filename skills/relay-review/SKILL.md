@@ -3,7 +3,7 @@ name: relay-review
 argument-hint: "[run-id]"
 description: Use when a recovered Relay run has an exact local Git or PR head and verification proof ready for independent review.
 context: fork
-compatibility: Requires git and Node.js 22+; gh CLI is required only for the retained GitHub route. macOS sandbox-exec is required for direct reviewer CLI isolation.
+compatibility: Requires git and Node.js 22+ on a trusted local development host; gh CLI is required only for the retained GitHub route.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-merge"
   keywords: "리뷰, 검토, review, exact SHA, fresh context"
@@ -52,7 +52,7 @@ The runner:
 2. Calls canonical `inspect` and requires the derived action `review`.
 3. Requires either the exact fresh local Git head/tree and passed verification proof, or the exact durable/live PR identity, PR head, and passed verification proof, for the frozen Done Criteria hash.
 4. Builds one review bundle containing only the immutable contract, exact diff, delivery identity, and verification fact. It never includes the dispatch prompt, executor transcript, session id, or mutable lifecycle state.
-5. Stages that bundle in an isolated temporary directory and asks the bound adapter for a direct read-only structured-output invocation.
+5. Stages that bundle in a private temporary directory and asks the bound adapter for a direct structured-output invocation; immutable staged bytes are checked before and after it runs.
 6. Re-enters the per-run lock, repeats inspection, and appends exactly one `review_recorded` fact.
 7. Re-inspects and returns the next derived action.
 
@@ -64,15 +64,15 @@ The reviewer returns only:
 
 `pass` is stored as `lgtm`; `changes_requested` derives `redispatch`; reviewer invocation or result errors are durably recorded as `escalated`. A runtime invocation failure permits one explicit `review` retry bound to its fact; a second failure fails closed. Model-returned escalation is not retryable. Rounds are derived from prior `review_recorded` facts. There is no automatic loop, review budget, mutable round state, manual verdict application, detached review supervisor, PR-comment authority, or lifecycle transition.
 
-## Isolation and failure behavior
+## Execution and failure behavior
 
 - Credentials are explicit only: repeat `--credential-env NAME` or a declared
   adapter `--credential-file ID=/absolute/source`. Sources must be canonical,
   owner-only regular files. They are copied into a private staged HOME/XDG tree
   and removed after invocation; GitHub tokens are never inherited.
 - GitHub-route reviewers use `--network-access enabled` (the default); selecting `disabled` fails before invocation. Enabled transport is unrestricted reviewer-process network and does not claim provider-only or tool-network separation. Local review has no forge transport requirement.
-- macOS uses `sandbox-exec` around the actual reviewer CLI and exposes only staged inputs plus required system/executable paths.
-- Linux does not claim direct CLI isolation through Node's permission model; unsupported hosts fail closed.
+- Relay runs directly on the trusted local host. It requests the adapter's native filesystem isolation where available; absent or declaration-only isolation is returned as a non-durable `filesystem_isolation` diagnostic and does not reject review.
+- The staged prompt, diff, criteria, schema, and executable bindings are rechecked after invocation. Any mutation or drift yields no review fact.
 - A stale PR head, missing verification, changed action, unsupported adapter, or reviewer-binding mismatch writes no review fact.
 
 See [runner notes](references/runner-notes.md) and the [adapter platform](../relay-dispatch/references/agent-adapter-platform.md).

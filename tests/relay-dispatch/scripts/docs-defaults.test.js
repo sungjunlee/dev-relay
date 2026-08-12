@@ -254,7 +254,7 @@ test("operator docs mention every supported dispatch and review adapter", () => 
     }
   }
 
-  assert.match(readRepoFile(ADAPTER_PLATFORM_DOC), /agy`? CLI only/);
+  assert.match(readRepoFile(ADAPTER_PLATFORM_DOC), /agy`? CLI with its declared, unverified `--sandbox`/);
 });
 
 test("operator guide readiness mirrors the current adapter contract", () => {

@@ -35,7 +35,7 @@ module.exports = createNativeAdapter({
     { id: "providers", targetRoot: "home", targetRel: ".cline/data/settings/providers.json", access: "read_write", recommendedSource: "~/.cline/data/settings/providers.json" },
   ], envHints: [] } },
   phases: {
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "jsonl", commandExecution: true },
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "jsonl", commandExecution: true },
     primary_review: { supported: false, reason: "Cline primary review remains blocked pending a strict live canary" },
   },
   validateDispatch,

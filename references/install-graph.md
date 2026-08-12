@@ -37,5 +37,8 @@ utility, or migration-overlay module.
 | Config | `relay-config/scripts/relay-config.js` | Read-only adapter capability validation. |
 
 All public commands use Node.js and Git; GitHub operations require authenticated
-`gh`. Direct local executor/reviewer sandboxing requires macOS `sandbox-exec`.
-Unsupported containment hosts fail closed rather than silently widening access.
+`gh`. Executors and reviewers launch directly on the trusted local host on all
+supported OSes. Adapter-native filesystem controls are requested where present;
+their absence is a nonblocking diagnostic, not a Relay sandbox or admission
+failure. Immutable contained review paths and post-run bindings remain
+fail-closed.

@@ -11,7 +11,7 @@ const path = require("path");
 const { parseArgs: parseNodeArgs } = require("util");
 
 const { getAdapter, listAdapters } = require("./adapters");
-const { assertInvocationShape, credentialRequest: validateCredentialRequest, validateCapabilities } = require("./adapter-contract");
+const { assertInvocationShape, credentialRequest: validateCredentialRequest, filesystemIsolationDiagnostic, validateCapabilities } = require("./adapter-contract");
 const facts = require("./facts");
 const host = require("./host");
 const recover = require("./recover");
@@ -472,7 +472,7 @@ function dryRunInvocation({ cli, identity, adapter, inputs }) {
       reasoning: cli.values.reasoning || null,
     });
     return { command: invocation.command, args: [...invocation.args], cwd: invocation.cwd, validation: "adapter_build_invocation",
-      launch_boundary: "host_sandbox_required_do_not_execute_raw",
+      launch_boundary: "host_supervisor_required_do_not_execute_raw",
       prompt_transport: adapter.metadata.promptTransport, network_access: invocation.networkAccess, tool_network_access: invocation.toolNetworkAccess, private_env_paths: invocation.privateEnvPaths };
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
@@ -704,15 +704,9 @@ async function executeForeground(cli, overrides = {}) {
   const inspectRun = overrides.inspectRun || recover.inspectProductionRun;
   const identity = repositoryIdentity(canonicalCheckout(cli.repo));
   const requestedCredentials = credentialRequest(adapter, cli.values);
-  validateCapabilities(adapter, "dispatch", { sandbox: cli.values.sandbox, readOnly: cli.values.sandbox === "read-only", networkAccess: cli.values["network-access"] });
-  host.sandboxInvocation({
-    role: "executor",
-    command: process.execPath,
-    args: ["-e", ""],
-    readRoots: [identity.checkout],
-    writeRoots: [identity.checkout],
-    networkAccess: cli.values["network-access"],
-  });
+  const capabilityRequest = { sandbox: cli.values.sandbox, readOnly: cli.values.sandbox === "read-only", networkAccess: cli.values["network-access"] };
+  validateCapabilities(adapter, "dispatch", capabilityRequest);
+  const filesystemIsolation = filesystemIsolationDiagnostic(adapter, "dispatch", capabilityRequest);
   let resumeInspection = null;
   if (!cli.creating) {
     const runDir = runStore.resolveRunDirectory(identity.checkout, cli.runId);
@@ -721,10 +715,10 @@ async function executeForeground(cli, overrides = {}) {
   const inputs = loadInputs(cli, prompt);
   if (cli.values["dry-run"]) {
     const invocation = dryRunInvocation({ cli, identity, adapter, inputs });
-    return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, credential_request: requestedCredentials.summary, durable_bytes_written: 0, invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
+    return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, credential_request: requestedCredentials.summary, filesystem_isolation: filesystemIsolation, durable_bytes_written: 0, invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
   }
   const started = await startAttempt({ cli, identity, adapter, prompt: inputs.prompt, rubric: inputs.rubric, criteria: inputs.criteria, resumeInspection, inspectRun });
-  const launch = { status: "dispatched", run_id: cli.runId, run_dir: started.runDir, worktree: started.record.git.worktree, attempt_id: started.attemptId, host_handle: started.receipt.host_handle };
+  const launch = { status: "dispatched", run_id: cli.runId, run_dir: started.runDir, worktree: started.record.git.worktree, attempt_id: started.attemptId, host_handle: started.receipt.host_handle, filesystem_isolation: filesystemIsolation };
   if (process.env.RELAY_DISPATCH_NOTIFY_PATH) {
     const inspection = await recover.inspectProductionRun({ runDir: started.runDir });
     atomicJson(process.env.RELAY_DISPATCH_NOTIFY_PATH, { ...launch, dispatcher_pid: process.pid, inspection });
