@@ -120,7 +120,7 @@ async function fixture(label, { local = false } = {}) {
       facts: current,
       observations: local
         ? { git: { local_delivery: true, head_sha: head, tree_sha: tree, reviewable_dirty: false }, github: {} }
-        : { github: { pr_number: 42, pr_head_sha: head, pr_state: "OPEN" } },
+        : { github: { pr_number: 42, pr_head_sha: head, pr_base_sha: startSha, pr_state: "OPEN" } },
       derived: { action, head_sha: head, pr_number: local ? null : 42, retry_of_event_id: retryable ? review.event_id : null },
       recommended_action: { kind: action, reason: retryable ? "review_retryable_escalation" : exhausted ? "review_escalated_retry_exhausted" : review?.payload?.verdict === "escalated" ? "review_escalated" : review ? review.payload.verdict : "review_missing", key: "c".repeat(64), steps: [], required_inputs: [] },
     };
@@ -147,6 +147,7 @@ test("Relay runner records one exact-SHA pass and the derived action advances to
   assert.equal(result.done_criteria_sha256, value.criteriaHash);
   assert.equal(result.recommended_action.kind, "merge");
   assert.equal(captured.request.reviewed_sha, value.head);
+  assert.equal(captured.request.base_sha, value.startSha);
   assert.equal(captured.request.current_sha, value.head);
   const rawDiff = execFileSync("git", ["-C", value.repo, "diff", "--binary", "--no-ext-diff",
     `${value.startSha}..${value.head}`, "--"], { encoding: "utf8" });
@@ -185,6 +186,22 @@ test("Relay runner records one exact-SHA pass and the derived action advances to
   );
   await assert.rejects(runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer: async () => { throw new Error("must not run"); } }), /not 'review'/);
   assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 1);
+});
+
+test("GitHub base drift during review appends no verdict fact", async () => {
+  const value = await fixture("base-drift");
+  let inspections = 0;
+  const inspectRun = async (...args) => {
+    const result = await value.inspectRun(...args);
+    inspections += 1;
+    if (inspections > 1) result.observations.github.pr_base_sha = "f".repeat(40);
+    return result;
+  };
+  await assert.rejects(runner.runReview(value.cli, {
+    inspectRun,
+    invokeReviewer: async (input) => reviewerSuccess(input, { verdict: "pass", summary: "base moved", issues: [] }),
+  }), (error) => error.code === "REVIEW_BINDING_CHANGED");
+  assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
 });
 
 test("#1208 production-shaped no-origin review records the exact verification projection", async () => {
@@ -378,7 +395,7 @@ test("#1208 canonical fold alone controls reviewed-close branch exceptions befor
       at: "2026-08-01T00:03:00.000Z", actor: "codex",
       payload: {
         round: 1, verdict: mode === "invalid" ? "changes_requested" : "lgtm",
-        reviewed_sha: value.head, done_criteria_sha256: value.criteriaHash,
+        reviewed_sha: value.head, base_sha: value.startSha, done_criteria_sha256: value.criteriaHash,
         reviewer: "codex", review_artifact: path.join(value.runDir, "forged-review.json"),
         executed_runtime: {
           digest: crypto.createHash("sha256").update(JSON.stringify(EXECUTED_RUNTIME)).digest("hex"),

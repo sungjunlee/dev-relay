@@ -540,7 +540,7 @@ function observeGithub(runRecord, { localHeadSha = null, recordedPrNumber = null
   try {
     const rows = JSON.parse(execGh(runRecord.repo.root, [
       "pr", "list", "--repo", remote, "--head", branch, "--state", "all", "--limit", "100",
-      "--json", "number,state,url,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,isCrossRepository,mergedAt,mergeCommit,body",
+      "--json", "number,state,url,headRefName,headRefOid,baseRefName,baseRefOid,headRepository,headRepositoryOwner,isCrossRepository,mergedAt,mergeCommit,body",
     ], { timeout: 15_000 }));
     const selection = selectGithubPr(rows, { remote, branch, baseBranch, localHeadSha, recordedPrNumber });
     const pr = selection.pr;
@@ -555,7 +555,8 @@ function observeGithub(runRecord, { localHeadSha = null, recordedPrNumber = null
       pr_number: pr?.number || null, pr_state: pr?.state || null,
       head_ref: pr?.headRefName || branch, base_ref: pr?.baseRefName || baseBranch,
       head_repo: pr ? selection.headRepo(pr) : remote,
-      pr_head_sha: pr?.headRefOid || null, merge_sha: pr?.mergeCommit?.oid || null,
+      pr_head_sha: pr?.headRefOid || null, pr_base_sha: pr?.baseRefOid || null,
+      merge_sha: pr?.mergeCommit?.oid || null,
       url: pr?.url || null, body: pr?.body || null,
     };
   } catch (error) {
@@ -563,7 +564,7 @@ function observeGithub(runRecord, { localHeadSha = null, recordedPrNumber = null
       available: false, lookup_complete: false, pr_lookup_complete: false, matching_pr_count: null,
       repo: remote,
       pr_number: null, pr_state: null, head_ref: branch, base_ref: baseBranch,
-      pr_head_sha: null, merge_sha: null,
+      pr_head_sha: null, pr_base_sha: null, merge_sha: null,
       error: commandFailure(error),
     };
   }
@@ -582,13 +583,13 @@ function externalMergeObserver(record) {
     `const repo=${expectedRepo};`,
     "const b=process.argv.indexOf('--gh-bin');",
     "const bin=b>=0?process.argv[b+1]:'gh';",
-    "const ghArgs=['pr','view',String(q.pr_number),'--repo',repo,'--json','number,state,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,isCrossRepository,mergeCommit'];",
+    "const ghArgs=['pr','view',String(q.pr_number),'--repo',repo,'--json','number,state,headRefName,headRefOid,baseRefName,baseRefOid,headRepository,headRepositoryOwner,isCrossRepository,mergeCommit'];",
     "const nodeScript=process.argv.includes('--gh-node-script');",
     "const raw=execFileSync(nodeScript?process.execPath:bin,nodeScript?[bin,...ghArgs]:ghArgs,{encoding:'utf8',stdio:['ignore','pipe','pipe']});",
     "const p=JSON.parse(raw);",
     "const hr=p.headRepository&&p.headRepository.nameWithOwner||(p.headRepositoryOwner&&p.headRepositoryOwner.login&&p.headRepository&&p.headRepository.name?`${p.headRepositoryOwner.login}/${p.headRepository.name}`:null);",
     `if((q.repo&&q.repo!==repo)||p.headRefName!==${expectedHead}||p.baseRefName!==${expectedBase}||hr!==repo)throw new Error('exact PR repo/head/base identity mismatch');`,
-    "process.stdout.write(JSON.stringify({nonce:input.nonce,repo,head_repo:hr,pr_number:p.number,pr_state:p.state,pr_head_sha:p.headRefOid,head_ref:p.headRefName,base_ref:p.baseRefName,merge_sha:p.mergeCommit&&p.mergeCommit.oid}));",
+    "process.stdout.write(JSON.stringify({nonce:input.nonce,repo,head_repo:hr,pr_number:p.number,pr_state:p.state,pr_head_sha:p.headRefOid,pr_base_sha:p.baseRefOid,head_ref:p.headRefName,base_ref:p.baseRefName,merge_sha:p.mergeCommit&&p.mergeCommit.oid}));",
   ].join("");
   const args = [
     { kind: "literal", value: "-e" },

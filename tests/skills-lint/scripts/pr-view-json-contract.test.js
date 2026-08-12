@@ -79,7 +79,7 @@ test("enumerates pr view fields from an argv variable assembled separately", () 
 });
 
 test("Relay regression: missing exact merge-observation fields names finalize-run", () => {
-  const finalizeFields = "number,state,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus";
+  const finalizeFields = "number,state,headRefName,headRefOid,baseRefName,baseRefOid,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus";
   const registryWithoutFinalizeFields = Object.fromEntries(
     Object.entries(PR_VIEW_JSON_REGISTRY).filter(([fields]) => fields !== finalizeFields),
   );

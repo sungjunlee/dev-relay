@@ -187,12 +187,16 @@ function requireReviewAction(inspection, record) {
     return { head, tree, prNumber: null, verification, retryOfEventId, local: true };
   }
   const head = inspection.observations?.github?.pr_head_sha;
+  const base = inspection.observations?.github?.pr_base_sha;
   const prNumber = inspection.observations?.github?.pr_number;
   if (!SHA1_RE.test(String(head || "")) || head !== inspection.derived.head_sha) {
     fail("live PR head must exactly equal the derived current head", "REVIEW_HEAD_MISMATCH");
   }
   if (!Number.isInteger(prNumber) || prNumber < 1 || prNumber !== inspection.derived.pr_number) {
     fail("live PR identity must exactly equal the durable derived PR", "REVIEW_PR_MISMATCH");
+  }
+  if (!SHA1_RE.test(String(base || ""))) {
+    fail("live PR base must be an exact commit SHA", "REVIEW_BASE_MISSING");
   }
   const durablePr = inspection.facts.filter((fact) => fact.type === "pull_request_recorded").at(-1);
   if (!durablePr || durablePr.payload.pr_number !== prNumber || durablePr.payload.head_sha !== head) {
@@ -214,7 +218,7 @@ function requireReviewAction(inspection, record) {
   )) {
     fail("retry review action is not bound to the latest durable escalation", "REVIEW_RETRY_BINDING_MISMATCH");
   }
-  return { head, prNumber, verification, retryOfEventId, local: false };
+  return { head, base, prNumber, verification, retryOfEventId, local: false };
 }
 
 function reviewPrompt({ record, binding, criteria, diff }) {
@@ -232,6 +236,7 @@ function reviewPrompt({ record, binding, criteria, diff }) {
     `Branch: ${record.git.branch} -> ${record.git.base_branch}`,
     binding.local ? "PR: none (local Git review)" : `PR: #${binding.prNumber}`,
     `Reviewed SHA: ${binding.head}`,
+    `Base SHA: ${binding.base || record.git.start_sha}`,
     `Done Criteria SHA-256: ${record.contract.done_criteria_sha256}`,
     `Verification fact: ${JSON.stringify(binding.verification)}`,
     "",
@@ -431,6 +436,7 @@ async function runReview(cli, overrides = {}) {
         prompt_path: promptPath,
         done_criteria_path: record.contract.done_criteria_path,
         reviewed_sha: binding.head,
+        base_sha: binding.base || record.git.start_sha,
         current_sha: binding.head,
         diff_sha256: diffDigest,
         prompt_sha256: promptDigest,
@@ -508,6 +514,7 @@ async function runReview(cli, overrides = {}) {
     if (
       freshBinding.retryOfEventId !== binding.retryOfEventId
       || freshBinding.head !== binding.head
+      || freshBinding.base !== binding.base
       || freshBinding.local !== binding.local
       || freshBinding.tree !== binding.tree
       || freshBinding.prNumber !== binding.prNumber
@@ -546,6 +553,7 @@ async function runReview(cli, overrides = {}) {
         round,
         verdict: verdict.verdict === "pass" ? "lgtm" : verdict.verdict,
         reviewed_sha: binding.head,
+        base_sha: binding.base || record.git.start_sha,
         done_criteria_sha256: record.contract.done_criteria_sha256,
         reviewer,
         review_artifact: artifactPath,

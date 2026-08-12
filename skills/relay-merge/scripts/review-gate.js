@@ -141,6 +141,12 @@ function requireMergeAction(inspection, record) {
     || review.payload.done_criteria_sha256 !== record.contract.done_criteria_sha256
     || review.payload.reviewer !== record.roles.reviewer
   ) fail("passing review is not bound to the exact head and frozen Done Criteria", "MERGE_REVIEW_MISMATCH");
+  if (!SHA1_RE.test(String(review.payload.base_sha || ""))) {
+    fail("passing review is missing its exact reviewed base SHA; run a fresh review", "MERGE_REVIEW_BASE_MISSING");
+  }
+  if (!SHA1_RE.test(String(github.pr_base_sha || ""))) {
+    fail("live PR observation is missing its exact base SHA", "MERGE_LIVE_BASE_MISSING");
+  }
 
   const verification = latestFact(inspection.facts, "verification_recorded");
   if (
@@ -152,7 +158,7 @@ function requireMergeAction(inspection, record) {
     || verification.payload.done_criteria_sha256 !== record.contract.done_criteria_sha256
   ) fail("passing verification is not bound to the exact head, tree, and Done Criteria", "MERGE_VERIFICATION_MISMATCH");
 
-  return { head, prNumber, review, verification };
+  return { head, prNumber, review, verification, reviewedBase: review.payload.base_sha, liveBase: github.pr_base_sha };
 }
 
 function terminalMergeFact(runDir, factsModule) {
