@@ -12,8 +12,8 @@ component: "dispatch-execution"
 Relay uses the developer's ambient CLI authentication and configuration, requests lightweight native isolation when an adapter supports it, and remains usable without a native filesystem sandbox while preserving durable lifecycle, review, recovery, and explicit-merge guarantees.
 
 ## Plan
-- [~] #1231 Define the trusted-local execution contract and native capability inventory [branch:issue/1231-trusted-local-contract]
-- [ ] #1232 Atomically replace Relay sandbox-exec with native-when-available execution
+- [x] #1231 Define the trusted-local execution contract and native capability inventory [PR:#1237]
+- [~] #1232 Atomically replace Relay sandbox-exec with native-when-available execution [branch:issue/1232-native-first-host]
 - [ ] #1233 Use ambient CLI auth/config and retire credential staging safely
 - [ ] #1234 Retire the 13-cell isolation release gate and subtract obsolete tests/docs
 - [ ] #1235 Dogfood ambient native Relay across all seven adapters and close the migration
@@ -31,6 +31,7 @@ Relay uses the developer's ambient CLI authentication and configuration, request
 - #1141 and #1158 are superseded by #1230; their live failure evidence remains historical input.
 
 ## Progress
+- 2026-08-12: #1231 merged via PR #1237 after 9/9 CI; issue closed. Started #1232 on `issue/1232-native-first-host`; Luna(max) owns the bounded production/test implementation with cross-family review afterward.
 - 2026-08-12: Started #1231 on `issue/1231-trusted-local-contract`; Qwen 3.8 Max owns the bounded contract/capability documentation implementation, followed by independent review before merge.
 - 2026-08-12: Claude Opus 5 and Pi/Qwen independent reviews converged on the trusted-local native-first direction and identified atomic adapter/host replacement, review-input preservation, process cleanup, and existing cleanup obligations as required boundaries.
 - 2026-08-12: Created milestone 18, epic #1230, ordered leaves #1231-#1235, and closed superseded #1141/#1158 with evidence-preserving comments.
