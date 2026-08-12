@@ -140,6 +140,12 @@ function assertBaseIntegrity(record, binding, liveBase) {
   if (comparison.status !== "ahead") {
     fail("live PR base is not a descendant of the reviewed base", "MERGE_BASE_NOT_DESCENDANT");
   }
+  if (
+    comparison.base_commit?.sha !== reviewedBase
+    || comparison.merge_base_commit?.sha !== reviewedBase
+    || comparison.head_commit?.sha !== liveBase
+    || comparePages.some((page) => !page || typeof page !== "object" || Array.isArray(page) || !Array.isArray(page.commits))
+  ) fail("GitHub comparison is not bound to the exact reviewed and live bases", "MERGE_BASE_EVIDENCE_INCOMPLETE");
   const commits = comparePages.flatMap((page) => Array.isArray(page.commits) ? page.commits : []);
   const commitShas = commits.map((commit) => commit?.sha);
   if (
@@ -148,6 +154,7 @@ function assertBaseIntegrity(record, binding, liveBase) {
     || commits.length !== comparison.total_commits
     || commitShas.some((sha) => !SHA1_RE.test(String(sha || "")))
     || new Set(commitShas).size !== commitShas.length
+    || commitShas.at(-1) !== liveBase
   ) {
     fail("GitHub base-advance commit pagination is incomplete", "MERGE_BASE_EVIDENCE_INCOMPLETE");
   }
@@ -700,7 +707,6 @@ async function finalizeRun(cli, overrides = {}) {
     binding = {
       head: derivedHead,
       prNumber: derivedPr,
-      review,
       reviewedBase: review?.payload?.base_sha,
       liveBase: initial.observations?.github?.pr_base_sha,
     };

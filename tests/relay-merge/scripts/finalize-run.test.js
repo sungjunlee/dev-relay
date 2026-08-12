@@ -62,7 +62,7 @@ function row() {
 }
 if (args[0] === "auth" && args[1] === "token") process.stdout.write("test-token\\n");
 else if (args[0] === "api" && args[1] === "user") process.stdout.write(state.authLogin + "\\n");
-else if (args[0] === "api" && args.includes("--slurp")) process.stdout.write(JSON.stringify([state.compareResponse]));
+else if (args[0] === "api" && args.includes("--slurp")) process.stdout.write(JSON.stringify(state.comparePages || [state.compareResponse]));
 else if (args[0] === "pr" && args[1] === "list") process.stdout.write(JSON.stringify([row()]));
 else if (args[0] === "pr" && args[1] === "view") {
   if (state.retargetBaseOnView) {
@@ -231,6 +231,15 @@ const result=spawnSync("/usr/bin/git",args,{stdio:"inherit"});process.exit(resul
 `, { mode: 0o755 });
   const value = { root, repo, origin, worktree, runDir, record, label, head, tree, criteriaHash, gitBin };
   await appendReadyFacts(value);
+  const configuredGithub = { ...github };
+  if (configuredGithub.compareResponse) {
+    configuredGithub.compareResponse = {
+      ...configuredGithub.compareResponse,
+      base_commit: { sha: start },
+      merge_base_commit: { sha: start },
+      head_commit: { sha: configuredGithub.baseRefOid },
+    };
+  }
   const gh = writeFakeGh(root, {
     number: 42,
     state: "OPEN",
@@ -244,7 +253,7 @@ const result=spawnSync("/usr/bin/git",args,{stdio:"inherit"});process.exit(resul
     authLogin: "relay-bot",
     mergeExitCode: 0,
     advanceHeadOnMerge: null,
-    ...github,
+    ...configuredGithub,
   });
   value.gh = gh;
   value.cli = finalize.parseCli(["--repo", repo, "--run-dir", runDir, "--json"]);
@@ -367,13 +376,28 @@ test("base movement allows zero reviewed-path overlap and rejects unsafe or inco
     const advanced = "e".repeat(40);
     const writeComparison = (compareResponse) => {
       const state = JSON.parse(fs.readFileSync(value.gh.statePath, "utf8"));
-      fs.writeFileSync(value.gh.statePath, JSON.stringify({ ...state, compareResponse }));
+      fs.writeFileSync(value.gh.statePath, JSON.stringify({
+        ...state,
+        ...(Array.isArray(compareResponse)
+          ? { comparePages: compareResponse }
+          : { compareResponse, comparePages: null }),
+      }));
     };
-    writeComparison({ status: "ahead", total_commits: 1, commits: [{ sha: advanced }], files: [{ filename: "other.txt" }] });
+    const comparison = (overrides = {}) => ({
+      status: "ahead",
+      base_commit: { sha: binding.reviewedBase },
+      merge_base_commit: { sha: binding.reviewedBase },
+      head_commit: { sha: advanced },
+      total_commits: 1,
+      commits: [{ sha: advanced }],
+      files: [],
+      ...overrides,
+    });
+    writeComparison(comparison({ files: [{ filename: "other.txt" }] }));
     assert.deepEqual(finalize.assertBaseIntegrity(value.record, binding, advanced), {
       status: "advanced_without_overlap", overlapping_paths: [],
     });
-    writeComparison({ status: "ahead", total_commits: 1, commits: [{ sha: advanced }], files: [{ filename: "renamed.txt", previous_filename: "file.txt" }] });
+    writeComparison(comparison({ files: [{ filename: "renamed.txt", previous_filename: "file.txt" }] }));
     assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced),
       (error) => error.code === "MERGE_BASE_PATH_OVERLAP" && error.collision_paths[0] === "file.txt");
     const unusual = "한글\npath.txt";
@@ -381,16 +405,20 @@ test("base movement allows zero reviewed-path overlap and rejects unsafe or inco
     git(value.worktree, ["add", unusual]);
     git(value.worktree, ["commit", "-m", "add unusual path"]);
     binding.head = git(value.worktree, ["rev-parse", "HEAD"]);
-    writeComparison({ status: "ahead", total_commits: 1, commits: [{ sha: advanced }], files: [{ filename: unusual }] });
+    writeComparison(comparison({ files: [{ filename: unusual }] }));
     assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced),
       (error) => error.code === "MERGE_BASE_PATH_OVERLAP" && error.collision_paths[0] === unusual);
-    writeComparison({ status: "diverged", total_commits: 1, commits: [{ sha: advanced }], files: [] });
+    writeComparison(comparison({ status: "diverged" }));
     assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced), { code: "MERGE_BASE_NOT_DESCENDANT" });
-    writeComparison({ status: "ahead", total_commits: 2, commits: [{ sha: advanced }], files: [] });
+    writeComparison(comparison({ total_commits: 2 }));
     assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced), { code: "MERGE_BASE_EVIDENCE_INCOMPLETE" });
-    writeComparison({ status: "ahead", total_commits: 1, commits: [{ sha: advanced }], files: [{ filename: null }] });
+    writeComparison(comparison({ files: [{ filename: null }] }));
     assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced), { code: "MERGE_BASE_EVIDENCE_INCOMPLETE" });
-    writeComparison({ status: "ahead", total_commits: 1, commits: [{ sha: advanced }], files: Array.from({ length: 300 }, (_, index) => ({ filename: `f-${index}` })) });
+    writeComparison(comparison({ head_commit: { sha: "f".repeat(40) } }));
+    assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced), { code: "MERGE_BASE_EVIDENCE_INCOMPLETE" });
+    writeComparison([comparison(), {}]);
+    assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced), { code: "MERGE_BASE_EVIDENCE_INCOMPLETE" });
+    writeComparison(comparison({ files: Array.from({ length: 300 }, (_, index) => ({ filename: `f-${index}` })) }));
     assert.throws(() => finalize.assertBaseIntegrity(value.record, binding, advanced), { code: "MERGE_BASE_EVIDENCE_INCOMPLETE" });
   } finally {
     if (prior === undefined) delete process.env.RELAY_GH_BIN;
@@ -400,9 +428,15 @@ test("base movement allows zero reviewed-path overlap and rejects unsafe or inco
 
 test("finalize merges a non-overlapping base advance and makes zero merge calls on overlap", async () => {
   const advanced = "e".repeat(40);
+  const compareResponse = (filename) => ({
+    status: "ahead",
+    total_commits: 1,
+    commits: [{ sha: advanced }],
+    files: [{ filename }],
+  });
   const noOverlap = await fixture("base-no-overlap", { github: {
     baseRefOid: advanced,
-    compareResponse: { status: "ahead", total_commits: 1, commits: [{ sha: advanced }], files: [{ filename: "other.txt" }] },
+    compareResponse: compareResponse("other.txt"),
   } });
   const merged = await withGh(noOverlap, () => finalize.finalizeRun(noOverlap.cli, services()));
   assert.equal(merged.status, "merged");
@@ -410,7 +444,7 @@ test("finalize merges a non-overlapping base advance and makes zero merge calls 
 
   const overlap = await fixture("base-overlap", { github: {
     baseRefOid: advanced,
-    compareResponse: { status: "ahead", total_commits: 1, commits: [{ sha: advanced }], files: [{ filename: "file.txt" }] },
+    compareResponse: compareResponse("file.txt"),
   } });
   await assert.rejects(
     withGh(overlap, () => finalize.finalizeRun(overlap.cli, services())),
