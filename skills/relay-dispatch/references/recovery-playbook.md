@@ -41,6 +41,16 @@ when the recommended action includes recording verification. Use
 `--break-lock` only after `inspect` identifies a stale or unknown owner and the
 authenticated terminal-result checks described in the output can succeed.
 
+If cleanup reports `HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED`, the signed
+obligation still names a live process but Relay can no longer prove its inherited
+scope marker. Relay sends no signal in that state. Independently inspect the
+reported `pid`, `pgid`, and `started_at`, terminate only that exact process using
+an operator-controlled facility, then rerun the same canonical `recover
+--break-lock` command. Do not kill by process name or reuse an old PID-only
+command: the identity may have changed. Once the recorded identity is absent,
+Relay signs cleanup settlement, publishes the terminal attempt result, and
+continues recovery idempotently.
+
 ## Safety contract
 
 - Treat `run.json`, the fact journal, intents, receipts, and merge

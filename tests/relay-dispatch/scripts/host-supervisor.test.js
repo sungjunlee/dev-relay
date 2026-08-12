@@ -54,6 +54,15 @@ function spawnIdle(env) {
   return { pid: Number(launched.stdout.trim()) };
 }
 
+function spawnScopeDroppingIdle(env, markerPath) {
+  const shell = 'printf %s "$RELAY_PROCESS_SCOPE" > "$1"; shift; exec /usr/bin/env -u RELAY_PROCESS_SCOPE "$@"';
+  const args = ["-c", shell, "relay-drop-scope", markerPath, process.execPath, "-e", IDLE];
+  const launcher = `const c=require('child_process').spawn('/bin/sh',${JSON.stringify(args)},{detached:true,stdio:'ignore',env:${JSON.stringify(env)}});c.unref();process.stdout.write(String(c.pid))`;
+  const launched = spawnSync(process.execPath, ["-e", launcher], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(launched.status, 0, launched.stderr);
+  return { pid: Number(launched.stdout.trim()) };
+}
+
 function ownerSecret(runDir) {
   const ownership = path.join(runDir, "ownership");
   const name = fs.readdirSync(ownership).filter((entry) => entry.endsWith(".owner.json")).sort().at(-1);
@@ -116,21 +125,39 @@ test("group reap signals only individually scope-verified PIDs and preserves an 
   assert.equal(processDead(pids.outsider), false, "the unscoped member is never reached by a group signal");
 });
 
-test("a reused cleanup PID fails closed instead of signalling an unrelated process", { timeout: 30_000 }, async (t) => {
-  const value = roots("pid-reuse"), attemptId = "pid-reuse", capability = lock(value, attemptId);
-  const foreign = spawnIdle({ PATH: process.env.PATH });
+test("lost cleanup scope proof requires exact external action and then converges", { timeout: 30_000 }, async (t) => {
+  const value = roots("scope-loss"), attemptId = "scope-loss", capability = lock(value, attemptId);
+  const scope = host.sandboxInvocation.beginProcessScope(), marker = path.join(value.root, "inherited-scope.txt");
+  const foreign = spawnScopeDroppingIdle({ PATH: process.env.PATH, ...scope.env }, marker);
   t.after(() => { if (!processDead(foreign.pid)) try { process.kill(-foreign.pid, "SIGKILL"); } catch {} try { host.releaseRunLock(capability); } catch {} });
+  await waitForFile(marker);
+  assert.equal(fs.readFileSync(marker, "utf8"), scope.env.RELAY_PROCESS_SCOPE, "the process must inherit the run scope before dropping it");
   await new Promise((resolve) => setTimeout(resolve, 300));
   const credentialRoot = path.join(value.runDir, `executor-credentials-${attemptId}`);
   writeCleanupObligation(value.runDir, attemptId, {
     processes: [liveIdentity(foreign.pid)], credential_root: { path: credentialRoot, dev: null, ino: null },
-    scope_seal: crypto.randomBytes(32).toString("hex"),
+    scope_seal: scope.seal,
   });
   const inspection = host.inspectOwnership({ runDir: value.runDir });
-  await assert.rejects(host.breakStaleRunLock({ inspection, reason: "settle a reused cleanup identity" }),
-    (error) => error.code === "HOST_CLEANUP_INCOMPLETE" && /could not be bound to the run process scope/.test(error.message));
+  await assert.rejects(host.breakStaleRunLock({ inspection, reason: "settle an unverified cleanup identity" }), (error) => {
+    assert.equal(error.code, "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED");
+    assert.equal(error.recommended_action, "terminate_exact_process_externally_then_retry");
+    assert.deepEqual(error.process_identity, liveIdentity(foreign.pid));
+    assert.equal(error.relay_signalled, false);
+    return true;
+  });
   assert.equal(processDead(foreign.pid), false, "a cleanup obligation must never signal an unverifiable identity");
   assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), false);
+
+  process.kill(foreign.pid, "SIGKILL");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await host.breakStaleRunLock({
+    inspection: host.inspectOwnership({ runDir: value.runDir }),
+    reason: "exact external process termination completed",
+  });
+  assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
+  assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), true);
+  assert.equal(fs.existsSync(path.join(value.runDir, `attempt-${attemptId}.result.json`)), true);
 });
 
 test("cleanup recovery treats an exact zombie as gone even when ps redacts its scope environment", { timeout: 30_000 }, async (t) => {
@@ -800,7 +827,7 @@ test("cleanup-incomplete recovery settles exact obligations and converges after 
     fs.rmSync(marker, { force: true });
     // The recorded supervisor/executor are short-lived; a same-second PID reuse (macOS lstart is
     // second-resolution) can transiently make the exact reap look like a foreign unscoped process,
-    // which the host correctly refuses to signal (HOST_CLEANUP_INCOMPLETE, see the dedicated
+    // which the host correctly refuses to signal (HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED, see the dedicated
     // "a same-second PID reuse without the inherited scope token" test above). Production recovery
     // re-observes and retries, so this test does too: the reused pid exits within a second and the
     // retry converges. This is not a timeout widening; the transient bind failure is a first-class
@@ -810,7 +837,7 @@ test("cleanup-incomplete recovery settles exact obligations and converges after 
         try {
           return await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "recover cleanup", ...(fault ? { fault } : {}) });
         } catch (error) {
-          if (error.code === "HOST_CLEANUP_INCOMPLETE" && /could not be bound to the run process scope/.test(error.message)) {
+          if (error.code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED") {
             await new Promise((resolve) => setTimeout(resolve, 100));
             continue;
           }
