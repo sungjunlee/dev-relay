@@ -609,7 +609,6 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
       runtimeDependencies: invocation.runtimeDependencies,
       timeoutMs,
       processContainment: adapter.metadata.processContainment,
-      phase: "dispatch",
       providerUnavailableSignals: adapter.providerUnavailableSignals,
       lockContext,
     });

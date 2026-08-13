@@ -755,7 +755,9 @@ test("a recognized OpenCode provider-unavailable stderr signal cancels the dispa
   const result = run(value, ["--executor", "opencode", "--branch", "opencode-quota", "--prompt-file", value.prompt,
     "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
     ...value.env,
-    FAKE_OPENCODE_SIGNAL: "insufficient_quota",
+    // Trailing output longer than the adapter's longest declared signal: a watcher that matches a
+    // fixed-size retained tail instead of the newly read bytes would miss this and run to timeout.
+    FAKE_OPENCODE_SIGNAL: `error: insufficient_quota - ${"retry after the current billing period".padEnd(120, ".")}`,
     FAKE_OPENCODE_STAY_ALIVE: "1",
   });
   assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);

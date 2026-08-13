@@ -865,7 +865,7 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   inputFiles = [], stdinPath = null, stdinSha256 = null, executorResultPath = null, executorSandbox = "workspace-write", executorNetworkAccess = "disabled", timeoutMs = 30_000,
   cancelGraceMs = 1_000, supervisorStartupTimeoutMs = 30_000, executorEnv = {}, processContainment = PROCESS_CONTRACT,
   runtimeDependencies = { executableParent: null, interpreterParent: null }, testGateBarrierPath = null, testBeforeSupervisorSpawn = null, lockContext,
-  phase = "dispatch", providerUnavailableSignals = [] } = {}) {
+  providerUnavailableSignals = [] } = {}) {
   if (lockContext === undefined) fail("production launch requires a lock capability", "HOST_LOCK_REQUIRED");
   const state = stateFor(lockContext), run = canonicalDir(runDir, "runDir"); assertRunLockHeld(lockContext, run);
   if (attemptId !== state.owner.attempt_id) fail("attempt does not match lock", "HOST_LOCK_IDENTITY_MISMATCH"); safeAttempt(attemptId);
@@ -875,7 +875,6 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   if (worktree !== state.owner.worktree.path || stat.dev !== state.owner.worktree.dev || stat.ino !== state.owner.worktree.ino
     || canonicalDir(cwd || worktree, "cwd") !== worktree) fail("worktree does not match lock", "HOST_LOCK_IDENTITY_MISMATCH");
   if (!["workspace-write", "read-only"].includes(executorSandbox) || !["enabled", "disabled"].includes(executorNetworkAccess)) fail("sandbox options are invalid", "INVALID_INVOCATION");
-  if (!["dispatch", "primary_review"].includes(phase)) fail("phase must be dispatch or primary_review", "INVALID_INVOCATION");
   if (!Array.isArray(providerUnavailableSignals) || providerUnavailableSignals.some((value) => typeof value !== "string" || !value.trim() || value.length > 200 || /[\u0000-\u001f]/.test(value))) {
     fail("provider unavailable signal declaration is invalid", "INVALID_INVOCATION");
   }
@@ -926,7 +925,7 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
     worktree, cwd: worktree, stdout, stderr, result, executor_result: executorResult,
     tmp, sandbox: executorSandbox, network: "enabled", tool_network: executorNetworkAccess, runtime_dependencies: runtimeDependencies, runtime_files: runtime.runtime_files, timeout_ms: timeoutMs, grace_ms: cancelGraceMs,
     supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier,
-    phase, provider_unavailable_signals: providerUnavailableSignals };
+    provider_unavailable_signals: providerUnavailableSignals };
   if (!publishOnce(paths.config, config)) fail("attempt has already been launched", "HOST_ATTEMPT_ALREADY_LAUNCHED");
   const configSha = sha256(fs.readFileSync(paths.config)), stdoutFd = fs.openSync(stdout, "wx", 0o600), stderrFd = fs.openSync(stderr, "wx", 0o600);
   const secretPath = path.join(run, `.host-secret-${attemptId}-${crypto.randomBytes(8).toString("hex")}`), secretFd = fs.openSync(secretPath, "wx+", 0o600);
@@ -1066,7 +1065,6 @@ function runSupervisor(configPath, configSha) {
   if (!/^[0-9a-f]{64}$/.test(secret)) fail("host secret is invalid", "HOST_CONFIG_MISMATCH");
   const config = JSON.parse(bytes), supervisor = waitFingerprint(process.pid); if (!supervisor) fail("supervisor identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
   if (!/^[0-9a-f]{64}$/.test(scopeToken || "") || process.env[PROCESS_SCOPE_KEY] !== scopeToken || scopeSeal(scopeToken) !== config.scope_seal) fail("supervisor process scope is unavailable", "HOST_CONFIG_MISMATCH");
-  if (!["dispatch", "primary_review"].includes(config.phase || "dispatch")) fail("supervisor phase is invalid", "HOST_CONFIG_MISMATCH");
   if (config.provider_unavailable_signals !== undefined && (!Array.isArray(config.provider_unavailable_signals)
     || config.provider_unavailable_signals.some((signal) => typeof signal !== "string" || !signal.trim() || signal.length > 200 || /[\u0000-\u001f]/.test(signal)))) {
     fail("provider unavailable signal declaration is invalid", "HOST_CONFIG_MISMATCH");
@@ -1075,7 +1073,7 @@ function runSupervisor(configPath, configSha) {
   publishOnce(config.supervisor, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
     config_sha256: configSha, nonce: config.nonce, supervisor, started_at: new Date().toISOString() }, secret));
   let child, childClosed = false, executorIdentity = null, finished = false, requested = null, requestedReason = null, pendingClose = null,
-    deadline, escalation, cancelPoll, barrierPoll, stderrPoll = null, stderrCursor = 0, stderrTail = "", outcome = "", overflow = false;
+    deadline, escalation, cancelPoll, barrierPoll, stderrPoll = null, stderrCursor = 0, stderrTail = "", signalSeen = false, outcome = "", overflow = false;
   const cleanupIncomplete = (error, obligation = null, terminal = {}) => {
     if (finished) return; finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll); clearInterval(stderrPoll);
     const priorStatus = TERMINAL.has(terminal.status) ? terminal.status : "failed", provided = obligation?.processes || [];
@@ -1147,7 +1145,9 @@ function runSupervisor(configPath, configSha) {
     deadline = setTimeout(() => terminate("timed_out"), config.timeout_ms);
     cancelPoll = setInterval(() => { if (fs.existsSync(config.cancel)) terminate("cancelled"); }, 25);
     if (declaredSignals.length) {
-      const maxSignalLength = Math.max(...declaredSignals.map((signal) => signal.length));
+      // A signal can straddle two reads, so carry one character less than the longest signal
+      // forward; that is the most any single signal could have left behind.
+      const overlap = Math.max(0, Math.max(...declaredSignals.map((signal) => signal.length)) - 1);
       stderrPoll = setInterval(() => {
         // Stand down the moment the executor is gone or its natural outcome is pending: a process that
         // exited on its own keeps the outcome the gate already derived.
@@ -1161,9 +1161,19 @@ function runSupervisor(configPath, configSha) {
             const chunk = Buffer.alloc(stat.size - stderrCursor);
             const read = fs.readSync(fd, chunk, 0, chunk.length, stderrCursor);
             stderrCursor += read;
-            stderrTail = `${stderrTail}${chunk.toString("utf8").slice(0, read)}`.slice(-maxSignalLength);
-            if (declaredSignals.some((signal) => stderrTail.toLowerCase().includes(signal))) terminate("cancelled", PROVIDER_UNAVAILABLE);
+            // Match the retained overlap plus the new bytes, then keep only the overlap a signal
+            // could still be split across. Truncating before the match would drop any signal that
+            // is not flush against the end of what has been read so far.
+            const scanned = `${stderrTail}${chunk.toString("utf8").slice(0, read)}`.toLowerCase();
+            stderrTail = overlap ? scanned.slice(-overlap) : "";
+            if (declaredSignals.some((signal) => scanned.includes(signal))) signalSeen = true;
           }
+          // Force-cancel only a group that still has a live scope-bound member. A CLI that prints a
+          // fatal signal is often already on its way out, and signalling a group whose last member is
+          // an unreaped exiting child is neither deliverable nor absent — that publishes a cleanup
+          // obligation for a process that was about to close on its own. Latch the signal instead and
+          // let the natural outcome land; if the executor really is stuck, a later tick still cancels.
+          if (signalSeen && scopedGroupMembers(child.pid, config.scope_seal).length) terminate("cancelled", PROVIDER_UNAVAILABLE);
         } catch { /* stderr log reads are best-effort while the executor starts */ }
         finally { if (fd !== null) try { fs.closeSync(fd); } catch {} }
       }, 25);
