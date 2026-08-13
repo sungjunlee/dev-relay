@@ -302,7 +302,7 @@ test("observable primary review classifies only a recognized live provider failu
   try {
     const started = Date.now();
     await assert.rejects(invoke("process.on('SIGTERM',()=>{});process.stderr.write('credential=hidden insufficient_quota trailing\\n');setInterval(()=>{},1000)", 10_000), (error) => {
-      assert.equal(error.classification, "provider_unavailable"); assert.equal(error.failure_reason, "provider_unavailable");
+      assert.equal(error.termination, "provider_unavailable"); assert.equal(error.classification, "provider_unavailable"); assert.equal(error.failure_reason, "provider_unavailable");
       assert.doesNotMatch(error.message, /credential=hidden|insufficient_quota/); return true;
     });
     assert.ok(Date.now() - started < 5_000); assert.equal(fs.existsSync(stages.at(-1)), false); assert.equal(host.inspectOwnership({ runDir }).status, "absent");
