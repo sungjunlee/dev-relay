@@ -925,7 +925,9 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
     worktree, cwd: worktree, stdout, stderr, result, executor_result: executorResult,
     tmp, sandbox: executorSandbox, network: "enabled", tool_network: executorNetworkAccess, runtime_dependencies: runtimeDependencies, runtime_files: runtime.runtime_files, timeout_ms: timeoutMs, grace_ms: cancelGraceMs,
     supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier,
-    provider_unavailable_signals: providerUnavailableSignals };
+    // Omitted entirely when an adapter declares nothing, so every adapter without a declaration
+    // keeps byte-identical config bytes and the same config SHA as before this feature existed.
+    ...(providerUnavailableSignals.length ? { provider_unavailable_signals: providerUnavailableSignals } : {}) };
   if (!publishOnce(paths.config, config)) fail("attempt has already been launched", "HOST_ATTEMPT_ALREADY_LAUNCHED");
   const configSha = sha256(fs.readFileSync(paths.config)), stdoutFd = fs.openSync(stdout, "wx", 0o600), stderrFd = fs.openSync(stderr, "wx", 0o600);
   const secretPath = path.join(run, `.host-secret-${attemptId}-${crypto.randomBytes(8).toString("hex")}`), secretFd = fs.openSync(secretPath, "wx+", 0o600);
@@ -1168,12 +1170,15 @@ function runSupervisor(configPath, configSha) {
             stderrTail = overlap ? scanned.slice(-overlap) : "";
             if (declaredSignals.some((signal) => scanned.includes(signal))) signalSeen = true;
           }
-          // Force-cancel only a group that still has a live scope-bound member. A CLI that prints a
-          // fatal signal is often already on its way out, and signalling a group whose last member is
-          // an unreaped exiting child is neither deliverable nor absent — that publishes a cleanup
-          // obligation for a process that was about to close on its own. Latch the signal instead and
-          // let the natural outcome land; if the executor really is stuck, a later tick still cancels.
-          if (signalSeen && scopedGroupMembers(child.pid, config.scope_seal).length) terminate("cancelled", PROVIDER_UNAVAILABLE);
+          // Force-cancel only while the executor itself is still running. The gate is always a live
+          // member of its own group, so counting every member would keep firing after the executor
+          // has exited and only the gate remains — racing a natural outcome that is already settled,
+          // and signalling an unreaped exiting child is neither deliverable nor absent, which
+          // publishes a cleanup obligation for a process that was about to close on its own. Excluding
+          // the gate makes a self-exiting executor deterministically keep its own outcome; a genuinely
+          // stuck one still has live members, so a later tick cancels it.
+          const executorAlive = scopedGroupMembers(child.pid, config.scope_seal).some((member) => member.pid !== child.pid);
+          if (signalSeen && executorAlive) terminate("cancelled", PROVIDER_UNAVAILABLE);
         } catch { /* stderr log reads are best-effort while the executor starts */ }
         finally { if (fd !== null) try { fs.closeSync(fd); } catch {} }
       }, 25);

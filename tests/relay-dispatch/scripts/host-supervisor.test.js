@@ -850,11 +850,25 @@ test("unrecognized stderr does not shorten a live attempt's timeout", { timeout:
   host.releaseRunLock(capability);
 });
 
-// Early termination only ever force-cancels a process that is still alive. A CLI that prints the
-// signal and exits on its own has already produced a natural gate outcome, so the watcher stands
-// down and that outcome (failed, exit 2, no signal) wins unchanged, with no termination reason
-// attached and no process-scope error. The fixture exits without delay, well inside the watcher's
-// 25ms poll interval, so the natural outcome is the one on the table when the watcher first looks.
+// An adapter that declares no provider-unavailable signals must reach the supervisor with exactly
+// the config bytes it had before this feature existed: the key is absent, not present-and-empty, so
+// the config SHA of every undeclared adapter is unchanged.
+test("an adapter with no declared signals leaves the supervisor config free of the field", { timeout: 30_000 }, async () => {
+  const value = roots("no-signal-config"), attemptId = "no-signal-config", capability = lock(value, attemptId);
+  const receipt = host.launchLocalSupervisor({
+    runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", "process.exit(0)"],
+    trustedWorktreeRoot: value.worktree, cwd: value.worktree, timeoutMs: 20_000, cancelGraceMs: 200, lockContext: capability,
+  });
+  const config = JSON.parse(fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.config.json`), "utf8"));
+  assert.equal(Object.prototype.hasOwnProperty.call(config, "provider_unavailable_signals"), false);
+  await host.waitForTerminalResult(receipt, { timeoutMs: 10_000 });
+  host.releaseRunLock(capability);
+});
+
+// Early termination only ever force-cancels an executor that is still alive. A CLI that prints the
+// signal and exits on its own keeps its natural outcome (failed, exit 2, no signal) unchanged, with
+// no termination reason attached and no process-scope error, because the watcher requires a live
+// scope member other than the gate before it cancels.
 test("a self-exiting fake that emits a recognized signal keeps its natural outcome", { timeout: 30_000 }, async () => {
   const value = roots("opencode-self-exit"), attemptId = "opencode-self-exit", capability = lock(value, attemptId);
   const receipt = host.launchLocalSupervisor({
@@ -867,20 +881,12 @@ test("a self-exiting fake that emits a recognized signal keeps its natural outco
     lockContext: capability,
   });
   const result = await host.waitForTerminalResult(receipt, { timeoutMs: 10_000 });
-  // Which side wins is a real race between the 25ms watcher tick and an immediate self-exit, and
-  // both resolutions are correct: the watcher saw a live process emitting a fatal signal, or the
-  // natural outcome landed first. Asserting one of them would be asserting a coin flip. What must
-  // hold either way is that nothing is fabricated and the scope is settled.
-  assert.ok(["failed", "cancelled"].includes(result.status), `unexpected status ${result.status}`);
-  if (result.status === "failed") {
-    // Natural outcome won: it survives byte-for-byte and carries no termination classification.
-    assert.equal(result.exit_code, 2);
-    assert.equal(result.signal, null);
-    assert.equal(result.termination, undefined);
-  } else {
-    // Watcher won: the cancellation is classified from the frozen vocabulary, never invented.
-    assert.equal(result.termination, "provider_unavailable");
-  }
+  // The natural outcome must win outright: the watcher only cancels while the executor itself is
+  // still a live member of the scope, and this executor exited on its own.
+  assert.equal(result.status, "failed");
+  assert.equal(result.exit_code, 2);
+  assert.equal(result.signal, null);
+  assert.equal(result.termination, undefined);
   assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-incomplete.json`)), false);
   host.releaseRunLock(capability);
 });
