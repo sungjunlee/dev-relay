@@ -779,6 +779,18 @@ test("recognized OpenCode stderr preserves a delayed natural exit", { timeout: 6
   assert.equal(finished.payload.status, "failed"); assert.equal(finished.payload.exit_code, 2);
 });
 
+test("recognized OpenCode stderr remains typed when the gate exits during Relay cancellation", { timeout: 60_000 }, () => {
+  const value = fixture("opencode-provider-exits-on-term");
+  const result = run(value, ["--executor", "opencode", "--branch", "opencode-provider-exits-on-term", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
+    ...value.env, FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_EXIT_ON_TERM: "1",
+  });
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
+  assert.equal(output.termination, "provider_unavailable", JSON.stringify(output));
+});
+
 test("a malformed structured adapter result cannot turn an exit-zero host result into a completed attempt", () => {
   const value = fixture("malformed-outcome");
   const result = run(value, ["--branch", "malformed-outcome", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--executor", "cline", "--json"]);

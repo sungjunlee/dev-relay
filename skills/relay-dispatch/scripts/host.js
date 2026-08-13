@@ -661,7 +661,8 @@ function cleanupObligation(value, runDir, owner) {
   const seal = obligation.scope_seal ?? null;
   if (seal !== null && !/^[0-9a-f]{64}$/.test(seal)) fail("cleanup process scope seal is invalid", "HOST_ARTIFACT_INVALID");
   if (!terminal || !["completed", "failed", "cancelled", "timed_out", "spawn_error"].includes(terminal.status)
-    || (terminal.exit_code !== null && !Number.isInteger(terminal.exit_code)) || (terminal.signal !== null && typeof terminal.signal !== "string")) fail("cleanup terminal context is invalid", "HOST_ARTIFACT_INVALID");
+    || (terminal.exit_code !== null && !Number.isInteger(terminal.exit_code)) || (terminal.signal !== null && typeof terminal.signal !== "string")
+    || (terminal.termination !== undefined && terminal.termination !== PROVIDER_UNAVAILABLE)) fail("cleanup terminal context is invalid", "HOST_ARTIFACT_INVALID");
   return { kind: value.kind, processes, staged_input_root: staged ? { ...staged } : null, scope_seal: seal, terminal };
 }
 function identityGone(identity, timeoutMs) {
@@ -786,6 +787,7 @@ function settleCleanup({ state, cleanupPath, fault, terminalStatus = "failed" })
   const resultPath = path.join(state.runDir, `attempt-${owner.attempt_id}.result.json`), body = {
     attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_kind: "local_supervisor", host_handle: owner.host_handle,
     status: terminalStatus, exit_code: obligation.terminal.exit_code, signal: obligation.terminal.signal,
+    ...(obligation.terminal.termination ? { termination: obligation.terminal.termination } : {}),
     error: terminalStatus === "completed" ? null : `cleanup recovered after incomplete host settlement: ${read.value.error}`, completed_at: new Date().toISOString(),
   };
   if (!publishOnce(resultPath, signed(body, owner.secret, "result_auth_sha256"))
@@ -1076,7 +1078,8 @@ function runSupervisor(configPath, configSha) {
     const processes = [supervisor, executorIdentity, ...provided].filter(Boolean).map((identity) => exactIdentity(identity));
     publishOnce(config.cleanup, signed({ v: 2, kind: "executor", attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
       identities: { supervisor: exactIdentity(supervisor), executor: executorIdentity ? exactIdentity(executorIdentity) : null },
-      error: error.message, terminal: { status: priorStatus, exit_code: terminal.exit_code ?? null, signal: terminal.signal || null },
+      error: error.message, terminal: { status: priorStatus, exit_code: terminal.exit_code ?? null, signal: terminal.signal || null,
+        ...(requestedReason ? { termination: requestedReason } : {}) },
       obligation: { processes: [...new Map(processes.map((identity) => [identity.pid, identity])).values()], staged_input_root: null,
         scope_seal: config.scope_seal }, observed_at: new Date().toISOString() }, secret));
   };
@@ -1125,11 +1128,9 @@ function runSupervisor(configPath, configSha) {
       const natural = parsed && parsed.attempt_id === config.attempt_id && TERMINAL.has(parsed.status)
         ? { status: parsed.status, exit_code: parsed.exit_code, signal: parsed.signal, error: parsed.error }
         : null;
-      const providerEarly = requestedReason === PROVIDER_UNAVAILABLE && natural;
-      const fields = requested && !providerEarly
+      const fields = requested
         ? { status: requested, exit_code: code, signal: signal || null, error: null }
         : natural || { status: "failed", exit_code: code, signal: signal || null, error: "executor gate returned no valid outcome" };
-      if (providerEarly) requestedReason = null;
       if (groupExists(child.pid)) { pendingClose = fields; if (!requested) terminate(fields.status); }
       else finish(fields);
     });

@@ -624,6 +624,12 @@ test("production OpenCode primary review terminates a recognized live provider f
     alive: process.env.FAKE_OPENCODE_STAY_ALIVE,
     base: process.env.RELAY_WORKTREE_BASE,
   };
+  const originalMkdtemp = fs.mkdtempSync; let reviewStage;
+  fs.mkdtempSync = function captureReviewStage(prefix, ...args) {
+    const stage = originalMkdtemp.call(this, prefix, ...args);
+    if (String(prefix).includes("relay-review-")) reviewStage = stage;
+    return stage;
+  };
   process.env.RELAY_OPENCODE_BIN = fake;
   process.env.FAKE_OPENCODE_SIGNAL = "credential=hidden insufficient_quota trailing";
   process.env.FAKE_OPENCODE_STAY_ALIVE = "1";
@@ -638,8 +644,10 @@ test("production OpenCode primary review terminates a recognized live provider f
     assert.equal(recorded.length, 0);
     assert.doesNotMatch(fs.readFileSync(value.eventsPath, "utf8"), /credential=hidden|insufficient_quota/);
     assert.equal(fs.readdirSync(value.runDir).some((name) => /^review-\d+-/.test(name)), false);
+    assert.ok(reviewStage); assert.equal(fs.existsSync(reviewStage), false, "the temporary review stage is deleted");
     assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
   } finally {
+    fs.mkdtempSync = originalMkdtemp;
     for (const [key, name] of [["bin", "RELAY_OPENCODE_BIN"], ["signal", "FAKE_OPENCODE_SIGNAL"], ["alive", "FAKE_OPENCODE_STAY_ALIVE"], ["base", "RELAY_WORKTREE_BASE"]]) {
       if (previous[key] === undefined) delete process.env[name]; else process.env[name] = previous[key];
     }

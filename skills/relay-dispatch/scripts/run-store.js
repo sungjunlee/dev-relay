@@ -430,6 +430,7 @@ function observableHostedProcess({ hosted, cwd, input, timeoutMs, processScope, 
     const overlap = Math.max(0, ...signals.map((value) => value.length - 1));
     const resolveEarly = (error) => {
       if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer);
+      child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
       resolve({ pid: child.pid, status: null, signal: null, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error, termination: classified });
     };
     const reap = () => {
@@ -536,7 +537,6 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
       audit_errors: auditErrors.map((entry) => entry.code || entry.message), quiet_window_ms: 250 };
     throw runtimeError(attachReviewInputError(error, inputBindingError));
   }
-  if (runtimeIntegrityError) throw runtimeError(attachReviewInputError(annotateTermination(runtimeIntegrityError), inputBindingError));
   const stdoutPath = path.join(readRoot, "reviewer.stdout"), stderrPath = path.join(readRoot, "reviewer.stderr");
   fs.writeFileSync(stdoutPath, result.stdout || "", { mode: 0o600 }); fs.writeFileSync(stderrPath, result.stderr || "", { mode: 0o600 });
   let resultPath = invocation.resultPath || null;
@@ -561,6 +561,7 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
       process_group_unverified: true, quiet_window_ms: 250 };
     throw runtimeError(attachReviewInputError(error, inputBindingError));
   }
+  if (runtimeIntegrityError) throw runtimeError(attachReviewInputError(annotateTermination(runtimeIntegrityError), inputBindingError));
   if (inputBindingError) throw runtimeError(inputBindingError);
   if (providerTermination) {
     throw runtimeError(annotateTermination(new Error("independent reviewer failed (provider_unavailable)")));
