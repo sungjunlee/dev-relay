@@ -563,6 +563,97 @@ test("#1208 review action binding accepts only fresh clean local Git and the lat
   assert.throws(() => runner.requireReviewAction(withPr, record), /durable PR fact/);
 });
 
+test("#1244 failed verification rejects review before invocation and appends zero review facts", async (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-failed-verification-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, "repo");
+  const runDir = path.join(root, "review-failed-verification");
+  fs.mkdirSync(repo);
+  fs.mkdirSync(runDir);
+  execFileSync("git", ["init", "-b", "main", repo], { stdio: "ignore" });
+  git(repo, ["config", "user.email", "review@example.test"]);
+  git(repo, ["config", "user.name", "Review Test"]);
+  fs.writeFileSync(path.join(repo, "file.txt"), "before\n");
+  git(repo, ["add", "file.txt"]);
+  git(repo, ["commit", "-m", "initial"]);
+  const startSha = git(repo, ["rev-parse", "HEAD"]);
+  git(repo, ["checkout", "-b", "issue-failed-verification"]);
+  fs.writeFileSync(path.join(repo, "file.txt"), "after\n");
+  git(repo, ["commit", "-am", "change"]);
+  const head = git(repo, ["rev-parse", "HEAD"]);
+  const tree = git(repo, ["rev-parse", "HEAD^{tree}"]);
+  const criteriaPath = path.join(runDir, "done-criteria.md");
+  fs.writeFileSync(criteriaPath, "- file.txt says after\n");
+  const criteriaHash = crypto.createHash("sha256").update(fs.readFileSync(criteriaPath)).digest("hex");
+  const record = {
+    version: 3,
+    run_id: "review-failed-verification",
+    repo: { root: fs.realpathSync(repo), remote: "local/repo" },
+    git: { branch: "issue-failed-verification", base_branch: "main", worktree: fs.realpathSync(repo), start_sha: startSha },
+    contract: { done_criteria_path: criteriaPath, done_criteria_sha256: criteriaHash },
+    roles: { orchestrator: "codex", executor: "codex", reviewer: "codex" },
+    parent: null,
+    ownership_digest: null,
+    created_at: "2026-08-01T00:00:00.000Z",
+  };
+  runStore.createRunRecord({ runDir, record });
+  const failedVerification = {
+    event_id: "verification-failed",
+    run_id: record.run_id,
+    type: "verification_recorded",
+    at: "2026-08-01T00:01:00.000Z",
+    actor: "codex",
+    payload: {
+      head_sha: head,
+      tree_sha: tree,
+      done_criteria_sha256: criteriaHash,
+      command: "node --test",
+      verification_request_sha256: "a".repeat(64),
+      declared_command_count: 1,
+      completed_command_count: 1,
+      result_path: path.join(runDir, "verification.log"),
+      result_sha256: "b".repeat(64),
+      exit_code: 7,
+      status: "failed",
+      operator: "codex",
+    },
+  };
+  facts.validateFact(failedVerification);
+  const eventsPath = path.join(runDir, "events.jsonl");
+  fs.writeFileSync(eventsPath, `${JSON.stringify(failedVerification)}\n`);
+  const beforeBytes = fs.readFileSync(eventsPath);
+  const inspection = {
+    blockers: [],
+    snapshot: { run_sha256: crypto.createHash("sha256").update(JSON.stringify(record)).digest("hex") },
+    facts: [failedVerification],
+    observations: {
+      git: { local_delivery: true, head_sha: head, tree_sha: tree, reviewable_dirty: false },
+      github: {},
+    },
+    derived: { action: "redispatch", reason: "verification_failed", head_sha: head, pr_number: null },
+    recommended_action: {
+      kind: "redispatch",
+      reason: "verification_failed",
+      key: "c".repeat(64),
+      steps: [],
+      required_inputs: [],
+    },
+  };
+  const cli = runner.parseCli(["--repo", repo, "--run-dir", runDir, "--json"]);
+  let reviewerCalls = 0;
+  let lockCalls = 0;
+  let appendCalls = 0;
+  await assert.rejects(runner.runReview(cli, {
+    inspectRun: async () => inspection,
+    invokeReviewer: async () => { reviewerCalls += 1; throw new Error("must not invoke reviewer"); },
+    withRunLock: async () => { lockCalls += 1; throw new Error("must not acquire review write lock"); },
+    appendFact: () => { appendCalls += 1; throw new Error("must not append review fact"); },
+  }), (error) => error.code === "REVIEW_ACTION_MISMATCH");
+  assert.deepEqual({ reviewerCalls, lockCalls, appendCalls }, { reviewerCalls: 0, lockCalls: 0, appendCalls: 0 });
+  assert.deepEqual(fs.readFileSync(eventsPath), beforeBytes);
+  assert.equal(facts.readFacts({ eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
+});
+
 test("changes_requested and invocation error are durable blocking review facts", async () => {
   const changed = await fixture("changes");
   const changedResult = await runner.runReview(changed.cli, {
