@@ -81,7 +81,7 @@ process.stdout.write("fake pi completed\\n");
   const env = { ...process.env, RELAY_HOME: relayHome, RELAY_CURSOR_AGENT_BIN: path.join(bin, "agent"), RELAY_CLINE_BIN: fakeCline,
     NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${ADAPTER_RUNTIME_PRELOAD}`].filter(Boolean).join(" "),
     PATH: `${bin}${path.delimiter}${process.env.PATH}` };
-  return { root, repo, remote, relayHome, prompt, rubric, fakePi, env };
+  return { root, repo, remote, relayHome, bin, prompt, rubric, fakePi, env };
 }
 
 function run(value, args, env = value.env) {
@@ -96,6 +96,89 @@ function fixtureRunsDir(value) {
   const base = path.basename(canonical).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
   const slug = `${base}-${crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 8)}`;
   return path.join(value.relayHome, "runs", slug);
+}
+
+function githubObservationFixture(value, branch) {
+  const statePath = path.join(value.root, "github-observation.json");
+  const gitBin = path.join(value.bin, "git-observer");
+  const ghBin = path.join(value.bin, "gh-observer");
+  const invocationLog = path.join(value.root, "codex-invocations.log");
+  fs.writeFileSync(statePath, JSON.stringify({ branch, head_sha: null, base_sha: null, gh_calls: 0, drift_body_after: null }));
+  fs.writeFileSync(gitBin, `#!${process.execPath}
+"use strict";
+const fs = require("fs"), { spawnSync } = require("child_process");
+const args = process.argv.slice(2), state = JSON.parse(fs.readFileSync(process.env.RELAY_TEST_GITHUB_STATE, "utf8"));
+if (args.includes("ls-remote")) {
+  if (state.head_sha) process.stdout.write(state.head_sha + "\\trefs/heads/" + state.branch + "\\n");
+  process.exit(0);
+}
+const child = spawnSync(process.env.RELAY_TEST_REAL_GIT, args, { stdio: "inherit" });
+if (child.error) throw child.error;
+process.exit(child.status === null ? 1 : child.status);
+`, { mode: 0o755 });
+  fs.writeFileSync(ghBin, `#!${process.execPath}
+"use strict";
+const fs = require("fs"), statePath = process.env.RELAY_TEST_GITHUB_STATE;
+const state = JSON.parse(fs.readFileSync(statePath, "utf8")), args = process.argv.slice(2);
+if (args[0] !== "pr" || args[1] !== "list") { process.stderr.write("unexpected gh invocation: " + args.join(" ")); process.exit(2); }
+state.gh_calls += 1; fs.writeFileSync(statePath, JSON.stringify(state));
+const body = state.drift_body_after !== null && state.gh_calls >= state.drift_body_after ? "drifted observation" : "stable observation";
+process.stdout.write(JSON.stringify([{ number: 42, state: "OPEN", url: "https://github.com/owner/repo/pull/42",
+  headRefName: state.branch, headRefOid: state.head_sha, baseRefName: "main", baseRefOid: state.base_sha,
+  headRepository: { nameWithOwner: "owner/repo" }, headRepositoryOwner: { login: "owner" },
+  isCrossRepository: false, mergedAt: null, mergeCommit: null, body }]));
+`, { mode: 0o755 });
+  git(value.repo, ["remote", "set-url", "origin", "git@github.com:owner/repo.git"]);
+  return {
+    statePath,
+    invocationLog,
+    env: {
+      ...value.env,
+      RELAY_GIT_BIN: gitBin,
+      RELAY_GH_BIN: ghBin,
+      RELAY_TEST_GITHUB_STATE: statePath,
+      RELAY_TEST_REAL_GIT: realGit(),
+      FAKE_CODEX_INVOCATION_LOG: invocationLog,
+    },
+    update(update) {
+      fs.writeFileSync(statePath, JSON.stringify({ ...JSON.parse(fs.readFileSync(statePath, "utf8")), ...update }));
+    },
+  };
+}
+
+function appendProductionFacts({ runDir, runId, worktree, entries }) {
+  const eventsPath = path.join(runDir, "events.jsonl");
+  return host.withRunLock({
+    runDir,
+    attemptId: `test-facts-${crypto.randomUUID()}`,
+    operation: "test_append_facts",
+    hostKind: "local_supervisor",
+    hostHandle: `test-facts:${process.pid}`,
+    worktreeDir: worktree,
+  }, (lockContext) => {
+    for (const entry of entries) facts.appendFact({ eventsPath, lockContext, fact: { ...entry, run_id: runId } });
+  });
+}
+
+function dispatchFactCounts(runDir) {
+  const runFacts = facts.readFacts({ eventsPath: path.join(runDir, "events.jsonl") }).facts;
+  return {
+    started: runFacts.filter((fact) => fact.type === "attempt_started").length,
+    terminal: runFacts.filter((fact) => fact.type === "attempt_finished" || fact.type === "attempt_interrupted").length,
+    attemptFacts: runFacts.filter((fact) => fact.type.startsWith("attempt_")).length,
+    prompts: fs.readdirSync(runDir).filter((name) => name.startsWith("prompt-")).length,
+  };
+}
+
+async function withEnvironment(values, callback) {
+  const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, values);
+  try { return await callback(); }
+  finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
 }
 
 test("cleanup recovery refuses to release an owner without a signed exact obligation", async () => {
@@ -899,6 +982,84 @@ test("verification_failed resume revalidates the exact action key under lock bef
   }
   assert.deepEqual(fs.readdirSync(output.run_dir).filter((name) => name.startsWith("prompt-")).sort(), beforePrompts);
   assert.equal(facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") }).facts.filter((fact) => fact.type.startsWith("attempt_")).length, beforeAttempts);
+});
+
+test("#1244 production inspection and public --run-id dispatch execute one exact-current failed-verification retry", async () => {
+  const value = fixture("verification-failed-production-resume");
+  const github = githubObservationFixture(value, "verification-failed-production-resume");
+  const first = run(value, ["--branch", "verification-failed-production-resume", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--done-criteria-file", value.rubric, "--json"], github.env);
+  assert.equal(first.status, 0, `${first.stderr}\n${first.stdout}`);
+  const output = json(first.stdout), record = readRunRecord({ runDir: output.run_dir });
+  const head = git(record.git.worktree, ["rev-parse", "HEAD"]), tree = git(record.git.worktree, ["rev-parse", "HEAD^{tree}"]);
+  fs.unlinkSync(path.join(record.git.worktree, "executor-change.txt"));
+  github.update({ head_sha: head, base_sha: head });
+  const now = new Date().toISOString();
+  await appendProductionFacts({ runDir: output.run_dir, runId: output.run_id, worktree: record.git.worktree, entries: [
+    { event_id: `pr-${crypto.randomUUID()}`, type: "pull_request_recorded", at: now, actor: "test-owner", payload: {
+      pr_number: 42, repo: "owner/repo", head_ref: record.git.branch, base_ref: record.git.base_branch,
+      head_sha: head, created_by_relay: true,
+    } },
+    { event_id: `verification-${crypto.randomUUID()}`, type: "verification_recorded", at: now, actor: "test-owner", payload: {
+      head_sha: head, tree_sha: tree, done_criteria_sha256: record.contract.done_criteria_sha256,
+      command: "node --test", verification_request_sha256: "1".repeat(64), declared_command_count: 1,
+      completed_command_count: 1, result_path: path.join(output.run_dir, "failed-verification.log"),
+      result_sha256: "2".repeat(64), exit_code: 1, status: "failed", operator: "test-owner",
+    } },
+  ] });
+
+  const before = await withEnvironment(github.env, () => runtime.inspectRun({ runDir: output.run_dir }));
+  assert.deepEqual([before.derived.action, before.derived.reason], ["redispatch", "verification_failed"]);
+  assert.equal(before.recommended_action.kind, "redispatch");
+  const counts = dispatchFactCounts(output.run_dir);
+  const invocations = fs.readFileSync(github.invocationLog, "utf8").trim().split("\n").filter(Boolean).length;
+  const retry = run(value, ["--run-id", output.run_id, "--prompt", "retry exact failed verification", "--json"], github.env);
+  assert.equal(retry.status, 0, `${retry.stderr}\n${retry.stdout}`);
+  assert.equal(fs.readFileSync(github.invocationLog, "utf8").trim().split("\n").filter(Boolean).length, invocations + 1,
+    "the run-bound Codex executor must actually run once");
+  assert.deepEqual(dispatchFactCounts(output.run_dir), {
+    started: counts.started + 1,
+    terminal: counts.terminal + 1,
+    attemptFacts: counts.attemptFacts + 2,
+    prompts: counts.prompts + 1,
+  }, "exactly one complete new attempt and its bound prompt are appended");
+});
+
+test("#1244 production --run-id action-key drift appends zero prompts or attempts and never runs the executor", async () => {
+  const value = fixture("verification-failed-production-drift");
+  const github = githubObservationFixture(value, "verification-failed-production-drift");
+  const first = run(value, ["--branch", "verification-failed-production-drift", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--done-criteria-file", value.rubric, "--json"], github.env);
+  assert.equal(first.status, 0, `${first.stderr}\n${first.stdout}`);
+  const output = json(first.stdout), record = readRunRecord({ runDir: output.run_dir });
+  const head = git(record.git.worktree, ["rev-parse", "HEAD"]), tree = git(record.git.worktree, ["rev-parse", "HEAD^{tree}"]);
+  fs.unlinkSync(path.join(record.git.worktree, "executor-change.txt"));
+  github.update({ head_sha: head, base_sha: head });
+  const now = new Date().toISOString();
+  await appendProductionFacts({ runDir: output.run_dir, runId: output.run_id, worktree: record.git.worktree, entries: [
+    { event_id: `pr-${crypto.randomUUID()}`, type: "pull_request_recorded", at: now, actor: "test-owner", payload: {
+      pr_number: 42, repo: "owner/repo", head_ref: record.git.branch, base_ref: record.git.base_branch,
+      head_sha: head, created_by_relay: true,
+    } },
+    { event_id: `verification-${crypto.randomUUID()}`, type: "verification_recorded", at: now, actor: "test-owner", payload: {
+      head_sha: head, tree_sha: tree, done_criteria_sha256: record.contract.done_criteria_sha256,
+      command: "node --test", verification_request_sha256: "3".repeat(64), declared_command_count: 1,
+      completed_command_count: 1, result_path: path.join(output.run_dir, "failed-verification.log"),
+      result_sha256: "4".repeat(64), exit_code: 1, status: "failed", operator: "test-owner",
+    } },
+  ] });
+  const before = await withEnvironment(github.env, () => runtime.inspectRun({ runDir: output.run_dir }));
+  assert.deepEqual([before.derived.action, before.derived.reason], ["redispatch", "verification_failed"]);
+  const counts = dispatchFactCounts(output.run_dir);
+  const invocations = fs.readFileSync(github.invocationLog, "utf8").trim().split("\n").filter(Boolean).length;
+  const state = JSON.parse(fs.readFileSync(github.statePath, "utf8"));
+  github.update({ drift_body_after: state.gh_calls + 2 });
+  const retry = run(value, ["--run-id", output.run_id, "--prompt", "retry must be rejected", "--json"], github.env);
+  assert.notEqual(retry.status, 0, `${retry.stderr}\n${retry.stdout}`);
+  assert.equal(json(retry.stderr).code, "RUN_ACTION_CHANGED");
+  assert.deepEqual(dispatchFactCounts(output.run_dir), counts, "stale action identity must append zero prompt or attempt writes");
+  assert.equal(fs.readFileSync(github.invocationLog, "utf8").trim().split("\n").filter(Boolean).length, invocations,
+    "the executor must not run after action-key drift");
 });
 
 test("production inspection excludes only the self-held dispatch lock from exact action identity", async () => {

@@ -39,11 +39,12 @@ function fact(type, index, payload, attemptId = null) {
   };
 }
 
-function started(index = 1, attemptId = "a1") {
+function started(index = 1, attemptId = "a1", overrides = {}) {
   return fact("attempt_started", index, {
     executor: "codex", model: null, start_sha: START, host_kind: "local",
     host_handle: "host-1", stdout_path: "/r/out", stderr_path: "/r/err",
     result_path: "/r/result", timeout_ms: 1000,
+    ...overrides,
   }, attemptId);
 }
 
@@ -291,7 +292,8 @@ test("#1244 exact-current verification failure outranks review history and later
   assert.equal(githubFailure.action, "redispatch");
   assert.equal(githubFailure.reason, "verification_failed");
 
-  const correctionFacts = [pr(), verification(4), review("pass", 5), failed, started(7, "a2"), finished(8, "a2")];
+  const correctionFacts = [pr(), verification(4), review("pass", 5), failed,
+    started(7, "a2", { start_sha: HEAD }), finished(8, "a2", { start_sha: HEAD })];
   const completedCorrection = foldRunFacts({
     runRecord: runRecord(),
     facts: correctionFacts,
@@ -347,6 +349,62 @@ test("#1244 exact-current verification failure outranks review history and later
   });
   assert.equal(incompleteFailure.action, "recover");
   assert.equal(incompleteFailure.reason, "verification_not_passing");
+});
+
+test("#1244 a no-op completed GitHub verification retry remains redispatchable", () => {
+  const failed = verification(6, { status: "failed", exit_code: 7 });
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [
+      pr(), verification(4), review("pass", 5), failed,
+      started(7, "a2", { start_sha: HEAD }), finished(8, "a2", { start_sha: HEAD }),
+    ],
+    gitFacts: {
+      head_sha: HEAD,
+      tree_sha: TREE,
+      reviewable_work: true,
+      reviewable_dirty: false,
+    },
+    githubFacts: livePrFacts(42, { pr_lookup_complete: true }),
+  });
+
+  assert.equal(result.action, "redispatch");
+  assert.equal(result.reason, "verification_failed");
+});
+
+test("#1244 a completed GitHub verification retry with an unpublished commit recovers publication", () => {
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [
+      pr(), verification(4), review("pass", 5),
+      verification(6, { status: "failed", exit_code: 7 }),
+      started(7, "a2", { start_sha: HEAD }),
+      finished(8, "a2", { start_sha: HEAD, final_sha: TARGET, tree_sha: TARGET }),
+    ],
+    gitFacts: {
+      head_sha: TARGET,
+      tree_sha: TARGET,
+      reviewable_work: true,
+      reviewable_dirty: false,
+    },
+    githubFacts: livePrFacts(42, { pr_lookup_complete: true }),
+  });
+
+  assert.equal(result.action, "recover");
+  assert.equal(result.reason, "publication_incomplete");
+});
+
+test("#1244 an orphan or stale completed terminal cannot turn failed verification into publication", () => {
+  const failed = verification(6, { status: "failed", exit_code: 7 });
+  const result = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [pr(), verification(4), review("pass", 5), failed, finished(7, "orphan", { start_sha: START })],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE, reviewable_work: true, reviewable_dirty: true },
+    githubFacts: livePrFacts(42, { pr_lookup_complete: true }),
+  });
+
+  assert.equal(result.action, "redispatch");
+  assert.equal(result.reason, "verification_failed");
 });
 
 test("#1207 keeps an unavailable forge distinct from a proven local delivery", () => {

@@ -31,6 +31,10 @@ function hasReviewableWork(gitFacts, interrupted = null) {
     || gitFacts.branch_commit_exists === true
     || gitFacts.result_artifact_regular === true;
 }
+function hasUnpublishedRetryWork(gitFacts, headSha, prHead) {
+  return gitFacts.reviewable_dirty === true
+    || Boolean(headSha && prHead && headSha !== prHead);
+}
 function hostIsLive(hostFacts, attempt) {
   if (typeof hostFacts.live === "boolean") return hostFacts.live;
   const handle = attempt?.payload?.host_handle;
@@ -157,6 +161,29 @@ function verificationGate({
     };
   }
   return { ready: true, latest };
+}
+function completedFailedVerificationRetry(facts, prHead, doneCriteriaSha256) {
+  const latest = facts.filter((fact) => fact.type === "verification_recorded").at(-1) || null;
+  if (
+    !latest
+    || latest.payload.status !== "failed"
+    || latest.payload.exit_code === 0
+    || latest.payload.completed_command_count !== latest.payload.declared_command_count
+    || latest.payload.head_sha !== prHead
+    || latest.payload.done_criteria_sha256 !== doneCriteriaSha256
+  ) return false;
+  const failureIndex = facts.indexOf(latest);
+  const afterFailure = facts.slice(failureIndex + 1);
+  const terminal = afterFailure
+    .filter((fact) => fact.type === "attempt_finished" || fact.type === "attempt_interrupted")
+    .at(-1) || null;
+  const start = terminal && afterFailure.find((fact) => (
+    fact.type === "attempt_started" && fact.attempt_id === terminal.attempt_id
+  ));
+  return terminal?.type === "attempt_finished"
+    && terminal.payload.status === "completed"
+    && start?.payload.start_sha === prHead
+    && terminal.payload.start_sha === prHead;
 }
 function foldRunFacts({
   runRecord,
@@ -540,6 +567,15 @@ function foldRunFacts({
   // an older passing review cannot mask a later exact-current failure.
   let githubVerification = null;
   if (prFact) {
+    if (completedFailedVerificationRetry(known, prHead, criteriaHash)
+      && hasUnpublishedRetryWork(gitFacts, headSha, prHead)) {
+      return withGithubAvailability(result("recover", "publication_incomplete", {
+        head_sha: headSha,
+        reviewed_sha: latestReview?.payload?.reviewed_sha || null,
+        pr_number: prNumber,
+        diagnostics,
+      }), githubFacts);
+    }
     githubVerification = verificationGate({
       facts: known,
       prHead,
@@ -547,24 +583,6 @@ function foldRunFacts({
       doneCriteriaSha256: criteriaHash,
     });
     if (!githubVerification.ready && githubVerification.action === "redispatch") {
-      const failureIndex = known.findIndex((fact) => (
-        fact.event_id === githubVerification.diagnostic.verification_event_id
-      ));
-      const postFailureTerminal = known.slice(failureIndex + 1)
-        .filter((fact) => fact.type === "attempt_finished" || fact.type === "attempt_interrupted")
-        .at(-1) || null;
-      if (
-        postFailureTerminal?.type === "attempt_finished"
-        && postFailureTerminal.payload.status === "completed"
-        && hasReviewableWork(gitFacts)
-      ) {
-        return withGithubAvailability(result("recover", "publication_incomplete", {
-          head_sha: headSha,
-          reviewed_sha: latestReview?.payload?.reviewed_sha || null,
-          pr_number: prNumber,
-          diagnostics,
-        }), githubFacts);
-      }
       return withGithubAvailability(result("redispatch", githubVerification.reason, {
         head_sha: headSha,
         reviewed_sha: latestReview?.payload?.reviewed_sha || null,
