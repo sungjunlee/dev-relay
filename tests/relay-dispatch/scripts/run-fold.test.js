@@ -327,6 +327,18 @@ test("#1244 exact-current verification failure outranks review history and later
   assert.equal(githubStaleFailure.action, "recover");
   assert.equal(githubStaleFailure.reason, "verification_stale");
 
+  const staleFailureWithCompletedRetry = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [pr(), verification(4), review("pass", 5), verification(6, {
+      status: "failed", exit_code: 7, tree_sha: START,
+    }), started(7, "a2", { start_sha: HEAD }), finished(8, "a2", { start_sha: HEAD })],
+    gitFacts: { head_sha: HEAD, tree_sha: TREE, reviewable_work: true, reviewable_dirty: true },
+    githubFacts: livePrFacts(42, { pr_lookup_complete: true }),
+  });
+  assert.equal(staleFailureWithCompletedRetry.action, "recover");
+  assert.equal(staleFailureWithCompletedRetry.reason, "verification_stale");
+  assert.equal(staleFailureWithCompletedRetry.diagnostics.at(-1).code, "verification_proof_stale");
+
   const terminalFailure = foldRunFacts({
     runRecord: record,
     facts: [fact("run_closed", 8, {

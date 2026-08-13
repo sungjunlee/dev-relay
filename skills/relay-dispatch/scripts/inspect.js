@@ -567,7 +567,24 @@ function foldRunFacts({
   // an older passing review cannot mask a later exact-current failure.
   let githubVerification = null;
   if (prFact) {
-    if (completedFailedVerificationRetry(known, prHead, criteriaHash)
+    githubVerification = verificationGate({
+      facts: known,
+      prHead,
+      treeSha: currentTreeSha,
+      doneCriteriaSha256: criteriaHash,
+    });
+    // A stale proof must remain stale even when a completed retry left
+    // unpublished work behind. The gate is authoritative for tree binding.
+    if (githubVerification.reason === "verification_stale") {
+      return withGithubAvailability(result("recover", githubVerification.reason, {
+        head_sha: headSha,
+        reviewed_sha: latestReview?.payload?.reviewed_sha || null,
+        pr_number: prNumber,
+        diagnostics: [...diagnostics, githubVerification.diagnostic],
+      }), githubFacts);
+    }
+    if (["verification_failed", "verification_observation_incomplete"].includes(githubVerification.reason)
+      && completedFailedVerificationRetry(known, prHead, criteriaHash)
       && hasUnpublishedRetryWork(gitFacts, headSha, prHead)) {
       return withGithubAvailability(result("recover", "publication_incomplete", {
         head_sha: headSha,
@@ -576,12 +593,6 @@ function foldRunFacts({
         diagnostics,
       }), githubFacts);
     }
-    githubVerification = verificationGate({
-      facts: known,
-      prHead,
-      treeSha: currentTreeSha,
-      doneCriteriaSha256: criteriaHash,
-    });
     if (!githubVerification.ready && githubVerification.action === "redispatch") {
       return withGithubAvailability(result("redispatch", githubVerification.reason, {
         head_sha: headSha,
