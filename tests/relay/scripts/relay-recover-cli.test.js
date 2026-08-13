@@ -121,7 +121,7 @@ function verificationFacts(f) {
 }
 
 for (const github of [false, true]) {
-  test(`#1244 ${github ? "GitHub" : "local"} production CLI records completed nonzero verification`, (t) => {
+  test(`#1244 ${github ? "GitHub" : "local"} production CLI records exact ordered nonzero verification`, (t) => {
     const f = fixture({ github }); t.after(() => fs.rmSync(f.root, { recursive: true, force: true })); f.writeVerification();
     const inspected = cli(f, "inspect", []); assert.equal(inspected.status, 0, inspected.stderr);
     const before = JSON.parse(inspected.stdout); assert.deepEqual(before.recommended_action.steps, ["record_verification"]);
@@ -153,11 +153,43 @@ for (const github of [false, true]) {
   });
 }
 
-test("#1244 missing, invalid, dirty, incomplete, and stale evidence append zero verification facts", async (t) => {
+test("#1244 production CLI records exact ordered all-zero verification as passed", (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  f.writeVerification({
+    completed_commands: [
+      { command: "node --test", exit_code: 0 },
+      { command: "node --check index.js", exit_code: 0 },
+    ],
+  });
+  const before = JSON.parse(cli(f, "inspect", []).stdout);
+  const recovered = cli(f, "recover", ["--reason", "record passed verification", "--actor", "owner",
+    "--expected-action-key", before.recommended_action.key, "--verification-file", f.verificationPath]);
+  assert.equal(recovered.status, 0, recovered.stderr);
+  const recorded = verificationFacts(f);
+  assert.equal(recorded.length, 1);
+  assert.deepEqual({ status: recorded[0].payload.status, exit_code: recorded[0].payload.exit_code }, {
+    status: "passed", exit_code: 0,
+  });
+});
+
+test("#1244 invalid command correspondence and other invalid evidence append zero verification facts", async (t) => {
   const cases = [
     ["missing file", null, (f) => path.join(f.root, "missing-verification.json")],
     ["missing argument", null, () => null],
     ["incomplete commands", { completed_commands: [{ command: "node --test", exit_code: 0 }] }],
+    ["duplicate commands", { completed_commands: [
+      { command: "node --test", exit_code: 0 },
+      { command: "node --test", exit_code: 0 },
+    ] }],
+    ["substituted commands", { completed_commands: [
+      { command: "node --test", exit_code: 0 },
+      { command: "npm test", exit_code: 0 },
+    ] }],
+    ["reordered commands", { completed_commands: [
+      { command: "node --check index.js", exit_code: 0 },
+      { command: "node --test", exit_code: 0 },
+    ] }],
     ["result hash mismatch", { result_sha256: "e".repeat(64) }],
     ["stale head", { head_sha: "f".repeat(40) }],
     ["stale tree", { tree_sha: "f".repeat(40) }],

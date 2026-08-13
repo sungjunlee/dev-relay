@@ -1274,12 +1274,18 @@ function readVerificationPayload(filePath, { record, observed, actor }) {
     if (
       !result || typeof result !== "object" || Array.isArray(result)
       || JSON.stringify(Object.keys(result).sort()) !== JSON.stringify(["command", "exit_code"])
-      || result.command !== payload.commands[index]
       || !Number.isInteger(result.exit_code) || result.exit_code < 0
     ) {
-      throw new Error(`verification completed_commands[${index}] is invalid or out of request order`);
+      throw new Error(`verification completed_commands[${index}] is invalid`);
     }
   });
+  const exactOrderedCompletion = (
+    payload.completed_commands.length === payload.commands.length
+    && payload.completed_commands.every((result, index) => result.command === payload.commands[index])
+  );
+  if (!exactOrderedCompletion) {
+    throw new Error("verification completed_commands do not exactly match commands in request order");
+  }
   const expected = {
     head_sha: observed.git.head_sha,
     tree_sha: observed.git.tree_sha,
@@ -1289,9 +1295,7 @@ function readVerificationPayload(filePath, { record, observed, actor }) {
     if (payload[field] !== value) throw new Error(`verification ${field} does not match the fresh recovery observation`);
   }
   if (payload.operator !== actor) throw new Error("verification operator does not match recovery actor");
-  const allCompleted = payload.completed_commands.length === payload.commands.length;
   const failed = payload.completed_commands.find((result) => result.exit_code !== 0);
-  if (!allCompleted) throw new Error("verification commands are incomplete");
   const result = readArtifact(payload.result_path, "verification result");
   if (result.sha256 !== payload.result_sha256) {
     throw new Error("verification result_sha256 does not match result_path bytes");
