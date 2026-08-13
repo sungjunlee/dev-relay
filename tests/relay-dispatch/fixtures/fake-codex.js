@@ -14,6 +14,9 @@ const output = value("-o");
 let controls = {};
 try { controls = JSON.parse(fs.readFileSync(0, "utf8")); } catch {}
 if (!cwd || !output) process.exit(64);
+if (process.env.FAKE_CODEX_INVOCATION_LOG) {
+  fs.appendFileSync(process.env.FAKE_CODEX_INVOCATION_LOG, `${cwd}\n`, "utf8");
+}
 if (controls.delay_ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(controls.delay_ms));
 }
