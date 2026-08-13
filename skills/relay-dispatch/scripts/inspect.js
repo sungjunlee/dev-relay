@@ -138,10 +138,16 @@ function verificationGate({
       },
     };
   }
+  const completeFailure = latest.payload.status === "failed"
+    && latest.payload.exit_code !== 0
+    && latest.payload.completed_command_count === latest.payload.declared_command_count;
   if (latest.payload.status !== "passed" || latest.payload.exit_code !== 0) {
+    const action = completeFailure ? "redispatch" : "recover";
+    const reason = completeFailure ? "verification_failed" : "verification_not_passing";
     return {
       ready: false,
-      reason: "verification_not_passing",
+      action,
+      reason,
       diagnostic: {
         code: "verification_proof_not_passing",
         verification_event_id: latest.event_id,
@@ -475,16 +481,37 @@ function foldRunFacts({
       && latestReview.payload.reviewer === runRecord.roles?.reviewer
     );
     const reviewIndex = currentReviewIsAuthoritative ? known.indexOf(latestReview) : known.length;
-    const candidateFacts = known.slice(0, reviewIndex);
+    // A verification recorded after an otherwise authoritative review is new
+    // evidence for the same subject. Include it in the gate so a failure
+    // cannot be hidden by the review-history projection. Earlier review facts
+    // remain valid when a later exact-current pass restores the subject.
+    const latestVerificationIndex = known.reduce(
+      (index, fact, candidateIndex) => fact.type === "verification_recorded" ? candidateIndex : index,
+      -1,
+    );
+    const candidateEnd = latestVerificationIndex > reviewIndex
+      ? latestVerificationIndex + 1 : reviewIndex;
+    const candidateFacts = known.slice(0, candidateEnd);
     const verification = verificationGate({
       facts: candidateFacts,
       prHead: headSha,
       treeSha: gitFacts.head_sha === headSha ? gitFacts.tree_sha : null,
       doneCriteriaSha256: runRecord.contract?.done_criteria_sha256 || null,
     });
-    localVerification = verification;
+    // A review remains bound to the passing verification that preceded it.
+    // Newer exact-current evidence may invalidate that review (failure), but a
+    // later pass must not rewrite the review artifact's verification event id.
+    const reviewVerification = currentReviewIsAuthoritative
+      ? verificationGate({
+        facts: known.slice(0, reviewIndex),
+        prHead: headSha,
+        treeSha: gitFacts.head_sha === headSha ? gitFacts.tree_sha : null,
+        doneCriteriaSha256: runRecord.contract?.done_criteria_sha256 || null,
+      })
+      : null;
+    localVerification = reviewVerification?.ready ? reviewVerification : verification;
     if (!verification.ready) {
-      return result("recover", verification.reason, {
+      return result(verification.action || "recover", verification.reason, {
         head_sha: headSha,
         diagnostics: [...diagnostics, verification.diagnostic],
       });
@@ -508,6 +535,44 @@ function foldRunFacts({
     && latestReview.payload.done_criteria_sha256 === criteriaHash
     && latestReview.payload.reviewer === runRecord.roles?.reviewer,
   );
+  // Verification failure is a current execution result, not a review
+  // correction. Check it before review-history and retry-lineage branches so
+  // an older passing review cannot mask a later exact-current failure.
+  let githubVerification = null;
+  if (prFact) {
+    githubVerification = verificationGate({
+      facts: known,
+      prHead,
+      treeSha: currentTreeSha,
+      doneCriteriaSha256: criteriaHash,
+    });
+    if (!githubVerification.ready && githubVerification.action === "redispatch") {
+      const failureIndex = known.findIndex((fact) => (
+        fact.event_id === githubVerification.diagnostic.verification_event_id
+      ));
+      const postFailureTerminal = known.slice(failureIndex + 1)
+        .filter((fact) => fact.type === "attempt_finished" || fact.type === "attempt_interrupted")
+        .at(-1) || null;
+      if (
+        postFailureTerminal?.type === "attempt_finished"
+        && postFailureTerminal.payload.status === "completed"
+        && hasReviewableWork(gitFacts)
+      ) {
+        return withGithubAvailability(result("recover", "publication_incomplete", {
+          head_sha: headSha,
+          reviewed_sha: latestReview?.payload?.reviewed_sha || null,
+          pr_number: prNumber,
+          diagnostics,
+        }), githubFacts);
+      }
+      return withGithubAvailability(result("redispatch", githubVerification.reason, {
+        head_sha: headSha,
+        reviewed_sha: latestReview?.payload?.reviewed_sha || null,
+        pr_number: prNumber,
+        diagnostics: [...diagnostics, githubVerification.diagnostic],
+      }), githubFacts);
+    }
+  }
   const subjectReviews = latestReview
     ? reviews.filter((fact) => (
       fact.payload.reviewed_sha === latestReview.payload.reviewed_sha
@@ -576,14 +641,14 @@ function foldRunFacts({
     return localReviewReady ? correction : withGithubAvailability(correction, githubFacts);
   }
   if (prFact) {
-    const verification = verificationGate({
+    const verification = githubVerification || verificationGate({
       facts: known,
       prHead,
       treeSha: currentTreeSha,
       doneCriteriaSha256: criteriaHash,
     });
     if (!verification.ready) {
-      return withGithubAvailability(result("recover", verification.reason, {
+      return withGithubAvailability(result(verification.action || "recover", verification.reason, {
         head_sha: headSha,
         reviewed_sha: latestReview?.payload?.reviewed_sha || null,
         pr_number: prNumber,

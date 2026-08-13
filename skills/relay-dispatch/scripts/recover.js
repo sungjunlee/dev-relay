@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { isDeepStrictEqual } = require("util");
 const factsModule = require("./facts");
 const host = require("./host");
 const { execGh, execGit, resolveBranchRemote } = require("./exec");
@@ -1181,7 +1182,7 @@ async function recoverRun({
       if (!result || result.converged !== true) {
         throw new Error(`recovery step ${step} did not converge`);
       }
-      let factEventId = null;
+      let factEventId = typeof result.fact_event_id === "string" ? result.fact_event_id : null;
       if (result.fact) {
         const fact = {
           ...result.fact,
@@ -1290,7 +1291,7 @@ function readVerificationPayload(filePath, { record, observed, actor }) {
   if (payload.operator !== actor) throw new Error("verification operator does not match recovery actor");
   const allCompleted = payload.completed_commands.length === payload.commands.length;
   const failed = payload.completed_commands.find((result) => result.exit_code !== 0);
-  if (!allCompleted || failed) throw new Error("only complete passing structured verification can converge recovery");
+  if (!allCompleted) throw new Error("verification commands are incomplete");
   const result = readArtifact(payload.result_path, "verification result");
   if (result.sha256 !== payload.result_sha256) {
     throw new Error("verification result_sha256 does not match result_path bytes");
@@ -1306,8 +1307,11 @@ function readVerificationPayload(filePath, { record, observed, actor }) {
     completed_command_count: payload.completed_commands.length,
     result_path: result.path,
     result_sha256: payload.result_sha256,
-    exit_code: 0,
-    status: "passed",
+    // Preserve only the deterministic command outcome in the fact. The
+    // result artifact remains separately bound by path and digest; its bytes
+    // never cross into durable fact or review prompt content.
+    exit_code: failed?.exit_code || 0,
+    status: failed ? "failed" : "passed",
     operator: payload.operator,
   };
 }
@@ -1473,12 +1477,14 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
         });
         const existing = snapshot.facts.find((fact) => (
           fact.type === "verification_recorded"
-          && fact.payload.head_sha === payload.head_sha
-          && fact.payload.tree_sha === payload.tree_sha
-          && fact.payload.done_criteria_sha256 === payload.done_criteria_sha256
-          && fact.payload.result_sha256 === payload.result_sha256
+          && isDeepStrictEqual(fact.payload, payload)
         ));
-        if (existing) return { converged: true, applied: false };
+        if (existing) {
+          // Preserve the exact durable fact identity in the applied ledger so
+          // a crash after fact append yields the same receipt shape as a crash
+          // before append. A non-equal pass/fail payload is not deduplicated.
+          return { converged: true, applied: false, fact_event_id: existing.event_id };
+        }
         return {
           converged: true,
           applied: true,

@@ -860,7 +860,19 @@ test("resume admission accepts only an exact inspect-derived redispatch action",
   }
 });
 
-test("resume revalidates the exact action key under the acquired run lock before prompt or attempt facts", async () => {
+test("#1244 verification_failed is admitted as redispatch and rejects action-key drift", () => {
+  const inspection = {
+    derived: { terminal: false, phase: "active", action: "redispatch", reason: "verification_failed" },
+    recommended_action: { kind: "redispatch", key: "f".repeat(64) },
+  };
+  assert.equal(dispatch.assertResumeInspection(inspection, "f".repeat(64)), inspection);
+  assert.throws(
+    () => dispatch.assertResumeInspection(inspection, "e".repeat(64)),
+    (error) => error.code === "RUN_ACTION_CHANGED",
+  );
+});
+
+test("verification_failed resume revalidates the exact action key under lock before prompt or attempt facts", async () => {
   const value = fixture("resume-lock-barrier");
   const first = run(value, ["--branch", "resume-lock-barrier", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
   assert.equal(first.status, 0, first.stderr);
@@ -873,7 +885,7 @@ test("resume revalidates the exact action key under the acquired run lock before
   process.env.PATH = value.env.PATH;
   let calls = 0;
   const inspectRun = async () => ({
-    derived: { terminal: false, phase: "active", action: "redispatch", reason: "changes_requested" },
+    derived: { terminal: false, phase: "active", action: "redispatch", reason: "verification_failed" },
     recommended_action: { kind: "redispatch", key: (calls++ === 0 ? "a" : "b").repeat(64) },
   });
   try {
