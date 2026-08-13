@@ -296,12 +296,12 @@ test("observable primary review classifies only a recognized live provider failu
     diff_sha256: crypto.createHash("sha256").update("diff\n").digest("hex"), prompt_sha256: crypto.createHash("sha256").update("prompt\n").digest("hex") };
   const originalMkdtemp = fs.mkdtempSync, stages = [];
   fs.mkdtempSync = function captureStage(prefix, ...args) { const value = originalMkdtemp.call(this, prefix, ...args); if (String(prefix).includes("relay-review-")) stages.push(value); return value; };
-  const invoke = (script, timeoutMs) => store.invokeIndependentReviewer({ runDir, request, timeoutMs, providerUnavailableSignals: ["insufficient_quota"],
+  const invoke = (script, timeoutMs, forcedStatus = null) => store.invokeIndependentReviewer({ runDir, request, timeoutMs, providerUnavailableSignals: ["insufficient_quota"],
     buildInvocation: ({ cwd }) => ({ command: process.execPath, args: ["-e", script], cwd, networkAccess: "enabled", runtimeDependencies: { executableParent: null, interpreterParent: null } }),
-    parseOutcome: ({ exitCode, signal, timedOut }) => ({ status: exitCode === 0 && !signal && !timedOut ? "succeeded" : "failed", output: {} }) });
+    parseOutcome: ({ exitCode, signal, timedOut }) => ({ status: forcedStatus || (exitCode === 0 && !signal && !timedOut ? "succeeded" : "failed"), output: {} }) });
   try {
     const started = Date.now();
-    await assert.rejects(invoke("process.on('SIGTERM',()=>{});process.stderr.write('credential=hidden insufficient_quota trailing\\n');setInterval(()=>{},1000)", 10_000), (error) => {
+    await assert.rejects(invoke("process.on('SIGTERM',()=>{});process.stderr.write('credential=hidden insufficient_quota trailing\\n');setInterval(()=>{},1000)", 10_000, "succeeded"), (error) => {
       assert.equal(error.termination, "provider_unavailable"); assert.equal(error.classification, "provider_unavailable"); assert.equal(error.failure_reason, "provider_unavailable");
       assert.doesNotMatch(error.message, /credential=hidden|insufficient_quota/); return true;
     });
@@ -313,10 +313,29 @@ test("observable primary review classifies only a recognized live provider failu
     });
     assert.ok(Date.now() - timeoutStarted >= 250); assert.equal(fs.existsSync(stages.at(-1)), false);
 
-    await assert.rejects(invoke("process.stderr.write('insufficient_quota\\n');process.exit(2)", 10_000), (error) => {
+    await assert.rejects(invoke("process.stderr.write('insufficient_quota\\n');setTimeout(()=>process.exit(2),100)", 10_000), (error) => {
       assert.equal(error.classification, null); assert.equal(error.failure_reason, "cli_nonzero_exit"); return true;
     });
     assert.equal(fs.existsSync(stages.at(-1)), false); assert.equal(host.inspectOwnership({ runDir }).status, "absent");
+
+    const realReap = host.hostInvocation.reapProcessGroup; let reapCalls = 0;
+    host.hostInvocation.reapProcessGroup = () => {
+      reapCalls += 1;
+      return { absent: false, survived_terminal: false, unverified: true };
+    };
+    const cleanupStarted = Date.now(); let cleanupStage;
+    try {
+      await assert.rejects(invoke("process.on('SIGTERM',()=>{});process.stderr.write('insufficient_quota\\n');setInterval(()=>{},1000)", 10_000), (error) => {
+        cleanupStage = error.review_evidence_path;
+        assert.equal(error.code, "HOST_CLEANUP_INCOMPLETE"); assert.equal(error.review_evidence_preserved, true);
+        assert.equal(error.runtime_audit.process_group_unverified, true); assert.equal(error.runtime_audit.process_group_absent, false);
+        return true;
+      });
+    } finally { host.hostInvocation.reapProcessGroup = realReap; }
+    assert.ok(reapCalls >= 2); assert.ok(Date.now() - cleanupStarted < 5_000, "an unverified group must settle after the bounded close window");
+    assert.ok(cleanupStage && fs.existsSync(cleanupStage)); assert.equal(host.inspectOwnership({ runDir }).reason, "cleanup_incomplete");
+    await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir }), reason: "settle bounded unverified reviewer cleanup" });
+    assert.equal(fs.existsSync(cleanupStage), false); assert.equal(host.inspectOwnership({ runDir }).status, "absent");
   } finally { fs.mkdtempSync = originalMkdtemp; }
 });
 

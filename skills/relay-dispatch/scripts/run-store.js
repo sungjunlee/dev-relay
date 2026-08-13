@@ -425,21 +425,20 @@ function attachReviewInputError(error, inputBindingError) {
 function observableHostedProcess({ hosted, cwd, input, timeoutMs, processScope, providerUnavailableSignals }) {
   return new Promise((resolve) => {
     const child = spawn(hosted.command, hosted.args, { cwd, env: hosted.env, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
-    const stdout = [], stderr = []; let stdoutSize = 0, stderrSize = 0, overflow = null, timedOut = false, classified = null, settled = false, tail = "", detectionTimer = null, timer = null;
+    const stdout = [], stderr = []; let stdoutSize = 0, stderrSize = 0, overflow = null, timedOut = false, classified = null, settled = false, tail = "", detectionTimer = null, cleanupTimer = null, timer = null;
     const signals = providerUnavailableSignals.map((value) => value.toLowerCase());
     const overlap = Math.max(0, ...signals.map((value) => value.length - 1));
     const resolveEarly = (error) => {
-      if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer);
+      if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer);
       resolve({ pid: child.pid, status: null, signal: null, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error, termination: classified });
     };
     const reap = () => {
       try {
         const result = host.hostInvocation.reapProcessGroup(child.pid, processScope.seal);
-        // A verified child can close just after its scoped processes are reaped while the
-        // kernel still reports the detached group briefly. Let close drive the final audit;
-        // an actual unverified survivor is still rejected by settle below.
-        if (!result.absent && !result.unverified) {
-          resolveEarly(Object.assign(new Error("reviewer process scope could not be terminated safely"), { code: "HOST_CLEANUP_INCOMPLETE" }));
+        if (!result.absent) {
+          const error = Object.assign(new Error("reviewer process scope could not be terminated safely"), { code: "HOST_CLEANUP_INCOMPLETE" });
+          if (!result.unverified) resolveEarly(error);
+          else if (!cleanupTimer) cleanupTimer = setTimeout(() => resolveEarly(error), 250);
         }
       } catch (error) { resolveEarly(error); }
     };
@@ -461,13 +460,13 @@ function observableHostedProcess({ hosted, cwd, input, timeoutMs, processScope, 
         detectionTimer = setTimeout(() => {
           detectionTimer = null;
           if (!settled && child.exitCode === null) { classified = "provider_unavailable"; reap(); }
-        }, 25);
+        }, 250);
       }
     });
-    child.once("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); clearTimeout(detectionTimer); resolve({ pid: child.pid, status: null, signal: null, stdout: "", stderr: "", error }); } });
+    child.once("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer); resolve({ pid: child.pid, status: null, signal: null, stdout: "", stderr: "", error }); } });
     timer = setTimeout(() => { if (child.exitCode === null) { timedOut = true; reap(); } }, timeoutMs);
     child.once("close", (status, signal) => {
-      if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer);
+      if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer);
       const error = overflow || (timedOut ? Object.assign(new Error("reviewer invocation timed out"), { code: "ETIMEDOUT" }) : null);
       resolve({ pid: child.pid, status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error,
         termination: classified });
@@ -546,6 +545,7 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
     const error = new Error(scopedAudit.remaining > 0 || processGroupAudit.unverified
       ? "independent reviewer cleanup incomplete"
       : "independent reviewer process scope survived terminal result");
+    if (processGroupAudit.unverified) error.code = "HOST_CLEANUP_INCOMPLETE";
     annotateTermination(error);
     error.runtime_audit = { pgid: result.pid || null, process_group_absent: processGroupAudit.absent && scopedAudit.remaining === 0,
       process_scope_matched: scopedAudit.matched, process_scope_reaped: scopedAudit.reaped, process_scope_remaining: scopedAudit.remaining,
@@ -553,7 +553,18 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
       process_group_unverified: processGroupAudit.unverified, quiet_window_ms: 250 };
     throw runtimeError(attachReviewInputError(error, inputBindingError));
   }
+  if (result.error?.code === "HOST_CLEANUP_INCOMPLETE") {
+    const error = annotateTermination(result.error);
+    error.runtime_audit = { pgid: result.pid || null, process_group_absent: false,
+      process_scope_matched: scopedAudit.matched, process_scope_reaped: scopedAudit.reaped, process_scope_remaining: scopedAudit.remaining,
+      remaining_identities: scopedAudit.remaining_identities || [], scope_seal: processScope.seal,
+      process_group_unverified: true, quiet_window_ms: 250 };
+    throw runtimeError(attachReviewInputError(error, inputBindingError));
+  }
   if (inputBindingError) throw runtimeError(inputBindingError);
+  if (providerTermination) {
+    throw runtimeError(annotateTermination(new Error("independent reviewer failed (provider_unavailable)")));
+  }
   let outcome; try { outcome = parseOutcome({ phase: "primary_review", exitCode: Number.isInteger(result.status) ? result.status : 1, signal: result.signal || null,
     timedOut: result.error?.code === "ETIMEDOUT", cancelled: false, stdoutPath, stderrPath, resultPath }); } catch (error) { throw runtimeError(error); }
   if (!outcome || outcome.status !== "succeeded") {

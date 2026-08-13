@@ -765,6 +765,20 @@ test("recognized OpenCode provider-unavailable stderr terminates dispatch with t
   assert.equal(fs.existsSync(path.join(output.run_dir, `host-attempt-${attempts[1].attempt_id}.cleanup-incomplete.json`)), false);
 });
 
+test("recognized OpenCode stderr preserves a delayed natural exit", { timeout: 60_000 }, () => {
+  const value = fixture("opencode-provider-natural-exit");
+  const result = run(value, ["--executor", "opencode", "--branch", "opencode-provider-natural-exit", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
+    ...value.env, FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_EXIT_CODE: "2", FAKE_OPENCODE_EXIT_DELAY_MS: "100",
+  });
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(output.host_status, "failed"); assert.equal(output.termination, undefined);
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const finished = journal.facts.find((fact) => fact.type === "attempt_finished");
+  assert.equal(finished.payload.status, "failed"); assert.equal(finished.payload.exit_code, 2);
+});
+
 test("a malformed structured adapter result cannot turn an exit-zero host result into a completed attempt", () => {
   const value = fixture("malformed-outcome");
   const result = run(value, ["--branch", "malformed-outcome", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--executor", "cline", "--json"]);
