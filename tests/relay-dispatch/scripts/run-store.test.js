@@ -291,13 +291,16 @@ test("observable primary review classifies only a recognized live provider failu
   fs.writeFileSync(criteriaPath, criteria, { mode: 0o600 });
   createRunRecord({ runDir, record: record(runDir, { contract: { done_criteria_path: criteriaPath, done_criteria_sha256: crypto.createHash("sha256").update(criteria).digest("hex") } }) });
   const diffPath = path.join(runDir, "diff.patch"), promptPath = path.join(runDir, "prompt.md");
-  fs.writeFileSync(diffPath, "diff\n", { mode: 0o600 }); fs.writeFileSync(promptPath, "prompt\n", { mode: 0o600 });
+  const promptBytes = Buffer.alloc(2 << 20, "p");
+  fs.writeFileSync(diffPath, "diff\n", { mode: 0o600 }); fs.writeFileSync(promptPath, promptBytes, { mode: 0o600 });
   const request = { diff_path: diffPath, prompt_path: promptPath, done_criteria_path: criteriaPath, reviewed_sha: "a".repeat(40), current_sha: "a".repeat(40),
-    diff_sha256: crypto.createHash("sha256").update("diff\n").digest("hex"), prompt_sha256: crypto.createHash("sha256").update("prompt\n").digest("hex") };
+    diff_sha256: crypto.createHash("sha256").update("diff\n").digest("hex"), prompt_sha256: crypto.createHash("sha256").update(promptBytes).digest("hex") };
   const originalMkdtemp = fs.mkdtempSync, stages = [];
   fs.mkdtempSync = function captureStage(prefix, ...args) { const value = originalMkdtemp.call(this, prefix, ...args); if (String(prefix).includes("relay-review-")) stages.push(value); return value; };
   const invoke = (script, timeoutMs, forcedStatus = null) => store.invokeIndependentReviewer({ runDir, request, timeoutMs, providerUnavailableSignals: ["insufficient_quota"],
-    buildInvocation: ({ cwd }) => ({ command: process.execPath, args: ["-e", script], cwd, networkAccess: "enabled", runtimeDependencies: { executableParent: null, interpreterParent: null } }),
+    buildInvocation: ({ cwd, promptPath: stagedPrompt, promptBytes: stagedBytes }) => ({ command: process.execPath, args: ["-e", script], cwd,
+      stdinPath: stagedPrompt, stdinSha256: crypto.createHash("sha256").update(stagedBytes).digest("hex"), networkAccess: "enabled",
+      runtimeDependencies: { executableParent: null, interpreterParent: null } }),
     parseOutcome: ({ exitCode, signal, timedOut }) => ({ status: forcedStatus || (exitCode === 0 && !signal && !timedOut ? "succeeded" : "failed"), output: {} }) });
   try {
     const started = Date.now();

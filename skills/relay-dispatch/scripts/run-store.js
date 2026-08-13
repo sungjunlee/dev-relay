@@ -465,6 +465,7 @@ function observableHostedProcess({ hosted, cwd, input, timeoutMs, processScope, 
       }
     });
     child.once("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer); resolve({ pid: child.pid, status: null, signal: null, stdout: "", stderr: "", error }); } });
+    child.stdin?.on("error", (error) => { if (error.code !== "EPIPE") resolveEarly(error); });
     timer = setTimeout(() => { if (child.exitCode === null) { timedOut = true; reap(); } }, timeoutMs);
     child.once("close", (status, signal) => {
       if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer);
