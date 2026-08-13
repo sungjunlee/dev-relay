@@ -1,5 +1,5 @@
 const crypto = require("crypto");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -422,8 +422,63 @@ function attachReviewInputError(error, inputBindingError) {
   if (!error.cause) error.cause = inputBindingError;
   return error;
 }
-function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, parseOutcome, envAllowlist = REVIEW_ENV, useAmbientEnvironment = false, stdinBinding = null, inputBindings = [], processScope = null }) {
+function observableHostedProcess({ hosted, cwd, input, timeoutMs, processScope, providerUnavailableSignals }) {
+  return new Promise((resolve) => {
+    const child = spawn(hosted.command, hosted.args, { cwd, env: hosted.env, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const stdout = [], stderr = []; let stdoutSize = 0, stderrSize = 0, overflow = null, timedOut = false, classified = null, settled = false, tail = "", detectionTimer = null, cleanupTimer = null, timer = null;
+    const signals = providerUnavailableSignals.map((value) => value.toLowerCase());
+    const overlap = Math.max(0, ...signals.map((value) => value.length - 1));
+    const resolveEarly = (error) => {
+      if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer);
+      child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+      resolve({ pid: child.pid, status: null, signal: null, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error, termination: classified });
+    };
+    const reap = () => {
+      try {
+        const result = host.hostInvocation.reapProcessGroup(child.pid, processScope.seal);
+        if (!result.absent) {
+          const error = Object.assign(new Error("reviewer process scope could not be terminated safely"), { code: "HOST_CLEANUP_INCOMPLETE" });
+          if (!result.unverified) resolveEarly(error);
+          else if (!cleanupTimer) cleanupTimer = setTimeout(() => resolveEarly(error), 250);
+        }
+      } catch (error) { resolveEarly(error); }
+    };
+    const bounded = (chunks, chunk, kind) => {
+      const size = kind === "stdout" ? stdoutSize : stderrSize;
+      if (size + chunk.length > 8 << 20) {
+        overflow ||= Object.assign(new Error(`${kind} maxBuffer exceeded`), { code: "ENOBUFS" });
+        reap(); return;
+      }
+      chunks.push(chunk); if (kind === "stdout") stdoutSize += chunk.length; else stderrSize += chunk.length;
+    };
+    child.stdout.on("data", (chunk) => bounded(stdout, chunk, "stdout"));
+    child.stderr.on("data", (chunk) => {
+      bounded(stderr, chunk, "stderr");
+      const scanned = `${tail}${chunk.toString("utf8")}`.toLowerCase(); tail = overlap ? scanned.slice(-overlap) : "";
+      if (!classified && !detectionTimer && signals.some((signal) => scanned.includes(signal))) {
+        // Give a self-exiting CLI one event-loop turn to publish its natural close before Relay
+        // decides that the invocation is still live and must be ended early.
+        detectionTimer = setTimeout(() => {
+          detectionTimer = null;
+          if (!settled && child.exitCode === null) { classified = "provider_unavailable"; reap(); }
+        }, 250);
+      }
+    });
+    child.once("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer); resolve({ pid: child.pid, status: null, signal: null, stdout: "", stderr: "", error }); } });
+    child.stdin?.on("error", (error) => { if (error.code !== "EPIPE") resolveEarly(error); });
+    timer = setTimeout(() => { if (child.exitCode === null) { timedOut = true; reap(); } }, timeoutMs);
+    child.once("close", (status, signal) => {
+      if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer);
+      const error = overflow || (timedOut ? Object.assign(new Error("reviewer invocation timed out"), { code: "ETIMEDOUT" }) : null);
+      resolve({ pid: child.pid, status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error,
+        termination: classified });
+    });
+    if (input) child.stdin.end(input);
+  });
+}
+function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, parseOutcome, envAllowlist = REVIEW_ENV, useAmbientEnvironment = false, stdinBinding = null, inputBindings = [], processScope = null, providerUnavailableSignals = [] }) {
   if (!Array.isArray(invocation?.args) || invocation.args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) throw new Error("hosted invocation requires string argv values");
+  if (!Array.isArray(providerUnavailableSignals) || providerUnavailableSignals.some((value) => typeof value !== "string" || !value)) throw new Error("provider unavailable signal declaration is invalid");
   const childEnv = useAmbientEnvironment ? ambientEnvironment(env) : boundedEnvironment(env, envAllowlist);
   if (useAmbientEnvironment) childEnv.TMPDIR = writeRoot;
   processScope ||= host.hostInvocation.beginProcessScope(); Object.assign(childEnv, processScope.env);
@@ -443,7 +498,19 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
   }
   host.hostInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
     runtimeDependencies: invocation.runtimeDependencies, env: childEnv });
-  const result = spawnSync(hosted.command, hosted.args, { cwd: readRoot, env: hosted.env, input, encoding: "utf8", timeout: timeoutMs, maxBuffer: 8 << 20, detached: process.platform !== "win32" });
+  const execution = providerUnavailableSignals.length
+    ? observableHostedProcess({ hosted, cwd: readRoot, input, timeoutMs, processScope, providerUnavailableSignals })
+    : spawnSync(hosted.command, hosted.args, { cwd: readRoot, env: hosted.env, input, encoding: "utf8", timeout: timeoutMs, maxBuffer: 8 << 20, detached: process.platform !== "win32" });
+  const settle = (result) => {
+  const providerTermination = result.termination === "provider_unavailable";
+  const annotateTermination = (error) => {
+    error.classification = result.termination || null;
+    if (providerTermination) {
+      error.termination = "provider_unavailable";
+      error.failure_reason = "provider_unavailable";
+    }
+    return error;
+  };
   let runtimeIntegrityError = null;
   try { host.hostInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
     runtimeDependencies: invocation.runtimeDependencies, env: childEnv, reenumerate: false }); }
@@ -464,13 +531,13 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
   } catch (error) { inputBindingError = error; }
   if (auditErrors.length) {
     const error = new Error(`independent reviewer runtime audit failed: ${auditErrors.map((entry) => entry.message).join("; ")}`);
+    annotateTermination(error);
     error.runtime_audit = { pgid: result.pid || null, process_group_absent: processGroupAudit?.absent === true,
       process_scope_matched: scopedAudit?.matched ?? null, process_scope_reaped: scopedAudit?.reaped ?? null,
       process_scope_remaining: scopedAudit?.remaining ?? null, remaining_identities: scopedAudit?.remaining_identities || [], scope_seal: processScope.seal,
       audit_errors: auditErrors.map((entry) => entry.code || entry.message), quiet_window_ms: 250 };
     throw runtimeError(attachReviewInputError(error, inputBindingError));
   }
-  if (runtimeIntegrityError) throw runtimeError(attachReviewInputError(runtimeIntegrityError, inputBindingError));
   const stdoutPath = path.join(readRoot, "reviewer.stdout"), stderrPath = path.join(readRoot, "reviewer.stderr");
   fs.writeFileSync(stdoutPath, result.stdout || "", { mode: 0o600 }); fs.writeFileSync(stderrPath, result.stderr || "", { mode: 0o600 });
   let resultPath = invocation.resultPath || null;
@@ -479,21 +546,38 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
     const error = new Error(scopedAudit.remaining > 0 || processGroupAudit.unverified
       ? "independent reviewer cleanup incomplete"
       : "independent reviewer process scope survived terminal result");
+    if (processGroupAudit.unverified) error.code = "HOST_CLEANUP_INCOMPLETE";
+    annotateTermination(error);
     error.runtime_audit = { pgid: result.pid || null, process_group_absent: processGroupAudit.absent && scopedAudit.remaining === 0,
       process_scope_matched: scopedAudit.matched, process_scope_reaped: scopedAudit.reaped, process_scope_remaining: scopedAudit.remaining,
       remaining_identities: scopedAudit.remaining_identities || [], scope_seal: processScope.seal,
       process_group_unverified: processGroupAudit.unverified, quiet_window_ms: 250 };
     throw runtimeError(attachReviewInputError(error, inputBindingError));
   }
+  if (result.error?.code === "HOST_CLEANUP_INCOMPLETE") {
+    const error = annotateTermination(result.error);
+    error.runtime_audit = { pgid: result.pid || null, process_group_absent: false,
+      process_scope_matched: scopedAudit.matched, process_scope_reaped: scopedAudit.reaped, process_scope_remaining: scopedAudit.remaining,
+      remaining_identities: scopedAudit.remaining_identities || [], scope_seal: processScope.seal,
+      process_group_unverified: true, quiet_window_ms: 250 };
+    throw runtimeError(attachReviewInputError(error, inputBindingError));
+  }
+  if (runtimeIntegrityError) throw runtimeError(attachReviewInputError(annotateTermination(runtimeIntegrityError), inputBindingError));
   if (inputBindingError) throw runtimeError(inputBindingError);
+  if (providerTermination) {
+    throw runtimeError(annotateTermination(new Error("independent reviewer failed (provider_unavailable)")));
+  }
   let outcome; try { outcome = parseOutcome({ phase: "primary_review", exitCode: Number.isInteger(result.status) ? result.status : 1, signal: result.signal || null,
     timedOut: result.error?.code === "ETIMEDOUT", cancelled: false, stdoutPath, stderrPath, resultPath }); } catch (error) { throw runtimeError(error); }
   if (!outcome || outcome.status !== "succeeded") {
-    const reason = isolatedFailureReason(result, outcome), error = new Error(`independent reviewer failed (${reason})`);
-    error.failure_reason = reason; error.failure_signals = isolatedFailureSignals(result, outcome); throw runtimeError(error);
+    const reason = result.termination || isolatedFailureReason(result, outcome), error = new Error(`independent reviewer failed (${reason})`);
+    error.failure_reason = reason; annotateTermination(error);
+    error.failure_signals = result.termination ? [] : isolatedFailureSignals(result, outcome); throw runtimeError(error);
   }
   return Object.freeze({ ...outcome, executed_runtime: runtime.runtime_files,
     runtime_audit: Object.freeze({ pgid: result.pid || null, process_group_absent: true, process_scope_remaining: 0, scope_seal: processScope.seal, quiet_window_ms: 250 }) });
+  };
+  return execution && typeof execution.then === "function" ? execution.then(settle) : settle(execution);
 }
 
 function invokeExternalObserver({ observer, request, timeoutMs = 120000 }) {
@@ -519,7 +603,7 @@ function invokeExternalObserver({ observer, request, timeoutMs = 120000 }) {
       } }).output;
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }
-function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutcome, timeoutMs, env }) {
+function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutcome, timeoutMs, env, providerUnavailableSignals = [] }) {
   const record = readRunRecord({ runDir });
   let diff, prompt;
   try {
@@ -542,7 +626,24 @@ function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutc
   catch (error) { host.hostInvocation.removeBoundDirectory(stage, stageBinding, "unowned review stage"); throw error; }
   const processScope = host.hostInvocation.beginProcessScope(), cleanup = host.retainReviewerCleanup(lockContext,
     { root: stage, binding: stageBinding, scopeSeal: processScope.seal });
-  let binding = null, preserveStage = false, outcome, failure; try {
+  let binding = null, preserveStage = false, outcome, failure;
+  function failAsyncReview(error) {
+    error.review_binding = binding;
+    const audit = error.runtime_audit;
+    const unsafe = Boolean(audit && !(audit.process_group_absent === true && audit.process_scope_remaining === 0));
+    if (unsafe) {
+      error.review_cleanup_path = cleanup.path; error.review_evidence_preserved = true; error.review_evidence_path = stage;
+      throw error;
+    }
+    try { cleanup.complete("failed"); host.releaseRunLock(lockContext, { outcome: "review_finished" }); }
+    catch (cleanupError) {
+      cleanupError.review_binding = binding; cleanupError.classification ||= error.classification;
+      cleanupError.review_cleanup_path = cleanup.path; cleanupError.review_evidence_preserved = true; cleanupError.review_evidence_path = stage;
+      throw cleanupError;
+    }
+    throw error;
+  }
+  try {
   const inputs = path.join(stage, "inputs"), output = path.join(inputs, "output"); fs.mkdirSync(inputs, { mode: 0o700 }); fs.mkdirSync(output, { mode: 0o700 });
   const paths = { diffPath: path.join(inputs, `review-diff-${digest(diff)}.patch`), promptPath: path.join(inputs, `review-prompt-${digest(prompt)}.md`),
     doneCriteriaPath: path.join(inputs, `done-criteria-${digest(criteria)}.md`) };
@@ -564,7 +665,18 @@ function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutc
     const invocation = buildInvocation(Object.freeze({ cwd: inputs, ...paths, promptBytes: Buffer.from(stagedBindings.prompt.bytes), requestPath: null, resultPath, schemaPath }));
     for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
     outcome = runHosted({ invocation: { ...invocation, resultPath }, readRoot: inputs, writeRoot: output, timeoutMs, env, parseOutcome, stdinBinding: stagedBindings.prompt,
-      inputBindings: Object.entries(stagedBindings), processScope, useAmbientEnvironment: true });
+      inputBindings: Object.entries(stagedBindings), processScope, useAmbientEnvironment: true, providerUnavailableSignals });
+    if (outcome && typeof outcome.then === "function") {
+      return outcome.then((resolved) => {
+        try {
+          for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
+          cleanup.complete("completed"); host.releaseRunLock(lockContext, { outcome: "review_finished" });
+          return Object.freeze({ ...resolved, review_binding: binding });
+        } catch (error) {
+          return failAsyncReview(error);
+        }
+      }, failAsyncReview);
+    }
     for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
   } catch (error) { if (binding) error.review_binding = binding; failure = error; const audit = error.runtime_audit;
     preserveStage = Boolean(audit && !(audit.process_group_absent === true && audit.process_scope_remaining === 0));

@@ -25,6 +25,19 @@ function normalizeRuntimeDependencies(value = {}) {
   } return Object.freeze(normalized);
 }
 
+function normalizeProviderUnavailableSignals(value) {
+  if (value === undefined || value === null) return Object.freeze([]);
+  if (!Array.isArray(value)) throw new Error("adapter providerUnavailableSignals must be an array of literal strings");
+  const normalized = value.map((signal) => {
+    if (typeof signal !== "string" || !signal.trim() || signal.length > 200 || /[\u0000-\u001f]/.test(signal)) {
+      throw new Error("adapter providerUnavailableSignals must be non-empty literal strings without control characters");
+    }
+    return signal.trim().toLowerCase();
+  });
+  if (new Set(normalized).size !== normalized.length) throw new Error("adapter providerUnavailableSignals must not repeat a signal");
+  return Object.freeze(normalized);
+}
+
 class AdapterCapabilityError extends Error {
   constructor(adapter, phase, reason) {
     super(`adapter '${adapter}' cannot run ${phase}: ${reason}`); this.name = "AdapterCapabilityError";
@@ -249,6 +262,7 @@ function createNativeAdapter({
   buildDispatch,
   buildReview = null,
   validateDispatch = null,
+  providerUnavailableSignals = null,
 }) {
   const phaseMetadata = Object.freeze({ ...phases });
   const parseOutcomeForProtocol = makeParseOutcome(outputProtocol);
@@ -277,10 +291,12 @@ function createNativeAdapter({
     throw new Error("native adapter dispatch phase must declare commandExecution");
   }
   const runtimeDependencies = normalizeRuntimeDependencies(metadata.runtimeDependencies);
+  const providerUnavailable = normalizeProviderUnavailableSignals(providerUnavailableSignals);
   const bindInvocationPolicy = (invocation, toolNetworkAccess) => Object.freeze({ ...invocation, networkAccess: "enabled", toolNetworkAccess, runtimeDependencies });
   return Object.freeze({
     name,
     defaults: Object.freeze({ timeoutMs }),
+    providerUnavailableSignals: providerUnavailable,
     metadata: deepFreeze({ ...metadata, runtimeDependencies }),
     probe({ env = process.env, timeoutMs: probeTimeoutMs = 5000, spawn = spawnSync } = {}) {
       const binary = env[metadata.cliBinaryEnv] || cliBinary;
@@ -334,6 +350,7 @@ module.exports = {
   decodeTrustedPrompt,
   formatAdapterPhase,
   makeParseOutcome,
+  normalizeProviderUnavailableSignals,
   parseOutput,
   parseJsonObject,
   probeBinary,

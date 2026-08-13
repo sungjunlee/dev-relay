@@ -381,6 +381,7 @@ function productionServices() {
           timeoutMs, sandbox: "read-only", networkAccess,
         }),
         parseOutcome: (input) => adapter.parseOutcome(input),
+        providerUnavailableSignals: adapter.providerUnavailableSignals,
       });
     },
     withRunLock,
@@ -444,6 +445,7 @@ async function runReview(cli, overrides = {}) {
   } catch (error) {
     if (error.review_evidence_preserved) throw error;
     if (hasReviewInputBindingError(error)) throw error;
+    if (error.classification === "provider_unavailable") throw error;
     stagedBinding = error.review_binding || null;
     executedRuntime = normalizeExecutedRuntime(error.executed_runtime);
     const reviewerResultFailure = error.code === "REVIEW_RESULT_INVALID"
@@ -589,7 +591,8 @@ async function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) {
   main().catch((error) => {
-    const payload = { ok: false, code: error.code || "REVIEW_FAILED", error: error.message };
+    const payload = { ok: false, code: error.code || "REVIEW_FAILED", error: error.message,
+      ...(error.classification ? { classification: error.classification } : {}) };
     console.error(process.argv.includes("--json") ? JSON.stringify(payload) : `Error: ${error.message}`);
     process.exitCode = 1;
   });

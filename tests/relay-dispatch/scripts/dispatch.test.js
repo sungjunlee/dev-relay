@@ -21,6 +21,7 @@ const DISPATCH = path.join(ROOT, "skills/relay-dispatch/scripts/dispatch.js");
 const FAKE_CODEX = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-codex.js");
 const FAKE_CURSOR = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-cursor.js");
 const FAKE_CLINE = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-cline.js");
+const FAKE_OPENCODE = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-opencode.js");
 const CRASH_AFTER_START = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-crash-after-start-preload.js");
 const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/adapter-runtime-preload.js");
 const RUN_CLAIM_RACE = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-run-claim-race-preload.js");
@@ -76,6 +77,7 @@ process.stdout.write("fake pi completed\\n");
 `, { mode: 0o755 });
   installNodeFixture(FAKE_CURSOR, path.join(bin, "agent"));
   const fakeCline = path.join(bin, "node_modules", "cline", "bin", "cline"); fs.mkdirSync(path.dirname(fakeCline), { recursive: true }); installNodeFixture(FAKE_CLINE, fakeCline);
+  installNodeFixture(FAKE_OPENCODE, path.join(bin, "opencode"));
   const env = { ...process.env, RELAY_HOME: relayHome, RELAY_CURSOR_AGENT_BIN: path.join(bin, "agent"), RELAY_CLINE_BIN: fakeCline,
     NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${ADAPTER_RUNTIME_PRELOAD}`].filter(Boolean).join(" "),
     PATH: `${bin}${path.delimiter}${process.env.PATH}` };
@@ -741,6 +743,52 @@ test("an empty adapter result cannot turn an exit-zero host result into a comple
   const finished = journal.facts.find((fact) => fact.type === "attempt_finished");
   assert.equal(finished.payload.status, "failed");
   assert.equal(finished.payload.exit_code, 0);
+});
+
+test("recognized OpenCode provider-unavailable stderr terminates dispatch with typed-only public state", { timeout: 60_000 }, () => {
+  const value = fixture("opencode-provider-unavailable"), raw = "credential=hidden insufficient_quota trailing provider text", started = Date.now();
+  const result = run(value, ["--executor", "opencode", "--branch", "opencode-provider-unavailable", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "30", "--json"], { ...value.env, FAKE_OPENCODE_SIGNAL: raw, FAKE_OPENCODE_STAY_ALIVE: "1" });
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout); assert.equal(output.status, "cancelled"); assert.equal(output.host_status, "cancelled");
+  assert.equal(output.termination, "provider_unavailable"); assert.doesNotMatch(JSON.stringify(output), /credential=hidden|insufficient_quota/);
+  assert.ok(Date.now() - started < 25_000);
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
+  assert.deepEqual(attempts.map((fact) => fact.type), ["attempt_started", "attempt_finished"]);
+  assert.equal(attempts[1].payload.status, "cancelled"); assert.equal(journal.facts.some((fact) => /verification_recorded|review_recorded/.test(fact.type)), false);
+  assert.doesNotMatch(JSON.stringify(journal.facts), /credential=hidden|insufficient_quota/);
+  const hostResult = JSON.parse(fs.readFileSync(attempts[1].payload.result_path, "utf8"));
+  assert.equal(hostResult.termination, "provider_unavailable"); assert.doesNotMatch(JSON.stringify(hostResult), /credential=hidden|insufficient_quota/);
+  const stderrPath = journal.facts.find((fact) => fact.type === "attempt_started").payload.stderr_path;
+  assert.equal(fs.statSync(stderrPath).mode & 0o777, 0o600); assert.match(fs.readFileSync(stderrPath, "utf8"), /credential=hidden insufficient_quota/);
+  assert.equal(fs.existsSync(path.join(output.run_dir, `host-attempt-${attempts[1].attempt_id}.cleanup-incomplete.json`)), false);
+});
+
+test("recognized OpenCode stderr preserves a delayed natural exit", { timeout: 60_000 }, () => {
+  const value = fixture("opencode-provider-natural-exit");
+  const result = run(value, ["--executor", "opencode", "--branch", "opencode-provider-natural-exit", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
+    ...value.env, FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_EXIT_CODE: "2", FAKE_OPENCODE_EXIT_DELAY_MS: "100",
+  });
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(output.host_status, "failed"); assert.equal(output.termination, undefined);
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const finished = journal.facts.find((fact) => fact.type === "attempt_finished");
+  assert.equal(finished.payload.status, "failed"); assert.equal(finished.payload.exit_code, 2);
+});
+
+test("recognized OpenCode stderr remains typed when the gate exits during Relay cancellation", { timeout: 60_000 }, () => {
+  const value = fixture("opencode-provider-exits-on-term");
+  const result = run(value, ["--executor", "opencode", "--branch", "opencode-provider-exits-on-term", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
+    ...value.env, FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_EXIT_ON_TERM: "1",
+  });
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
+  assert.equal(output.termination, "provider_unavailable", JSON.stringify(output));
 });
 
 test("a malformed structured adapter result cannot turn an exit-zero host result into a completed attempt", () => {

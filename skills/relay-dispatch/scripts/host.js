@@ -10,6 +10,7 @@ const OWNERSHIP = "ownership";
 const OWNER_RE = /^(\d{12})\.owner\.json$/;
 const ATTEMPT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,126}[A-Za-z0-9])?$/;
 const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out", "spawn_error"]);
+const PROVIDER_UNAVAILABLE = "provider_unavailable";
 const BREAK_PROBE_MS = 10_000;
 const PROCESS_SCOPE_KEY = "RELAY_PROCESS_SCOPE";
 const PROCESS_CONTRACT = "inherited_scope_no_daemon";
@@ -660,7 +661,8 @@ function cleanupObligation(value, runDir, owner) {
   const seal = obligation.scope_seal ?? null;
   if (seal !== null && !/^[0-9a-f]{64}$/.test(seal)) fail("cleanup process scope seal is invalid", "HOST_ARTIFACT_INVALID");
   if (!terminal || !["completed", "failed", "cancelled", "timed_out", "spawn_error"].includes(terminal.status)
-    || (terminal.exit_code !== null && !Number.isInteger(terminal.exit_code)) || (terminal.signal !== null && typeof terminal.signal !== "string")) fail("cleanup terminal context is invalid", "HOST_ARTIFACT_INVALID");
+    || (terminal.exit_code !== null && !Number.isInteger(terminal.exit_code)) || (terminal.signal !== null && typeof terminal.signal !== "string")
+    || (terminal.termination !== undefined && terminal.termination !== PROVIDER_UNAVAILABLE)) fail("cleanup terminal context is invalid", "HOST_ARTIFACT_INVALID");
   return { kind: value.kind, processes, staged_input_root: staged ? { ...staged } : null, scope_seal: seal, terminal };
 }
 function identityGone(identity, timeoutMs) {
@@ -785,6 +787,7 @@ function settleCleanup({ state, cleanupPath, fault, terminalStatus = "failed" })
   const resultPath = path.join(state.runDir, `attempt-${owner.attempt_id}.result.json`), body = {
     attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_kind: "local_supervisor", host_handle: owner.host_handle,
     status: terminalStatus, exit_code: obligation.terminal.exit_code, signal: obligation.terminal.signal,
+    ...(obligation.terminal.termination ? { termination: obligation.terminal.termination } : {}),
     error: terminalStatus === "completed" ? null : `cleanup recovered after incomplete host settlement: ${read.value.error}`, completed_at: new Date().toISOString(),
   };
   if (!publishOnce(resultPath, signed(body, owner.secret, "result_auth_sha256"))
@@ -859,7 +862,8 @@ function waitForStartup({ child, paths, owner, configSha, timeoutMs }) {
 function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedWorktreeRoot, cwd, stdoutPath, stderrPath, resultPath,
   inputFiles = [], stdinPath = null, stdinSha256 = null, executorResultPath = null, executorSandbox = "workspace-write", executorNetworkAccess = "disabled", timeoutMs = 30_000,
   cancelGraceMs = 1_000, supervisorStartupTimeoutMs = 30_000, executorEnv = {}, processContainment = PROCESS_CONTRACT,
-  runtimeDependencies = { executableParent: null, interpreterParent: null }, testGateBarrierPath = null, testBeforeSupervisorSpawn = null, lockContext } = {}) {
+  runtimeDependencies = { executableParent: null, interpreterParent: null }, testGateBarrierPath = null, testBeforeSupervisorSpawn = null, lockContext,
+  providerUnavailableSignals = [] } = {}) {
   if (lockContext === undefined) fail("production launch requires a lock capability", "HOST_LOCK_REQUIRED");
   const state = stateFor(lockContext), run = canonicalDir(runDir, "runDir"); assertRunLockHeld(lockContext, run);
   if (attemptId !== state.owner.attempt_id) fail("attempt does not match lock", "HOST_LOCK_IDENTITY_MISMATCH"); safeAttempt(attemptId);
@@ -869,6 +873,9 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   if (worktree !== state.owner.worktree.path || stat.dev !== state.owner.worktree.dev || stat.ino !== state.owner.worktree.ino
     || canonicalDir(cwd || worktree, "cwd") !== worktree) fail("worktree does not match lock", "HOST_LOCK_IDENTITY_MISMATCH");
   if (!["workspace-write", "read-only"].includes(executorSandbox) || !["enabled", "disabled"].includes(executorNetworkAccess)) fail("sandbox options are invalid", "INVALID_INVOCATION");
+  if (!Array.isArray(providerUnavailableSignals) || providerUnavailableSignals.some((value) => typeof value !== "string" || !value.trim() || value.length > 200 || /[\u0000-\u001f]/.test(value))) {
+    fail("provider unavailable signal declaration is invalid", "INVALID_INVOCATION");
+  }
   if (!Array.isArray(inputFiles)) fail("inputFiles must be an array", "INVALID_INVOCATION");
   if (Boolean(stdinPath) !== Boolean(stdinSha256) || (stdinSha256 && !/^[0-9a-f]{64}$/.test(stdinSha256))) fail("stdinPath and stdinSha256 must form an exact binding", "INVALID_INVOCATION");
   const declaredInputs = [...new Set([...inputFiles, ...(stdinPath ? [stdinPath] : [])])];
@@ -915,9 +922,10 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
     scope_seal: scopeSeal(scopeToken),
     worktree, cwd: worktree, stdout, stderr, result, executor_result: executorResult,
     tmp, sandbox: executorSandbox, network: "enabled", tool_network: executorNetworkAccess, runtime_dependencies: runtimeDependencies, runtime_files: runtime.runtime_files, timeout_ms: timeoutMs, grace_ms: cancelGraceMs,
-    supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier };
+    supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier,
+    ...(providerUnavailableSignals.length ? { provider_unavailable_signals: providerUnavailableSignals } : {}) };
   if (!publishOnce(paths.config, config)) fail("attempt has already been launched", "HOST_ATTEMPT_ALREADY_LAUNCHED");
-  const configSha = sha256(fs.readFileSync(paths.config)), stdoutFd = fs.openSync(stdout, "wx", 0o600), stderrFd = fs.openSync(stderr, "wx", 0o600);
+  const configSha = sha256(fs.readFileSync(paths.config)), stdoutFd = fs.openSync(stdout, "wx", 0o600), stderrFd = fs.openSync(stderr, "wx+", 0o600);
   const secretPath = path.join(run, `.host-secret-${attemptId}-${crypto.randomBytes(8).toString("hex")}`), secretFd = fs.openSync(secretPath, "wx+", 0o600);
   let child;
   try {
@@ -1055,29 +1063,36 @@ function runSupervisor(configPath, configSha) {
   if (!/^[0-9a-f]{64}$/.test(secret)) fail("host secret is invalid", "HOST_CONFIG_MISMATCH");
   const config = JSON.parse(bytes), supervisor = waitFingerprint(process.pid); if (!supervisor) fail("supervisor identity unavailable", "HOST_IDENTITY_UNAVAILABLE");
   if (!/^[0-9a-f]{64}$/.test(scopeToken || "") || process.env[PROCESS_SCOPE_KEY] !== scopeToken || scopeSeal(scopeToken) !== config.scope_seal) fail("supervisor process scope is unavailable", "HOST_CONFIG_MISMATCH");
+  if (config.provider_unavailable_signals !== undefined && (!Array.isArray(config.provider_unavailable_signals)
+    || config.provider_unavailable_signals.some((signal) => typeof signal !== "string" || !signal.trim() || signal.length > 200 || /[\u0000-\u001f]/.test(signal)))) {
+    fail("provider unavailable signal declaration is invalid", "HOST_CONFIG_MISMATCH");
+  }
+  const declaredSignals = (config.provider_unavailable_signals || []).map((signal) => signal.trim().toLowerCase());
   publishOnce(config.supervisor, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
     config_sha256: configSha, nonce: config.nonce, supervisor, started_at: new Date().toISOString() }, secret));
-  let child, childClosed = false, executorIdentity = null, finished = false, requested = null, pendingClose = null, deadline, escalation, cancelPoll, barrierPoll, outcome = "", overflow = false;
+  let child, childClosed = false, executorIdentity = null, finished = false, requested = null, requestedReason = null, pendingClose = null,
+    deadline, escalation, cancelPoll, barrierPoll, stderrPoll = null, stderrCursor = 0, stderrTail = "", signalSeen = false, signalSeenAt = null, outcome = "", overflow = false;
   const cleanupIncomplete = (error, obligation = null, terminal = {}) => {
-    if (finished) return; finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll);
+    if (finished) return; finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll); clearInterval(stderrPoll);
     const priorStatus = TERMINAL.has(terminal.status) ? terminal.status : "failed", provided = obligation?.processes || [];
     const processes = [supervisor, executorIdentity, ...provided].filter(Boolean).map((identity) => exactIdentity(identity));
     publishOnce(config.cleanup, signed({ v: 2, kind: "executor", attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
       identities: { supervisor: exactIdentity(supervisor), executor: executorIdentity ? exactIdentity(executorIdentity) : null },
-      error: error.message, terminal: { status: priorStatus, exit_code: terminal.exit_code ?? null, signal: terminal.signal || null },
+      error: error.message, terminal: { status: priorStatus, exit_code: terminal.exit_code ?? null, signal: terminal.signal || null,
+        ...(requestedReason ? { termination: requestedReason } : {}) },
       obligation: { processes: [...new Map(processes.map((identity) => [identity.pid, identity])).values()], staged_input_root: null,
         scope_seal: config.scope_seal }, observed_at: new Date().toISOString() }, secret));
   };
   function finish(fields) {
     if (finished) return;
-    finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll);
+    finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll); clearInterval(stderrPoll);
     const body = { attempt_id: config.attempt_id, lock_id: config.lock_id, host_kind: "local_supervisor", host_handle: config.host_handle,
-      ...fields, completed_at: new Date().toISOString() };
+      ...fields, ...(requestedReason ? { termination: requestedReason } : {}), completed_at: new Date().toISOString() };
     atomicWrite(config.result, `${JSON.stringify(signed(body, secret, "result_auth_sha256"))}\n`);
   }
   const unverifiedGroup = (status) => cleanupIncomplete(new Error("executor process group could not be bound to the run process scope"), null, { status });
-  function terminate(status) {
-    if (finished || requested || !child) return; requested = status;
+  function terminate(status, reason = null) {
+    if (finished || requested || !child) return; requested = status; requestedReason = reason;
     const identity = { pid: child.pid, pgid: child.pid, started_at: config.executor_started_at };
     const term = signalScopedGroup(identity, "SIGTERM", config.scope_seal);
     if (!term.delivered && !term.absent) return unverifiedGroup(status);
@@ -1110,10 +1125,12 @@ function runSupervisor(configPath, configSha) {
       if (!requested && parsed?.attempt_id === config.attempt_id && parsed.status === "cleanup_incomplete") {
         cleanupIncomplete(new Error(parsed.error || "executor cleanup is incomplete"), parsed.obligation, parsed); return;
       }
-      const fields = requested ? { status: requested, exit_code: code, signal: signal || null, error: null }
-        : parsed && parsed.attempt_id === config.attempt_id && TERMINAL.has(parsed.status)
-          ? { status: parsed.status, exit_code: parsed.exit_code, signal: parsed.signal, error: parsed.error }
-          : { status: "failed", exit_code: code, signal: signal || null, error: "executor gate returned no valid outcome" };
+      const natural = parsed && parsed.attempt_id === config.attempt_id && TERMINAL.has(parsed.status)
+        ? { status: parsed.status, exit_code: parsed.exit_code, signal: parsed.signal, error: parsed.error }
+        : null;
+      const fields = requested
+        ? { status: requested, exit_code: code, signal: signal || null, error: null }
+        : natural || { status: "failed", exit_code: code, signal: signal || null, error: "executor gate returned no valid outcome" };
       if (groupExists(child.pid)) { pendingClose = fields; if (!requested) terminate(fields.status); }
       else finish(fields);
     });
@@ -1121,6 +1138,28 @@ function runSupervisor(configPath, configSha) {
     else child.stdio[3].end(Buffer.from([1]));
     deadline = setTimeout(() => terminate("timed_out"), config.timeout_ms);
     cancelPoll = setInterval(() => { if (fs.existsSync(config.cancel)) terminate("cancelled"); }, 25);
+    if (declaredSignals.length) {
+      const overlap = Math.max(0, Math.max(...declaredSignals.map((signal) => signal.length)) - 1);
+      stderrPoll = setInterval(() => {
+        if (finished || requested || childClosed || pendingClose || !child || !groupExists(child.pid)) return;
+        try {
+          // FD 5 is the exact owner-only stderr inode opened by the launcher. Positional reads do
+          // not disturb its append offset and avoid reopening a mutable pathname while it is live.
+          const stat = fs.fstatSync(5);
+          if (stat.size < stderrCursor) { stderrCursor = 0; stderrTail = ""; }
+          if (stat.size > stderrCursor) {
+            const chunk = Buffer.alloc(stat.size - stderrCursor);
+            const read = fs.readSync(5, chunk, 0, chunk.length, stderrCursor);
+            stderrCursor += read;
+            const scanned = `${stderrTail}${chunk.toString("utf8").slice(0, read)}`.toLowerCase();
+            stderrTail = overlap ? scanned.slice(-overlap) : "";
+            if (declaredSignals.some((signal) => scanned.includes(signal))) { signalSeen = true; signalSeenAt ||= Date.now(); }
+          }
+          const executorAlive = scopedGroupMembers(child.pid, config.scope_seal).some((member) => member.pid !== child.pid && !/^Z/.test(member.state || ""));
+          if (signalSeen && executorAlive && Date.now() - signalSeenAt >= 250) terminate("cancelled", PROVIDER_UNAVAILABLE);
+        } catch { /* best-effort observation of the inherited stderr artifact */ }
+      }, 25);
+    }
     process.once("SIGTERM", () => terminate("cancelled")); process.once("SIGINT", () => terminate("cancelled"));
   } catch (error) { finish({ status: "spawn_error", exit_code: null, signal: null, error: error.message }); }
 }

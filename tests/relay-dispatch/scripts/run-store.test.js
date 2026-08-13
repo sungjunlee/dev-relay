@@ -286,6 +286,62 @@ test("independent review preserves ambient HOME/XDG and auth while removing stag
   }
 });
 
+test("observable primary review classifies only a recognized live provider failure", { timeout: 30_000 }, async () => {
+  const runDir = tempDir("review-provider-unavailable"), criteriaPath = path.join(runDir, "done-criteria.md"), criteria = "criterion\n";
+  fs.writeFileSync(criteriaPath, criteria, { mode: 0o600 });
+  createRunRecord({ runDir, record: record(runDir, { contract: { done_criteria_path: criteriaPath, done_criteria_sha256: crypto.createHash("sha256").update(criteria).digest("hex") } }) });
+  const diffPath = path.join(runDir, "diff.patch"), promptPath = path.join(runDir, "prompt.md");
+  const promptBytes = Buffer.alloc(2 << 20, "p");
+  fs.writeFileSync(diffPath, "diff\n", { mode: 0o600 }); fs.writeFileSync(promptPath, promptBytes, { mode: 0o600 });
+  const request = { diff_path: diffPath, prompt_path: promptPath, done_criteria_path: criteriaPath, reviewed_sha: "a".repeat(40), current_sha: "a".repeat(40),
+    diff_sha256: crypto.createHash("sha256").update("diff\n").digest("hex"), prompt_sha256: crypto.createHash("sha256").update(promptBytes).digest("hex") };
+  const originalMkdtemp = fs.mkdtempSync, stages = [];
+  fs.mkdtempSync = function captureStage(prefix, ...args) { const value = originalMkdtemp.call(this, prefix, ...args); if (String(prefix).includes("relay-review-")) stages.push(value); return value; };
+  const invoke = (script, timeoutMs, forcedStatus = null) => store.invokeIndependentReviewer({ runDir, request, timeoutMs, providerUnavailableSignals: ["insufficient_quota"],
+    buildInvocation: ({ cwd, promptPath: stagedPrompt, promptBytes: stagedBytes }) => ({ command: process.execPath, args: ["-e", script], cwd,
+      stdinPath: stagedPrompt, stdinSha256: crypto.createHash("sha256").update(stagedBytes).digest("hex"), networkAccess: "enabled",
+      runtimeDependencies: { executableParent: null, interpreterParent: null } }),
+    parseOutcome: ({ exitCode, signal, timedOut }) => ({ status: forcedStatus || (exitCode === 0 && !signal && !timedOut ? "succeeded" : "failed"), output: {} }) });
+  try {
+    const started = Date.now();
+    await assert.rejects(invoke("process.on('SIGTERM',()=>{});process.stderr.write('credential=hidden insufficient_quota trailing\\n');setInterval(()=>{},1000)", 10_000, "succeeded"), (error) => {
+      assert.equal(error.termination, "provider_unavailable"); assert.equal(error.classification, "provider_unavailable"); assert.equal(error.failure_reason, "provider_unavailable");
+      assert.doesNotMatch(error.message, /credential=hidden|insufficient_quota/); return true;
+    });
+    assert.ok(Date.now() - started < 5_000); assert.equal(fs.existsSync(stages.at(-1)), false); assert.equal(host.inspectOwnership({ runDir }).status, "absent");
+
+    const timeoutStarted = Date.now();
+    await assert.rejects(invoke("process.on('SIGTERM',()=>{});process.stderr.write('ordinary provider error\\n');setInterval(()=>{},1000)", 300), (error) => {
+      assert.equal(error.classification, null); assert.equal(error.failure_reason, "invocation_timeout"); return true;
+    });
+    assert.ok(Date.now() - timeoutStarted >= 250); assert.equal(fs.existsSync(stages.at(-1)), false);
+
+    await assert.rejects(invoke("process.stderr.write('insufficient_quota\\n');setTimeout(()=>process.exit(2),100)", 10_000), (error) => {
+      assert.equal(error.classification, null); assert.equal(error.failure_reason, "cli_nonzero_exit"); return true;
+    });
+    assert.equal(fs.existsSync(stages.at(-1)), false); assert.equal(host.inspectOwnership({ runDir }).status, "absent");
+
+    const realReap = host.hostInvocation.reapProcessGroup; let reapCalls = 0;
+    host.hostInvocation.reapProcessGroup = () => {
+      reapCalls += 1;
+      return { absent: false, survived_terminal: false, unverified: true };
+    };
+    const cleanupStarted = Date.now(); let cleanupStage;
+    try {
+      await assert.rejects(invoke("process.on('SIGTERM',()=>{});process.stderr.write('insufficient_quota\\n');setInterval(()=>{},1000)", 10_000), (error) => {
+        cleanupStage = error.review_evidence_path;
+        assert.equal(error.code, "HOST_CLEANUP_INCOMPLETE"); assert.equal(error.review_evidence_preserved, true);
+        assert.equal(error.runtime_audit.process_group_unverified, true); assert.equal(error.runtime_audit.process_group_absent, false);
+        return true;
+      });
+    } finally { host.hostInvocation.reapProcessGroup = realReap; }
+    assert.ok(reapCalls >= 2); assert.ok(Date.now() - cleanupStarted < 5_000, "an unverified group must settle after the bounded close window");
+    assert.ok(cleanupStage && fs.existsSync(cleanupStage)); assert.equal(host.inspectOwnership({ runDir }).reason, "cleanup_incomplete");
+    await host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir }), reason: "settle bounded unverified reviewer cleanup" });
+    assert.equal(fs.existsSync(cleanupStage), false); assert.equal(host.inspectOwnership({ runDir }).status, "absent");
+  } finally { fs.mkdtempSync = originalMkdtemp; }
+});
+
 test("external observer rejects an executable replaced after runtime binding", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-observer-runtime-swap-"))), observer = path.join(root, "observer.sh"), replacement = path.join(root, "replacement.sh");
   fs.writeFileSync(observer, "#!/bin/sh\necho '{\"which\":\"original\"}'\n", { mode: 0o700 });

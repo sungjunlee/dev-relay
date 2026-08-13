@@ -12,6 +12,13 @@ module.exports = createNativeAdapter({
   name: "opencode",
   timeoutMs: 1800000,
   outputProtocol: (phase) => phase === "primary_review" ? "json_result" : "text_stdout",
+  providerUnavailableSignals: [
+    "insufficient_quota",
+    "quota exceeded",
+    "quota_exceeded",
+    "billing hard limit",
+    "billing_hard_limit_reached",
+  ],
   metadata: { cliBinary: "opencode", outputProtocol: "phase-specific", providerDefault: "opencode", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", runtimeDependencies: { executableParent: null, interpreterParent: null } },
   phases: {
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text", commandExecution: true },

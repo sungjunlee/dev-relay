@@ -40,7 +40,7 @@ function reviewerSuccess(input, output) {
   return { status: "succeeded", output, review_binding: reviewBinding(input), executed_runtime: EXECUTED_RUNTIME };
 }
 
-async function fixture(label, { local = false } = {}) {
+async function fixture(label, { local = false, reviewer = "codex" } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-review-${label}-`)));
   const repo = path.join(root, "repo");
   const runId = `review-${label}`;
@@ -78,7 +78,7 @@ async function fixture(label, { local = false } = {}) {
     repo: { root: fs.realpathSync(repo), remote },
     git: { branch: `issue-${label}`, base_branch: "main", worktree: fs.realpathSync(worktree), start_sha: startSha },
     contract: { done_criteria_path: criteriaPath, done_criteria_sha256: criteriaHash },
-    roles: { orchestrator: "codex", executor: "codex", reviewer: "codex" },
+    roles: { orchestrator: "codex", executor: "codex", reviewer },
     parent: null,
     ownership_digest: null,
     created_at: "2026-08-01T00:00:00.000Z",
@@ -588,6 +588,70 @@ test("changes_requested and invocation error are durable blocking review facts",
   assert.match(artifact.verdict.summary, /adapter crashed/);
   const errorFacts = facts.readFacts({ eventsPath: errored.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
   assert.equal(errorFacts[0].payload.escalation_kind, "runtime_failure");
+});
+
+test("provider-unavailable runtime failure remains typed and writes zero review facts", async () => {
+  const value = await fixture("provider-unavailable");
+  const secretProviderText = "secret provider quota response";
+  await assert.rejects(runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    async invokeReviewer() {
+      const error = new Error("independent reviewer failed (provider_unavailable)");
+      error.classification = "provider_unavailable";
+      error.failure_reason = "provider_unavailable";
+      error.raw_stderr_for_test = secretProviderText;
+      throw error;
+    },
+  }), (error) => {
+    assert.equal(error.classification, "provider_unavailable");
+    assert.doesNotMatch(error.message, /secret provider quota response/);
+    return true;
+  });
+  const reviewFacts = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+  assert.equal(reviewFacts.length, 0);
+  assert.doesNotMatch(fs.readFileSync(value.eventsPath, "utf8"), /secret provider quota response/);
+  assert.equal(fs.readdirSync(value.runDir).some((name) => /^review-\d+-/.test(name)), false);
+});
+
+test("production OpenCode primary review terminates a recognized live provider failure with zero facts", { timeout: 30_000 }, async () => {
+  const value = await fixture("provider-unavailable-production", { local: true, reviewer: "opencode" });
+  const fake = path.join(value.root, "fake-opencode");
+  fs.copyFileSync(path.join(__dirname, "../../relay-dispatch/fixtures/fake-opencode.js"), fake);
+  fs.chmodSync(fake, 0o700);
+  const previous = {
+    bin: process.env.RELAY_OPENCODE_BIN,
+    signal: process.env.FAKE_OPENCODE_SIGNAL,
+    alive: process.env.FAKE_OPENCODE_STAY_ALIVE,
+    base: process.env.RELAY_WORKTREE_BASE,
+  };
+  const originalMkdtemp = fs.mkdtempSync; let reviewStage;
+  fs.mkdtempSync = function captureReviewStage(prefix, ...args) {
+    const stage = originalMkdtemp.call(this, prefix, ...args);
+    if (String(prefix).includes("relay-review-")) reviewStage = stage;
+    return stage;
+  };
+  process.env.RELAY_OPENCODE_BIN = fake;
+  process.env.FAKE_OPENCODE_SIGNAL = "credential=hidden insufficient_quota trailing";
+  process.env.FAKE_OPENCODE_STAY_ALIVE = "1";
+  process.env.RELAY_WORKTREE_BASE = value.worktreeBase;
+  try {
+    await assert.rejects(runner.runReview(value.cli, { inspectRun: value.inspectRun }), (error) => {
+      assert.equal(error.classification, "provider_unavailable");
+      assert.doesNotMatch(error.message, /credential=hidden|insufficient_quota/);
+      return true;
+    });
+    const recorded = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+    assert.equal(recorded.length, 0);
+    assert.doesNotMatch(fs.readFileSync(value.eventsPath, "utf8"), /credential=hidden|insufficient_quota/);
+    assert.equal(fs.readdirSync(value.runDir).some((name) => /^review-\d+-/.test(name)), false);
+    assert.ok(reviewStage); assert.equal(fs.existsSync(reviewStage), false, "the temporary review stage is deleted");
+    assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
+  } finally {
+    fs.mkdtempSync = originalMkdtemp;
+    for (const [key, name] of [["bin", "RELAY_OPENCODE_BIN"], ["signal", "FAKE_OPENCODE_SIGNAL"], ["alive", "FAKE_OPENCODE_STAY_ALIVE"], ["base", "RELAY_WORKTREE_BASE"]]) {
+      if (previous[key] === undefined) delete process.env[name]; else process.env[name] = previous[key];
+    }
+  }
 });
 
 test("a runtime escalation permits one explicitly bound retry, then fails closed", async () => {
