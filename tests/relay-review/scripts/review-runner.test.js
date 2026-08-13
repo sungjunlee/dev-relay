@@ -590,6 +590,29 @@ test("changes_requested and invocation error are durable blocking review facts",
   assert.equal(errorFacts[0].payload.escalation_kind, "runtime_failure");
 });
 
+test("provider-unavailable runtime failure remains typed and writes zero review facts", async () => {
+  const value = await fixture("provider-unavailable");
+  const secretProviderText = "secret provider quota response";
+  await assert.rejects(runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    async invokeReviewer() {
+      const error = new Error("independent reviewer failed (provider_unavailable)");
+      error.classification = "provider_unavailable";
+      error.failure_reason = "provider_unavailable";
+      error.raw_stderr_for_test = secretProviderText;
+      throw error;
+    },
+  }), (error) => {
+    assert.equal(error.classification, "provider_unavailable");
+    assert.doesNotMatch(error.message, /secret provider quota response/);
+    return true;
+  });
+  const reviewFacts = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded");
+  assert.equal(reviewFacts.length, 0);
+  assert.doesNotMatch(fs.readFileSync(value.eventsPath, "utf8"), /secret provider quota response/);
+  assert.equal(fs.readdirSync(value.runDir).some((name) => /^review-\d+-/.test(name)), false);
+});
+
 test("a runtime escalation permits one explicitly bound retry, then fails closed", async () => {
   const value = await fixture("retry");
   let calls = 0;

@@ -9,6 +9,7 @@ const os = require("os");
 const path = require("path");
 
 const host = require("../../../skills/relay-dispatch/scripts/host");
+const FAKE_OPENCODE = path.join(__dirname, "../fixtures/fake-opencode.js");
 
 function roots(label) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-supervisor-${label}-`)));
@@ -771,4 +772,43 @@ test("cleanup deadline cannot publish a pending completed outcome", () => {
   assert.doesNotMatch(source, /Date\.now\(\) >= end\)[^\n]*finish\(pendingClose/);
   assert.match(source, /Date\.now\(\) >= end\)[^\n]*cleanupIncomplete/);
   assert.doesNotMatch(source, /process group cleanup bound elapsed[^\n]*status:\s*"failed"/);
+});
+
+test("recognized provider-unavailable stderr cancels a live dispatch and settles its scope", { timeout: 30_000 }, async () => {
+  const value = roots("provider-unavailable"), attemptId = "provider-unavailable", capability = lock(value, attemptId), started = Date.now();
+  const receipt = host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath,
+    args: [FAKE_OPENCODE], trustedWorktreeRoot: value.worktree, cwd: value.worktree, timeoutMs: 20_000, cancelGraceMs: 200,
+    providerUnavailableSignals: ["insufficient_quota"], executorEnv: { FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_SIGNAL: "secret: insufficient_quota trailing output" }, lockContext: capability });
+  const result = await host.waitForTerminalResult(receipt, { timeoutMs: 10_000 });
+  assert.equal(result.status, "cancelled"); assert.equal(result.termination, "provider_unavailable");
+  assert.ok(Date.now() - started < 10_000); assert.doesNotMatch(JSON.stringify(result), /secret:/);
+  assert.equal(fs.statSync(receipt.stderr_path).mode & 0o777, 0o600);
+  assert.match(fs.readFileSync(receipt.stderr_path, "utf8"), /secret: insufficient_quota/);
+  assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-incomplete.json`)), false);
+  host.releaseRunLock(capability);
+});
+
+test("unrecognized stderr keeps timeout behavior and a recognized self-exit stays natural", { timeout: 30_000 }, async () => {
+  const unknown = roots("provider-unknown"), unknownId = "provider-unknown", unknownLock = lock(unknown, unknownId), started = Date.now();
+  const unknownReceipt = host.launchLocalSupervisor({ runDir: unknown.runDir, attemptId: unknownId, command: process.execPath, args: [FAKE_OPENCODE],
+    trustedWorktreeRoot: unknown.worktree, cwd: unknown.worktree, timeoutMs: 1_000, cancelGraceMs: 100, providerUnavailableSignals: ["insufficient_quota"],
+    executorEnv: { FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_SIGNAL: "ordinary provider error" }, lockContext: unknownLock });
+  const timedOut = await host.waitForTerminalResult(unknownReceipt, { timeoutMs: 10_000 });
+  assert.equal(timedOut.status, "timed_out"); assert.equal(timedOut.termination, undefined); assert.ok(Date.now() - started >= 750); host.releaseRunLock(unknownLock);
+
+  const natural = roots("provider-natural"), naturalId = "provider-natural", naturalLock = lock(natural, naturalId);
+  const naturalReceipt = host.launchLocalSupervisor({ runDir: natural.runDir, attemptId: naturalId, command: process.execPath, args: [FAKE_OPENCODE],
+    trustedWorktreeRoot: natural.worktree, cwd: natural.worktree, timeoutMs: 10_000, providerUnavailableSignals: ["insufficient_quota"],
+    executorEnv: { FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_EXIT_CODE: "2" }, lockContext: naturalLock });
+  const exited = await host.waitForTerminalResult(naturalReceipt, { timeoutMs: 10_000 });
+  assert.equal(exited.status, "failed"); assert.equal(exited.exit_code, 2); assert.equal(exited.termination, undefined); host.releaseRunLock(naturalLock);
+});
+
+test("an adapter without declarations omits the dispatch config field", { timeout: 30_000 }, async () => {
+  const value = roots("provider-none"), attemptId = "provider-none", capability = lock(value, attemptId);
+  const receipt = host.launchLocalSupervisor({ runDir: value.runDir, attemptId, command: process.execPath, args: ["-e", "process.exit(0)"],
+    trustedWorktreeRoot: value.worktree, cwd: value.worktree, timeoutMs: 10_000, lockContext: capability });
+  const config = JSON.parse(fs.readFileSync(path.join(value.runDir, `host-attempt-${attemptId}.config.json`), "utf8"));
+  assert.equal(Object.hasOwn(config, "provider_unavailable_signals"), false);
+  await host.waitForTerminalResult(receipt, { timeoutMs: 10_000 }); host.releaseRunLock(capability);
 });

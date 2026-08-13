@@ -609,6 +609,7 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
       runtimeDependencies: invocation.runtimeDependencies,
       timeoutMs,
       processContainment: adapter.metadata.processContainment,
+      providerUnavailableSignals: adapter.providerUnavailableSignals,
       lockContext,
     });
   } catch (error) {
@@ -725,7 +726,8 @@ async function executeForeground(cli, overrides = {}) {
   }
   const finished = await finishAttempt({ cli, adapter, started });
   const inspection = await recover.inspectProductionRun({ runDir: started.runDir });
-  return { ...launch, status: finished.status, host_status: finished.terminal.status, outcome: finished.parsed, inspection };
+  return { ...launch, status: finished.status, host_status: finished.terminal.status,
+    ...(finished.terminal.termination ? { termination: finished.terminal.termination } : {}), outcome: finished.parsed, inspection };
 }
 
 function processLive(pid) {

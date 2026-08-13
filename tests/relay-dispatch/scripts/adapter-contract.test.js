@@ -553,9 +553,24 @@ test("production dispatch and review integration contain no concrete executor-na
   const files = [
     path.join(__dirname, "../../../skills/relay-dispatch/scripts/dispatch.js"),
     path.join(__dirname, "../../../skills/relay-review/scripts/review-runner.js"),
+    path.join(__dirname, "../../../skills/relay-dispatch/scripts/host.js"),
+    path.join(__dirname, "../../../skills/relay-dispatch/scripts/run-store.js"),
   ];
   const branchPattern = /(?:===|!==|case)\s*["'](?:codex|claude|cursor|opencode|pi|antigravity|cline)["']/;
   for (const file of files) assert.doesNotMatch(fs.readFileSync(file, "utf8"), branchPattern, file);
+});
+
+test("provider-unavailable signals are adapter-owned frozen literals consumed generically", () => {
+  const opencode = getAdapter("opencode");
+  assert.ok(opencode.providerUnavailableSignals.length > 0);
+  assert.ok(Object.isFrozen(opencode.providerUnavailableSignals));
+  assert.ok(opencode.providerUnavailableSignals.every((signal) => signal === signal.toLowerCase()));
+  for (const name of listAdapters().filter((value) => value !== "opencode")) {
+    assert.deepEqual(getAdapter(name).providerUnavailableSignals, [], name);
+  }
+  assert.deepEqual(contract.normalizeProviderUnavailableSignals(["Insufficient_Quota", "Quota Exceeded"]), ["insufficient_quota", "quota exceeded"]);
+  assert.throws(() => contract.normalizeProviderUnavailableSignals(["bad\nvalue"]), /literal strings/);
+  assert.throws(() => contract.normalizeProviderUnavailableSignals(["same", "same"]), /must not repeat/);
 });
 
 test("native adapter sources have no reverse imports into relay-review", () => {
