@@ -72,7 +72,7 @@ function fixture(label, { objectFormat = "sha1" } = {}) {
   const fakePi = path.join(bin, "pi");
   fs.writeFileSync(fakePi, `#!${process.execPath}
 "use strict";
-if (process.env.PI_FIXTURE_INVOCATION_MARKER) require("fs").writeFileSync(process.env.PI_FIXTURE_INVOCATION_MARKER, process.argv.slice(2).join("\\n"));
+if (process.env.PI_FIXTURE_INVOCATION_MARKER) require("fs").writeFileSync(process.env.PI_FIXTURE_INVOCATION_MARKER, JSON.stringify(process.argv.slice(2)));
 if (process.env.PI_FIXTURE_FAIL_NO_WORK === "1") process.exit(1);
 require("fs").writeFileSync(require("path").join(process.cwd(), "executor-change.txt"), "review me\\n");
 process.stdout.write("fake pi completed\\n");
@@ -897,11 +897,15 @@ test("Pi keeps non-Alibaba explicit model argv and launches the fake executable"
   const value = fixture("pi-explicit-non-alibaba");
   const marker = path.join(value.root, "pi-invoked.log");
   const result = run(value, [
-    "--executor", "pi", "--model", "openai/gpt-5", "--branch", "pi-explicit-non-alibaba",
+    "--executor", "pi", "--model", "openai/gpt-5", "--reasoning", "high", "--branch", "pi-explicit-non-alibaba",
     "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
   ], { ...value.env, PI_FIXTURE_INVOCATION_MARKER: marker });
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
-  assert.match(fs.readFileSync(marker, "utf8"), /--model\nopenai\/gpt-5/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")), [
+    "--no-session", "--no-context-files", "--no-extensions", "--no-skills",
+    "--tools", "read,grep,find,ls,write,edit",
+    "--model", "openai/gpt-5", "--thinking", "high", "--print",
+  ]);
 });
 
 test("an empty adapter result cannot turn an exit-zero host result into a completed attempt", () => {

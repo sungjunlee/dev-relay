@@ -745,6 +745,44 @@ test("production OpenCode primary review terminates a recognized live provider f
   }
 });
 
+test("production Pi primary review preserves the complete non-Alibaba model argv", async () => {
+  const value = await fixture("pi-explicit-non-alibaba", { local: true, reviewer: "pi" });
+  const fake = path.join(value.root, "fake-pi");
+  const marker = path.join(value.root, "pi-invoked.json");
+  fs.writeFileSync(fake, `#!${process.execPath}
+"use strict";
+const fs = require("fs");
+fs.writeFileSync(process.env.PI_FIXTURE_INVOCATION_MARKER, JSON.stringify(process.argv.slice(2)));
+process.stdout.write(JSON.stringify({ verdict: "pass", summary: "Pi review passed", issues: [] }));
+`, { mode: 0o700 });
+  const previous = {
+    bin: process.env.RELAY_PI_BIN,
+    marker: process.env.PI_FIXTURE_INVOCATION_MARKER,
+    base: process.env.RELAY_WORKTREE_BASE,
+  };
+  process.env.RELAY_PI_BIN = fake;
+  process.env.PI_FIXTURE_INVOCATION_MARKER = marker;
+  process.env.RELAY_WORKTREE_BASE = value.worktreeBase;
+  const cli = runner.parseCli([
+    "--repo", value.repo, "--run-dir", value.runDir,
+    "--model", "openai/gpt-5", "--json",
+  ]);
+  try {
+    const result = await runner.runReview(cli, { inspectRun: value.inspectRun });
+    assert.equal(result.verdict, "lgtm");
+    assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")), [
+      "--no-session", "--no-context-files", "--no-extensions", "--no-skills",
+      "--no-prompt-templates", "--no-themes",
+      "--tools", "read,grep,find,ls",
+      "--model", "openai/gpt-5", "--print",
+    ]);
+  } finally {
+    for (const [key, name] of [["bin", "RELAY_PI_BIN"], ["marker", "PI_FIXTURE_INVOCATION_MARKER"], ["base", "RELAY_WORKTREE_BASE"]]) {
+      if (previous[key] === undefined) delete process.env[name]; else process.env[name] = previous[key];
+    }
+  }
+});
+
 test("a runtime escalation permits one explicitly bound retry, then fails closed", async () => {
   const value = await fixture("retry");
   let calls = 0;
