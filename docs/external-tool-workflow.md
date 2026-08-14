@@ -52,7 +52,7 @@ CE is most useful here as **specialist review** and **structured learning captur
 
 - **Treating gstack `review` as the merge gate.** It is a pre-landing helper. The relay merge gate is `gate-check.js`, not gstack.
 - **Re-running gstack `plan-eng-review` after dispatch.** If you want planning changes, escalate to a re-plan inside relay (re-persist the anchor). Otherwise the relay reviewer scores against a stale anchor and gives the wrong verdict.
-- **Loading superpowers skills inside the dispatch worktree.** The executor runs in an isolated worktree with `--sandbox workspace-write --network-access disabled`. Skills that need network or arbitrary subagents won't work cleanly there. Use superpowers in the orchestrator session (planning, reviewing reviews, deciding next dispatch).
+- **Loading superpowers skills inside the dispatch worktree.** The executor runs directly on the trusted local host inside a retained worktree with tool networking enabled by default. Skills that assume orchestrator-session structure or arbitrary subagents won't behave identically there. Use superpowers in the orchestrator session (planning, reviewing reviews, deciding next dispatch).
 - **Letting CE specialist findings silently rewrite the relay rubric.** If a CE specialist proposes a new factor, that's a planner-side decision: surface it, decide, then re-plan. Do not edit the persisted rubric out-of-band.
 - **Coupling relay scripts to gstack/superpowers/CE internals.** Relay scripts must keep working without any of these tools installed. If a workflow needs them, document the workflow; don't import the dependency.
 

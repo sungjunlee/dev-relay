@@ -86,8 +86,9 @@ process.stdout.write("fake pi completed\\n");
 }
 
 function run(value, args, env = value.env) {
-  const network = args.includes("--network-access") ? [] : ["--network-access", "enabled"];
-  return spawnSync(process.execPath, [DISPATCH, value.repo, ...args, ...network], { encoding: "utf8", env, timeout: 60_000 });
+  // Tool networking defaults to enabled; tests exercise the default unless they
+  // pass an explicit --network-access value.
+  return spawnSync(process.execPath, [DISPATCH, value.repo, ...args], { encoding: "utf8", env, timeout: 60_000 });
 }
 
 function json(stdout) { return JSON.parse(stdout); }
@@ -207,6 +208,8 @@ test("dry-run validates the closed Relay surface while writing zero durable byte
   assert.equal(json(result.stdout).durable_bytes_written, 0);
   assert.equal(json(result.stdout).invocation.validation, "adapter_build_invocation");
   assert.equal(json(result.stdout).invocation.launch_boundary, "host_supervisor_required_do_not_execute_raw");
+  assert.equal(json(result.stdout).invocation.network_access, "enabled", "routine dispatch defaults tool networking to enabled");
+  assert.equal(json(result.stdout).invocation.tool_network_access, "enabled", "routine dispatch defaults tool networking to enabled");
   assert.deepEqual(json(result.stdout).filesystem_isolation, { requested: "workspace-write", effective: "native", diagnostic: null });
   assert.equal(fs.existsSync(stateDir), false);
   assert.equal(fs.existsSync(value.relayHome), false);
@@ -249,6 +252,14 @@ test("tool-network disable fails closed for informational executors and preserve
     "--network-access", "disabled", "--dry-run", "--json"]);
   assert.notEqual(unsupported.status, 0);
   assert.match(unsupported.stderr, /tool network disable/i);
+  // The explicit native-deny request fails before any branch, worktree, run, or fact effects.
+  const rejected = run(value, ["--branch", "network-disabled-rejected", "--prompt-file", value.prompt, "--rubric-file", value.rubric,
+    "--network-access", "disabled", "--json"]);
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /tool network disable/i);
+  assert.equal(git(value.repo, ["branch", "--list", "network-disabled-rejected"]), "", "a rejected advanced request must not create a branch");
+  assert.equal(git(value.repo, ["worktree", "list"]).includes("network-disabled-rejected"), false, "a rejected advanced request must not register a worktree");
+  assert.equal(fs.existsSync(fixtureRunsDir(value)), false, "a rejected advanced request must not create a run directory");
   // pi is the only adapter declaring networkControl "native"; claude is deliberately informational,
   // because safe mode preserves admin-managed hooks and so cannot prove complete tool egress denial.
   const result = run(value, ["--executor", "pi", "--branch", "network-disabled-native", "--prompt-file", value.prompt, "--rubric-file", value.rubric,
@@ -258,9 +269,23 @@ test("tool-network disable fails closed for informational executors and preserve
   assert.equal(fs.existsSync(fixtureRunsDir(value)), false);
 });
 
+test("dispatch defaults tool networking to enabled and rejects the retired sandbox flag", () => {
+  const value = fixture("dispatch-defaults");
+  const parsed = dispatch.parseCli([value.repo, "--branch", "defaults-b", "--prompt", "x", "--rubric-file", value.rubric]);
+  assert.equal(parsed.values["network-access"], "enabled");
+  assert.equal(Object.hasOwn(parsed.values, "sandbox"), false);
+  const explicit = dispatch.parseCli([value.repo, "--branch", "defaults-b", "--prompt", "x", "--rubric-file", value.rubric, "--network-access", "enabled"]);
+  assert.equal(explicit.values["network-access"], "enabled");
+  assert.throws(() => dispatch.parseCli([value.repo, "--branch", "defaults-b", "--prompt", "x", "--rubric-file", value.rubric, "--sandbox", "workspace-write"]), /unknown flag/i);
+  const retired = run(value, ["--branch", "defaults-b", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--sandbox", "workspace-write", "--json"]);
+  assert.notEqual(retired.status, 0);
+  assert.match(retired.stderr, /unknown flag/i);
+  assert.equal(fs.existsSync(value.relayHome), false, "a retired --sandbox input must fail before durable effects");
+});
+
 test("retired dispatch flags fail closed instead of being silently ignored", () => {
   const value = fixture("retired-dispatch-flags");
-  for (const flag of ["--request-id", "--leaf-id", "--allow-toolset-mismatch"]) {
+  for (const flag of ["--request-id", "--leaf-id", "--allow-toolset-mismatch", "--sandbox"]) {
     const result = run(value, ["--branch", "closed-surface", "--prompt", "x", "--rubric-file", value.rubric, flag, "legacy", "--dry-run", "--json"]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /unknown flag/i);
@@ -1184,7 +1209,7 @@ test("resume without --executor resolves the immutable Pi adapter and appends a 
   assert.equal(output.inspection.derived.reason, "attempt_failed_no_work");
   const eventsPath = path.join(output.run_dir, "events.jsonl");
   const beforeAttempts = facts.readFacts({ eventsPath }).facts.filter((fact) => fact.type.startsWith("attempt_")).length;
-  const resumed = run(value, ["--run-id", output.run_id, "--prompt", "write the requested bounded file", "--network-access", "enabled", "--json"], {
+  const resumed = run(value, ["--run-id", output.run_id, "--prompt", "write the requested bounded file", "--json"], {
     ...value.env, RELAY_PI_BIN: value.fakePi,
   });
   assert.equal(resumed.status, 0, `${resumed.stderr}\n${resumed.stdout}`);

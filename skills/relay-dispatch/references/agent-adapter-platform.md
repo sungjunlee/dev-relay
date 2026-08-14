@@ -65,9 +65,9 @@ The trusted local CLI's remote provider control-plane transport is available.
 be enforced by native adapter policy. Pi exposes a native constrained tool set;
 Claude, Codex, Cursor, Antigravity, OpenCode, and Cline are informational
 only because their installed CLI flags do not prove that every internal or
-server-side or managed-policy tool is network-disabled. A phase without a native deny fails
-closed when tool networking is disabled. Enabling tool networking is an
-explicit authorization.
+server-side or managed-policy tool is network-disabled. Tool networking
+defaults to `enabled` for trusted-local dispatch; an explicit `disabled`
+request requires a native deny and fails closed for a phase without one.
 
 Relay owns no filesystem profile or platform admission. Codex requests its
 native `workspace-write` dispatch or `read-only` review sandbox, Cursor enables

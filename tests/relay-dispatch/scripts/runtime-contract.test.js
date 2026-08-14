@@ -372,7 +372,7 @@ printf '%s\\n' '{"verdict":"pass","summary":"direct","issues":[]}' > "$out"
         },
         buildInvocation: ({ cwd, promptPath: stagedPrompt, promptBytes, resultPath, schemaPath }) => adapter.buildInvocation({
           phase: "primary_review", cwd, promptPath: stagedPrompt, promptBytes, resultPath, schemaPath,
-          sandbox: "read-only", networkAccess: "enabled",
+          networkAccess: "enabled",
         }),
         parseOutcome: (input) => adapter.parseOutcome(input),
       });

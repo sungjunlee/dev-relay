@@ -22,7 +22,7 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,126}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const LEAF_FIELDS = new Set([
   "leaf_ref", "issue_number", "branch", "prompt_file", "prompt_sha256", "rubric_file", "rubric_sha256",
-  "done_criteria_file", "done_criteria_sha256", "ownership", "executor", "model", "sandbox",
+  "done_criteria_file", "done_criteria_sha256", "ownership", "executor", "model",
   "network_access", "timeout", "reasoning", "copy",
 ]);
 const OPTIONS = Object.freeze({
@@ -35,7 +35,7 @@ const OPTIONS = Object.freeze({
   "dispatch-script": { type: "string", default: DEFAULT_DISPATCH_SCRIPT },
   "review-script": { type: "string", default: DEFAULT_REVIEW_SCRIPT },
   "finalize-script": { type: "string", default: DEFAULT_FINALIZE_SCRIPT },
-  executor: { type: "string" }, model: { type: "string" }, sandbox: { type: "string" },
+  executor: { type: "string" }, model: { type: "string" },
   "network-access": { type: "string" }, timeout: { type: "string" }, reasoning: { type: "string" },
   copy: { type: "string" },
   reviewer: { type: "string" }, "reviewer-model": { type: "string" },
@@ -148,7 +148,7 @@ function normalizeLeaf(raw, index, base, freeze) {
     rubric_file: rubric.file, rubric_sha256: rubric.digest,
     done_criteria_file: done.file, done_criteria_sha256: done.digest,
     ownership,
-    executor: optional("executor"), model: optional("model"), sandbox: optional("sandbox"),
+    executor: optional("executor"), model: optional("model"),
     network_access: optional("network_access"),
     timeout: raw.timeout == null ? null : String(issueNumber(raw.timeout, `leaves[${index}].timeout`)),
     reasoning: optional("reasoning"), copy: Array.isArray(raw.copy) ? raw.copy.join(",") : optional("copy"),
@@ -330,7 +330,7 @@ function parseArgs(argv) {
   return {
     repo: parsed.values.repo, fleetId: parsed.values["fleet-id"], leavesFile: parsed.values["leaves-file"], status: parsed.values.status,
     review: parsed.values.review, parallel, dispatchScript: path.resolve(parsed.values["dispatch-script"]), reviewScript: path.resolve(parsed.values["review-script"]),
-    finalizeScript: path.resolve(parsed.values["finalize-script"]), executor: parsed.values.executor, model: parsed.values.model, sandbox: parsed.values.sandbox,
+    finalizeScript: path.resolve(parsed.values["finalize-script"]), executor: parsed.values.executor, model: parsed.values.model,
     networkAccess: parsed.values["network-access"], timeout: parsed.values.timeout, reasoning: parsed.values.reasoning, copy: parsed.values.copy,
     reviewer: parsed.values.reviewer, reviewerModel: parsed.values["reviewer-model"], mergeMethod: parsed.values["merge-method"],
     dryRun: parsed.values["dry-run"], json: parsed.values.json, help: parsed.values.help,
@@ -340,7 +340,7 @@ function push(args, flag, value) { if (value != null && value !== "") args.push(
 function buildDispatchArgs({ repoRoot, fleetId, leaf, options, runId = null }) {
   const args = [options.dispatchScript, repoRoot, ...(runId ? ["--run-id", runId] : ["--branch", leaf.branch]), "--issue-number", String(leaf.issue_number), "--prompt-file", leaf.prompt_file, "--rubric-file", leaf.rubric_file, "--done-criteria-file", leaf.done_criteria_file, "--fleet-id", fleetId, "--ownership-json", JSON.stringify(leaf.ownership), "--json"];
   push(args, "--executor", leaf.executor || options.executor); push(args, "--model", leaf.model || options.model);
-  push(args, "--sandbox", leaf.sandbox || options.sandbox); push(args, "--network-access", leaf.network_access || options.networkAccess);
+  push(args, "--network-access", leaf.network_access || options.networkAccess);
   push(args, "--timeout", leaf.timeout || options.timeout); push(args, "--reasoning", leaf.reasoning || options.reasoning); push(args, "--copy", leaf.copy || options.copy);
   if (options.dryRun) args.push("--dry-run");
   return args;

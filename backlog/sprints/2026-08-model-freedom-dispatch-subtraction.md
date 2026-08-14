@@ -20,7 +20,7 @@ Make the routine trusted-local dispatch path executor/model/task-shaped: Relay s
 
 ### Batch 2 — Remove normal-path policy ceremony
 
-- [ ] #1252 — default trusted-local networking to the normal usable path and remove the misleading public dispatch sandbox choice (depends on #1251)
+- [x] #1252 — default trusted-local networking to the normal usable path and remove the misleading public dispatch sandbox choice (depends on #1251)
 
 ## Running Context
 

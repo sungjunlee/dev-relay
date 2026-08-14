@@ -19,12 +19,9 @@ function worktreePrompt(cwd, prompt) {
   return ["[RELAY WORKTREE BOUNDARY]", `Repository worktree: ${cwd}`, "Run every shell command from that repository worktree.", "Do not read, write, git add, git commit, or create files outside that repository worktree.", "Do not use cline --worktree; relay already created and owns this worktree.", "", prompt].join("\n");
 }
 
-function validateDispatch({ sandbox, networkAccess }) {
-  const warnings = [];
-  if (sandbox !== "workspace-write") warnings.push(`cline executor: --sandbox '${sandbox}' is not enforced by cline; proceeding with workspace-write semantics.`);
+function validateDispatch({ networkAccess }) {
   void networkAccess;
-  warnings.push("cline executor has no native relay sandbox; relay uses its own worktree boundary and never cline --worktree.");
-  return { ok: true, warnings };
+  return { ok: true, warnings: ["cline executor has no native relay sandbox; relay uses its own worktree boundary and never cline --worktree."] };
 }
 
 module.exports = createNativeAdapter({

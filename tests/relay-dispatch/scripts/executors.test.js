@@ -8,15 +8,15 @@ test("flat adapter registry retains all seven executor names", () => {
 });
 
 test("filesystem-isolation diagnostics are static, visible, and nonblocking", () => {
-  const opencode = getAdapter("opencode").capabilities({ phase: "dispatch", request: { sandbox: "read-only", networkAccess: "disabled" } });
+  const opencode = getAdapter("opencode").capabilities({ phase: "dispatch", request: { networkAccess: "disabled" } });
   assert.equal(opencode.supported, true);
   assert.equal(opencode.warnings.length > 0, true);
-  assert.deepEqual(filesystemIsolationDiagnostic(getAdapter("opencode"), "dispatch", { sandbox: "read-only", networkAccess: "enabled" }), {
+  assert.deepEqual(filesystemIsolationDiagnostic(getAdapter("opencode"), "dispatch", { networkAccess: "enabled" }), {
     requested: "unavailable", effective: "none", diagnostic: "opencode has no native filesystem sandbox; continuing directly on the trusted local host.",
   });
-  const cursor = getAdapter("cursor").capabilities({ phase: "dispatch", request: { sandbox: "read-only", networkAccess: "disabled" } });
+  const cursor = getAdapter("cursor").capabilities({ phase: "dispatch", request: { networkAccess: "disabled" } });
   assert.equal(cursor.supported, true);
-  assert.deepEqual(filesystemIsolationDiagnostic(getAdapter("cursor"), "dispatch", { sandbox: "read-only", networkAccess: "enabled" }), {
+  assert.deepEqual(filesystemIsolationDiagnostic(getAdapter("cursor"), "dispatch", { networkAccess: "enabled" }), {
     requested: "enabled", effective: "native", diagnostic: null,
   });
 });

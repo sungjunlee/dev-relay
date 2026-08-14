@@ -82,12 +82,16 @@ test("closed fleet CLI rejects removed child-dispatch flags", () => {
   assert.equal(fleet.parseArgs(["--fleet-id", "fleet-a", "--json"]).json, true);
 });
 
-test("immutable leaf schema rejects retired lineage and policy fields", async () => {
+test("immutable leaf schema rejects retired lineage, policy, and sandbox fields", async () => {
   const fixture = setup();
   await fixtureWork(fixture, () => {
     const leavesFile = path.join(fixture.repo, "retired.json");
     fs.writeFileSync(leavesFile, JSON.stringify({ leaves: [{ ...leaf(fixture.repo, 99), request_id: "old-request" }] }));
     assert.throws(() => fleet.loadLeavesFile(fixture.repo, leavesFile), /unsupported fields: request_id/);
+    const sandboxFile = path.join(fixture.repo, "sandbox-retired.json");
+    fs.writeFileSync(sandboxFile, JSON.stringify({ leaves: [{ ...leaf(fixture.repo, 98), sandbox: "workspace-write" }] }));
+    assert.throws(() => fleet.loadLeavesFile(fixture.repo, sandboxFile), /unsupported fields: sandbox/);
+    assert.equal(fs.existsSync(fleet.getFleetLeavesStorePath(fixture.repo, "fleet-sandbox-retired")), false);
   });
 });
 
@@ -135,7 +139,7 @@ test("dispatch invokes only no-child new and exact redispatch resume, without re
     const result = await fleet.runFleet({ repo: fixture.repo, fleetId: "fleet-dispatch", leavesFile, parallel: 2, dispatchScript, reviewScript: dispatchScript, finalizeScript: dispatchScript, services: { inspectRun: inspector({ [resumed.runId]: "redispatch" }) } });
     const calls = fs.readFileSync(capture, "utf8").trim().split("\n").map(JSON.parse);
     assert.equal(calls.length, 2); assert.equal(result.dispatch.filter((item) => item.mode === "new").length, 1); assert.equal(result.dispatch.filter((item) => item.mode === "resume").length, 1);
-    for (const args of calls) for (const retired of ["--leaf-id", "--request-id", "--publish-policy", "--test-command"]) assert.equal(args.includes(retired), false);
+    for (const args of calls) for (const retired of ["--leaf-id", "--request-id", "--publish-policy", "--test-command", "--sandbox"]) assert.equal(args.includes(retired), false);
   });
 });
 
