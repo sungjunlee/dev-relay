@@ -398,7 +398,7 @@ async function runReview(cli, overrides = {}) {
     fail(`reviewer override is not part of the Relay contract; immutable binding is '${record.roles.reviewer}'`, "REVIEWER_BINDING_MISMATCH");
   }
   const adapter = getAdapter(reviewer);
-  const capabilityRequest = { readOnly: true, networkAccess: cli.values["network-access"] };
+  const capabilityRequest = { readOnly: true, networkAccess: cli.values["network-access"], model: cli.values.model || null };
   validateCapabilities(adapter, "primary_review", capabilityRequest);
   const filesystemIsolation = filesystemIsolationDiagnostic(adapter, "primary_review", capabilityRequest);
   const initial = await services.inspectRun({ runDir });

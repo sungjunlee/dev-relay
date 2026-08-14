@@ -530,7 +530,7 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
       }
     }
     immutableBytes(promptPath, prompt.bytes);
-    validateCapabilities(adapter, "dispatch", { networkAccess: cli.values["network-access"] });
+    validateCapabilities(adapter, "dispatch", { networkAccess: cli.values["network-access"], model: cli.values.model || null });
     invocation = adapter.buildInvocation({
       phase: "dispatch", cwd: record.git.worktree, promptPath, resultPath: outputPath,
       promptBytes: prompt.bytes,
@@ -652,7 +652,7 @@ async function executeForeground(cli, overrides = {}) {
   }
   const inspectRun = overrides.inspectRun || recover.inspectProductionRun;
   const identity = repositoryIdentity(canonicalCheckout(cli.repo));
-  const capabilityRequest = { networkAccess: cli.values["network-access"] };
+  const capabilityRequest = { networkAccess: cli.values["network-access"], model: cli.values.model || null };
   validateCapabilities(adapter, "dispatch", capabilityRequest);
   const filesystemIsolation = filesystemIsolationDiagnostic(adapter, "dispatch", capabilityRequest);
   let resumeInspection = null;
