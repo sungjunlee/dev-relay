@@ -701,6 +701,20 @@ function foldRunFacts({
     });
   }
   if (latestReview && PASS_VERDICTS.has(latestReview.payload.verdict) && reviewBindingMatches) {
+    // The reviewed commit remains authoritative, but a retained GitHub
+    // worktree with live uncommitted reviewable bytes is not the reviewed
+    // worktree.  Project that live drift as a typed observation blocker so
+    // inspect and merge cannot derive readiness from the same passing facts.
+    // Local delivery reaches its existing publication-incomplete branch above
+    // and keeps its Reviewed Result recovery behavior unchanged.
+    if (!localReviewReady && gitFacts.reviewable_dirty === true) {
+      return result("none", "reviewed_worktree_dirty", {
+        head_sha: headSha,
+        reviewed_sha: latestReview.payload.reviewed_sha,
+        pr_number: prNumber,
+        diagnostics: [...diagnostics, { code: "reviewed_worktree_dirty" }],
+      });
+    }
     if (localReviewReady) {
       return result("recover", "reviewed_result_ready", {
         head_sha: headSha,
@@ -849,6 +863,13 @@ function deriveBlockers(snapshot, facts, seen, derived) {
   if (Number(seen.github.matching_pr_count) > 1) out.push(blocker("ambiguous_pr", "multiple PRs match the immutable run identity"));
   if (["ahead_local", "diverged"].includes(seen.git.remote_relation)) out.push(blocker("remote_branch_conflict", "remote branch cannot be advanced safely"));
   if (seen.github.pr_state === "MERGED" && !matchingRecordedPr(facts, seen.github)) out.push(blocker("unrecorded_merged_pr", "a merged branch PR is not bound to the durable run PR identity"));
+  if (derived.reason === "reviewed_worktree_dirty") {
+    out.push(blocker(
+      "reviewed_worktree_dirty",
+      "the retained worktree contains uncommitted reviewable changes after review",
+      true,
+    ));
+  }
   if (derived.reason === "github_pr_closed_unmerged") out.push(blocker("github_pr_closed_unmerged", "the durable run PR is closed without a merge"));
   if (derived.reason === "fact_conflict") out.push(blocker("fact_conflict", "durable facts or external identity conflict"));
   return out;

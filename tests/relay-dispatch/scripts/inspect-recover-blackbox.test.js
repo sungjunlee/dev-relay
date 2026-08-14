@@ -548,6 +548,33 @@ test("inspect accepts the immediate single passing retry", async () => {
   assert.equal(result.derived.reason, "ready_to_merge");
 });
 
+test("production inspect blocks dirty reviewed bytes and re-enables readiness when restored clean", async () => {
+  const observations = publicationObservations({
+    git: { ...publicationObservations().git, reviewable_work: false, reviewable_dirty: true },
+    github: {
+      ...publicationObservations().github,
+      matching_pr_count: 1, pr_number: 42, pr_state: "OPEN",
+      pr_head_sha: HEAD, pr_base_sha: START,
+    },
+  });
+  const h = harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), reviewFact({ eventId: "dirty-reviewed-pass", verdict: "pass", baseSha: START })],
+    observations,
+  });
+  const dirty = await inspectRun(h);
+  assert.equal(dirty.derived.action, "none");
+  assert.equal(dirty.derived.reason, "reviewed_worktree_dirty");
+  assert.equal(dirty.blockers[0].code, "reviewed_worktree_dirty");
+  assert.equal(dirty.recommended_action.kind, "operator_attention");
+  assert.equal(dirty.recommended_action.reason, "reviewed_worktree_dirty");
+
+  h.state.observations.git.reviewable_dirty = false;
+  const clean = await inspectRun(h);
+  assert.equal(clean.derived.action, "merge");
+  assert.equal(clean.derived.reason, "ready_to_merge");
+  assert.equal(clean.recommended_action.kind, "merge");
+});
+
 test("a historical passing GitHub review without base evidence derives one fresh review", async () => {
   const observations = publicationObservations({
     git: { ...publicationObservations().git, reviewable_work: false },

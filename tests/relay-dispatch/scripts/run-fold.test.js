@@ -167,6 +167,28 @@ test("fold implements active, publication, review, stale, changes, and ready pre
   assert.equal(ready.reason, "ready_to_merge");
 });
 
+test("a dirty retained GitHub worktree blocks an otherwise exact reviewed merge", () => {
+  const input = {
+    runRecord: runRecord(),
+    facts: [pr(), verification(), review("pass", 5)],
+    githubFacts: livePrFacts(),
+    gitFacts: {
+      head_sha: HEAD,
+      tree_sha: TREE,
+      reviewable_work: true,
+      reviewable_dirty: true,
+    },
+  };
+  const dirty = foldRunFacts(input);
+  assert.equal(dirty.action, "none");
+  assert.equal(dirty.reason, "reviewed_worktree_dirty");
+  assert.equal(dirty.diagnostics.at(-1).code, "reviewed_worktree_dirty");
+
+  const clean = foldRunFacts({ ...input, gitFacts: { ...input.gitFacts, reviewable_dirty: false } });
+  assert.equal(clean.action, "merge");
+  assert.equal(clean.reason, "ready_to_merge");
+});
+
 test("#1207 proven no-remote Git runs recover verification and advance to local review", () => {
   const local = {
     local_delivery: true,
