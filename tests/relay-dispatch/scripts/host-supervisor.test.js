@@ -788,6 +788,12 @@ test("recognized provider-unavailable stderr cancels a live dispatch and settles
   host.releaseRunLock(capability);
 });
 
+test("provider-unavailable cancellation requires repeated live observations, not elapsed wall time", () => {
+  const source = fs.readFileSync(require.resolve("../../../skills/relay-dispatch/scripts/host"), "utf8");
+  assert.doesNotMatch(source, /signalSeenAt|Date\.now\(\) - signalSeenAt/);
+  assert.match(source, /observedBeforeSignal && signalSeen && \+\+providerLivePolls >= 10/);
+});
+
 test("unrecognized stderr keeps timeout behavior and a recognized self-exit stays natural", { timeout: 30_000 }, async () => {
   const unknown = roots("provider-unknown"), unknownId = "provider-unknown", unknownLock = lock(unknown, unknownId), started = Date.now();
   const unknownReceipt = host.launchLocalSupervisor({ runDir: unknown.runDir, attemptId: unknownId, command: process.execPath, args: [FAKE_OPENCODE],
@@ -802,6 +808,13 @@ test("unrecognized stderr keeps timeout behavior and a recognized self-exit stay
     executorEnv: { FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_EXIT_CODE: "2" }, lockContext: naturalLock });
   const exited = await host.waitForTerminalResult(naturalReceipt, { timeoutMs: 10_000 });
   assert.equal(exited.status, "failed"); assert.equal(exited.exit_code, 2); assert.equal(exited.termination, undefined); host.releaseRunLock(naturalLock);
+
+  const delayed = roots("provider-natural-delayed"), delayedId = "provider-natural-delayed", delayedLock = lock(delayed, delayedId);
+  const delayedReceipt = host.launchLocalSupervisor({ runDir: delayed.runDir, attemptId: delayedId, command: process.execPath, args: [FAKE_OPENCODE],
+    trustedWorktreeRoot: delayed.worktree, cwd: delayed.worktree, timeoutMs: 10_000, providerUnavailableSignals: ["insufficient_quota"],
+    executorEnv: { FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_EXIT_CODE: "2", FAKE_OPENCODE_EXIT_DELAY_MS: "100" }, lockContext: delayedLock });
+  const delayedExit = await host.waitForTerminalResult(delayedReceipt, { timeoutMs: 10_000 });
+  assert.equal(delayedExit.status, "failed"); assert.equal(delayedExit.exit_code, 2); assert.equal(delayedExit.termination, undefined); host.releaseRunLock(delayedLock);
 });
 
 test("an adapter without declarations omits the dispatch config field", { timeout: 30_000 }, async () => {
