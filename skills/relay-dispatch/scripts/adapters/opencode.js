@@ -1,11 +1,8 @@
 const { createNativeAdapter } = require("../adapter-contract");
 
-function validateDispatch({ sandbox, networkAccess }) {
-  const warnings = [];
-  if (sandbox !== "workspace-write") warnings.push(`opencode executor: --sandbox '${sandbox}' is not enforced by opencode (no native sandboxing); proceeding with workspace-write semantics.`);
+function validateDispatch({ networkAccess }) {
   void networkAccess;
-  warnings.push("opencode executor is experimental; an independent primary review remains required.");
-  return { ok: true, warnings };
+  return { ok: true, warnings: ["opencode executor is experimental; an independent primary review remains required."] };
 }
 
 module.exports = createNativeAdapter({

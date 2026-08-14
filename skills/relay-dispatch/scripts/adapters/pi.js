@@ -5,11 +5,9 @@ function normalizeThinking(reasoning) {
   return reasoning === "xhigh" ? "high" : null;
 }
 
-function validateDispatch({ sandbox, networkAccess }) {
-  const warnings = [];
-  if (sandbox !== "workspace-write") warnings.push(`pi executor: --sandbox '${sandbox}' is not enforced by pi; proceeding with workspace-write semantics.`);
+function validateDispatch({ networkAccess }) {
   void networkAccess;
-  return { ok: true, warnings };
+  return { ok: true, warnings: [] };
 }
 
 module.exports = createNativeAdapter({

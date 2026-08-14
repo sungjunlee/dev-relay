@@ -35,16 +35,16 @@ the GitHub route. Dispatch itself never initializes Git or selects a forge.
 
 ```bash
 # Foreground (blocking — simple tasks, default executor: codex)
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b feature-auth -p "..." --rubric-file rubric.yaml --network-access enabled
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b feature-auth -p "..." --rubric-file rubric.yaml
 
 # Detached (recommended for long/background work; survives caller shell exit)
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b feature-auth -p "..." --rubric-file rubric.yaml --network-access enabled --detach --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b feature-auth -p "..." --rubric-file rubric.yaml --detach --json
 
 # Same-run resume after a changes-requested review
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md --network-access enabled
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
 
 # With explicit executor
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e codex -b feature-auth -p "..." --rubric-file rubric.yaml --network-access enabled
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e codex -b feature-auth -p "..." --rubric-file rubric.yaml
 ```
 
 For background and parallel dispatch, see `../relay/SKILL.md` § Batch Mode (single source of truth for the parallel-fork flow).
@@ -63,8 +63,8 @@ Essential flags:
 - `--prompt, -p` or `--prompt-file` supplies the executor prompt.
 - `--rubric-file` is required for new dispatches. `--done-criteria-file` freezes a separate review anchor; otherwise the rubric is frozen as Done Criteria.
 - `--executor, -e` and `--model, -m` select execution. On `--run-id`, omit `--executor` to use the immutable executor bound in `run.json`; an explicit different executor fails before reading the prompt or writing an attempt. `--model` remains per-attempt.
-- `--sandbox`, `--network-access`, `--timeout`, `--reasoning`, and `--copy` configure the attempt. Copy inputs must be regular files contained by the repository.
-- Provider control-plane transport is always available to the trusted CLI. `--network-access` governs model/tool networking: `disabled` requires an adapter-native deny and fails closed for adapters that cannot enforce one; `enabled` explicitly permits the adapter's network-capable tools.
+- `--network-access`, `--timeout`, `--reasoning`, and `--copy` configure the attempt. Copy inputs must be regular files contained by the repository.
+- Provider control-plane transport is always available to the trusted CLI. Tool networking defaults to `enabled` for trusted-local dispatch; the explicit `--network-access disabled` advanced request requires an adapter-native deny and fails closed for adapters that cannot enforce one. The retired public `--sandbox` flag fails as an unknown option; dispatch always uses writable-worktree semantics and the adapter/phase owns its truthful native filesystem request.
 - CLI authentication, HOME, XDG config, and supported token variables come from the operator's ambient local environment. Credential selector flags were removed and fail as unknown options; Relay never copies auth files or records their paths.
 - Adapters retain their actual invocation tools and native capability declarations. Prompt wording never controls dispatch admission or selects a different outcome/verification contract.
 - `--fleet-id` requires typed `--ownership-json` with exactly `sprint`, `track`, and `component`; parent and ownership digest are immutable.
@@ -76,14 +76,14 @@ Essential flags:
 The durable layout is `~/.relay/runs/<repo-slug>/<run-id>/`: immutable `run.json`, `done-criteria.md`, and `rubric.yaml`; append-only `events.jsonl`; and per-attempt prompt, log, and result artifacts. Retired routing hints and readiness identity flags do not participate in dispatch.
 
 Relay runs directly on the trusted local host; it has no filesystem admission
-or profile compiler. `--sandbox` is passed only to an adapter that can express
-native filesystem isolation (Codex requests `workspace-write` or `read-only`,
-Cursor requests `enabled`, Claude enables its documented Bash sandbox, and
-Antigravity keeps its declared flag). Pi, OpenCode, and Cline run directly.
-Foreground and dry-run JSON return the non-durable `filesystem_isolation`
-requested/effective diagnostic; missing or declaration-only isolation never
-rejects dispatch. Use an external container or VM for a hostile-worker threat
-model.
+or profile compiler. Dispatch always runs with writable-worktree semantics and
+lets each adapter/phase request its own truthful native filesystem isolation
+(Codex requests `workspace-write`, Cursor requests `enabled`, Claude enables
+its documented Bash sandbox, and Antigravity keeps its declared flag). Pi,
+OpenCode, and Cline run directly. Foreground and dry-run JSON return the
+non-durable `filesystem_isolation` requested/effective diagnostic; missing or
+declaration-only isolation never rejects dispatch. Use an external container
+or VM for a hostile-worker threat model.
 
 Executor attempts preserve immutable input staging, executable binding,
 timeout/cancellation, inherited-scope cleanup, and durable facts. Relay itself

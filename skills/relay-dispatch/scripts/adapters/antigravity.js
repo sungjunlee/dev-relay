@@ -9,8 +9,7 @@ function boundedArgv(args) {
   return args;
 }
 
-function validateDispatch({ sandbox, networkAccess }) {
-  if (sandbox !== "workspace-write") return { ok: false, error: "antigravity executor supports only --sandbox workspace-write semantics; read-only dispatch is not safely representable" };
+function validateDispatch({ networkAccess }) {
   void networkAccess; const warnings = [];
   return { ok: true, warnings };
 }
@@ -38,9 +37,8 @@ const native = createNativeAdapter({
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "declaration_only", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
-  buildDispatch({ cwd, prompt, sandbox, timeoutSeconds }) {
-    const args = ["--prompt", worktreePrompt(cwd, prompt), "--print-timeout", `${timeoutSeconds}s`, "--mode", "accept-edits", "--output-format", "json", "--disable-slash-commands"];
-    if (sandbox === "workspace-write") args.push("--sandbox");
+  buildDispatch({ cwd, prompt, timeoutSeconds }) {
+    const args = ["--prompt", worktreePrompt(cwd, prompt), "--print-timeout", `${timeoutSeconds}s`, "--mode", "accept-edits", "--output-format", "json", "--disable-slash-commands", "--sandbox"];
     return { command: process.env.RELAY_ANTIGRAVITY_BIN || "agy", args: boundedArgv(args), cwd };
   },
   buildReview({ cwd, prompt, schemaPath, timeoutSeconds }) {

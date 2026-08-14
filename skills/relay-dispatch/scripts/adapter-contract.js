@@ -159,7 +159,7 @@ function validateCapabilities(adapter, phase, request = {}) {
   if (!PHASES.includes(phase)) throw new AdapterCapabilityError(adapter.name, phase, "unknown phase");
   const capability = adapter.capabilities({ phase, request });
   if (!capability.supported) throw new AdapterCapabilityError(adapter.name, phase, capability.reason || "phase is unsupported");
-  if (request.readOnly === true && !capability.readOnly) {
+  if (phase === "primary_review" && request.readOnly === true && !capability.readOnly) {
     throw new AdapterCapabilityError(adapter.name, phase, "read-only execution is unsupported");
   }
   if (request.networkAccess === "disabled" && capability.networkControl !== "native") {
@@ -177,11 +177,7 @@ function filesystemIsolationDiagnostic(adapter, phase, request = {}) {
   let diagnostic;
   switch (effective) {
     case "native":
-      // `enabled` is an adapter-owned on/off switch (Cursor).  Read/write
-      // modes are operator-facing (Codex), so the diagnostic mirrors argv.
-      requested = capability.filesystemIsolationRequest === "enabled"
-        ? "enabled"
-        : request.readOnly || request.sandbox === "read-only" ? "read-only" : "workspace-write";
+      requested = capability.filesystemIsolationRequest;
       diagnostic = null;
       break;
     case "native_bash":
@@ -302,16 +298,13 @@ function createNativeAdapter({
       if (!value) return Object.freeze({ supported: false, reason: "unknown phase" });
       let capability = { ...value };
       if (value.supported && phase === "dispatch" && request && validateDispatch) {
-        const validation = validateDispatch({
-          sandbox: request.sandbox || (request.readOnly ? "read-only" : "workspace-write"),
-          networkAccess: request.networkAccess || "disabled",
-        });
+        const validation = validateDispatch({ networkAccess: request.networkAccess || "disabled" });
         capability = { ...capability, supported: validation.ok, ...(validation.ok ? {} : { reason: validation.error }), warnings: validation.warnings || [] };
       }
       return Object.freeze(capability);
     },
-    buildInvocation({ phase, cwd, promptPath, promptBytes, resultPath, schemaPath = null, model = null, timeoutMs: requestedTimeoutMs, sandbox = "workspace-write", networkAccess = "disabled", reasoning = null }) {
-      validateCapabilities(this, phase, { readOnly: sandbox === "read-only", sandbox, networkAccess });
+    buildInvocation({ phase, cwd, promptPath, promptBytes, resultPath, schemaPath = null, model = null, timeoutMs: requestedTimeoutMs, networkAccess = "disabled", reasoning = null }) {
+      validateCapabilities(this, phase, phase === "primary_review" ? { readOnly: true, networkAccess } : { networkAccess });
       for (const [value, label] of [[cwd, "cwd"], [promptPath, "promptPath"], [resultPath, "resultPath"], ...(schemaPath ? [[schemaPath, "schemaPath"]] : [])]) requireAbsolutePath(value, label);
       requireSafeOptionalValue(model, "model");
       const trustedPrompt = decodeTrustedPrompt(promptBytes);
@@ -321,7 +314,7 @@ function createNativeAdapter({
         cwd, prompt: trustedPrompt.prompt, promptPath, promptSha256: trustedPrompt.sha256, resultPath, model,
         timeoutSeconds: Math.max(1, Math.floor((requestedTimeoutMs || timeoutMs) / 1000)),
       };
-      const phaseOptions = phase === "dispatch" ? { sandbox, networkAccess, reasoning } : { schemaPath };
+      const phaseOptions = phase === "dispatch" ? { networkAccess, reasoning } : { schemaPath };
       return bindInvocationPolicy(normalizeInvocationShape(builder({ ...common, ...phaseOptions })), networkAccess);
     },
     parseOutcome(input) {

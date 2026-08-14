@@ -1,6 +1,6 @@
 # Trusted-local execution contract
 
-**Status:** Accepted 2026-08-12; `#1232`, `#1233`, and `#1234` implemented · Issue `#1231` · Epic `#1230` · Milestone "Trusted-local native Relay"
+**Status:** Accepted 2026-08-12; `#1232`, `#1233`, `#1234`, and `#1252` implemented · Issue `#1231` · Epic `#1230` · Milestone "Trusted-local native Relay"
 **Supersedes:** the mandatory Relay-owned isolation + staged-credential policy of `#1141` and the dispatch-availability policy derived from it in `#1158` ([Supersession](#supersession-of-1141-and-1158)).
 **Runtime status:** `#1232` has removed Relay-owned `sandbox-exec` and its
 non-darwin admission failure. Dispatch, review, observer, and recovery launch
@@ -46,7 +46,7 @@ Filesystem isolation (OS/CLI enforcement of writable paths) and tool-network con
 
 - Missing or declaration-only native filesystem isolation never fails admission; it must emit a visible, nonblocking diagnostic.
 - Foreground and dry-run dispatch, and foreground review result objects, carry requested/effective filesystem-isolation diagnostics. No new fact kind, no schema change, no durable diagnostic artifact, no second mode.
-- Unchanged: the fail-closed tool-network semantics — a phase without native network control rejects `networkAccess: disabled` requests, and enabling tool networking remains an explicit authorization.
+- `#1252`: tool networking defaults to `enabled` for trusted-local dispatch, so routine new and resume dispatch carries no network ceremony. The fail-closed semantics now apply only to an explicit `networkAccess: disabled` advanced request: a phase without native network control rejects it before any branch, worktree, run, fact, or provider effect. The public `--sandbox` flag is retired; dispatch has fixed writable-worktree semantics while the adapter/phase owns its truthful native filesystem request.
 
 ### 4. Hostile multi-tenant execution is out of scope
 
@@ -76,6 +76,7 @@ the signed staged review-input root after exact process settlement.
 - `#1232` (implemented): atomically removes the outer `sandbox-exec` boundary; Codex/Cursor request their native sandboxes; adds the visible capability diagnostic of §3.
 - `#1233` (implemented): moves all seven adapters to ambient HOME/auth/config and deletes credential staging after the §6 rule was satisfied.
 - `#1234` (implemented): retires the provider-credential-dependent 13-cell release gate and its obsolete tests/docs. Static adapter argv contracts and the nonblocking native-isolation diagnostic remain; `#1235` dogfoods normal operator use without becoming a release gate.
+- `#1252` (implemented): defaults trusted-local dispatch/redispatch tool networking to `enabled`, retires the public dispatch `--sandbox` flag and its fleet leaf/schema/argv forwarding, and freezes dispatch to writable-worktree semantics with adapter-owned native filesystem requests. Explicit `enabled` is byte-equivalent; explicit `disabled` remains the advanced native-deny request.
 
 ## Supersession of #1141 and #1158
 

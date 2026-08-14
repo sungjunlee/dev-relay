@@ -50,7 +50,7 @@ relay-fleet only fans out already-decomposed leaf contracts; it never splits a r
 
 All leaves must carry the same normalized owner. `ownership.track` must equal the basename of `ownership.sprint` without `.md`; `component` is a separate dev-backlog scope key and need not equal the track. Before admission, the canonical path, track, and component must exactly match the trusted schema-v2 `sprint-state.js --track` result, and the path must resolve to an existing regular file in the current repo's `backlog/sprints/`; relay-fleet does not parse that markdown. Missing, malformed, contradictory, unresolved, stale, or mixed-track ownership is rejected before a cohort or child dispatch exists: one fleet is one track.
 
-Optional per-leaf fields passed through to the current `dispatch.js` contract are `executor`, `model`, `sandbox`, `network_access`, `timeout`, `reasoning`, and `copy`. Submit dependent work in a later fleet wave after its prerequisite fleet is terminal; the immutable cohort intentionally carries no second dependency scheduler.
+Optional per-leaf fields passed through to the current `dispatch.js` contract are `executor`, `model`, `network_access`, `timeout`, `reasoning`, and `copy`. Submit dependent work in a later fleet wave after its prerequisite fleet is terminal; the immutable cohort intentionally carries no second dependency scheduler.
 If a leaf selects an unsupported executor or an unavailable model provider, pause that leaf and correct the explicit leaf input before resuming the fleet.
 
 ## Commands

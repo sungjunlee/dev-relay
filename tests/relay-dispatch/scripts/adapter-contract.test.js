@@ -52,7 +52,6 @@ function invocationFor(adapter, phase = "dispatch") {
     schemaPath,
     model: "provider/model; literally-not-a-shell-command",
     timeoutMs: 123456,
-    sandbox: "workspace-write",
     networkAccess: "enabled",
     reasoning: "high",
   });
@@ -82,7 +81,7 @@ test("new adapter registry preserves exactly the seven supported executors", () 
 
 test("session-backed adapters rely on the ambient host session without secret argv", () => {
   for (const name of ["antigravity", "cline", "cursor"]) {
-    const adapter = getAdapter(name), capability = adapter.capabilities({ phase: "dispatch", request: { sandbox: "workspace-write", networkAccess: "enabled" } });
+    const adapter = getAdapter(name), capability = adapter.capabilities({ phase: "dispatch", request: { networkAccess: "enabled" } });
     assert.equal(Object.hasOwn(capability, "credentialTransport"), false, name);
     assert.equal(Object.hasOwn(adapter.metadata, "credentials"), false, name);
     const invocation = invocationFor(adapter); assert.equal(invocation.args.includes("-k"), false, name);
@@ -97,11 +96,11 @@ test("provider transport is outer-enabled while only verified adapters may force
     assert.ok(Object.isFrozen(invocation.runtimeDependencies), name);
   }
   for (const name of ["claude", "codex", "cursor", "antigravity", "opencode", "cline"]) assert.throws(() => getAdapter(name).buildInvocation({
-    phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath, sandbox: "workspace-write", networkAccess: "disabled",
+    phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath, networkAccess: "disabled",
   }), (error) => error instanceof contract.AdapterCapabilityError && /tool network disable/.test(error.message), name);
   for (const name of ["pi"]) {
     const invocation = getAdapter(name).buildInvocation({ phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath,
-      sandbox: "workspace-write", networkAccess: "disabled", timeoutSeconds: 123 });
+      networkAccess: "disabled", timeoutSeconds: 123 });
     assert.equal(invocation.networkAccess, "enabled", name);
     assert.equal(invocation.toolNetworkAccess, "disabled", name);
   }
@@ -142,7 +141,6 @@ test("Codex omits the reasoning override when the operator did not select one", 
     resultPath,
     model: null,
     timeoutMs: 123456,
-    sandbox: "workspace-write",
     networkAccess: "enabled",
   });
   assert.equal(invocation.args.includes("model_reasoning_effort=xhigh"), false);
@@ -157,7 +155,7 @@ test("phase matrix is fail-closed before an invocation is built", () => {
     () => invocationFor(getAdapter("cline"), "primary_review"),
     (error) => error instanceof contract.AdapterCapabilityError && /structured primary-review output contract/.test(error.message)
   );
-  assert.equal(contract.validateCapabilities(getAdapter("cursor"), "dispatch", { readOnly: true, sandbox: "read-only", networkAccess: "enabled" }).supported, true);
+  assert.equal(contract.validateCapabilities(getAdapter("cursor"), "dispatch", { networkAccess: "enabled" }).supported, true);
   assert.equal(contract.validateCapabilities(getAdapter("codex"), "primary_review", { readOnly: true }).supported, true);
   assert.equal(
     getAdapter("codex").buildInvocation({
@@ -166,7 +164,6 @@ test("phase matrix is fail-closed before an invocation is built", () => {
       promptPath,
       promptBytes: fs.readFileSync(promptPath),
       resultPath,
-      sandbox: "read-only",
       networkAccess: "enabled",
     }).networkAccess,
     "enabled",
@@ -230,7 +227,6 @@ test("native invocation requires trusted prompt bytes and rejects invalid UTF-8 
     cwd,
     promptPath,
     resultPath,
-    sandbox: "workspace-write",
     networkAccess: "enabled",
   };
   assert.throws(() => adapter.buildInvocation(input), /promptBytes must be a Buffer/);
@@ -356,7 +352,6 @@ test("dry-run uses the same real adapter builder and argv as launch for all seve
       copy: null,
       model: "provider/model; literally-not-a-shell-command",
       reasoning: "high",
-      sandbox: "workspace-write",
       "network-access": "enabled",
     };
     const cli = { creating: false, runId: `dry-${name}`, timeoutSeconds: 123, values };
@@ -374,7 +369,6 @@ test("dry-run uses the same real adapter builder and argv as launch for all seve
       resultPath,
       model: values.model,
       timeoutMs: 123_000,
-      sandbox: values.sandbox,
       networkAccess: values["network-access"],
       reasoning: values.reasoning,
     });
@@ -386,7 +380,7 @@ test("dry-run uses the same real adapter builder and argv as launch for all seve
   }
 });
 
-test("Codex and Cursor request their native sandbox without an outer Relay boundary", () => {
+test("Codex and Cursor derive native requests from phase metadata without an outer Relay boundary", () => {
   for (const phase of ["dispatch", "primary_review"]) {
     const codex = invocationFor(getAdapter("codex"), phase), cursor = invocationFor(getAdapter("cursor"), phase);
     assert.deepEqual(codex.args.slice(codex.args.indexOf("--sandbox"), codex.args.indexOf("--sandbox") + 2), ["--sandbox", phase === "primary_review" ? "read-only" : "workspace-write"]);
@@ -395,10 +389,29 @@ test("Codex and Cursor request their native sandbox without an outer Relay bound
     assert.deepEqual(cursor.args.slice(cursor.args.indexOf("--sandbox"), cursor.args.indexOf("--sandbox") + 2), ["--sandbox", "enabled"]);
     assert.equal(Object.hasOwn(cursor, "privateEnvPaths"), false);
   }
-  assert.equal(getAdapter("cursor").capabilities({ phase: "dispatch", request: { sandbox: "read-only", networkAccess: "enabled" } }).supported, true);
+  assert.equal(getAdapter("cursor").capabilities({ phase: "dispatch", request: { networkAccess: "enabled" } }).supported, true);
   assert.deepEqual(contract.filesystemIsolationDiagnostic(getAdapter("codex"), "dispatch", {
-    sandbox: "read-only", readOnly: true, networkAccess: "enabled",
-  }), { requested: "read-only", effective: "native", diagnostic: null });
+    networkAccess: "enabled",
+  }), { requested: "workspace-write", effective: "native", diagnostic: null });
+});
+
+test("dispatch keeps fixed writable-worktree semantics while the adapter owns its native filesystem request", () => {
+  const promptBytes = fs.readFileSync(promptPath);
+  const base = { phase: "dispatch", cwd, promptPath, promptBytes, resultPath, model: null, timeoutMs: 123_000, networkAccess: "enabled" };
+  const codex = getAdapter("codex").buildInvocation(base);
+  assert.deepEqual(codex.args.slice(codex.args.indexOf("--sandbox"), codex.args.indexOf("--sandbox") + 2), ["--sandbox", "workspace-write"], "Codex dispatch argv is fixed to workspace-write");
+  const cursor = getAdapter("cursor").buildInvocation(base);
+  assert.deepEqual(cursor.args.slice(cursor.args.indexOf("--sandbox"), cursor.args.indexOf("--sandbox") + 2), ["--sandbox", "enabled"], "Cursor dispatch argv is fixed to enabled");
+  const antigravity = getAdapter("antigravity").buildInvocation(base);
+  assert.equal(antigravity.args.includes("--sandbox"), true, "Antigravity keeps its declared --sandbox flag");
+  const claude = getAdapter("claude").buildInvocation(base);
+  assert.equal(claude.args.includes(JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false } })), true, "Claude dispatch enables its native Bash sandbox settings");
+});
+
+test("generic adapter invocation defaults tool networking to disabled", () => {
+  assert.throws(() => getAdapter("codex").buildInvocation({
+    phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath,
+  }), /tool network disable/);
 });
 
 test("adapter metadata is static and carries no integration side channel", () => {
@@ -433,7 +446,7 @@ test("Claude dispatch enables native Bash while primary review is tool-read-only
   });
   assert.equal(getAdapter("claude").capabilities({ phase: "dispatch" }).networkControl, "informational");
   assert.throws(() => getAdapter("claude").buildInvocation({ phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath,
-    sandbox: "workspace-write", networkAccess: "disabled" }), /tool network disable/);
+    networkAccess: "disabled" }), /tool network disable/);
 });
 
 test("invocation contract rejects retired private-environment metadata", () => {
@@ -520,7 +533,6 @@ test("Antigravity rejects prompts above its conservative argv budget before proc
     resultPath,
     schemaPath,
     timeoutMs: 123_000,
-    sandbox: "read-only",
     networkAccess: "enabled",
   }), /argv.*256 KiB.*process list/i);
   assert.equal(getAdapter("antigravity").metadata.promptTransport, "argv_visible");
@@ -543,7 +555,6 @@ test("all supported primary review adapters pass capability negotiation", () => 
     const adapter = getAdapter(name);
     const capability = contract.validateCapabilities(adapter, "primary_review", {
       readOnly: true,
-      sandbox: "read-only",
       networkAccess: "enabled",
     });
     assert.equal(capability.supported, true, name);

@@ -3,7 +3,7 @@ const { createNativeAdapter } = require("../adapter-contract");
 
 const NATIVE_BASH_SANDBOX = JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false } });
 
-function validateDispatch({ sandbox, networkAccess }) { void sandbox; void networkAccess; return { ok: true, warnings: [] }; }
+function validateDispatch({ networkAccess }) { void networkAccess; return { ok: true, warnings: [] }; }
 
 module.exports = createNativeAdapter({
   name: "claude",

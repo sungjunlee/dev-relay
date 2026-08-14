@@ -1,7 +1,7 @@
 const { createNativeAdapter } = require("../adapter-contract");
 
-function validateDispatch({ sandbox, networkAccess }) {
-  void sandbox; void networkAccess;
+function validateDispatch({ networkAccess }) {
+  void networkAccess;
   return { ok: true, warnings: [] };
 }
 
@@ -25,12 +25,13 @@ module.exports = createNativeAdapter({
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "read-only", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
-  buildDispatch({ cwd, promptPath, promptSha256, resultPath, model, sandbox, networkAccess, reasoning }) {
+  buildDispatch({ cwd, promptPath, promptSha256, resultPath, model, networkAccess, reasoning }) {
     const args = ["exec", "-C", cwd, "--color", "never", "-o", resultPath];
     if (reasoning) args.push("-c", `model_reasoning_effort=${reasoning}`);
     void networkAccess;
     if (model) args.push("-m", model);
-    args.push("--sandbox", sandbox);
+    // Dispatch has fixed writable-worktree semantics; this is Codex's own native request.
+    args.push("--sandbox", "workspace-write");
     args.push("-");
     return { command: "codex", args, cwd, stdinPath: promptPath, stdinSha256: promptSha256 };
   },

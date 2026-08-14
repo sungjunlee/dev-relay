@@ -378,7 +378,7 @@ function productionServices() {
         timeoutMs,
         buildInvocation: ({ cwd, promptPath, promptBytes, resultPath, schemaPath }) => adapter.buildInvocation({
           phase: "primary_review", cwd, promptPath, promptBytes, resultPath, schemaPath, model,
-          timeoutMs, sandbox: "read-only", networkAccess,
+          timeoutMs, networkAccess,
         }),
         parseOutcome: (input) => adapter.parseOutcome(input),
         providerUnavailableSignals: adapter.providerUnavailableSignals,

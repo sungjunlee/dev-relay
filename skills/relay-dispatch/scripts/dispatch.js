@@ -27,8 +27,7 @@ const OPTIONS = Object.freeze({
   "done-criteria-file": { type: "string" },
   executor: { type: "string", short: "e", default: "codex" },
   model: { type: "string", short: "m" },
-  sandbox: { type: "string", default: "workspace-write" },
-  "network-access": { type: "string", default: "disabled" },
+  "network-access": { type: "string", default: "enabled" },
   timeout: { type: "string" },
   reasoning: { type: "string" },
   copy: { type: "string" },
@@ -44,7 +43,6 @@ const OPTIONS = Object.freeze({
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "timed_out", "spawn_error"]);
 const RUN_ID_RE = /^[a-z0-9][a-z0-9-]{0,126}$/;
 const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-
 function usage() {
   return [
     "Usage:",
@@ -196,7 +194,6 @@ function parseCli(argv) {
   if (!values.branch && !values["run-id"] && !internalRunId) fail("--branch or --run-id is required");
   if (values.prompt === undefined && values["prompt-file"] === undefined) fail("--prompt or --prompt-file is required");
   if (values.prompt !== undefined && values["prompt-file"] !== undefined) fail("--prompt and --prompt-file are mutually exclusive");
-  if (!new Set(["workspace-write", "read-only"]).has(values.sandbox)) fail("--sandbox must be workspace-write or read-only");
   if (!new Set(["disabled", "enabled"]).has(values["network-access"])) fail("--network-access must be disabled or enabled");
   const issueNumber = values["issue-number"] === undefined ? null : Number(values["issue-number"]);
   if (issueNumber !== null && (!Number.isInteger(issueNumber) || issueNumber <= 0)) fail("--issue-number must be a positive integer");
@@ -425,7 +422,6 @@ function dryRunInvocation({ cli, identity, adapter, inputs }) {
       resultPath,
       model: cli.values.model || null,
       timeoutMs: (cli.timeoutSeconds || adapter.defaults.timeoutMs / 1000) * 1000,
-      sandbox: cli.values.sandbox,
       networkAccess: cli.values["network-access"],
       reasoning: cli.values.reasoning || null,
     });
@@ -534,12 +530,12 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
       }
     }
     immutableBytes(promptPath, prompt.bytes);
-    validateCapabilities(adapter, "dispatch", { sandbox: cli.values.sandbox, readOnly: cli.values.sandbox === "read-only", networkAccess: cli.values["network-access"] });
+    validateCapabilities(adapter, "dispatch", { networkAccess: cli.values["network-access"] });
     invocation = adapter.buildInvocation({
       phase: "dispatch", cwd: record.git.worktree, promptPath, resultPath: outputPath,
       promptBytes: prompt.bytes,
       model: cli.values.model || null, timeoutMs: (cli.timeoutSeconds || adapter.defaults.timeoutMs / 1000) * 1000,
-      sandbox: cli.values.sandbox, networkAccess: cli.values["network-access"], reasoning: cli.values.reasoning || null,
+      networkAccess: cli.values["network-access"], reasoning: cli.values.reasoning || null,
     });
     startSha = git(record.git.worktree, ["rev-parse", "HEAD"]);
     timeoutMs = (cli.timeoutSeconds || adapter.defaults.timeoutMs / 1000) * 1000;
@@ -556,7 +552,6 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
       stdinPath: invocation.stdinPath || null,
       stdinSha256: invocation.stdinSha256 || null,
       executorResultPath: outputPath,
-      executorSandbox: cli.values.sandbox,
       executorNetworkAccess: cli.values["network-access"],
       runtimeDependencies: invocation.runtimeDependencies,
       timeoutMs,
@@ -657,7 +652,7 @@ async function executeForeground(cli, overrides = {}) {
   }
   const inspectRun = overrides.inspectRun || recover.inspectProductionRun;
   const identity = repositoryIdentity(canonicalCheckout(cli.repo));
-  const capabilityRequest = { sandbox: cli.values.sandbox, readOnly: cli.values.sandbox === "read-only", networkAccess: cli.values["network-access"] };
+  const capabilityRequest = { networkAccess: cli.values["network-access"] };
   validateCapabilities(adapter, "dispatch", capabilityRequest);
   const filesystemIsolation = filesystemIsolationDiagnostic(adapter, "dispatch", capabilityRequest);
   let resumeInspection = null;
