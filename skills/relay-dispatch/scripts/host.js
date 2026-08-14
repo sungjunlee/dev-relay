@@ -1071,7 +1071,7 @@ function runSupervisor(configPath, configSha) {
   publishOnce(config.supervisor, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
     config_sha256: configSha, nonce: config.nonce, supervisor, started_at: new Date().toISOString() }, secret));
   let child, childClosed = false, executorIdentity = null, finished = false, requested = null, requestedReason = null, pendingClose = null,
-    deadline, escalation, cancelPoll, barrierPoll, stderrPoll = null, stderrCursor = 0, stderrTail = "", signalSeen = false, signalSeenAt = null, outcome = "", overflow = false;
+    deadline, escalation, cancelPoll, barrierPoll, stderrPoll = null, stderrCursor = 0, stderrTail = "", signalSeen = false, providerLivePolls = 0, outcome = "", overflow = false;
   const cleanupIncomplete = (error, obligation = null, terminal = {}) => {
     if (finished) return; finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll); clearInterval(stderrPoll);
     const priorStatus = TERMINAL.has(terminal.status) ? terminal.status : "failed", provided = obligation?.processes || [];
@@ -1143,6 +1143,7 @@ function runSupervisor(configPath, configSha) {
       stderrPoll = setInterval(() => {
         if (finished || requested || childClosed || pendingClose || !child || !groupExists(child.pid)) return;
         try {
+          const observedBeforeSignal = signalSeen;
           // FD 5 is the exact owner-only stderr inode opened by the launcher. Positional reads do
           // not disturb its append offset and avoid reopening a mutable pathname while it is live.
           const stat = fs.fstatSync(5);
@@ -1153,11 +1154,12 @@ function runSupervisor(configPath, configSha) {
             stderrCursor += read;
             const scanned = `${stderrTail}${chunk.toString("utf8").slice(0, read)}`.toLowerCase();
             stderrTail = overlap ? scanned.slice(-overlap) : "";
-            if (declaredSignals.some((signal) => scanned.includes(signal))) { signalSeen = true; signalSeenAt ||= Date.now(); }
+            if (declaredSignals.some((signal) => scanned.includes(signal))) signalSeen = true;
           }
           const executorAlive = scopedGroupMembers(child.pid, config.scope_seal).some((member) => member.pid !== child.pid && !/^Z/.test(member.state || ""));
-          if (signalSeen && executorAlive && Date.now() - signalSeenAt >= 250) terminate("cancelled", PROVIDER_UNAVAILABLE);
-        } catch { /* best-effort observation of the inherited stderr artifact */ }
+          if (!executorAlive) providerLivePolls = 0;
+          else if (observedBeforeSignal && signalSeen && ++providerLivePolls >= 10) terminate("cancelled", PROVIDER_UNAVAILABLE);
+        } catch { providerLivePolls = 0; /* best-effort observation of the inherited stderr artifact */ }
       }, 25);
     }
     process.once("SIGTERM", () => terminate("cancelled")); process.once("SIGINT", () => terminate("cancelled"));

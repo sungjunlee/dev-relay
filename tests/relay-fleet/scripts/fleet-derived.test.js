@@ -177,19 +177,13 @@ test("artifact drift is operator attention and dry-run publishes no cohort", asy
   });
 });
 
-// #1173 item 4: the --allow-toolset-mismatch escape hatch must thread through a fleet leaf override,
-// and the leaf field must reject non-booleans instead of coercing them.
-test("fleet leaf allow_toolset_mismatch threads the dispatch flag and rejects non-booleans", async () => {
+test("retired prompt admission overrides fail before a fleet cohort is written", async () => {
   const fixture = setup();
   await fixtureWork(fixture, () => {
     const item = { ...leaf(fixture.repo, 40), allow_toolset_mismatch: true };
     const leavesFile = path.join(fixture.repo, "leaves.json");
     fs.writeFileSync(leavesFile, JSON.stringify({ leaves: [item] }));
-    const [loaded] = fleet.loadLeavesFile(fixture.repo, leavesFile);
-    assert.equal(loaded.allow_toolset_mismatch, true);
-    const args = fleet.buildDispatchArgs({ repoRoot: fixture.repo, fleetId: "fleet-toolset", leaf: loaded, options: { dispatchScript: "dispatch.js" } });
-    assert.equal(args.includes("--allow-toolset-mismatch"), true);
-    fs.writeFileSync(leavesFile, JSON.stringify({ leaves: [{ ...leaf(fixture.repo, 41), allow_toolset_mismatch: "yes" }] }));
-    assert.throws(() => fleet.loadLeavesFile(fixture.repo, leavesFile), /allow_toolset_mismatch must be a boolean/);
+    assert.throws(() => fleet.loadLeavesFile(fixture.repo, leavesFile), /unsupported fields: allow_toolset_mismatch/);
+    assert.equal(fs.existsSync(fleet.getFleetLeavesStorePath(fixture.repo, "fleet-toolset")), false);
   });
 });

@@ -285,11 +285,6 @@ function createNativeAdapter({
       throw new Error(`native adapter ${phase} filesystemIsolationRequest is only valid with native filesystemIsolation`);
     }
   }
-  // Declared, never inferred: dispatch.js rejects a command-demanding prompt for a toolset with no
-  // shell, and an adapter that forgot to say which it is would silently become shell-capable.
-  if (phaseMetadata.dispatch?.supported && typeof phaseMetadata.dispatch.commandExecution !== "boolean") {
-    throw new Error("native adapter dispatch phase must declare commandExecution");
-  }
   const runtimeDependencies = normalizeRuntimeDependencies(metadata.runtimeDependencies);
   const providerUnavailable = normalizeProviderUnavailableSignals(providerUnavailableSignals);
   const bindInvocationPolicy = (invocation, toolNetworkAccess) => Object.freeze({ ...invocation, networkAccess: "enabled", toolNetworkAccess, runtimeDependencies });
