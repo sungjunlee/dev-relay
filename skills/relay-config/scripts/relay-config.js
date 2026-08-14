@@ -43,11 +43,12 @@ function run(argv = process.argv.slice(2)) {
     throw new Error("--phase review requires --reviewer only");
   }
   const actor = executor || reviewer;
+  const model = args.getArg("--model") || null;
   const capability = validateCapabilities(getAdapter(actor), selectedPhase, {
     readOnly: selectedPhase === ADAPTER_PHASES.PRIMARY_REVIEW,
     networkAccess: "enabled",
+    model,
   });
-  const model = args.getArg("--model") || null;
   const result = { ok: true, phase: selectedPhase, adapter: actor, model, model_source: model ? "explicit" : "adapter_default", capability };
   if (json) console.log(JSON.stringify(result, null, 2)); else console.log(`${actor}: ${selectedPhase} supported; model=${model || "(adapter default)"}`);
   return 0;

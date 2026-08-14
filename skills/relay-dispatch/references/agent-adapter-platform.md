@@ -27,6 +27,13 @@ single binaries receive literal executable access only; Pi and Cline declare
 their Node package roots, while Cursor declares only its version
 directory. The host never infers and opens an executable's HOME parent.
 
+Pi's ordinary catalog may include `alibaba-plan/*` through the ambient
+`pi-alibaba-models` extension. Relay invokes Pi with `--no-extensions`, and the
+extension file is outside the executable closure bound by `runtimeDependencies`.
+Relay therefore never adds an unbound `--extension` path: an explicit
+`alibaba-plan/*` selection fails before provider execution with the typed
+`PI_ISOLATED_CATALOG_MISMATCH` diagnostic in dispatch and primary review.
+
 ## Primary Reviewer Contract
 
 `review-runner.js` stages an immutable prompt, diff, and verdict schema, then

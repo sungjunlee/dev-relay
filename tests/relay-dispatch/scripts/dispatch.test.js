@@ -72,6 +72,7 @@ function fixture(label, { objectFormat = "sha1" } = {}) {
   const fakePi = path.join(bin, "pi");
   fs.writeFileSync(fakePi, `#!${process.execPath}
 "use strict";
+if (process.env.PI_FIXTURE_INVOCATION_MARKER) require("fs").writeFileSync(process.env.PI_FIXTURE_INVOCATION_MARKER, process.argv.slice(2).join("\\n"));
 if (process.env.PI_FIXTURE_FAIL_NO_WORK === "1") process.exit(1);
 require("fs").writeFileSync(require("path").join(process.cwd(), "executor-change.txt"), "review me\\n");
 process.stdout.write("fake pi completed\\n");
@@ -875,6 +876,32 @@ test("a no-sandbox adapter remains dry-runnable with a visible diagnostic", () =
   assert.deepEqual(json(result.stdout).filesystem_isolation, {
     requested: "unavailable", effective: "none", diagnostic: "pi has no native filesystem sandbox; continuing directly on the trusted local host.",
   });
+});
+
+test("Pi rejects explicit Alibaba models before launching the isolated fake executable", () => {
+  const value = fixture("pi-alibaba-isolated-catalog");
+  const marker = path.join(value.root, "pi-invoked.log");
+  const result = run(value, [
+    "--executor", "pi", "--model", "alibaba-plan/qwen3.8-max", "--branch", "pi-alibaba-isolated-catalog",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
+  ], { ...value.env, PI_FIXTURE_INVOCATION_MARKER: marker });
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout || result.stderr);
+  assert.equal(output.code, "PI_ISOLATED_CATALOG_MISMATCH");
+  assert.match(output.error, /isolated Pi catalog cannot resolve/);
+  assert.equal(fs.existsSync(marker), false, "provider executable must not be launched");
+  assert.equal(fs.existsSync(fixtureRunsDir(value)), false, "pre-provider diagnostic must not claim a run");
+});
+
+test("Pi keeps non-Alibaba explicit model argv and launches the fake executable", () => {
+  const value = fixture("pi-explicit-non-alibaba");
+  const marker = path.join(value.root, "pi-invoked.log");
+  const result = run(value, [
+    "--executor", "pi", "--model", "openai/gpt-5", "--branch", "pi-explicit-non-alibaba",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
+  ], { ...value.env, PI_FIXTURE_INVOCATION_MARKER: marker });
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.match(fs.readFileSync(marker, "utf8"), /--model\nopenai\/gpt-5/);
 });
 
 test("an empty adapter result cannot turn an exit-zero host result into a completed attempt", () => {

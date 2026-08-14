@@ -337,6 +337,48 @@ test("all seven native adapters preserve full dispatch argv order and policy inp
   }
 });
 
+test("Pi reports the isolated Alibaba catalog mismatch before provider execution", () => {
+  const adapter = getAdapter("pi");
+  const input = {
+    phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath,
+    model: "alibaba-plan/qwen3.8-max", networkAccess: "enabled",
+  };
+  for (const phase of ["dispatch", "primary_review"]) {
+    const capability = adapter.capabilities({ phase, request: {
+      readOnly: phase === "primary_review", networkAccess: "enabled", model: input.model,
+    } });
+    assert.equal(capability.supported, false, phase);
+    assert.equal(capability.errorCode, "PI_ISOLATED_CATALOG_MISMATCH", phase);
+    assert.equal(capability.diagnostic.stage, "pre-provider", phase);
+  }
+  assert.throws(() => adapter.buildInvocation(input), (error) => {
+    assert.equal(error.name, "AdapterCapabilityError");
+    assert.equal(error.code, "PI_ISOLATED_CATALOG_MISMATCH");
+    assert.deepEqual(error.diagnostic, {
+      code: "PI_ISOLATED_CATALOG_MISMATCH",
+      kind: "isolated_catalog_mismatch",
+      stage: "pre-provider",
+      provider: "alibaba-plan",
+      model: "alibaba-plan/qwen3.8-max",
+      extension: "pi-alibaba-models",
+      isolatedInvocation: "--no-extensions",
+      reason: "the extension is discovered by ordinary Pi catalog listing but its executable bytes are not bound by Relay's runtime contract",
+    });
+    assert.match(error.message, /isolated Pi catalog cannot resolve/);
+    return true;
+  });
+  assert.throws(() => adapter.buildInvocation({ ...input, phase: "primary_review", schemaPath }), (error) => {
+    assert.equal(error.code, "PI_ISOLATED_CATALOG_MISMATCH");
+    assert.equal(error.diagnostic.stage, "pre-provider");
+    return true;
+  });
+  for (const model of ["openai/gpt-5", "qwen/qwen3.8-max", null]) {
+    const invocation = adapter.buildInvocation({ ...input, model });
+    assert.equal(invocation.args.includes("--no-extensions"), true);
+    assert.equal(invocation.args.includes("--model"), model !== null);
+  }
+});
+
 test("dry-run uses the same real adapter builder and argv as launch for all seven executors", () => {
   function normalize(args) {
     return [...args].map((value) => (

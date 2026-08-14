@@ -158,7 +158,12 @@ function makeParseOutcome(outputProtocol) {
 function validateCapabilities(adapter, phase, request = {}) {
   if (!PHASES.includes(phase)) throw new AdapterCapabilityError(adapter.name, phase, "unknown phase");
   const capability = adapter.capabilities({ phase, request });
-  if (!capability.supported) throw new AdapterCapabilityError(adapter.name, phase, capability.reason || "phase is unsupported");
+  if (!capability.supported) {
+    const error = new AdapterCapabilityError(adapter.name, phase, capability.reason || "phase is unsupported");
+    if (capability.errorCode) error.code = capability.errorCode;
+    if (capability.diagnostic) error.diagnostic = capability.diagnostic;
+    throw error;
+  }
   if (phase === "primary_review" && request.readOnly === true && !capability.readOnly) {
     throw new AdapterCapabilityError(adapter.name, phase, "read-only execution is unsupported");
   }
@@ -257,6 +262,7 @@ function createNativeAdapter({
   outputProtocol,
   buildDispatch,
   buildReview = null,
+  validateModel = null,
   validateDispatch = null,
   providerUnavailableSignals = null,
 }) {
@@ -297,14 +303,28 @@ function createNativeAdapter({
       const value = phaseMetadata[phase];
       if (!value) return Object.freeze({ supported: false, reason: "unknown phase" });
       let capability = { ...value };
-      if (value.supported && phase === "dispatch" && request && validateDispatch) {
-        const validation = validateDispatch({ networkAccess: request.networkAccess || "disabled" });
-        capability = { ...capability, supported: validation.ok, ...(validation.ok ? {} : { reason: validation.error }), warnings: validation.warnings || [] };
+      const applyValidation = (validation) => {
+        capability = {
+          ...capability,
+          supported: validation.ok,
+          ...(validation.ok ? {} : {
+            reason: validation.error,
+            ...(validation.errorCode ? { errorCode: validation.errorCode } : {}),
+            ...(validation.diagnostic ? { diagnostic: validation.diagnostic } : {}),
+          }),
+          warnings: validation.warnings || [],
+        };
+      };
+      if (value.supported && request && validateModel) {
+        applyValidation(validateModel({ phase, model: request.model || null }));
+      }
+      if (capability.supported && phase === "dispatch" && request && validateDispatch) {
+        applyValidation(validateDispatch({ ...request, networkAccess: request.networkAccess || "disabled" }));
       }
       return Object.freeze(capability);
     },
     buildInvocation({ phase, cwd, promptPath, promptBytes, resultPath, schemaPath = null, model = null, timeoutMs: requestedTimeoutMs, networkAccess = "disabled", reasoning = null }) {
-      validateCapabilities(this, phase, phase === "primary_review" ? { readOnly: true, networkAccess } : { networkAccess });
+      validateCapabilities(this, phase, phase === "primary_review" ? { readOnly: true, networkAccess, model } : { networkAccess, model });
       for (const [value, label] of [[cwd, "cwd"], [promptPath, "promptPath"], [resultPath, "resultPath"], ...(schemaPath ? [[schemaPath, "schemaPath"]] : [])]) requireAbsolutePath(value, label);
       requireSafeOptionalValue(model, "model");
       const trustedPrompt = decodeTrustedPrompt(promptBytes);

@@ -1,8 +1,37 @@
 const { createNativeAdapter } = require("../adapter-contract");
 
+const ISOLATED_CATALOG_CODE = "PI_ISOLATED_CATALOG_MISMATCH";
+
+// Ordinary `pi --list-models` discovers pi-alibaba-models from the ambient
+// extension directory. Relay deliberately passes --no-extensions, so that
+// catalog entry is absent; the extension bytes are not a bound runtime input.
+function isolatedCatalogDiagnostic(model) {
+  const diagnostic = {
+    code: ISOLATED_CATALOG_CODE,
+    kind: "isolated_catalog_mismatch",
+    stage: "pre-provider",
+    provider: "alibaba-plan",
+    model,
+    extension: "pi-alibaba-models",
+    isolatedInvocation: "--no-extensions",
+    reason: "the extension is discovered by ordinary Pi catalog listing but its executable bytes are not bound by Relay's runtime contract",
+  };
+  return Object.freeze(diagnostic);
+}
+
+function isolatedCatalogReason(model) {
+  return `isolated Pi catalog cannot resolve explicit model '${model}': Relay disables extension discovery with --no-extensions, while pi-alibaba-models is not a bound runtime dependency`;
+}
+
 function normalizeThinking(reasoning) {
   if (["low", "medium", "high"].includes(reasoning)) return reasoning;
   return reasoning === "xhigh" ? "high" : null;
+}
+
+function validateModel({ model }) {
+  if (typeof model !== "string" || !model.startsWith("alibaba-plan/")) return { ok: true, warnings: [] };
+  const diagnostic = isolatedCatalogDiagnostic(model);
+  return { ok: false, error: isolatedCatalogReason(model), errorCode: diagnostic.code, diagnostic, warnings: [] };
 }
 
 function validateDispatch({ networkAccess }) {
@@ -20,6 +49,7 @@ module.exports = createNativeAdapter({
     dispatch: { supported: true, write: true, readOnly: false, networkControl: "native", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text" },
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "native", filesystemIsolation: "none", cancellation: "process", structuredOutput: "json" },
   },
+  validateModel,
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, model, reasoning }) {
     const args = ["--no-session", "--no-context-files", "--no-extensions", "--no-skills", "--tools", "read,grep,find,ls,write,edit", ...(model ? ["--model", model] : [])];
