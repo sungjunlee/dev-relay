@@ -507,6 +507,31 @@ test("live PR head drift and closed GitHub state fail closed before merge", asyn
   }
 });
 
+test("dirty reviewed worktree blocks finalize before any GitHub merge call", async () => {
+  const value = await fixture("dirty-reviewed");
+  fs.writeFileSync(path.join(value.worktree, "file.txt"), "uncommitted drift\n");
+  const factBytes = fs.readFileSync(path.join(value.runDir, "events.jsonl"));
+
+  const dirty = await withGh(value, () => recover.inspectProductionRun({ runDir: value.runDir }));
+  assert.equal(dirty.derived.action, "none");
+  assert.equal(dirty.derived.reason, "reviewed_worktree_dirty");
+  assert.equal(dirty.recommended_action.kind, "operator_attention");
+  assert.equal(dirty.blockers[0].code, "reviewed_worktree_dirty");
+  await assert.rejects(
+    withGh(value, () => finalize.finalizeRun(value.cli, services())),
+    (error) => error.code === "MERGE_BLOCKED" || /dirty|blocked/i.test(error.message),
+  );
+  assert.equal((fs.readFileSync(value.gh.logPath, "utf8").match(/^pr merge /gm) || []).length, 0);
+  assert.deepEqual(fs.readFileSync(path.join(value.runDir, "events.jsonl")), factBytes);
+
+  fs.writeFileSync(path.join(value.worktree, "file.txt"), "after\n");
+  const clean = await withGh(value, () => recover.inspectProductionRun({ runDir: value.runDir }));
+  assert.equal(clean.derived.action, "merge");
+  assert.equal(clean.derived.reason, "ready_to_merge");
+  assert.equal(clean.recommended_action.kind, "merge");
+  assert.deepEqual(fs.readFileSync(path.join(value.runDir, "events.jsonl")), factBytes);
+});
+
 test("GitHub merge failure cannot be classified or recorded as success", async () => {
   const value = await fixture("gh-failure", { github: { mergeExitCode: 1 } });
   await assert.rejects(
