@@ -74,6 +74,7 @@ test("new adapter registry preserves exactly the seven supported executors", () 
     assert.equal(adapter.metadata.providerTransport, "remote_required");
     assert.equal(Object.hasOwn(adapter.metadata, "credentialTransport"), false);
     assert.equal(Object.hasOwn(adapter.metadata, "credentials"), false);
+    assert.equal(Object.hasOwn(adapter.capabilities({ phase: "dispatch" }), "commandExecution"), false, name);
     assert.ok(adapter.metadata.runtimeDependencies);
     assert.ok(Number.isInteger(adapter.defaults.timeoutMs));
   }
@@ -185,7 +186,7 @@ test("adapter filesystem-isolation metadata is a closed static contract", () => 
     outputProtocol: "text_stdout",
     buildDispatch: () => ({ command: "fixture", args: [], cwd }),
   });
-  const base = { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text", commandExecution: true };
+  const base = { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" };
   assert.doesNotThrow(() => create({ ...base, filesystemIsolation: "native", filesystemIsolationRequest: "workspace-write" }));
   assert.throws(() => create({ ...base, filesystemIsolation: "natvie", filesystemIsolationRequest: "workspace-write" }), /known filesystemIsolation/);
   assert.throws(() => create({ ...base, filesystemIsolation: "native" }), /native filesystemIsolationRequest/);

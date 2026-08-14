@@ -35,7 +35,6 @@ const OPTIONS = Object.freeze({
   "issue-number": { type: "string" },
   "fleet-id": { type: "string" },
   "ownership-json": { type: "string" },
-  "allow-toolset-mismatch": { type: "boolean", default: false },
   detach: { type: "boolean", default: false },
   "dry-run": { type: "boolean", default: false },
   json: { type: "boolean", default: false },
@@ -53,7 +52,6 @@ function usage() {
     "  dispatch.js [<repo>] --run-id <id> (--prompt <text> | --prompt-file <path>) [options]",
     "",
     `Executors: ${listAdapters().join(", ")}`,
-    "A prompt matching a known command-demand pattern is rejected when the executor's dispatch capability declares no command-execution tool; --allow-toolset-mismatch downgrades that rejection to a warning. Detection is literal pattern matching, not proof of intent.",
     "Dispatch never commits, pushes, opens a PR, or runs recovery. Use relay-recover for those actions.",
   ].join("\n");
 }
@@ -224,58 +222,12 @@ function resolveResumeExecutor(cli) {
   return cli;
 }
 
-// Evaluated in this order; the first hit is the reported evidence. Deliberately literal: the
-// false-positive escape hatch is --allow-toolset-mismatch, not a cleverer matcher.
-const COMMAND_DEMAND_PATTERNS = Object.freeze([
-  ["fenced_shell_block", /^[ \t]*(?:```|~~~)[ \t]*(?:bash|sh|shell|zsh)\b/m],
-  ["node_test", /\bnode\s+--test\b/],
-  ["npm_test", /\bnpm\s+test\b/],
-  ["npm_run", /\bnpm\s+run\s+[^\s`]+/],
-  ["npx", /\bnpx\s+[^\s`]+/],
-  ["git_write", /\bgit\s+(?:commit|push|rebase|merge)\b/],
-  ["imperative_backticked_command", /\b(?:run|runs|execute|executes)\b[^`\n]{0,40}`[^`\n]+`/i],
-]);
-
-function detectCommandExecutionDemand(prompt) {
-  const text = Buffer.isBuffer(prompt) ? prompt.toString("utf8") : typeof prompt === "string" ? prompt : "";
-  for (const [pattern, expression] of COMMAND_DEMAND_PATTERNS) {
-    const match = expression.exec(text);
-    if (match) return Object.freeze({ pattern, evidence: match[0].trim().slice(0, 120) });
-  }
-  return null;
-}
-
-// Read once per process, in main(), and thread the same buffer to the gate and to loadInputs. Two
-// reads let a swap between them stamp bytes the gate never validated.
+// Read once per process, in main(), and thread the same buffer to loadInputs. A second read would
+// let a swap stamp bytes that the immutable run contract never validated.
 function readPrompt(cli) {
   return cli.values["prompt-file"] === undefined
     ? { path: null, bytes: Buffer.from(cli.values.prompt, "utf8") }
     : secureBytes(cli.values["prompt-file"], "prompt");
-}
-
-// Runs before every entry state mutates anything: create, resume, and the detached parent all reach
-// it from main() ahead of worktree creation, the run-directory claim, and any appended fact.
-function assertDispatchToolset(cli, prompt, adapter) {
-  const capability = adapter.capabilities({ phase: "dispatch" });
-  // Asserted here as well as in createNativeAdapter, which binds only adapters built through it.
-  // Unconditional: an object that never declared this cannot be trusted about `supported` either, and
-  // a request-dependent `supported` was measured to slip past a qualified assert. Read once into a
-  // local — an accessor answering the typeof check and the decision differently skips the detector.
-  // This enforces that a declaration is present, never that it is true; `adapter` is resolved once in
-  // main(), so the validated adapter is the one that dispatches, but misrouting is not addressed.
-  const declared = capability.commandExecution;
-  if (typeof declared !== "boolean") {
-    fail(`executor '${adapter.name}' does not declare commandExecution in its dispatch capability`, "TOOLSET_UNDECLARED");
-  }
-  if (declared !== false) return null;
-  const demand = detectCommandExecutionDemand(prompt.bytes);
-  if (!demand) return null;
-  const detail = `executor '${adapter.name}' has no command-execution tool in its dispatch toolset, but the prompt demands one (${demand.pattern}: ${JSON.stringify(demand.evidence)})`;
-  if (cli.values["allow-toolset-mismatch"]) {
-    console.error(`relay-dispatch: warning: toolset mismatch: ${detail}; proceeding because --allow-toolset-mismatch was supplied`);
-    return demand;
-  }
-  fail(`toolset mismatch: ${detail}. Dispatch to a shell-capable executor or pass --allow-toolset-mismatch.`, "TOOLSET_MISMATCH");
 }
 
 function validateCopyInputs(repoRoot, copyValue) {
@@ -685,7 +637,7 @@ async function finishAttempt({ cli, adapter, started }) {
   return { terminal, parsed, status };
 }
 
-// `prompt` is the buffer main() already validated, threaded rather than re-read.
+// `prompt` is the buffer main() already loaded, threaded rather than re-read.
 function loadInputs(cli, prompt) {
   const rubric = cli.values["rubric-file"] ? secureBytes(cli.values["rubric-file"], "rubric") : null;
   if (cli.creating && !rubric) fail("new dispatch requires a readable --rubric-file");
@@ -693,15 +645,15 @@ function loadInputs(cli, prompt) {
   return { prompt, rubric, criteria };
 }
 
-// `adapter` and `prompt` are resolved once in main() and threaded here; re-deriving either is how the
-// gate and the dispatch drift apart.
+// `adapter` and `prompt` are resolved once in main() and threaded here; re-deriving either would split
+// the trusted inputs from the dispatch.
 async function executeForeground(cli, overrides = {}) {
   const { adapter, prompt } = overrides;
-  // Both are the gate-validated values main() resolved once. Defaulting or re-deriving either here
+  // Both are the trusted values main() resolved once. Defaulting or re-deriving either here
   // reintroduces the split between validated bytes and executed bytes; a caller that omits them gets
   // a typed failure before any filesystem read instead of an undefined forwarded downstream.
   if (adapter === undefined || prompt === undefined) {
-    fail("executeForeground requires the gate-validated adapter and prompt; re-deriving either would split validation from use", "INVALID_INVOCATION");
+    fail("executeForeground requires the resolved adapter and prompt; re-deriving either would split validation from use", "INVALID_INVOCATION");
   }
   const inspectRun = overrides.inspectRun || recover.inspectProductionRun;
   const identity = repositoryIdentity(canonicalCheckout(cli.repo));
@@ -764,7 +716,6 @@ async function main(argv = process.argv.slice(2)) {
     // is rather than a missing prompt file, and every later stage uses this exact descriptor.
     const adapter = getAdapter(cli.values.executor);
     const prompt = readPrompt(cli);
-    assertDispatchToolset(cli, prompt, adapter);
     // The detached child is a separate process and resolves its own copy of both; there is nothing to
     // hand across the boundary.
     const result = cli.values.detach && !process.env.RELAY_DISPATCH_INTERNAL_RUN_ID
@@ -784,4 +735,4 @@ async function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main().then((code) => { process.exitCode = code; });
 
-module.exports = { assertDispatchToolset, assertResumeInspection, detectCommandExecutionDemand, dryRunInvocation, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, startAttempt, validateCopyInputs };
+module.exports = { assertResumeInspection, dryRunInvocation, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, startAttempt, validateCopyInputs };

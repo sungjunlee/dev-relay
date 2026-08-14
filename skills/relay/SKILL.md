@@ -97,7 +97,7 @@ Capture `run_id`, `run_dir`, and the current action key. The immutable record is
 
 **MANDATORY. Do NOT skip this step.**
 
-**Verify before review — orchestrator-enforced for shell-free completion.** When the dispatched executor's dispatch capability declares no command-execution tool (today Pi; resolve with `relay-config check --executor <name> --phase dispatch --json`), the executor returned observation checks, not executed-test claims. Before invoking relay-review, the orchestrator performs each returned verification against the retained worktree and states the result; if the executor returned a stuck note, that becomes the blocking reason instead. Review must not begin on unverified changes. This is the orchestrator's obligation, not the executor's prompt — the executor-facing template cannot enforce it.
+**Verify before review.** Before invoking relay-review, reconcile every declared verification against the retained worktree and state its result. Accept only actually executed or observed results as evidence. Run checks reported unavailable or proposed before review; a failed or still-unavailable check blocks review.
 
 Invoke relay-review only when inspection recommends `review`:
 
@@ -119,4 +119,4 @@ For `source.route=github`, LGTM must derive `merge/ready_to_merge`; stop there u
 When multiple independent tasks are ready, prepare a `relay-fleet` batch but preserve `/relay`'s `ready_to_merge` stop until the user explicitly authorizes landing it; after authorization, `relay-fleet` is the default parallel batch drive. See `references/batch-mode.md` for the remaining conflict-recovery note and the "when in doubt, run sequentially" principle.
 ## Summary Checklist
 
-Verify Done Criteria fully implemented, relay-review LGTM/audit evidence, and the selected route's exact finish state: `ready_to_merge` for GitHub or terminal `reviewed_result_ready` for local delivery. Then apply any sprint/follow-up updates per [sprint-integration.md](references/sprint-integration.md). For a shell-free executor, orchestrator-performed verification (Step 4) must be recorded before review.
+Verify Done Criteria fully implemented, relay-review LGTM/audit evidence, and the selected route's exact finish state: `ready_to_merge` for GitHub or terminal `reviewed_result_ready` for local delivery. Then apply any sprint/follow-up updates per [sprint-integration.md](references/sprint-integration.md).
