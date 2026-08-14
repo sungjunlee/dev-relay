@@ -114,9 +114,9 @@ Skip this step when the issue or relay-ready handoff already provides the final 
 
 ### 8. Emit handoff artifacts
 
-Write the dispatch prompt and evaluation YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Pass the evaluation artifact through the compatibility-named `--rubric-file`; `references/iteration-protocol.md` defines the compact evidence-and-commit contract plus optional TDD flavor.
+Write the dispatch prompt and evaluation YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Pass the evaluation artifact through the compatibility-named `--rubric-file`; `references/iteration-protocol.md` defines the compact evidence-and-handoff contract plus optional TDD flavor.
 
-Before writing the prompt, resolve the target executor's dispatch toolset with `relay-config check --executor <name> --phase dispatch --json`. When `capability.commandExecution` is `false` the executor has no shell and dispatch rejects a command-demanding prompt: emit `../relay/references/prompt-template-shell-free.md`, whose Returned Verification and Completion Responsibilities replace the base Test-run Discipline and Completion Responsibilities. Otherwise keep the base contract verbatim. When the frozen Done Criteria itself names a command line, no template clears the gate: route that task to a shell-capable executor rather than emitting the shell-free contract or rewording the criteria.
+Use the same prompt template and completion responsibilities for every executor. The executor's adapter retains its actual invocation tools; prompt content does not select a different outcome or verification contract.
 
 Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, and the recommended `relay-dispatch` command.
 

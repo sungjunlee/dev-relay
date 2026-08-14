@@ -20,7 +20,7 @@ module.exports = createNativeAdapter({
     promptTransport: "stdin",
   },
   phases: {
-    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "enabled", cancellation: "process", structuredOutput: "text", commandExecution: true },
+    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "enabled", cancellation: "process", structuredOutput: "text" },
     primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "enabled", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,

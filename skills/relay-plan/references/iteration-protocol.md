@@ -1,8 +1,6 @@
 # Execution Contract
 
-This compatibility-named reference defines the compact completion responsibilities that every dispatch prompt to a shell-capable executor must include. Take the base template at `../../relay/references/prompt-template.md` and append the sections named in the Default Path of `SKILL.md`: Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Relay specifies observable completion, not the executor's internal iteration strategy.
-
-When the target executor's dispatch toolset reports `capability.commandExecution: false`, neither this file's Completion Responsibilities nor its TDD flavor applies: `../../relay/references/prompt-template-shell-free.md` supplies the whole completion contract, and nothing here is appended to it. That contract's own wording clears the dispatch toolset gate, but this section's does not clear it in substance — a prerequisite gate, self-verification, and an executor-side commit are all unreachable without a terminal — so appending it anyway rebuilds the silent no-op the gate exists to remove.
+This compatibility-named reference defines the compact completion responsibilities that every dispatch prompt includes. Take the base template at `../../relay/references/prompt-template.md` and append the sections named in the Default Path of `SKILL.md`: Setup, optional Working Guidance, Evaluation Channels, and Completion Responsibilities. Relay specifies observable completion, not the executor's internal iteration strategy.
 
 ## Optional TDD Factor Flavor
 
@@ -28,22 +26,21 @@ Optional Step 0a block to insert before the prerequisite gate only when any fact
 ```
   0a. TDD RED ANCHOR STEP:
      Active anchors: `<tdd_anchor>` via `<resolved tdd_runner>`, one entry per factor carrying a non-empty `tdd_anchor`.
-     a) Write failing test(s) targeting every factor's `tdd_anchor`, grouped into a SINGLE commit covering all anchors.
-     b) The commit subject MUST start with the literal prefix `tdd: red — ` (lowercase `tdd`, lowercase `red`, em-dash U+2014 surrounded by single spaces).
-     c) Run every `rubric.prerequisites[].command` with the executor's framework-native exclusion flag for every `tdd_anchor` path. Assert exit 0 on each.
+     a) Write failing test(s) targeting every factor's `tdd_anchor`.
+     b) Run every `rubric.prerequisites[].command` with the executor's framework-native exclusion flag for every `tdd_anchor` path. Assert exit 0 on each.
         If any prerequisite command does not support such a path-exclusion flag, surface a stuck signal at the start of Step 0a and STOP.
         Do not modify `rubric.factors[].command`; the exclusion applies only to Step 0a prerequisite commands.
-     d) Run the test command resolved from `tdd_runner` on the `tdd_anchor` paths and assert NON-zero exit. Red verified.
-     e) Proceed to the prerequisite gate and remaining completion responsibilities.
+     c) Run the test command resolved from `tdd_runner` on the `tdd_anchor` paths and assert NON-zero exit. Red verified.
+     d) Proceed to the prerequisite gate and remaining completion responsibilities.
 ```
 
 ## Completion Responsibilities
 
 Choose the implementation, exploration, test, and repair sequence that best fits the task.
 
-  0. PREREQUISITE GATE: Treat prerequisite checks as the final gate, not a per-iteration check. Run targeted or touched suites as useful during implementation, then run long repo-wide prerequisites once before committing. Any final prerequisite failure must be fixed before completion. Do not modify automated check commands merely to make them pass.
+  0. PREREQUISITE GATE: Treat prerequisite checks as the final gate, not a per-iteration check. Run targeted or touched suites as useful during implementation, then run long repo-wide prerequisites once before handoff. Any final prerequisite failure must be fixed before completion. Do not modify automated check commands merely to make them pass.
 - Implement every Done Criteria outcome within the stated scope boundaries.
 - Run relevant verification and fix failures found.
 - Capture concise verification evidence expected by the run: commands and result summaries plus concrete artifact references for the Done Criteria.
 - Leave a concrete stuck note with partial evidence if completion is impossible.
-- Completion requires both the captured evidence and confirmation that the final work is committed.
+- Completion requires both the captured evidence and reviewable dirty-worktree changes.

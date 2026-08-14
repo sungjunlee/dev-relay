@@ -31,5 +31,6 @@ Choose the implementation, exploration, test, and repair sequence that best fits
 - Implement every Done Criteria outcome within the stated scope boundaries.
 - Run relevant verification and fix failures found.
 - Capture concise verification evidence expected by the run: commands and result summaries plus concrete artifact references for the Done Criteria.
+- Report only checks actually executed as evidence; unavailable checks must be reported as unavailable or proposed, never fabricated.
 - Leave a concrete stuck note with partial evidence if completion is impossible.
-- Completion requires both the captured evidence and confirmation that the final work is committed.
+- Completion requires both the captured evidence and reviewable dirty-worktree changes.

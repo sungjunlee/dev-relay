@@ -48,7 +48,8 @@ evaluation:
 Outcome Contract is the pass/fail authority. Verification supplies evidence without adding requirements. Earned Rubric is optional; do not add scored factors merely to fill the structure.
 
 ## Test-run Discipline
-While iterating, run only the targeted or touched suites needed to verify the current change. Treat long repo-wide prerequisite checks as the final gate: run them once at the end before committing, because re-running long prerequisites every iteration can consume the dispatch timeout.
+While iterating, run only the targeted or touched suites needed to verify the current change. Treat long repo-wide prerequisite checks as the final gate: run them once at the end before handoff, because re-running long prerequisites every iteration can consume the dispatch timeout.
+Report only checks actually executed as evidence. If a check cannot be run, report it as unavailable or proposed; never fabricate a result.
 
 ## Completion Responsibilities
 Choose the implementation, exploration, test, and repair sequence that best fits the task.

@@ -24,6 +24,7 @@ const FAKE_CLINE = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-cline.js"
 const FAKE_OPENCODE = path.join(ROOT, "tests/relay-dispatch/fixtures/fake-opencode.js");
 const CRASH_AFTER_START = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-crash-after-start-preload.js");
 const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/adapter-runtime-preload.js");
+const READ_ONCE_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-prompt-read-once-preload.js");
 const RUN_CLAIM_RACE = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-run-claim-race-preload.js");
 
 function git(repo, args) {
@@ -257,14 +258,52 @@ test("tool-network disable fails closed for informational executors and preserve
   assert.equal(fs.existsSync(fixtureRunsDir(value)), false);
 });
 
-test("removed readiness identity flags fail closed instead of being silently ignored", () => {
-  const value = fixture("removed-readiness-flags");
-  for (const flag of ["--request-id", "--leaf-id"]) {
+test("retired dispatch flags fail closed instead of being silently ignored", () => {
+  const value = fixture("retired-dispatch-flags");
+  for (const flag of ["--request-id", "--leaf-id", "--allow-toolset-mismatch"]) {
     const result = run(value, ["--branch", "closed-surface", "--prompt", "x", "--rubric-file", value.rubric, flag, "legacy", "--dry-run", "--json"]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /unknown flag/i);
   }
   assert.equal(fs.existsSync(value.relayHome), false);
+});
+
+test("prompt wording does not change dispatch admission or its unified dry-run contract", () => {
+  const value = fixture("prompt-content-neutral");
+  const prompts = [
+    "Implement the requested change.\n",
+    "Implement the requested change, then run `node --test tests/example.test.js`.\n",
+    "Implement the requested change, then git commit the result.\n",
+    "```bash\nnode --test tests/example.test.js\n```\n",
+  ];
+  const outputs = prompts.map((prompt, index) => {
+    const result = run(value, ["--executor", "pi", "--branch", `prompt-content-${index}`, "--prompt", prompt,
+      "--rubric-file", value.rubric, "--dry-run", "--json"]);
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+    return json(result.stdout);
+  });
+  const expectedIsolation = {
+    requested: "unavailable", effective: "none", diagnostic: "pi has no native filesystem sandbox; continuing directly on the trusted local host.",
+  };
+  for (const output of outputs) {
+    assert.equal(output.executor, "pi");
+    assert.deepEqual(output.filesystem_isolation, expectedIsolation);
+  }
+  assert.equal(fs.existsSync(value.relayHome), false, "dry-run must not create durable state");
+});
+
+test("the create path stages prompt bytes from the single trusted prompt read", () => {
+  const value = fixture("prompt-read-once");
+  const result = run(value, ["--branch", "prompt-read-once", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+    ...value.env,
+    NODE_OPTIONS: `${value.env.NODE_OPTIONS} --require=${READ_ONCE_PRELOAD}`,
+    RELAY_TEST_READ_ONCE_PATH: value.prompt,
+  });
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(fs.existsSync(value.prompt), false, "the one allowed read must have happened");
+  assert.equal(fs.readFileSync(path.join(output.run_dir, `prompt-${output.attempt_id}.md`), "utf8"),
+    "Implement the requested change.\n");
 });
 
 test("the removed migration cutover flag fails closed instead of being silently ignored", () => {
@@ -1120,9 +1159,8 @@ test("a denied resume writes no prompt, attempt, or fact before failing closed",
   const eventsPath = path.join(output.run_dir, "events.jsonl");
   const beforeFacts = facts.readFacts({ eventsPath }).facts;
 
-  // #1173: the prompt is read once, in main(), ahead of the resume inspection, so the denial needs a
-  // readable prompt to be the resume gate's rejection and not the reader's. An unreadable one is now
-  // rejected first for every executor, which is the shape the shell-less path already had.
+  // #1173: the prompt is read once, in main(), ahead of the resume inspection. A readable prompt
+  // therefore reaches the resume gate, while an unreadable one is rejected first for every executor.
   const denied = run(value, ["--run-id", output.run_id, "--prompt-file", value.prompt, "--json"]);
   assert.notEqual(denied.status, 0);
   assert.equal(json(denied.stderr).code, "RUN_NOT_REDISPATCHABLE");

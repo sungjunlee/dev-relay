@@ -8,6 +8,10 @@ const BASELINE_PROMPT_PATH = path.join(__dirname, "..", "fixtures", "dispatch-pr
 const PROMPT_TEMPLATE_PATH = path.join(
   __dirname, "..", "..", "..", "skills", "relay", "references", "prompt-template.md",
 );
+const PLAN_SKILL_PATH = path.join(__dirname, "..", "..", "..", "skills", "relay-plan", "SKILL.md");
+const ITERATION_PROTOCOL_PATH = path.join(
+  __dirname, "..", "..", "..", "skills", "relay-plan", "references", "iteration-protocol.md",
+);
 const TEMPLATE_SECTIONS = [
   "## Outcome Contract (Done Criteria)",
   "## Evaluation Channels",
@@ -70,4 +74,23 @@ test("inline Working Guidance lands between the Outcome Contract and Evaluation 
   assert.ok(rendered.indexOf("## Working Guidance") < rendered.indexOf("## Evaluation Channels"));
   assert.ok(rendered.indexOf("## Evaluation Channels") < rendered.indexOf("## Completion Responsibilities"));
   assert.doesNotMatch(rendered, /tdd_mode/);
+});
+
+test("every emitted prompt uses one honest verification contract", () => {
+  const template = fs.readFileSync(PROMPT_TEMPLATE_PATH, "utf-8");
+  const prompt = baselinePrompt();
+  const planningGuidance = [PLAN_SKILL_PATH, ITERATION_PROTOCOL_PATH]
+    .map((filePath) => fs.readFileSync(filePath, "utf-8"))
+    .join("\n");
+  for (const [name, text] of [["template", template], ["baseline", prompt]]) {
+    assert.doesNotMatch(text, /prompt-template-shell-free|commandExecution|toolset.?mismatch/i, name);
+    assert.match(text, /Report only checks actually executed as evidence/i, name);
+    assert.match(text, /unavailable or proposed/i, name);
+  }
+  assert.doesNotMatch(
+    fs.readFileSync(PLAN_SKILL_PATH, "utf-8"),
+    /prompt-template-shell-free|commandExecution|toolset.?mismatch/i,
+  );
+  assert.doesNotMatch(planningGuidance, /SINGLE commit|commit subject/i);
+  assert.equal(fs.existsSync(path.join(path.dirname(PROMPT_TEMPLATE_PATH), "prompt-template-shell-free.md")), false);
 });

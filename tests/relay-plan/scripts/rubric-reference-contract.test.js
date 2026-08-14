@@ -198,7 +198,8 @@ test("default executor contract delegates iteration while preserving verificatio
 
   assert.match(text, /## Completion Responsibilities/);
   assert.match(text, /Capture concise verification evidence/);
-  assert.match(text, /final work is committed/);
+  assert.match(text, /reviewable dirty-worktree changes/);
+  assert.doesNotMatch(text, /final work is committed/);
   assert.match(text, /choose the implementation, exploration, test, and repair sequence/i);
   assert.doesNotMatch(text, /Score Log/);
   assert.doesNotMatch(text, /self-(?:evaluate|review)/i);

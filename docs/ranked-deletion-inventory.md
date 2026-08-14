@@ -113,8 +113,7 @@ for keeping them was wrong.** Measured 2026-08-06 against the 48 entries then in
 the ledger: `classification` was `preserve-invariant` in 48/48; `siteRules` was
 used by 0 of 48; and 47 of 48 entries claimed `RR-*` ids that appear nowhere in
 their own source, 25 of them claiming `RR-01 worktree_containment` — including
-`relay-config.test.js`, `rubric-reference-contract.test.js`, and
-`shell-free-prompt-contract.test.js`.
+`relay-config.test.js` and `rubric-reference-contract.test.js`.
 
 This paragraph previously argued that the other three `classification` values
 stayed load bearing because `retiredTestMappings` used them and
