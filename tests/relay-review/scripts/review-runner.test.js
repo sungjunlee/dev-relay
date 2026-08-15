@@ -785,7 +785,7 @@ process.stdout.write(JSON.stringify({ verdict: "pass", summary: "Pi review passe
 
 test("production Pi Alibaba review binds the installed manifest entry exactly", async () => {
   const value = await fixture("pi-explicit-alibaba", { local: true, reviewer: "pi" });
-  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-pi-home-")));
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "relay-review-pi-home-")));
   const packageRoot = path.join(home, ".pi", "agent", "npm", "node_modules", "pi-alibaba-models");
   const entryPath = path.join(packageRoot, "extensions", "alibaba.ts");
   const marker = path.join(value.root, "pi-alibaba-invoked.json");
@@ -824,7 +824,7 @@ process.stdout.write(JSON.stringify({ verdict: "pass", summary: "Pi Alibaba revi
 
 test("production Pi Alibaba review rejects an entry replaced after binding without invoking or recording review", async () => {
   const value = await fixture("pi-alibaba-entry-replaced", { local: true, reviewer: "pi" });
-  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-pi-home-")));
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "relay-review-pi-home-")));
   const packageRoot = path.join(home, ".pi", "agent", "npm", "node_modules", "pi-alibaba-models");
   const entryPath = path.join(packageRoot, "extensions", "alibaba.ts");
   const replacement = path.join(packageRoot, "extensions", "replacement.ts");
