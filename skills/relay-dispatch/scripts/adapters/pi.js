@@ -2,9 +2,8 @@ const { createNativeAdapter } = require("../adapter-contract");
 
 const ISOLATED_CATALOG_CODE = "PI_ISOLATED_CATALOG_MISMATCH";
 
-// Ordinary `pi --list-models` discovers pi-alibaba-models from the ambient
-// extension directory. Relay deliberately passes --no-extensions, so that
-// catalog entry is absent; the extension bytes are not a bound runtime input.
+// Primary review remains isolated from ambient extensions, so its catalog
+// cannot resolve models supplied by pi-alibaba-models.
 function isolatedCatalogDiagnostic(model) {
   const diagnostic = {
     code: ISOLATED_CATALOG_CODE,
@@ -28,8 +27,8 @@ function normalizeThinking(reasoning) {
   return reasoning === "xhigh" ? "high" : null;
 }
 
-function validateModel({ model }) {
-  if (typeof model !== "string" || !model.startsWith("alibaba-plan/")) return { ok: true, warnings: [] };
+function validateModel({ phase, model }) {
+  if (phase !== "primary_review" || typeof model !== "string" || !model.startsWith("alibaba-plan/")) return { ok: true, warnings: [] };
   const diagnostic = isolatedCatalogDiagnostic(model);
   return { ok: false, error: isolatedCatalogReason(model), errorCode: diagnostic.code, diagnostic, warnings: [] };
 }
@@ -52,7 +51,7 @@ module.exports = createNativeAdapter({
   validateModel,
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, model, reasoning }) {
-    const args = ["--no-session", "--no-context-files", "--no-extensions", "--no-skills", "--tools", "read,grep,find,ls,write,edit", ...(model ? ["--model", model] : [])];
+    const args = ["--no-session", "--no-context-files", "--no-skills", "--tools", "read,grep,find,ls,write,edit", ...(model ? ["--model", model] : [])];
     const thinking = normalizeThinking(reasoning);
     if (thinking) args.push("--thinking", thinking);
     args.push("--print");

@@ -321,7 +321,7 @@ test("all seven native adapters preserve full dispatch argv order and policy inp
     claude: { command: "claude", args: ["-p", "--settings", claudeSandbox, "--output-format", "text", "--allowedTools", "Read,Write,Edit,Glob,Grep,Bash", "--disallowedTools", "WebFetch,WebSearch,Agent", "--model", model] },
     cursor: { command: "agent", args: ["--print", "--trust", "--auto-review", "--workspace", cwd, "--output-format", "text", "--sandbox", "enabled", "--model", model] },
     opencode: { command: "opencode", args: ["run", "--auto", "--print-logs", "--log-level", "ERROR", "--pure", "--dir", cwd, "-m", model] },
-    pi: { command: "pi", args: ["--no-session", "--no-context-files", "--no-extensions", "--no-skills", "--tools", "read,grep,find,ls,write,edit", "--model", model, "--thinking", "high", "--print"] },
+    pi: { command: "pi", args: ["--no-session", "--no-context-files", "--no-skills", "--tools", "read,grep,find,ls,write,edit", "--model", model, "--thinking", "high", "--print"] },
     antigravity: { command: "agy", args: ["--prompt", antigravityPrompt, "--print-timeout", "123s", "--mode", "accept-edits", "--output-format", "json", "--disable-slash-commands", "--sandbox"] },
     cline: { command: "cline", args: ["--json", "-P", "provider", "-m", model, "--cwd", cwd, "--auto-approve", "true", "--timeout", "123", clinePrompt] },
   };
@@ -337,21 +337,27 @@ test("all seven native adapters preserve full dispatch argv order and policy inp
   }
 });
 
-test("Pi reports the isolated Alibaba catalog mismatch before provider execution", () => {
+test("Pi admits ambient Alibaba extensions for dispatch but isolates primary review", () => {
   const adapter = getAdapter("pi");
   const input = {
     phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath,
     model: "alibaba-plan/qwen3.8-max", networkAccess: "enabled",
   };
-  for (const phase of ["dispatch", "primary_review"]) {
-    const capability = adapter.capabilities({ phase, request: {
-      readOnly: phase === "primary_review", networkAccess: "enabled", model: input.model,
-    } });
-    assert.equal(capability.supported, false, phase);
-    assert.equal(capability.errorCode, "PI_ISOLATED_CATALOG_MISMATCH", phase);
-    assert.equal(capability.diagnostic.stage, "pre-provider", phase);
-  }
-  assert.throws(() => adapter.buildInvocation(input), (error) => {
+  const dispatchCapability = adapter.capabilities({ phase: "dispatch", request: {
+    networkAccess: "enabled", model: input.model,
+  } });
+  assert.equal(dispatchCapability.supported, true);
+  const dispatch = adapter.buildInvocation(input);
+  assert.equal(dispatch.args.includes("--no-extensions"), false);
+  assert.deepEqual(dispatch.args.slice(dispatch.args.indexOf("--model"), dispatch.args.indexOf("--model") + 2), ["--model", input.model]);
+
+  const reviewCapability = adapter.capabilities({ phase: "primary_review", request: {
+    readOnly: true, networkAccess: "enabled", model: input.model,
+  } });
+  assert.equal(reviewCapability.supported, false);
+  assert.equal(reviewCapability.errorCode, "PI_ISOLATED_CATALOG_MISMATCH");
+  assert.equal(reviewCapability.diagnostic.stage, "pre-provider");
+  assert.throws(() => adapter.buildInvocation({ ...input, phase: "primary_review", schemaPath }), (error) => {
     assert.equal(error.name, "AdapterCapabilityError");
     assert.equal(error.code, "PI_ISOLATED_CATALOG_MISMATCH");
     assert.deepEqual(error.diagnostic, {
@@ -367,13 +373,15 @@ test("Pi reports the isolated Alibaba catalog mismatch before provider execution
     assert.match(error.message, /isolated Pi catalog cannot resolve/);
     return true;
   });
-  assert.throws(() => adapter.buildInvocation({ ...input, phase: "primary_review", schemaPath }), (error) => {
-    assert.equal(error.code, "PI_ISOLATED_CATALOG_MISMATCH");
-    assert.equal(error.diagnostic.stage, "pre-provider");
-    return true;
-  });
-  for (const model of ["openai/gpt-5", "qwen/qwen3.8-max", null]) {
-    const invocation = adapter.buildInvocation({ ...input, model });
+  assert.deepEqual([...adapter.buildInvocation({
+    ...input, phase: "primary_review", schemaPath, model: "openai/gpt-5",
+  }).args], [
+    "--no-session", "--no-context-files", "--no-extensions", "--no-skills",
+    "--no-prompt-templates", "--no-themes", "--tools", "read,grep,find,ls",
+    "--model", "openai/gpt-5", "--print",
+  ]);
+  for (const model of ["qwen/qwen3.8-max", null]) {
+    const invocation = adapter.buildInvocation({ ...input, phase: "primary_review", schemaPath, model });
     assert.equal(invocation.args.includes("--no-extensions"), true);
     assert.equal(invocation.args.includes("--model"), model !== null);
   }
