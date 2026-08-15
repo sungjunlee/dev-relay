@@ -28,15 +28,20 @@ test("relay-config rejects unsupported primary-review adapters", () => {
   assert.match(result.stderr, /cannot run primary_review/);
 });
 
-test("relay-config reports Pi extension-backed Alibaba models as absent from the isolated catalog", () => {
-  for (const [phase, actorFlag] of [["dispatch", "--executor"], ["review", "--reviewer"]]) {
-    const result = spawnSync(process.execPath, [SCRIPT,
-      "check", "--phase", phase, actorFlag, "pi",
-      "--model", "alibaba-plan/qwen3.8-max", "--json",
-    ], { encoding: "utf8" });
-    assert.notEqual(result.status, 0, phase);
-    assert.match(result.stderr, /PI_ISOLATED_CATALOG_MISMATCH|isolated Pi catalog cannot resolve/, phase);
-  }
+test("relay-config admits Alibaba Pi dispatch but keeps primary review isolated", () => {
+  const dispatch = spawnSync(process.execPath, [SCRIPT,
+    "check", "--phase", "dispatch", "--executor", "pi",
+    "--model", "alibaba-plan/qwen3.8-max", "--json",
+  ], { encoding: "utf8" });
+  assert.equal(dispatch.status, 0, dispatch.stderr);
+  assert.equal(JSON.parse(dispatch.stdout).capability.supported, true);
+
+  const review = spawnSync(process.execPath, [SCRIPT,
+    "check", "--phase", "review", "--reviewer", "pi",
+    "--model", "alibaba-plan/qwen3.8-max", "--json",
+  ], { encoding: "utf8" });
+  assert.notEqual(review.status, 0);
+  assert.match(review.stderr, /PI_ISOLATED_CATALOG_MISMATCH|isolated Pi catalog cannot resolve/);
 });
 
 test("relay-config requires the exact actor flag for each phase", () => {
