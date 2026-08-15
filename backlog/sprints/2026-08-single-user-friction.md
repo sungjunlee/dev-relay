@@ -69,3 +69,17 @@ measured subset). No new lifecycle writer, facts, mutable state, or registry.
   fold). Filed #1268. Exited via the established v2-run precedent: PR #1267
   closed as superseded; v2 run dispatched on `issue-1264-advance-driver-v2`
   reusing the verified base plus three bundle-verifiability corrections.
+- 2026-08-15/16 — #1264 REACHED ready_to_merge on PR #1272 (run
+  `issue-1264-20260815174912511-dd1bd2b3`, head `a2b78b9e`): codex reviewer,
+  3 rounds (2× parser-adjacency changes_requested, then LGTM), 656/656 local
+  gate + 11/11 GitHub checks. Stops explicit per contract.
+- Dogfood harvest along the way (issues filed): #1268 v2 run stranded again by
+  pass-with-issues coercion (second instance recorded); #1271 flaky OpenCode
+  cancellation test — root-caused to PID reuse racing the fail-closed cleanup
+  scope proof on a busy host (instrumented capture; simulator shutdown
+  confirmed empirically); #1273 long codex attempts finish work but never land
+  result.json (3/3 instances → salvage tax); #1274 pending mid-operation
+  intent masquerades as `stale_action` and hides its resume path. Also
+  observed, not yet filed: run-full-gate wedges ~1h when its own test suite
+  runs under it (nested machine lock without timeout).
+- Superseded PRs closed: #1267, #1269.
