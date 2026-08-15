@@ -369,6 +369,10 @@ test("Pi dispatch uses ambient Alibaba extensions while primary review stays iso
     const invocation = adapter.buildInvocation({ ...input, model });
     assert.equal(invocation.args.includes("--no-extensions"), false);
     assert.equal(invocation.args.includes("--model"), model !== null);
+
+    const review = adapter.buildInvocation({ ...input, phase: "primary_review", model, schemaPath });
+    assert.equal(review.args.includes("--no-extensions"), true);
+    assert.equal(review.args.includes("--model"), model !== null);
   }
 });
 
