@@ -17,7 +17,7 @@ function parseCli(argv) {
   const known = new Set(KNOWN_FLAGS);
   const consumed = new Set();
   const name = (token) => String(token).split("=", 1)[0];
-  const accepts = (value) => value !== undefined && !String(value).startsWith("--");
+  const accepts = (value) => value !== undefined && !String(value).startsWith("-");
   argv.forEach((token, index) => {
     const flag = name(token);
     if (known.has(flag) && VALUE_FLAGS.has(flag) && !String(token).includes("=") && accepts(argv[index + 1])) {

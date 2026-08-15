@@ -148,11 +148,18 @@ test("CLI rejects unknown flags, mixed run selectors, and invalid step budgets",
   assert.notEqual(unknown.status, 0); assert.match(unknown.stderr, /unknown flags: --unknown/);
   const adjacentUnknown = run(ADVANCE, ["--repo", "--unknown", "--run-id", "run", "--json"], process.env);
   assert.notEqual(adjacentUnknown.status, 0); assert.match(adjacentUnknown.stderr, /unknown flags: --unknown/);
+  const adjacentSingleHyphenRepo = run(ADVANCE, ["--repo", "-x", "--run-id", "run", "--json"], process.env);
+  assert.notEqual(adjacentSingleHyphenRepo.status, 0); assert.match(adjacentSingleHyphenRepo.stderr, /unknown flags: -x/);
+  const adjacentSingleHyphenActor = run(ADVANCE, ["--actor", "-x"], process.env);
+  assert.notEqual(adjacentSingleHyphenActor.status, 0); assert.match(adjacentSingleHyphenActor.stderr, /unknown flags: -x/);
 
   const value = fixture(t); const eventPath = path.join(value.runDir, "events.jsonl"); const eventsBefore = fs.readFileSync(eventPath);
   const adjacentKnown = run(ADVANCE, ["--run-dir", value.runDir, "--actor", "--json"], value.env);
   assert.notEqual(adjacentKnown.status, 0); const flagError = JSON.parse(adjacentKnown.stderr);
   assert.equal(flagError.ok, false); assert.equal(flagError.code, "ADVANCE_FAILED"); assert.match(flagError.error, /--actor.*requires/);
+  assert.deepEqual(fs.readFileSync(eventPath), eventsBefore);
+  const helpAfterRunDir = run(ADVANCE, ["--run-dir", value.runDir, "-h"], value.env);
+  assert.equal(helpAfterRunDir.status, 0); assert.match(helpAfterRunDir.stdout, /Usage: relay-advance\.js/);
   assert.deepEqual(fs.readFileSync(eventPath), eventsBefore);
 
   const mixed = run(ADVANCE, ["--run-dir", "/tmp/run", "--repo", "/tmp/repo", "--run-id", "run", "--json"], process.env);
