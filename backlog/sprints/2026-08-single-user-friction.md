@@ -28,7 +28,7 @@ measured subset). No new lifecycle writer, facts, mutable state, or registry.
 
 ### Batch 3 — naming honesty (docs-only; disjoint files, may interleave with Batch 2)
 
-- [ ] #1266 — describe recover as the publication conveyor; retire stale operator references
+- [x] #1266 — delivered independently as PR #1270 (merged 2026-08-15T15:48Z), closed
 
 ## Running Context
 
@@ -83,3 +83,8 @@ measured subset). No new lifecycle writer, facts, mutable state, or registry.
   observed, not yet filed: run-full-gate wedges ~1h when its own test suite
   runs under it (nested machine lock without timeout).
 - Superseded PRs closed: #1267, #1269.
+- 2026-08-16 — #1266 turned out to be already delivered and merged as PR #1270
+  (parallel operator work) before this sprint dispatched it; the redundant run
+  `issue-1266-20260815194916879-83dfcd5a` was aborted pre-work
+  (`interrupted_no_work`). No clean operator-abort verb exists — the run
+  dangles non-terminal, reinforcing the #1268 close-path AC.
