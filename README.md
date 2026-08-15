@@ -26,8 +26,11 @@ route first requires Git and classifies the source: no configured remote uses
 local Reviewed Result delivery, while an identity-matching GitHub source keeps
 the existing PR route. `inspect` derives the next action from durable facts and
 fresh observations. The one recovery command alone may commit, publish a
-GitHub revision, record verification, or close a run. Review and merge bind the
-exact current SHA and frozen criteria.
+GitHub revision, record verification, or close a run. Recovery is also the
+routine publication and verification conveyor: 96% of `recovery_applied`
+events serve the routine conveyor, with crash convergence a measured small
+subset (2026-08-15 reading). Review and merge bind the exact current SHA and
+frozen criteria.
 The GitHub `/relay` cycle stops at `ready_to_merge` until you explicitly land it;
 the local route closes through a Reviewed Result. Use `/relay-merge` only when you explicitly want to land the reviewed GitHub change.
 
@@ -70,11 +73,13 @@ node skills/relay-merge/scripts/finalize-run.js --repo . --run-id <id> --json
 
 ## Executors
 
-All current executors are retained: Claude, Codex, OpenCode, Pi, Antigravity,
-Cursor, and Cline. The adapter registry gives each a common argv, capability,
-and output contract; it does not own lifecycle or registration state. Cline is
-dispatch-only because it has no registered structured primary-review output
-contract.
+Codex is the default route — recent real usage is 38 of 52 runs `codex|codex`,
+with non-codex executor runs serving as adapter dogfood. Claude, Codex,
+OpenCode, Pi, Antigravity, Cursor, and Cline are all retained; the non-codex
+adapters remain available and selectable via `relay-config`. The adapter
+registry gives each a common argv, capability, and output contract; it does
+not own lifecycle or registration state. Cline is dispatch-only because it
+has no registered structured primary-review output contract.
 
 ```bash
 node skills/relay-config/scripts/relay-config.js doctor --json

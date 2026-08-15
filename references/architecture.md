@@ -110,6 +110,15 @@ Recovery alone may close a dead attempt, commit reviewable work, place a GitHub
 branch revision on the remote ref (Publication), record/create the exact
 Change Request, record verification, or append the local Reviewed Result's
 `run_closed` fact.
+
+Measurement (2026-08-15): canonical recovery is also the routine publication
+and verification conveyor, not only crash machinery. Across recent vNext runs,
+219 of 228 `recovery_applied` events (96%) served the routine conveyor —
+`verification_stale` (104), `publication_incomplete` (80),
+`verification_missing` (35) — while the crash rule `attempt_liveness_unknown`
+fired in 8 of 52 runs (15.4%). Crash convergence is a real but measured small
+subset of recovery work.
+
 Every recovery step is authorized by a fresh action key and re-observed after
 the side effect. An explicit close carries a durable operator and reason.
 
