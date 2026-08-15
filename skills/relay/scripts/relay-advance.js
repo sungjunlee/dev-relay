@@ -17,12 +17,10 @@ function parseCli(argv) {
   const known = new Set(KNOWN_FLAGS);
   const consumed = new Set();
   const name = (token) => String(token).split("=", 1)[0];
-  const accepts = (flag, value) => value !== undefined
-    && (flag === "--repo" || flag === "--run-dir" || flag === "--verification-file" || flag === "--actor"
-      || (!String(value).startsWith("--") && !known.has(String(value))));
+  const accepts = (value) => value !== undefined && !String(value).startsWith("--");
   argv.forEach((token, index) => {
     const flag = name(token);
-    if (known.has(flag) && VALUE_FLAGS.has(flag) && !String(token).includes("=") && accepts(flag, argv[index + 1])) {
+    if (known.has(flag) && VALUE_FLAGS.has(flag) && !String(token).includes("=") && accepts(argv[index + 1])) {
       consumed.add(index + 1);
     }
   });
@@ -45,7 +43,7 @@ function parseCli(argv) {
           const token = String(argv[index]);
           if (token !== flag && !token.startsWith(`${flag}=`)) continue;
           const value = token === flag ? argv[index + 1] : token.slice(flag.length + 1);
-          if (!accepts(flag, value)) return fallback;
+          if (token === flag && !accepts(value)) throw new Error(`${flag} requires a non-empty value`);
           if (VALUE_FLAGS.has(flag) && !String(value).trim()) throw new Error(`${flag} requires a non-empty value`);
           return value;
         }

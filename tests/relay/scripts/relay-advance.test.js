@@ -143,9 +143,18 @@ test("relay SKILL.md stays below the 150-line budget", () => {
   assert.ok(lines.length < 150, `skills/relay/SKILL.md has ${lines.length} lines`);
 });
 
-test("CLI rejects unknown flags, mixed run selectors, and invalid step budgets", () => {
+test("CLI rejects unknown flags, mixed run selectors, and invalid step budgets", (t) => {
   const unknown = run(ADVANCE, ["--unknown", "--json"], process.env);
   assert.notEqual(unknown.status, 0); assert.match(unknown.stderr, /unknown flags: --unknown/);
+  const adjacentUnknown = run(ADVANCE, ["--repo", "--unknown", "--run-id", "run", "--json"], process.env);
+  assert.notEqual(adjacentUnknown.status, 0); assert.match(adjacentUnknown.stderr, /unknown flags: --unknown/);
+
+  const value = fixture(t); const eventPath = path.join(value.runDir, "events.jsonl"); const eventsBefore = fs.readFileSync(eventPath);
+  const adjacentKnown = run(ADVANCE, ["--run-dir", value.runDir, "--actor", "--json"], value.env);
+  assert.notEqual(adjacentKnown.status, 0); const flagError = JSON.parse(adjacentKnown.stderr);
+  assert.equal(flagError.ok, false); assert.equal(flagError.code, "ADVANCE_FAILED"); assert.match(flagError.error, /--actor.*requires/);
+  assert.deepEqual(fs.readFileSync(eventPath), eventsBefore);
+
   const mixed = run(ADVANCE, ["--run-dir", "/tmp/run", "--repo", "/tmp/repo", "--run-id", "run", "--json"], process.env);
   assert.notEqual(mixed.status, 0); assert.match(mixed.stderr, /mutually exclusive/);
   for (const value of ["0", "1.5", "invalid"]) {
