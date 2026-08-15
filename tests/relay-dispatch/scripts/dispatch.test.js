@@ -878,19 +878,20 @@ test("a no-sandbox adapter remains dry-runnable with a visible diagnostic", () =
   });
 });
 
-test("Pi rejects explicit Alibaba models before launching the isolated fake executable", () => {
-  const value = fixture("pi-alibaba-isolated-catalog");
+test("Pi launches explicit Alibaba models with ambient extension discovery", () => {
+  const value = fixture("pi-alibaba-ambient-extension");
   const marker = path.join(value.root, "pi-invoked.log");
   const result = run(value, [
-    "--executor", "pi", "--model", "alibaba-plan/qwen3.8-max", "--branch", "pi-alibaba-isolated-catalog",
+    "--executor", "pi", "--model", "alibaba-plan/qwen3.8-max", "--branch", "pi-alibaba-ambient-extension",
     "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
   ], { ...value.env, PI_FIXTURE_INVOCATION_MARKER: marker });
-  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
-  const output = json(result.stdout || result.stderr);
-  assert.equal(output.code, "PI_ISOLATED_CATALOG_MISMATCH");
-  assert.match(output.error, /isolated Pi catalog cannot resolve/);
-  assert.equal(fs.existsSync(marker), false, "provider executable must not be launched");
-  assert.equal(fs.existsSync(fixtureRunsDir(value)), false, "pre-provider diagnostic must not claim a run");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")), [
+    "--no-session", "--no-context-files", "--no-skills",
+    "--tools", "read,grep,find,ls,write,edit",
+    "--model", "alibaba-plan/qwen3.8-max", "--print",
+  ]);
+  assert.equal(json(result.stdout).outcome.status, "succeeded");
 });
 
 test("Pi keeps non-Alibaba explicit model argv and launches the fake executable", () => {
@@ -902,7 +903,7 @@ test("Pi keeps non-Alibaba explicit model argv and launches the fake executable"
   ], { ...value.env, PI_FIXTURE_INVOCATION_MARKER: marker });
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")), [
-    "--no-session", "--no-context-files", "--no-extensions", "--no-skills",
+    "--no-session", "--no-context-files", "--no-skills",
     "--tools", "read,grep,find,ls,write,edit",
     "--model", "openai/gpt-5", "--thinking", "high", "--print",
   ]);
