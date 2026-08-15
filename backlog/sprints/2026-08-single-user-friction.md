@@ -55,3 +55,17 @@ measured subset). No new lifecycle writer, facts, mutable state, or registry.
 - 2026-08-15 — Sprint admitted from the single-user friction review. Created
   #1264/#1265/#1266; batch order strict for #1264→#1265 (cockpit rows reference
   the advance CLI), #1266 disjoint.
+- 2026-08-15 — #1264 first run: codex completed the driver in the worktree but
+  died at the timeout boundary before writing its result file; salvaged through
+  canonical recovery (close_dead_attempt included a live PID-reuse refusal —
+  the stale cleanup pid belonged to an unrelated simulator widget, verified and
+  terminated externally as the runtime demanded). Orchestrator gate outside the
+  executor sandbox: 654/654 (the in-sandbox 176 failures were `/bin/ps` EPERM
+  cascades). Round-1 claude-opus-5 review returned `escalated` on two
+  bundle-unverifiable criteria; all items adjudicated with live evidence
+  (SKILL.md 136 lines; sibling CLIs accept every emitted next_command flag).
+- 2026-08-15 — Dogfood finding: reviewer-escalation is an in-ledger dead end
+  (no redispatch, no re-review, no close; dirty worktree does not reopen the
+  fold). Filed #1268. Exited via the established v2-run precedent: PR #1267
+  closed as superseded; v2 run dispatched on `issue-1264-advance-driver-v2`
+  reusing the verified base plus three bundle-verifiability corrections.
