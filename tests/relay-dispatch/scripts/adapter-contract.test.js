@@ -381,7 +381,9 @@ test("Pi binds the manifest-declared Alibaba extension for primary review", () =
     name: "pi-alibaba-models", pi: { extensions: ["extensions/alibaba.ts"] },
   }));
   fs.writeFileSync(path.join(packageRoot, "extensions", "alibaba.ts"), "export default {};\n");
-  process.env.HOME = alibabaHome;
+  const alibabaHomeAlias = path.join(root, "alibaba-home-alias");
+  fs.symlinkSync(alibabaHome, alibabaHomeAlias, "dir");
+  process.env.HOME = alibabaHomeAlias;
   try {
     const bound = adapter.buildInvocation({ ...input, phase: "primary_review", schemaPath });
     const extensionPath = path.join(packageRoot, "extensions", "alibaba.ts");
@@ -400,6 +402,13 @@ test("Pi binds the manifest-declared Alibaba extension for primary review", () =
     const outside = path.join(alibabaHome, "outside.ts"); fs.writeFileSync(outside, "outside\n"); fs.unlinkSync(extensionPath); fs.symlinkSync(outside, extensionPath);
     assert.equal(adapter.capabilities({ phase: "primary_review", request: { readOnly: true, networkAccess: "enabled", model: input.model } }).errorCode, "PI_EXTENSION_BINDING_INVALID");
     fs.unlinkSync(extensionPath); fs.writeFileSync(extensionPath, "export default {};\n");
+
+    const linkedHome = path.join(root, "linked-package-home");
+    const linkedRoot = path.join(linkedHome, ".pi", "agent", "npm", "node_modules", "pi-alibaba-models");
+    fs.mkdirSync(path.dirname(linkedRoot), { recursive: true });
+    fs.symlinkSync(packageRoot, linkedRoot, "dir");
+    process.env.HOME = linkedHome;
+    assert.equal(adapter.capabilities({ phase: "primary_review", request: { readOnly: true, networkAccess: "enabled", model: input.model } }).errorCode, "PI_EXTENSION_BINDING_INVALID");
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
   }

@@ -33,7 +33,13 @@ function extensionFailure(model, error) {
 }
 
 function extensionPackageCandidates() {
-  const home = path.resolve(process.env.HOME || os.homedir());
+  const configuredHome = path.resolve(process.env.HOME || os.homedir());
+  let home;
+  try { home = fs.realpathSync(configuredHome); }
+  catch (error) {
+    if (error.code === "ENOENT") home = configuredHome;
+    else throw new PiExtensionBindingError("installed extension home is unavailable");
+  }
   return [path.join(home, ".pi", "agent", "npm", "node_modules", EXTENSION_PACKAGE)];
 }
 
