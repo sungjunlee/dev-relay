@@ -337,8 +337,10 @@ test("all seven native adapters preserve full dispatch argv order and policy inp
   }
 });
 
-test("Pi admits ambient Alibaba extensions for dispatch but isolates primary review", () => {
+test("Pi binds the manifest-declared Alibaba extension for primary review", () => {
   const adapter = getAdapter("pi");
+  const previousHome = process.env.HOME;
+  process.env.HOME = path.join(root, "missing-alibaba-home");
   const input = {
     phase: "dispatch", cwd, promptPath, promptBytes: fs.readFileSync(promptPath), resultPath,
     model: "alibaba-plan/qwen3.8-max", networkAccess: "enabled",
@@ -355,24 +357,52 @@ test("Pi admits ambient Alibaba extensions for dispatch but isolates primary rev
     readOnly: true, networkAccess: "enabled", model: input.model,
   } });
   assert.equal(reviewCapability.supported, false);
-  assert.equal(reviewCapability.errorCode, "PI_ISOLATED_CATALOG_MISMATCH");
+  assert.equal(reviewCapability.errorCode, "PI_EXTENSION_BINDING_MISSING");
   assert.equal(reviewCapability.diagnostic.stage, "pre-provider");
   assert.throws(() => adapter.buildInvocation({ ...input, phase: "primary_review", schemaPath }), (error) => {
     assert.equal(error.name, "AdapterCapabilityError");
-    assert.equal(error.code, "PI_ISOLATED_CATALOG_MISMATCH");
+    assert.equal(error.code, "PI_EXTENSION_BINDING_MISSING");
     assert.deepEqual(error.diagnostic, {
-      code: "PI_ISOLATED_CATALOG_MISMATCH",
-      kind: "isolated_catalog_mismatch",
+      code: "PI_EXTENSION_BINDING_MISSING",
+      kind: "extension_binding",
       stage: "pre-provider",
       provider: "alibaba-plan",
       model: "alibaba-plan/qwen3.8-max",
       extension: "pi-alibaba-models",
-      isolatedInvocation: "--no-extensions",
-      reason: "the extension is discovered by ordinary Pi catalog listing but its executable bytes are not bound by Relay's runtime contract",
+      reason: "the manifest-declared Alibaba extension entry is not a trusted regular file",
     });
-    assert.match(error.message, /isolated Pi catalog cannot resolve/);
+    assert.match(error.message, /installed pi-alibaba-models extension binding/);
     return true;
   });
+  const alibabaHome = path.join(root, "alibaba-home");
+  const packageRoot = path.join(alibabaHome, ".pi", "agent", "npm", "node_modules", "pi-alibaba-models");
+  fs.mkdirSync(path.join(packageRoot, "extensions"), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+    name: "pi-alibaba-models", pi: { extensions: ["extensions/alibaba.ts"] },
+  }));
+  fs.writeFileSync(path.join(packageRoot, "extensions", "alibaba.ts"), "export default {};\n");
+  process.env.HOME = alibabaHome;
+  try {
+    const bound = adapter.buildInvocation({ ...input, phase: "primary_review", schemaPath });
+    const extensionPath = path.join(packageRoot, "extensions", "alibaba.ts");
+    assert.deepEqual(bound.args.slice(bound.args.indexOf("--extension"), bound.args.indexOf("--extension") + 2), ["--extension", extensionPath]);
+    assert.equal(bound.extensionBinding.root, packageRoot);
+    assert.equal(bound.extensionBinding.entry.path, extensionPath);
+    assert.equal(bound.args.includes("--no-extensions"), true, "ambient extension discovery remains disabled");
+    const manifestPath = path.join(packageRoot, "package.json");
+    fs.writeFileSync(manifestPath, "{");
+    assert.equal(adapter.capabilities({ phase: "primary_review", request: { readOnly: true, networkAccess: "enabled", model: input.model } }).errorCode, "PI_EXTENSION_BINDING_INVALID");
+    fs.writeFileSync(manifestPath, JSON.stringify({ name: "pi-alibaba-models", pi: { extensions: ["extensions/alibaba.ts", "extensions/other.ts"] } }));
+    assert.equal(adapter.capabilities({ phase: "primary_review", request: { readOnly: true, networkAccess: "enabled", model: input.model } }).errorCode, "PI_EXTENSION_BINDING_INVALID");
+    fs.writeFileSync(manifestPath, JSON.stringify({ name: "pi-alibaba-models", pi: { extensions: ["../escape.ts"] } }));
+    assert.equal(adapter.capabilities({ phase: "primary_review", request: { readOnly: true, networkAccess: "enabled", model: input.model } }).errorCode, "PI_EXTENSION_BINDING_INVALID");
+    fs.writeFileSync(manifestPath, JSON.stringify({ name: "pi-alibaba-models", pi: { extensions: ["extensions/alibaba.ts"] } }));
+    const outside = path.join(alibabaHome, "outside.ts"); fs.writeFileSync(outside, "outside\n"); fs.unlinkSync(extensionPath); fs.symlinkSync(outside, extensionPath);
+    assert.equal(adapter.capabilities({ phase: "primary_review", request: { readOnly: true, networkAccess: "enabled", model: input.model } }).errorCode, "PI_EXTENSION_BINDING_INVALID");
+    fs.unlinkSync(extensionPath); fs.writeFileSync(extensionPath, "export default {};\n");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+  }
   assert.deepEqual([...adapter.buildInvocation({
     ...input, phase: "primary_review", schemaPath, model: "openai/gpt-5",
   }).args], [

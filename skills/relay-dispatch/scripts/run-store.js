@@ -378,6 +378,39 @@ function verifyRegularFileBinding(binding, label) {
   }
   return observed;
 }
+function verifyExtensionBinding(binding) {
+  if (!binding || typeof binding.root !== "string" || !path.isAbsolute(binding.root)) {
+    fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension binding is unavailable");
+  }
+  let rootStat;
+  try { rootStat = fs.lstatSync(binding.root); }
+  catch { fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension package root is unavailable"); }
+  let rootCanonical;
+  try { rootCanonical = fs.realpathSync(binding.root); }
+  catch { fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension package root changed"); }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || rootCanonical !== binding.root) {
+    fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension package root changed");
+  }
+  for (const [label, fileBinding] of [["manifest", binding.manifest], ["entry", binding.entry]]) {
+    if (!fileBinding || typeof fileBinding.path !== "string" || !contained(binding.root, fileBinding.path)) {
+      fail("REVIEW_INPUT_BINDING_CHANGED", `Pi extension ${label} binding escaped its package`);
+    }
+    let current = path.dirname(fileBinding.path);
+    while (contained(binding.root, current) && current !== binding.root) {
+      let stat;
+      try { stat = fs.lstatSync(current); } catch { fail("REVIEW_INPUT_BINDING_CHANGED", `Pi extension ${label} parent changed`); }
+      let canonical;
+      try { canonical = fs.realpathSync(current); }
+      catch { fail("REVIEW_INPUT_BINDING_CHANGED", `Pi extension ${label} parent changed`); }
+      if (!stat.isDirectory() || stat.isSymbolicLink() || canonical !== current) {
+        fail("REVIEW_INPUT_BINDING_CHANGED", `Pi extension ${label} parent changed`);
+      }
+      current = path.dirname(current);
+    }
+    try { verifyRegularFileBinding(fileBinding, `Pi extension ${label}`); }
+    catch (error) { error.code = "REVIEW_INPUT_BINDING_CHANGED"; throw error; }
+  }
+}
 function contained(root, candidate) {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -498,6 +531,8 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
   }
   host.hostInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
     runtimeDependencies: invocation.runtimeDependencies, env: childEnv });
+  try { if (invocation.extensionBinding) verifyExtensionBinding(invocation.extensionBinding); }
+  catch (error) { throw runtimeError(error); }
   const execution = providerUnavailableSignals.length
     ? observableHostedProcess({ hosted, cwd: readRoot, input, timeoutMs, processScope, providerUnavailableSignals })
     : spawnSync(hosted.command, hosted.args, { cwd: readRoot, env: hosted.env, input, encoding: "utf8", timeout: timeoutMs, maxBuffer: 8 << 20, detached: process.platform !== "win32" });
@@ -515,6 +550,9 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
   try { host.hostInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
     runtimeDependencies: invocation.runtimeDependencies, env: childEnv, reenumerate: false }); }
   catch (error) { runtimeIntegrityError = error; }
+  let extensionIntegrityError = null;
+  try { if (invocation.extensionBinding) verifyExtensionBinding(invocation.extensionBinding); }
+  catch (error) { extensionIntegrityError = error; }
   // The process-group reap must run even when the scope audit throws or times out, or a reviewer
   // descendant would outlive the reviewer. Both audit failures are aggregated and reported together.
   const auditErrors = [];
@@ -563,6 +601,7 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
     throw runtimeError(attachReviewInputError(error, inputBindingError));
   }
   if (runtimeIntegrityError) throw runtimeError(attachReviewInputError(annotateTermination(runtimeIntegrityError), inputBindingError));
+  if (extensionIntegrityError) throw runtimeError(attachReviewInputError(annotateTermination(extensionIntegrityError), inputBindingError));
   if (inputBindingError) throw runtimeError(inputBindingError);
   if (providerTermination) {
     throw runtimeError(annotateTermination(new Error("independent reviewer failed (provider_unavailable)")));
