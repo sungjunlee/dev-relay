@@ -391,6 +391,12 @@ function verifyExtensionBinding(binding) {
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || rootCanonical !== binding.root) {
     fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension package root changed");
   }
+  if (!Array.isArray(binding.runtimeFiles) || binding.runtimeFiles.length !== 2
+    || binding.runtimeFiles.some((file, index) => ["path", "dev", "ino", "size", "sha256"]
+      .some((key) => file?.[key] !== [binding.manifest, binding.entry][index]?.[key]))) {
+    fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension runtime binding is unavailable");
+  }
+  const observed = [];
   for (const [label, fileBinding] of [["manifest", binding.manifest], ["entry", binding.entry]]) {
     if (!fileBinding || typeof fileBinding.path !== "string" || !contained(binding.root, fileBinding.path)) {
       fail("REVIEW_INPUT_BINDING_CHANGED", `Pi extension ${label} binding escaped its package`);
@@ -407,9 +413,10 @@ function verifyExtensionBinding(binding) {
       }
       current = path.dirname(current);
     }
-    try { verifyRegularFileBinding(fileBinding, `Pi extension ${label}`); }
+    try { observed.push(verifyRegularFileBinding(fileBinding, `Pi extension ${label}`)); }
     catch (error) { error.code = "REVIEW_INPUT_BINDING_CHANGED"; throw error; }
   }
+  return observed.map(({ bytes, ...file }) => Object.freeze(file));
 }
 function contained(root, candidate) {
   const relative = path.relative(root, candidate);
@@ -516,7 +523,9 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
   if (useAmbientEnvironment) childEnv.TMPDIR = writeRoot;
   processScope ||= host.hostInvocation.beginProcessScope(); Object.assign(childEnv, processScope.env);
   const runtime = host.hostInvocation.bindRuntimeFiles({ command: invocation.command, env: childEnv, runtimeDependencies: invocation.runtimeDependencies });
-  const runtimeError = (error) => { error.executed_runtime = runtime.runtime_files; return error; };
+  let extensionRuntime = [];
+  const executedRuntime = () => Object.freeze([...runtime.runtime_files, ...extensionRuntime]);
+  const runtimeError = (error) => { error.executed_runtime = executedRuntime(); return error; };
   const hosted = host.hostInvocation({ command: runtime.command, args: invocation.args, env: childEnv });
   let input;
   if (invocation.stdinPath) {
@@ -531,7 +540,7 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
   }
   host.hostInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
     runtimeDependencies: invocation.runtimeDependencies, env: childEnv });
-  try { if (invocation.extensionBinding) verifyExtensionBinding(invocation.extensionBinding); }
+  try { if (invocation.extensionBinding) extensionRuntime = verifyExtensionBinding(invocation.extensionBinding); }
   catch (error) { throw runtimeError(error); }
   const execution = providerUnavailableSignals.length
     ? observableHostedProcess({ hosted, cwd: readRoot, input, timeoutMs, processScope, providerUnavailableSignals })
@@ -613,7 +622,7 @@ function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, p
     error.failure_reason = reason; annotateTermination(error);
     error.failure_signals = result.termination ? [] : isolatedFailureSignals(result, outcome); throw runtimeError(error);
   }
-  return Object.freeze({ ...outcome, executed_runtime: runtime.runtime_files,
+  return Object.freeze({ ...outcome, executed_runtime: executedRuntime(),
     runtime_audit: Object.freeze({ pgid: result.pid || null, process_group_absent: true, process_scope_remaining: 0, scope_seal: processScope.seal, quiet_window_ms: 250 }) });
   };
   return execution && typeof execution.then === "function" ? execution.then(settle) : settle(execution);

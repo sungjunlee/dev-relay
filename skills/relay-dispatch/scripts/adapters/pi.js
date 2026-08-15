@@ -168,7 +168,12 @@ module.exports = createNativeAdapter({
     if (typeof model === "string" && model.startsWith("alibaba-plan/")) {
       try {
         const extension = resolveAlibabaExtension();
-        extensionBinding = { root: extension.root, manifest: extension.manifest, entry: extension.entry };
+        extensionBinding = {
+          root: extension.root,
+          manifest: extension.manifest,
+          entry: extension.entry,
+          runtimeFiles: [extension.manifest, extension.entry],
+        };
         args.push("--extension", extension.entryPath);
       } catch (error) {
         throw Object.assign(new Error("installed pi-alibaba-models extension binding is unavailable"), {

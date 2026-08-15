@@ -72,7 +72,7 @@ function normalizeInvocationShape(invocation) {
   if (invocation.extensionBinding !== undefined) {
     const value = invocation.extensionBinding;
     if (!value || typeof value !== "object" || Array.isArray(value)
-      || Object.keys(value).sort().join(",") !== "entry,manifest,root"
+      || Object.keys(value).sort().join(",") !== "entry,manifest,root,runtimeFiles"
       || typeof value.root !== "string" || !path.isAbsolute(value.root)) {
       throw new Error("adapter extension binding is invalid");
     }
@@ -88,10 +88,21 @@ function normalizeInvocationShape(invocation) {
       }
       return Object.freeze({ path: file.path, dev: file.dev, ino: file.ino, size: file.size, sha256: file.sha256 });
     };
+    if (!Array.isArray(value.runtimeFiles) || value.runtimeFiles.length !== 2) {
+      throw new Error("adapter extension runtime binding is invalid");
+    }
+    const manifest = normalizeBoundFile(value.manifest, "manifest");
+    const entry = normalizeBoundFile(value.entry, "entry");
+    const runtimeFiles = value.runtimeFiles.map((file, index) => normalizeBoundFile(file, `runtime file ${index}`));
+    if (runtimeFiles[0].path !== manifest.path || runtimeFiles[1].path !== entry.path
+      || runtimeFiles.some((file, index) => ["dev", "ino", "size", "sha256"].some((key) => file[key] !== [manifest, entry][index][key]))) {
+      throw new Error("adapter extension runtime binding does not match its loader evidence");
+    }
     extensionBinding = Object.freeze({
       root: value.root,
-      manifest: normalizeBoundFile(value.manifest, "manifest"),
-      entry: normalizeBoundFile(value.entry, "entry"),
+      manifest,
+      entry,
+      runtimeFiles: Object.freeze(runtimeFiles),
     });
   }
   return Object.freeze({

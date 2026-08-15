@@ -29,8 +29,8 @@ directory. The host never infers and opens an executable's HOME parent.
 
 Pi's ordinary catalog may include `alibaba-plan/*` through the ambient
 `pi-alibaba-models` extension. Relay keeps `--no-extensions` enabled for review,
-then binds the package manifest and its exact `extensions/alibaba.ts` entry before
-adding `--extension <canonical-entry>`. Missing, malformed, escaped, symlinked,
+then binds the package manifest and its exact `extensions/alibaba.ts` entry into
+the hosted runtime evidence before adding `--extension <canonical-entry>`. Missing, malformed, escaped, symlinked,
 or replaced evidence fails closed before provider execution with a typed
 extension-binding diagnostic.
 

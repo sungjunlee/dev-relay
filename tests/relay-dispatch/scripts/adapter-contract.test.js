@@ -391,6 +391,9 @@ test("Pi binds the manifest-declared Alibaba extension for primary review", () =
     assert.deepEqual(bound.args.slice(bound.args.indexOf("--extension"), bound.args.indexOf("--extension") + 2), ["--extension", extensionPath]);
     assert.equal(bound.extensionBinding.root, canonicalPackageRoot);
     assert.equal(bound.extensionBinding.entry.path, extensionPath);
+    assert.deepEqual(bound.extensionBinding.runtimeFiles.map((file) => file.path), [
+      fs.realpathSync(path.join(packageRoot, "package.json")), extensionPath,
+    ]);
     assert.equal(bound.args.includes("--no-extensions"), true, "ambient extension discovery remains disabled");
     const manifestPath = path.join(packageRoot, "package.json");
     fs.writeFileSync(manifestPath, "{");
