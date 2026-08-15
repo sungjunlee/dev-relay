@@ -34,12 +34,6 @@ One fleet represents one validated track. Every leaf carries the same normalized
 ### Route-facing documentation requires the full repository gate
 Relay configuration vocabulary is exposed through both `skills/relay-config/` and the delegated core under `skills/relay-dispatch/`. Changes to either surface, especially SKILL.md wording, must run the serialized full repository suite because sibling suites pin the public prose and aliases.
 
-### Hardened advisory evidence is event-rooted
-For hardened review, filenames and advisory request/result/decision metadata are untrusted claims. Merge validation starts from the latest round's durable advisory success event, uses its HEAD/round-bound resolved-lane snapshot, and cross-checks every configured lane against the event-bound artifact's contained regular-file path, profile, hash, reviewed HEAD, status, and required findings. Both `blindspot` and `adversarial` profiles are valid when the bindings agree.
-
-### Calibration cohorts must preserve real task risk
-Risk-path observation compares compact runs only with compact-eligible full-path controls. Never lower a task's risk classification or manufacture examples to fill a cohort; record an under-sampled class explicitly and continue calibration instead.
-
 ## Known Gotchas
 
 ### `rubric-lifecycle-gap`
