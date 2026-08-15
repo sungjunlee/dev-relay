@@ -31,17 +31,8 @@ Dev-backlog schema-v2 JSON is the source of truth for sprint ownership. Resoluti
 
 One fleet represents one validated track. Every leaf carries the same normalized owner through its child manifest and finalize path; missing, contradictory, ambiguous, or mixed ownership must fail before fleet manifest, issue lock, worktree, or dispatch side effects.
 
-### Unified route configuration is the single source of truth
-`routes.json` drives dispatch and review routing. It maps into the existing policy-shaped object in memory; do not generate a derived `policy.json`, and keep `evaluateRelayRoute()` behavior stable. Legacy `policy.json` holders retain legacy precedence until explicitly migrated.
-
 ### Route-facing documentation requires the full repository gate
 Relay configuration vocabulary is exposed through both `skills/relay-config/` and the delegated core under `skills/relay-dispatch/`. Changes to either surface, especially SKILL.md wording, must run the serialized full repository suite because sibling suites pin the public prose and aliases.
-
-### Hardened advisory evidence is event-rooted
-For hardened review, filenames and advisory request/result/decision metadata are untrusted claims. Merge validation starts from the latest round's durable advisory success event, uses its HEAD/round-bound resolved-lane snapshot, and cross-checks every configured lane against the event-bound artifact's contained regular-file path, profile, hash, reviewed HEAD, status, and required findings. Both `blindspot` and `adversarial` profiles are valid when the bindings agree.
-
-### Calibration cohorts must preserve real task risk
-Risk-path observation compares compact runs only with compact-eligible full-path controls. Never lower a task's risk classification or manufacture examples to fill a cohort; record an under-sampled class explicitly and continue calibration instead.
 
 ## Known Gotchas
 
@@ -49,7 +40,7 @@ Risk-path observation compares compact runs only with compact-eligible full-path
 Relay rubric was historically ephemeral: generated in orchestrator context, embedded in dispatch prompt, lost after. Reviewer never saw it. This manifests as "enforcement layers built on missing artifacts" anti-pattern. Phase 0 (sprint `2026-04-agentic-patterns-phase-0`) is the fix.
 
 Confidence: 9/10. Source: observed.
-Related files: `skills/relay-dispatch/scripts/dispatch.js`, `skills/relay-review/scripts/review-runner.js`, `skills/relay-dispatch/scripts/relay-manifest.js`.
+Related files: `skills/relay-dispatch/scripts/dispatch.js`, `skills/relay-review/scripts/review-runner.js`.
 
 ### Reviewer independence is a feature, not a limitation
 Willison's patterns assume the same agent remembers and improves over time. Relay's reviewer intentionally runs in fresh context (`context: fork` / `--ephemeral`). Do not add memory to the reviewer. Do not let planning bias leak into review.
