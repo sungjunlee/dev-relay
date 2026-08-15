@@ -386,9 +386,10 @@ test("Pi binds the manifest-declared Alibaba extension for primary review", () =
   process.env.HOME = alibabaHomeAlias;
   try {
     const bound = adapter.buildInvocation({ ...input, phase: "primary_review", schemaPath });
-    const extensionPath = path.join(packageRoot, "extensions", "alibaba.ts");
+    const canonicalPackageRoot = fs.realpathSync(packageRoot);
+    const extensionPath = fs.realpathSync(path.join(packageRoot, "extensions", "alibaba.ts"));
     assert.deepEqual(bound.args.slice(bound.args.indexOf("--extension"), bound.args.indexOf("--extension") + 2), ["--extension", extensionPath]);
-    assert.equal(bound.extensionBinding.root, packageRoot);
+    assert.equal(bound.extensionBinding.root, canonicalPackageRoot);
     assert.equal(bound.extensionBinding.entry.path, extensionPath);
     assert.equal(bound.args.includes("--no-extensions"), true, "ambient extension discovery remains disabled");
     const manifestPath = path.join(packageRoot, "package.json");

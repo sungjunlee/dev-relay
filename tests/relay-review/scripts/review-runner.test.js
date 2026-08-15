@@ -785,7 +785,7 @@ process.stdout.write(JSON.stringify({ verdict: "pass", summary: "Pi review passe
 
 test("production Pi Alibaba review binds the installed manifest entry exactly", async () => {
   const value = await fixture("pi-explicit-alibaba", { local: true, reviewer: "pi" });
-  const home = path.join(value.root, "pi-home");
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-pi-home-")));
   const packageRoot = path.join(home, ".pi", "agent", "npm", "node_modules", "pi-alibaba-models");
   const entryPath = path.join(packageRoot, "extensions", "alibaba.ts");
   const marker = path.join(value.root, "pi-alibaba-invoked.json");
@@ -818,12 +818,13 @@ process.stdout.write(JSON.stringify({ verdict: "pass", summary: "Pi Alibaba revi
     for (const [key, name] of [["bin", "RELAY_PI_BIN"], ["marker", "PI_FIXTURE_INVOCATION_MARKER"], ["home", "HOME"], ["base", "RELAY_WORKTREE_BASE"]]) {
       if (previous[key] === undefined) delete process.env[name]; else process.env[name] = previous[key];
     }
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
 test("production Pi Alibaba review rejects an entry replaced after binding without invoking or recording review", async () => {
   const value = await fixture("pi-alibaba-entry-replaced", { local: true, reviewer: "pi" });
-  const home = path.join(value.root, "pi-home");
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-pi-home-")));
   const packageRoot = path.join(home, ".pi", "agent", "npm", "node_modules", "pi-alibaba-models");
   const entryPath = path.join(packageRoot, "extensions", "alibaba.ts");
   const replacement = path.join(packageRoot, "extensions", "replacement.ts");
@@ -871,6 +872,7 @@ process.stdout.write(JSON.stringify({ verdict: "pass", summary: "unexpected", is
     for (const [key, name] of [["bin", "RELAY_PI_BIN"], ["marker", "PI_FIXTURE_INVOCATION_MARKER"], ["home", "HOME"], ["base", "RELAY_WORKTREE_BASE"]]) {
       if (previous[key] === undefined) delete process.env[name]; else process.env[name] = previous[key];
     }
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
