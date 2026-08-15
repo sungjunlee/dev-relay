@@ -445,7 +445,9 @@ async function runReview(cli, overrides = {}) {
   } catch (error) {
     if (error.review_evidence_preserved) throw error;
     if (hasReviewInputBindingError(error)) throw error;
+    if (error?.diagnostic?.stage === "pre-provider") throw error;
     if (error.classification === "provider_unavailable") throw error;
+    if (error.executed_runtime === undefined) throw error;
     stagedBinding = error.review_binding || null;
     executedRuntime = normalizeExecutedRuntime(error.executed_runtime);
     const reviewerResultFailure = error.code === "REVIEW_RESULT_INVALID"

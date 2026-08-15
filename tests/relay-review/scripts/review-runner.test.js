@@ -14,6 +14,7 @@ const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
 const recovery = require("../../../skills/relay-dispatch/scripts/recover");
 const relayStatus = require("../../../skills/relay/scripts/relay-status");
 const runner = require("../../../skills/relay-review/scripts/review-runner");
+const CHECKOUT_ROOT = fs.realpathSync(path.resolve(__dirname, "../../.."));
 const runtime = { withRunLock(runDir, callback) { const canonical = fs.realpathSync(runDir);
   return host.withRunLock({ runDir: canonical, attemptId: `test-${crypto.randomUUID()}`, operation: "review",
     hostKind: "local_supervisor", hostHandle: `test:${process.pid}`, worktreeDir: canonical }, callback); } };
@@ -780,6 +781,123 @@ process.stdout.write(JSON.stringify({ verdict: "pass", summary: "Pi review passe
     for (const [key, name] of [["bin", "RELAY_PI_BIN"], ["marker", "PI_FIXTURE_INVOCATION_MARKER"], ["base", "RELAY_WORKTREE_BASE"]]) {
       if (previous[key] === undefined) delete process.env[name]; else process.env[name] = previous[key];
     }
+  }
+});
+
+test("production Pi Alibaba review binds the installed manifest entry exactly", async () => {
+  const value = await fixture("pi-explicit-alibaba", { local: true, reviewer: "pi" });
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(CHECKOUT_ROOT, ".relay-review-pi-home-")));
+  const packageRoot = path.join(home, ".pi", "agent", "npm", "node_modules", "pi-alibaba-models");
+  const entryPath = path.join(packageRoot, "extensions", "alibaba.ts");
+  const marker = path.join(value.root, "pi-alibaba-invoked.json");
+  fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "pi-alibaba-models", pi: { extensions: ["extensions/alibaba.ts"] } }));
+  fs.writeFileSync(entryPath, "export default {};\n");
+  const fake = path.join(value.root, "fake-pi-alibaba");
+  fs.writeFileSync(fake, `#!${process.execPath}
+"use strict";
+const fs = require("fs");
+const args = process.argv.slice(2);
+const extensionIndex = args.indexOf("--extension");
+if (extensionIndex < 0) throw new Error("missing explicit extension");
+const extensionPath = args[extensionIndex + 1];
+const packageRoot = require("path").dirname(require("path").dirname(extensionPath));
+const manifest = JSON.parse(fs.readFileSync(require("path").join(packageRoot, "package.json"), "utf8"));
+if (manifest.name !== "pi-alibaba-models" || manifest.pi.extensions.length !== 1
+  || require("path").resolve(packageRoot, manifest.pi.extensions[0]) !== extensionPath) throw new Error("extension manifest mismatch");
+const extensionBytes = fs.readFileSync(extensionPath, "utf8");
+if (extensionBytes !== "export default {};\\n") throw new Error("extension entry mismatch");
+fs.writeFileSync(process.env.PI_FIXTURE_INVOCATION_MARKER, JSON.stringify({ args, extensionPath, extensionBytes }));
+process.stdout.write(JSON.stringify({ verdict: "pass", summary: "Pi Alibaba review passed", issues: [] }));
+`, { mode: 0o700 });
+  const previous = { bin: process.env.RELAY_PI_BIN, marker: process.env.PI_FIXTURE_INVOCATION_MARKER, home: process.env.HOME, base: process.env.RELAY_WORKTREE_BASE };
+  process.env.RELAY_PI_BIN = fake;
+  process.env.PI_FIXTURE_INVOCATION_MARKER = marker;
+  process.env.HOME = home;
+  process.env.RELAY_WORKTREE_BASE = value.worktreeBase;
+  try {
+    const cli = runner.parseCli([
+      "--repo", value.repo, "--run-dir", value.runDir,
+      "--model", "alibaba-plan/qwen3.8-max", "--json",
+    ]);
+    const result = await runner.runReview(cli, { inspectRun: value.inspectRun });
+    assert.equal(result.verdict, "lgtm");
+    const loaded = JSON.parse(fs.readFileSync(marker, "utf8"));
+    const { args } = loaded;
+    assert.deepEqual(args.slice(args.indexOf("--extension"), args.indexOf("--extension") + 2), ["--extension", entryPath]);
+    assert.equal(args.includes("--no-extensions"), true);
+    assert.equal(loaded.extensionPath, entryPath);
+    assert.equal(loaded.extensionBytes, "export default {};\n");
+    const review = facts.readFacts({ eventsPath: value.eventsPath }).facts.find((fact) => fact.type === "review_recorded");
+    const executableRuntime = host.hostInvocation.bindRuntimeFiles({
+      command: fake, env: process.env, runtimeDependencies: { executableParent: 1, interpreterParent: null },
+    }).runtime_files;
+    const extensionRuntime = [path.join(packageRoot, "package.json"), entryPath].map((filePath) => {
+      const { bytes, ...binding } = host.hostInvocation.bindRegularFile(filePath, "Pi extension runtime evidence");
+      void bytes;
+      return binding;
+    });
+    assert.equal(review.payload.executed_runtime.digest,
+      crypto.createHash("sha256").update(JSON.stringify([...executableRuntime, ...extensionRuntime])).digest("hex"));
+  } finally {
+    for (const [key, name] of [["bin", "RELAY_PI_BIN"], ["marker", "PI_FIXTURE_INVOCATION_MARKER"], ["home", "HOME"], ["base", "RELAY_WORKTREE_BASE"]]) {
+      if (previous[key] === undefined) delete process.env[name]; else process.env[name] = previous[key];
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("production Pi Alibaba review rejects an entry replaced after binding without invoking or recording review", async () => {
+  const value = await fixture("pi-alibaba-entry-replaced", { local: true, reviewer: "pi" });
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(CHECKOUT_ROOT, ".relay-review-pi-home-")));
+  const packageRoot = path.join(home, ".pi", "agent", "npm", "node_modules", "pi-alibaba-models");
+  const entryPath = path.join(packageRoot, "extensions", "alibaba.ts");
+  const replacement = path.join(packageRoot, "extensions", "replacement.ts");
+  const marker = path.join(value.root, "pi-provider-invoked");
+  fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+    name: "pi-alibaba-models", pi: { extensions: ["extensions/alibaba.ts"] },
+  }));
+  fs.writeFileSync(entryPath, "export const original = true;\n");
+  fs.writeFileSync(replacement, "export const replacement = true;\n");
+  const fake = path.join(value.root, "fake-pi-alibaba");
+  fs.writeFileSync(fake, `#!${process.execPath}
+"use strict";
+require("fs").writeFileSync(process.env.PI_FIXTURE_INVOCATION_MARKER, "invoked");
+process.stdout.write(JSON.stringify({ verdict: "pass", summary: "unexpected", issues: [] }));
+`, { mode: 0o700 });
+  const previous = { bin: process.env.RELAY_PI_BIN, marker: process.env.PI_FIXTURE_INVOCATION_MARKER, home: process.env.HOME, base: process.env.RELAY_WORKTREE_BASE };
+  const originalHostInvocation = host.hostInvocation;
+  let replaced = false;
+  function replaceAfterRuntimeProfile(...args) {
+    const invocation = originalHostInvocation(...args);
+    if (!replaced) { replaced = true; fs.renameSync(replacement, entryPath); }
+    return invocation;
+  }
+  Object.assign(replaceAfterRuntimeProfile, originalHostInvocation);
+  process.env.RELAY_PI_BIN = fake;
+  process.env.PI_FIXTURE_INVOCATION_MARKER = marker;
+  process.env.HOME = home;
+  process.env.RELAY_WORKTREE_BASE = value.worktreeBase;
+  host.hostInvocation = replaceAfterRuntimeProfile;
+  try {
+    const cli = runner.parseCli([
+      "--repo", value.repo, "--run-dir", value.runDir,
+      "--model", "alibaba-plan/qwen3.8-max", "--json",
+    ]);
+    await assert.rejects(runner.runReview(cli, { inspectRun: value.inspectRun }), (error) => {
+      assert.equal(error.code, "REVIEW_INPUT_BINDING_CHANGED");
+      assert.match(error.message, /extension entry changed/);
+      return true;
+    });
+    assert.equal(fs.existsSync(marker), false);
+    assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 0);
+  } finally {
+    host.hostInvocation = originalHostInvocation;
+    for (const [key, name] of [["bin", "RELAY_PI_BIN"], ["marker", "PI_FIXTURE_INVOCATION_MARKER"], ["home", "HOME"], ["base", "RELAY_WORKTREE_BASE"]]) {
+      if (previous[key] === undefined) delete process.env[name]; else process.env[name] = previous[key];
+    }
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
