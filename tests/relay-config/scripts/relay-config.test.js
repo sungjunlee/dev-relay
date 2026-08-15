@@ -28,20 +28,29 @@ test("relay-config rejects unsupported primary-review adapters", () => {
   assert.match(result.stderr, /cannot run primary_review/);
 });
 
-test("relay-config admits Alibaba Pi dispatch but keeps primary review isolated", () => {
+test("relay-config admits Alibaba Pi dispatch but binds primary review evidence", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "relay-config-pi-home-"));
+  const packageRoot = path.join(home, ".pi", "agent", "npm", "node_modules", "pi-alibaba-models");
+  fs.mkdirSync(path.join(packageRoot, "extensions"), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+    name: "pi-alibaba-models", pi: { extensions: ["extensions/alibaba.ts"] },
+  }));
+  fs.writeFileSync(path.join(packageRoot, "extensions", "alibaba.ts"), "export default {};\n");
+  const env = { ...process.env, HOME: home };
   const dispatch = spawnSync(process.execPath, [SCRIPT,
     "check", "--phase", "dispatch", "--executor", "pi",
     "--model", "alibaba-plan/qwen3.8-max", "--json",
-  ], { encoding: "utf8" });
+  ], { encoding: "utf8", env });
   assert.equal(dispatch.status, 0, dispatch.stderr);
   assert.equal(JSON.parse(dispatch.stdout).capability.supported, true);
 
   const review = spawnSync(process.execPath, [SCRIPT,
     "check", "--phase", "review", "--reviewer", "pi",
     "--model", "alibaba-plan/qwen3.8-max", "--json",
-  ], { encoding: "utf8" });
-  assert.notEqual(review.status, 0);
-  assert.match(review.stderr, /PI_ISOLATED_CATALOG_MISMATCH|isolated Pi catalog cannot resolve/);
+  ], { encoding: "utf8", env });
+  assert.equal(review.status, 0, review.stderr);
+  assert.equal(JSON.parse(review.stdout).capability.supported, true);
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test("relay-config requires the exact actor flag for each phase", () => {

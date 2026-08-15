@@ -28,11 +28,11 @@ their Node package roots, while Cursor declares only its version
 directory. The host never infers and opens an executable's HOME parent.
 
 Pi's ordinary catalog may include `alibaba-plan/*` through the ambient
-`pi-alibaba-models` extension. Relay invokes Pi with `--no-extensions`, and the
-extension file is outside the executable closure bound by `runtimeDependencies`.
-Relay therefore never adds an unbound `--extension` path: an explicit
-`alibaba-plan/*` selection fails before provider execution with the typed
-`PI_ISOLATED_CATALOG_MISMATCH` diagnostic in dispatch and primary review.
+`pi-alibaba-models` extension. Relay keeps `--no-extensions` enabled for review,
+then binds the package manifest and its exact `extensions/alibaba.ts` entry into
+the hosted runtime evidence before adding `--extension <canonical-entry>`. Missing, malformed, escaped, symlinked,
+or replaced evidence fails closed before provider execution with a typed
+extension-binding diagnostic.
 
 ## Primary Reviewer Contract
 

@@ -63,11 +63,48 @@ function decodeTrustedPrompt(promptBytes) {
 
 function normalizeInvocationShape(invocation) {
   if (!invocation || typeof invocation !== "object") throw new Error("adapter invocation must be an object");
-  if (Object.keys(invocation).some((key) => !["command", "args", "cwd", "stdinPath", "stdinSha256"].includes(key))) throw new Error("adapter invocation contains unsupported metadata");
+  if (Object.keys(invocation).some((key) => !["command", "args", "cwd", "stdinPath", "stdinSha256", "extensionBinding"].includes(key))) throw new Error("adapter invocation contains unsupported metadata");
   if (typeof invocation.command !== "string" || !invocation.command || invocation.command.includes("\n")) throw new Error("adapter invocation command must be one executable argv value");
   if (!Array.isArray(invocation.args) || invocation.args.some((value) => typeof value !== "string" || value.includes("\0"))) throw new Error("adapter invocation args must be an array of string argv values");
   requireAbsolutePath(invocation.cwd, "adapter invocation cwd");
   if (Boolean(invocation.stdinPath) !== Boolean(invocation.stdinSha256)) throw new Error("adapter invocation stdinPath and stdinSha256 must be supplied together");
+  let extensionBinding = null;
+  if (invocation.extensionBinding !== undefined) {
+    const value = invocation.extensionBinding;
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).sort().join(",") !== "entry,manifest,root,runtimeFiles"
+      || typeof value.root !== "string" || !path.isAbsolute(value.root)) {
+      throw new Error("adapter extension binding is invalid");
+    }
+    const normalizeBoundFile = (file, label) => {
+      if (!file || typeof file !== "object" || Array.isArray(file)
+        || Object.keys(file).sort().join(",") !== "dev,ino,path,sha256,size"
+        || typeof file.path !== "string" || !path.isAbsolute(file.path)
+        || !SHA256_RE.test(file.sha256 || "")
+        || !Number.isInteger(file.dev) || file.dev < 0
+        || !Number.isInteger(file.ino) || file.ino < 0
+        || !Number.isInteger(file.size) || file.size < 0) {
+        throw new Error(`${label} extension binding is invalid`);
+      }
+      return Object.freeze({ path: file.path, dev: file.dev, ino: file.ino, size: file.size, sha256: file.sha256 });
+    };
+    if (!Array.isArray(value.runtimeFiles) || value.runtimeFiles.length !== 2) {
+      throw new Error("adapter extension runtime binding is invalid");
+    }
+    const manifest = normalizeBoundFile(value.manifest, "manifest");
+    const entry = normalizeBoundFile(value.entry, "entry");
+    const runtimeFiles = value.runtimeFiles.map((file, index) => normalizeBoundFile(file, `runtime file ${index}`));
+    if (runtimeFiles[0].path !== manifest.path || runtimeFiles[1].path !== entry.path
+      || runtimeFiles.some((file, index) => ["dev", "ino", "size", "sha256"].some((key) => file[key] !== [manifest, entry][index][key]))) {
+      throw new Error("adapter extension runtime binding does not match its loader evidence");
+    }
+    extensionBinding = Object.freeze({
+      root: value.root,
+      manifest,
+      entry,
+      runtimeFiles: Object.freeze(runtimeFiles),
+    });
+  }
   return Object.freeze({
     command: invocation.command,
     args: Object.freeze([...invocation.args]),
@@ -78,6 +115,7 @@ function normalizeInvocationShape(invocation) {
         ? invocation.stdinSha256
         : (() => { throw new Error("adapter invocation stdinSha256 must bind stdinPath bytes"); })(),
     } : {}),
+    ...(extensionBinding ? { extensionBinding } : {}),
   });
 }
 
