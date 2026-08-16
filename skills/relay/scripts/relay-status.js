@@ -23,10 +23,45 @@ const ALL_FLAGS = ["--all", "--gc", "--apply", "--min-age-days", "--json", "--he
 const ALL_VALUE_FLAGS = new Set(["--min-age-days"]);
 const DEFAULT_MIN_AGE_DAYS = 14;
 function parseCli(argv) {
-  const known = new Set(KNOWN_FLAGS), bool = new Set(CLI_OPTIONS.booleanFlags), verbatim = new Set(CLI_OPTIONS.verbatimValueFlags), consumed = new Set(); const name = (token) => String(token).split("=", 1)[0]; const accepts = (flag, value) => value !== undefined && (verbatim.has(flag) || (!String(value).startsWith("--") && !known.has(String(value))));
-  argv.forEach((token, index) => { const flag = name(token); if (known.has(flag) && !bool.has(flag) && !String(token).includes("=") && accepts(flag, argv[index + 1])) consumed.add(index + 1); });
-  const unknown = argv.filter((token, index) => !consumed.has(index) && String(token).startsWith("-") && !known.has(name(token))); if (unknown.length) throw new Error(`unknown flags: ${unknown.join(", ")}`);
-  const variants = (flag) => Array.isArray(flag) ? flag : [flag]; return { hasFlag: (flags) => variants(flags).some((flag) => argv.some((token, index) => !consumed.has(index) && (token === flag || String(token).startsWith(`${flag}=`)))), getArg: (flags, fallback) => { for (const flag of variants(flags)) for (let index = 0; index < argv.length; index += 1) { if (consumed.has(index)) continue; const token = String(argv[index]); if (token === flag || token.startsWith(`${flag}=`)) { const value = token === flag ? argv[index + 1] : token.slice(flag.length + 1); if (!accepts(flag, value)) return fallback; if (verbatim.has(flag) && !String(value).trim()) throw new Error(`${flag} requires a non-empty value`); return value; } } return fallback; } };
+  const known = new Set(KNOWN_FLAGS);
+  const boolean = new Set(CLI_OPTIONS.booleanFlags);
+  const nonEmpty = new Set(CLI_OPTIONS.verbatimValueFlags);
+  const consumed = new Set();
+  const name = (token) => String(token).split("=", 1)[0];
+  const acceptsAdjacent = (value) => value !== undefined && !String(value).startsWith("-");
+  const variants = (flag) => Array.isArray(flag) ? flag : [flag];
+
+  argv.forEach((token, index) => {
+    const flag = name(token);
+    if (known.has(flag) && !boolean.has(flag) && !String(token).includes("=") && acceptsAdjacent(argv[index + 1])) {
+      consumed.add(index + 1);
+    }
+  });
+  const unknown = argv.filter((token, index) => !consumed.has(index)
+    && String(token).startsWith("-") && !known.has(name(token)));
+  if (unknown.length) throw new Error(`unknown flags: ${unknown.join(", ")}`);
+
+  return {
+    hasFlag(flags) {
+      return variants(flags).some((flag) => argv.some((token, index) => !consumed.has(index)
+        && (token === flag || String(token).startsWith(`${flag}=`))));
+    },
+    getArg(flags, fallback) {
+      for (const flag of variants(flags)) {
+        for (let index = 0; index < argv.length; index += 1) {
+          if (consumed.has(index)) continue;
+          const token = String(argv[index]);
+          if (token !== flag && !token.startsWith(`${flag}=`)) continue;
+          const inline = token !== flag;
+          const value = inline ? token.slice(flag.length + 1) : argv[index + 1];
+          if (!inline && !acceptsAdjacent(value)) return fallback;
+          if (nonEmpty.has(flag) && !String(value).trim()) throw new Error(`${flag} requires a non-empty value`);
+          return value;
+        }
+      }
+      return fallback;
+    },
+  };
 }
 
 function parseAllCli(argv) {
@@ -372,6 +407,14 @@ function pathClaimsCandidate(claimedPath, candidatePath) {
   return claimed === candidate || claimed.startsWith(`${candidate}${path.sep}`);
 }
 
+function hasLegacyRunDirectories(scan) {
+  return [...scan.legacyBySlug.values()].some((entries) => entries.length > 0);
+}
+
+function legacyLedgerIsProvablyEmpty(scan) {
+  return scan.diagnostics.length === 0 && !hasLegacyRunDirectories(scan);
+}
+
 function worktreeCandidates(scan, { minAgeDays, nowMs = Date.now() }) {
   const worktreesRoot = path.join(scan.relayHome, "worktrees");
   const candidates = [];
@@ -392,7 +435,14 @@ function worktreeCandidates(scan, { minAgeDays, nowMs = Date.now() }) {
     const row = runDir ? byRunDir.get(path.resolve(runDir)) : null;
     let classification = "unprovable", reason = "ledger_state_unprovable", eligible = false;
     if (layout === "legacy_hash") {
-      reason = "legacy_layout_unprovable";
+      if (owner) {
+        reason = "claimed_by_ledger";
+      } else if (!legacyLedgerIsProvablyEmpty(scan)) {
+        // Legacy manifests are unreadable by contract, so per-entry ownership is undecidable; only an empty legacy ledger makes absence provable.
+        reason = "legacy_layout_unprovable";
+      } else {
+        classification = "orphan"; reason = "legacy_ledger_empty"; eligible = true;
+      }
     } else if (!runExists && !owner) {
       classification = "orphan"; reason = "run_directory_missing"; eligible = true;
     } else if (!runExists && owner) {
@@ -450,14 +500,25 @@ function applyGcCandidate(candidate, scan, { minAgeDays, nowMs = Date.now() }) {
     const stat = fs.lstatSync(candidate.worktree_path);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw Object.assign(new Error("candidate is not a regular directory"), { code: "candidate_identity_changed" });
     if (candidate.classification === "orphan") {
-      if (candidate.layout !== "current" || !candidate.run_dir) {
+      if (candidate.layout !== "current" && candidate.layout !== "legacy_hash") {
+        throw Object.assign(new Error("orphan removal requires an exact current-layout run directory"), { code: "orphan_layout_unprovable" });
+      }
+      if (candidate.layout === "current" && !candidate.run_dir) {
         throw Object.assign(new Error("orphan removal requires an exact current-layout run directory"), { code: "orphan_layout_unprovable" });
       }
       const refreshedScan = scanAllRuns({ relayHome: scan.relayHome, nowMs });
       const claimedNow = [...refreshedScan.rows, ...refreshedScan.terminalRows]
         .find((row) => pathClaimsCandidate(row.record.git.worktree, candidate.worktree_path));
       if (claimedNow) throw Object.assign(new Error(`worktree is claimed by ${claimedNow.run_id}`), { code: "claimed_by_ledger" });
-      if (fs.existsSync(candidate.run_dir)) throw Object.assign(new Error("run directory appeared before removal"), { code: "run_directory_appeared" });
+      if (candidate.layout === "legacy_hash") {
+        if (refreshedScan.diagnostics.length > 0) {
+          throw Object.assign(new Error("legacy ledger could not be revalidated before removal"), { code: "legacy_ledger_revalidation_failed" });
+        }
+        if (hasLegacyRunDirectories(refreshedScan)) {
+          throw Object.assign(new Error("legacy run directory appeared before removal"), { code: "legacy_run_appeared" });
+        }
+      }
+      if (candidate.run_dir && fs.existsSync(candidate.run_dir)) throw Object.assign(new Error("run directory appeared before removal"), { code: "run_directory_appeared" });
       fs.rmSync(candidate.worktree_path, { recursive: true });
       candidate.applied = true;
       return candidate;

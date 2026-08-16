@@ -325,8 +325,45 @@ test("legacy top-level layout stays unprovable even with a v3 ledger claim", (t)
     .find((row) => row.worktree_path === value.legacyHash);
 
   assert.equal(candidate.classification, "unprovable");
-  assert.equal(candidate.reason, "legacy_layout_unprovable");
+  assert.equal(candidate.reason, "claimed_by_ledger");
   assert.equal(candidate.eligible, false);
+});
+
+test("legacy top-level layout is reclaimable only when the machine-wide legacy ledger is empty", (t) => {
+  const value = fixture(t);
+  fs.rmSync(path.join(value.runs, "legacy-run"), { recursive: true });
+  fs.rmSync(value.version2Run, { recursive: true });
+  const result = run(["--all", "--gc", "--apply", "--json"], value.relayHome);
+  assert.equal(result.status, 0, result.stderr);
+  const candidate = JSON.parse(result.stdout).gc.candidates
+    .find((row) => row.worktree_path === value.legacyHash);
+
+  assert.equal(candidate.classification, "orphan");
+  assert.equal(candidate.reason, "legacy_ledger_empty");
+  assert.equal(candidate.eligible, true);
+  assert.equal(candidate.applied, true);
+  assert.equal(fs.existsSync(value.legacyHash), false);
+});
+
+test("legacy top-level orphan apply skips deletion when a legacy run materializes after scan", (t) => {
+  const value = fixture(t);
+  fs.rmSync(path.join(value.runs, "legacy-run"), { recursive: true });
+  fs.rmSync(value.version2Run, { recursive: true });
+  const scan = scanAllRuns({ relayHome: value.relayHome });
+  const candidate = worktreeCandidates(scan, { minAgeDays: 14 })
+    .find((row) => row.worktree_path === value.legacyHash);
+  const before = treeSnapshot(value.legacyHash);
+
+  assert.equal(candidate.classification, "orphan");
+  const materialized = path.join(value.relayHome, "runs", "another-repo", "legacy-run");
+  fs.mkdirSync(materialized, { recursive: true });
+  fs.writeFileSync(path.join(materialized, "legacy.json"), "{}\n");
+
+  applyGcCandidate(candidate, scan, { minAgeDays: 14 });
+
+  assert.equal(candidate.applied, false);
+  assert.ok(candidate.diagnostics.some((entry) => entry.code === "legacy_run_appeared"));
+  assert.deepEqual(treeSnapshot(value.legacyHash), before);
 });
 
 test("orphan apply skips deletion when the exact run directory materializes after scan", (t) => {
@@ -361,6 +398,12 @@ test("threshold boundary and strict flag adjacency fail closed", (t) => {
   const unknown = run(["--all", "--min-age-days", "--wat", "--json"], value.relayHome);
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr, /unknown flags: --wat/);
+  const singleRunRepoUnknown = run(["--repo", "--wat", "--run-id", "fixture"], value.relayHome);
+  assert.notEqual(singleRunRepoUnknown.status, 0);
+  assert.match(singleRunRepoUnknown.stderr, /unknown flags: --wat/);
+  const singleRunIdUnknown = run(["--run-id", "-wat"], value.relayHome);
+  assert.notEqual(singleRunIdUnknown.status, 0);
+  assert.match(singleRunIdUnknown.stderr, /unknown flags: -wat/);
   const applyWithoutGc = run(["--all", "--apply", "--json"], value.relayHome);
   assert.notEqual(applyWithoutGc.status, 0);
   assert.match(applyWithoutGc.stderr, /--apply requires --gc/);
