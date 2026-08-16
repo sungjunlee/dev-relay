@@ -14,6 +14,7 @@ const PROVIDER_UNAVAILABLE = "provider_unavailable";
 const BREAK_PROBE_MS = 10_000;
 const PROCESS_SCOPE_KEY = "RELAY_PROCESS_SCOPE";
 const PROCESS_CONTRACT = "inherited_scope_no_daemon";
+const COMPLETION_LOG_TAIL_BYTES = 64 * 1024;
 const AMBIENT_ENVIRONMENT_INJECTION = /^(?:RELAY_.*|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PHPRC|PHP_INI_SCAN_DIR|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|PERL5DB|RUBYOPT|RUBYLIB|GEM_HOME|GEM_PATH|GCONV_PATH|LOCPATH|NLSPATH)$|^(?:DYLD|LD)_|^LUA_(?:INIT|PATH|CPATH)(?:_.*)?$/;
 const PS_ROW_RE = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/;
 const SCOPE_RE = new RegExp(`(?:^|\\s)${PROCESS_SCOPE_KEY}=([0-9a-f]{64})(?=\\s|$)`);
@@ -157,6 +158,16 @@ function regularFileBinding(filePath, label, { canonical = true } = {}) {
     const bytes = fs.readFileSync(fd);
     return { path: filePath, size: bytes.length, sha256: sha256(bytes), dev: stat.dev, ino: stat.ino, bytes };
   } finally { fs.closeSync(fd); }
+}
+function validCompletionSignal(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === "kind,stableMs,streamMarkers"
+    && value.kind === "stable_result_file"
+    && Number.isInteger(value.stableMs) && value.stableMs >= 100 && value.stableMs <= 10_000
+    && Array.isArray(value.streamMarkers) && value.streamMarkers.length >= 1 && value.streamMarkers.length <= 16
+    && value.streamMarkers.every((marker) => typeof marker === "string" && marker === marker.trim()
+      && marker.length > 0 && marker.length <= 200 && !/[\u0000-\u001f]/.test(marker))
+    && new Set(value.streamMarkers).size === value.streamMarkers.length;
 }
 function verifyFileBinding(binding, label) {
   if (!binding || typeof binding !== "object" || typeof binding.path !== "string") fail(`${label} binding is invalid`, "HOST_CONFIG_MISMATCH");
@@ -879,10 +890,7 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   if (!Array.isArray(inputFiles)) fail("inputFiles must be an array", "INVALID_INVOCATION");
   if (Boolean(stdinPath) !== Boolean(stdinSha256) || (stdinSha256 && !/^[0-9a-f]{64}$/.test(stdinSha256))) fail("stdinPath and stdinSha256 must form an exact binding", "INVALID_INVOCATION");
   const declaredInputs = [...new Set([...inputFiles, ...(stdinPath ? [stdinPath] : [])])];
-  if (executorCompletionSignal !== null && (!executorResultPath || !executorCompletionSignal || typeof executorCompletionSignal !== "object"
-    || Array.isArray(executorCompletionSignal) || Object.keys(executorCompletionSignal).sort().join(",") !== "kind,stableMs"
-    || executorCompletionSignal.kind !== "stable_result_file" || !Number.isInteger(executorCompletionSignal.stableMs)
-    || executorCompletionSignal.stableMs < 100 || executorCompletionSignal.stableMs > 10_000)) {
+  if (executorCompletionSignal !== null && (!executorResultPath || !validCompletionSignal(executorCompletionSignal))) {
     fail("executor completion signal is invalid", "INVALID_INVOCATION");
   }
   const inputSources = declaredInputs.map((file) => directChild(run, file, "executor input", { exists: true }));
@@ -932,7 +940,7 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
     supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier,
     ...(providerUnavailableSignals.length ? { provider_unavailable_signals: providerUnavailableSignals } : {}) };
   if (!publishOnce(paths.config, config)) fail("attempt has already been launched", "HOST_ATTEMPT_ALREADY_LAUNCHED");
-  const configSha = sha256(fs.readFileSync(paths.config)), stdoutFd = fs.openSync(stdout, "wx", 0o600), stderrFd = fs.openSync(stderr, "wx+", 0o600);
+  const configSha = sha256(fs.readFileSync(paths.config)), stdoutFd = fs.openSync(stdout, "wx+", 0o600), stderrFd = fs.openSync(stderr, "wx+", 0o600);
   const secretPath = path.join(run, `.host-secret-${attemptId}-${crypto.randomBytes(8).toString("hex")}`), secretFd = fs.openSync(secretPath, "wx+", 0o600);
   let child;
   try {
@@ -1074,12 +1082,7 @@ function runSupervisor(configPath, configSha) {
     || config.provider_unavailable_signals.some((signal) => typeof signal !== "string" || !signal.trim() || signal.length > 200 || /[\u0000-\u001f]/.test(signal)))) {
     fail("provider unavailable signal declaration is invalid", "HOST_CONFIG_MISMATCH");
   }
-  if (config.executor_completion_signal !== null && (!config.executor_completion_signal || typeof config.executor_completion_signal !== "object"
-    || Array.isArray(config.executor_completion_signal)
-    || Object.keys(config.executor_completion_signal).sort().join(",") !== "kind,stableMs"
-    || config.executor_completion_signal.kind !== "stable_result_file"
-    || !Number.isInteger(config.executor_completion_signal.stableMs)
-    || config.executor_completion_signal.stableMs < 100 || config.executor_completion_signal.stableMs > 10_000
+  if (config.executor_completion_signal !== null && (!validCompletionSignal(config.executor_completion_signal)
     || typeof config.executor_result !== "string")) fail("executor completion signal declaration is invalid", "HOST_CONFIG_MISMATCH");
   const declaredSignals = (config.provider_unavailable_signals || []).map((signal) => signal.trim().toLowerCase());
   publishOnce(config.supervisor, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
@@ -1096,19 +1099,35 @@ function runSupervisor(configPath, configSha) {
       if (completionObservation?.key !== key) completionObservation = { key, since: Date.now() };
     } catch { completionObservation = null; }
   };
+  const completedStreamMarker = () => {
+    for (const fd of [4, 5]) {
+      try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile()) continue;
+        const length = Math.min(stat.size, COMPLETION_LOG_TAIL_BYTES), tail = Buffer.alloc(length);
+        if (length && fs.readSync(fd, tail, 0, length, stat.size - length) !== length) continue;
+        const marker = config.executor_completion_signal.streamMarkers.find((value) => tail.includes(Buffer.from(value, "utf8")));
+        if (marker) return marker;
+      } catch { /* a missing or unreadable durable log cannot prove completion */ }
+    }
+    return null;
+  };
   const completedAfterTermination = (fallback) => {
     // The first exact binding must remain stable for the adapter's full window
     // before timeout termination is requested, then still match after the scoped group is proven dead.
-    // A file that is still being written therefore cannot supply completion proof.
+    // Independently, an adapter-declared completion marker must exist in a durable stream-log tail.
+    // A partial stable file or a file that is still being written therefore cannot supply completion proof.
     if (requested !== "timed_out" || !terminationRequestedAt || !completionObservation
       || completionObservation.since > terminationRequestedAt
       || terminationRequestedAt - completionObservation.since < config.executor_completion_signal.stableMs) return null;
     try {
       const binding = regularFileBinding(config.executor_result, "executor result", { canonical: false });
       const key = `${binding.dev}:${binding.ino}:${binding.size}:${binding.sha256}`;
-      return binding.size && key === completionObservation.key
+      const streamMarker = completedStreamMarker();
+      return binding.size && key === completionObservation.key && streamMarker
         ? { status: "completed", exit_code: 0, signal: fallback.signal || null, error: null, termination: "timeout_after_completion",
-          completion: { kind: "stable_result_file", size: binding.size, sha256: binding.sha256, stable_ms: config.executor_completion_signal.stableMs } }
+          completion: { kind: "stable_result_file", size: binding.size, sha256: binding.sha256,
+            stable_ms: config.executor_completion_signal.stableMs, stream_marker: streamMarker } }
         : null;
     } catch { return null; }
   };

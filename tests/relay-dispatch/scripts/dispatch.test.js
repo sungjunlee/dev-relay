@@ -861,7 +861,7 @@ test("dispatch persists immutable bindings and exact attempt facts but never aut
 test("Codex completion written before a timeout is durably completed after the hung executor is killed", { timeout: 30_000 }, async () => {
   const value = fixture("codex-completion-then-hang");
   const github = githubObservationFixture(value, "completion-then-hang");
-  fs.writeFileSync(value.prompt, JSON.stringify({ hang_after_output: true }));
+  fs.writeFileSync(value.prompt, JSON.stringify({ hang_after_output: true, print_completion_marker: true }));
   const result = run(value, ["--branch", "completion-then-hang", "--prompt-file", value.prompt,
     "--rubric-file", value.rubric, "--timeout", "5", "--json"], github.env);
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
@@ -883,6 +883,7 @@ test("Codex completion written before a timeout is durably completed after the h
     size: Buffer.byteLength("fake executor completed\n"),
     sha256: crypto.createHash("sha256").update("fake executor completed\n").digest("hex"),
     stable_ms: 250,
+    stream_marker: "tokens used",
   });
   assert.match(hostResult.result_auth_sha256, /^[0-9a-f]{64}$/);
   const stubKeys = ["RELAY_GIT_BIN", "RELAY_GH_BIN", "RELAY_TEST_GITHUB_STATE", "RELAY_TEST_REAL_GIT"];
@@ -931,6 +932,22 @@ test("a Codex result that keeps changing until timeout is not positive completio
   assert.equal(output.host_status, "timed_out");
   assert.equal(output.status, "cancelled");
   assert.equal(output.termination, undefined);
+});
+
+test("a stable partial Codex result without a stream completion marker fails closed at timeout", { timeout: 30_000 }, () => {
+  const value = fixture("codex-partial-then-stall");
+  fs.writeFileSync(value.prompt, JSON.stringify({ partial_then_stall: true }));
+  const result = run(value, ["--branch", "partial-then-stall", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "1", "--json"]);
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.ok(new Set(["timed_out", "failed"]).has(output.host_status), JSON.stringify(output));
+  assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
+  assert.notEqual(output.termination, "timeout_after_completion");
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
+  assert.ok(new Set(["cancelled", "failed"]).has(attempts.at(-1).payload.status), JSON.stringify(attempts.at(-1).payload));
+  assert.notEqual(attempts.at(-1).payload.status, "completed");
 });
 
 test("trusted-local dispatch needs no Relay sandbox admission and reports native capability", () => {

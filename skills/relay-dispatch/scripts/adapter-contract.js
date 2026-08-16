@@ -41,12 +41,20 @@ function normalizeProviderUnavailableSignals(value) {
 function normalizeCompletionSignal(value) {
   if (value === undefined || value === null) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).sort().join(",") !== "kind,stableMs"
+    || Object.keys(value).sort().join(",") !== "kind,stableMs,streamMarkers"
     || value.kind !== "stable_result_file"
-    || !Number.isInteger(value.stableMs) || value.stableMs < 100 || value.stableMs > 10_000) {
-    throw new Error("adapter completionSignal must declare stable_result_file with a bounded stableMs");
+    || !Number.isInteger(value.stableMs) || value.stableMs < 100 || value.stableMs > 10_000
+    || !Array.isArray(value.streamMarkers) || value.streamMarkers.length < 1 || value.streamMarkers.length > 16) {
+    throw new Error("adapter completionSignal must declare stable_result_file with bounded stableMs and streamMarkers");
   }
-  return Object.freeze({ kind: value.kind, stableMs: value.stableMs });
+  const streamMarkers = value.streamMarkers.map((marker) => {
+    if (typeof marker !== "string" || !marker.trim() || marker.length > 200 || /[\u0000-\u001f]/.test(marker)) {
+      throw new Error("adapter completionSignal streamMarkers must be non-empty bounded literal strings without control characters");
+    }
+    return marker.trim();
+  });
+  if (new Set(streamMarkers).size !== streamMarkers.length) throw new Error("adapter completionSignal streamMarkers must not repeat a marker");
+  return Object.freeze({ kind: value.kind, stableMs: value.stableMs, streamMarkers: Object.freeze(streamMarkers) });
 }
 
 class AdapterCapabilityError extends Error {
@@ -413,6 +421,7 @@ module.exports = {
   decodeTrustedPrompt,
   formatAdapterPhase,
   makeParseOutcome,
+  normalizeCompletionSignal,
   normalizeProviderUnavailableSignals,
   parseOutput,
   parseJsonObject,

@@ -694,9 +694,17 @@ test("provider-unavailable signals are adapter-owned frozen literals consumed ge
   assert.throws(() => contract.normalizeProviderUnavailableSignals(["same", "same"]), /must not repeat/);
 });
 
-test("only Codex declares a bounded stable result-file completion signal", () => {
-  assert.deepEqual(getAdapter("codex").completionSignal, { kind: "stable_result_file", stableMs: 250 });
+test("only Codex declares bounded stable-file and stream-marker completion signals", () => {
+  assert.deepEqual(getAdapter("codex").completionSignal, { kind: "stable_result_file", stableMs: 250, streamMarkers: ["tokens used"] });
   assert.equal(Object.isFrozen(getAdapter("codex").completionSignal), true);
+  assert.equal(Object.isFrozen(getAdapter("codex").completionSignal.streamMarkers), true);
+  assert.deepEqual(contract.normalizeCompletionSignal({
+    kind: "stable_result_file", stableMs: 100, streamMarkers: [" marker one ", "marker two"],
+  }), { kind: "stable_result_file", stableMs: 100, streamMarkers: ["marker one", "marker two"] });
+  assert.throws(() => contract.normalizeCompletionSignal({ kind: "stable_result_file", stableMs: 250, streamMarkers: [] }), /bounded stableMs and streamMarkers/);
+  assert.throws(() => contract.normalizeCompletionSignal({ kind: "stable_result_file", stableMs: 250, streamMarkers: ["bad\nmarker"] }), /bounded literal strings/);
+  assert.throws(() => contract.normalizeCompletionSignal({ kind: "stable_result_file", stableMs: 250, streamMarkers: ["same", "same"] }), /must not repeat/);
+  assert.throws(() => contract.normalizeCompletionSignal({ kind: "stable_result_file", stableMs: 250, streamMarkers: Array(17).fill(0).map((_, index) => `marker-${index}`) }), /bounded stableMs and streamMarkers/);
   for (const name of listAdapters().filter((value) => value !== "codex")) {
     assert.equal(getAdapter(name).completionSignal, null, name);
   }
