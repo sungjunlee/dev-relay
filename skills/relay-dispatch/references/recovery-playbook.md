@@ -52,6 +52,8 @@ an operator-controlled facility, then rerun the same canonical `recover
 command: the identity may have changed. Once the recorded identity is absent,
 Relay signs cleanup settlement, publishes the terminal attempt result, and
 continues recovery idempotently.
+The refusal payload is advisory; the signed `cleanup-incomplete` artifact is the
+authoritative source for its terminal context.
 
 ## Safety contract
 

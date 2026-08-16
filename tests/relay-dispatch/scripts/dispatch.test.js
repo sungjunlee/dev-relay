@@ -95,7 +95,44 @@ function run(value, args, env = value.env) {
 function json(stdout) { return JSON.parse(stdout); }
 
 const CLEANUP_REFUSALS = new Set(["HOST_CLEANUP_INCOMPLETE", "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED"]);
-function typedOpenCodeProviderUnavailable(result) {
+function cleanupIncompleteArtifact(value) {
+  const runsRoot = fixtureRunsDir(value);
+  const runDirs = fs.existsSync(runsRoot) ? fs.readdirSync(runsRoot)
+    .map((entry) => path.join(runsRoot, entry)).filter((entry) => fs.statSync(entry).isDirectory()) : [];
+  const artifacts = [];
+  for (const runDir of runDirs) {
+    if (!fs.existsSync(runDir)) continue;
+    for (const entry of fs.readdirSync(runDir)) {
+      if (/^host-attempt-[A-Za-z0-9_-]+\.cleanup-incomplete\.json$/.test(entry)) {
+        artifacts.push({ runDir, path: path.join(runDir, entry) });
+      }
+    }
+  }
+  assert.equal(artifacts.length, 1, "a cleanup refusal requires exactly one durable cleanup-incomplete artifact");
+  return artifacts[0];
+}
+
+function readSignedCleanupArtifact(value) {
+  const artifactRef = cleanupIncompleteArtifact(value);
+  const artifact = JSON.parse(fs.readFileSync(artifactRef.path, "utf8"));
+  assert.equal(path.basename(artifactRef.path), `host-attempt-${artifact.attempt_id}.cleanup-incomplete.json`,
+    "cleanup artifact path must bind the signed attempt id");
+  const ownerDir = path.join(artifactRef.runDir, "ownership");
+  const owners = fs.readdirSync(ownerDir).filter((entry) => entry.endsWith(".owner.json"))
+    .map((entry) => JSON.parse(fs.readFileSync(path.join(ownerDir, entry), "utf8")))
+    .filter((owner) => artifact.lock_id === owner.lock_id && artifact.attempt_id === owner.attempt_id
+      && artifact.host_handle === owner.host_handle);
+  assert.equal(owners.length, 1, "cleanup artifact must bind to exactly one durable owner record");
+  const owner = owners[0];
+  const { auth_sha256: signature, ...body } = artifact;
+  const expected = crypto.createHmac("sha256", owner.secret).update(JSON.stringify(body)).digest("hex");
+  assert.match(signature || "", /^[0-9a-f]{64}$/i, "cleanup-incomplete artifact must carry a SHA-256 HMAC");
+  assert.ok(crypto.timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(expected, "hex")),
+    "cleanup-incomplete artifact must authenticate with the bound owner secret");
+  return artifact;
+}
+
+function typedOpenCodeProviderUnavailable(result, value) {
   if (result.stdout.trim()) {
     assert.ok(new Set([0, 1]).has(result.status), `${result.stderr}\n${result.stdout}`);
     const output = json(result.stdout);
@@ -109,9 +146,12 @@ function typedOpenCodeProviderUnavailable(result) {
   catch (error) { assert.fail(`empty stdout requires JSON stderr, got ${error.message}:\n${result.stderr}`); }
   assert.equal(output.ok, false, JSON.stringify(output));
   assert.ok(CLEANUP_REFUSALS.has(output.code), JSON.stringify(output));
-  assert.equal(output.terminal?.termination, "provider_unavailable", JSON.stringify(output));
   if (output.code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED") assert.ok(output.process_identity, JSON.stringify(output));
-  return { kind: "refusal", output };
+  const artifact = readSignedCleanupArtifact(value);
+  assert.ok(new Set(["cancelled", "failed"]).has(artifact.terminal?.status), JSON.stringify(artifact));
+  assert.equal(artifact.terminal?.termination, "provider_unavailable", JSON.stringify(artifact));
+  if (output.terminal !== undefined) assert.deepEqual(output.terminal, artifact.terminal);
+  return { kind: "refusal", output, artifact };
 }
 
 function fixtureRunsDir(value) {
@@ -946,7 +986,7 @@ test("recognized OpenCode provider-unavailable stderr terminates dispatch with t
   const value = fixture("opencode-provider-unavailable"), raw = "credential=hidden insufficient_quota trailing provider text", started = Date.now();
   const result = run(value, ["--executor", "opencode", "--branch", "opencode-provider-unavailable", "--prompt-file", value.prompt,
     "--rubric-file", value.rubric, "--timeout", "30", "--json"], { ...value.env, FAKE_OPENCODE_SIGNAL: raw, FAKE_OPENCODE_STAY_ALIVE: "1" });
-  const typed = typedOpenCodeProviderUnavailable(result), output = typed.output;
+  const typed = typedOpenCodeProviderUnavailable(result, value), output = typed.output;
   assert.doesNotMatch(JSON.stringify(output), /credential=hidden|insufficient_quota/);
   assert.ok(Date.now() - started < 25_000);
   if (typed.kind === "refusal") return;
@@ -983,7 +1023,7 @@ test("recognized OpenCode stderr remains typed when the gate exits during Relay 
     "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
     ...value.env, FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_EXIT_ON_TERM: "1",
   });
-  const typed = typedOpenCodeProviderUnavailable(result), output = typed.output;
+  const typed = typedOpenCodeProviderUnavailable(result, value), output = typed.output;
   if (typed.kind === "refusal") return;
   assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
 });
