@@ -324,6 +324,15 @@ function scanAllRuns({ relayHome = relayHomeDirectory(), nowMs = Date.now() } = 
         legacyBySlug.set(slugEntry.name, legacy);
         continue;
       }
+      if (record.version !== 3) {
+        const legacy = legacyBySlug.get(slugEntry.name) || [];
+        legacy.push({
+          path: runDir,
+          diagnostic: { code: "UNSUPPORTED_RUN_VERSION", message: `run.version must be 3 (found ${record.version})` },
+        });
+        legacyBySlug.set(slugEntry.name, legacy);
+        continue;
+      }
       try {
         const row = readDurableRun(runDir, slugEntry.name, nowMs, record);
         if (row.classification === "terminal") terminalRows.push(row);

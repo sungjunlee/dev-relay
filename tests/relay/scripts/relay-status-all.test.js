@@ -8,10 +8,12 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createRunRecord } = require("../../../skills/relay-dispatch/scripts/run-store");
+const runStore = require("../../../skills/relay-dispatch/scripts/run-store");
+const { createRunRecord } = runStore;
 
 const ROOT = path.resolve(__dirname, "../../..");
 const STATUS = path.join(ROOT, "skills/relay/scripts/relay-status.js");
+const { scanAllRuns, worktreeCandidates } = require(STATUS);
 const SHA = "a".repeat(40);
 const TARGET = "b".repeat(40);
 const HASH = "c".repeat(64);
@@ -152,6 +154,13 @@ function fixture(t) {
   fs.writeFileSync(path.join(legacyRun, "legacy.json"), "{}\n");
   const legacyCandidate = path.join(relayHome, "worktrees", slug, "legacy-run");
   const legacyBound = marker(path.join(legacyCandidate, "repo"), "legacy");
+  const version2Candidate = path.join(relayHome, "worktrees", slug, "version-2");
+  const version2Bound = marker(path.join(version2Candidate, "repo"), "version-2");
+  const version2Run = createRun(value, "version-2", [], { worktree: version2Bound });
+  const version2Path = path.join(version2Run, "run.json");
+  const version2Record = JSON.parse(fs.readFileSync(version2Path, "utf8"));
+  fs.writeFileSync(version2Path, `${JSON.stringify({ ...version2Record, version: 2 }, null, 2)}\n`);
+  fs.writeFileSync(path.join(version2Run, "events.jsonl"), "not durable facts\n");
   const orphanCandidate = path.join(relayHome, "worktrees", slug, "orphan-current");
   const orphanCurrent = marker(path.join(orphanCandidate, "repo"), "orphan-current");
   fs.writeFileSync(path.join(orphanCandidate, "root-marker.txt"), "remove the candidate root\n");
@@ -164,6 +173,7 @@ function fixture(t) {
     nonTerminalCandidate, nonTerminalWorktree,
     mismatchCandidate, mismatchWorktree,
     legacyCandidate, legacyBound,
+    version2Candidate, version2Bound, version2Run,
     orphanCandidate, orphanCurrent,
     orphanHash,
   };
@@ -204,14 +214,38 @@ test("--all classifies every durable state, summarizes legacy and is byte-preser
   assert.deepEqual(output.terminal_runs.map((row) => row.run_id).sort(), ["binding-mismatch", "terminal-aged", "terminal-young"]);
   assert.equal(output.legacy.length, 1);
   assert.equal(output.legacy[0].repo_slug, value.slug);
-  assert.deepEqual(output.legacy[0].paths, [path.join(value.runs, "legacy-run")]);
+  assert.deepEqual(output.legacy[0].paths, [path.join(value.runs, "legacy-run"), value.version2Run]);
+  assert.equal(output.runs.some((row) => row.run_id === "version-2"), false);
+  assert.equal(output.terminal_runs.some((row) => row.run_id === "version-2"), false);
   assert.deepEqual(treeSnapshot(value.relayHome), before);
 
   const text = run(["--all"], value.relayHome);
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /Terminal: 3/);
-  assert.match(text.stdout, new RegExp(`Legacy: ${value.slug} count=1`));
+  assert.match(text.stdout, new RegExp(`Legacy: ${value.slug} count=2`));
   assert.equal(text.stdout.match(/^Legacy:/gm).length, 1);
+});
+
+test("a readable non-v3 record bypasses durable folding and GC ledger claims", (t) => {
+  const value = fixture(t);
+  const originalReadRunRecord = runStore.readRunRecord;
+  t.mock.method(runStore, "readRunRecord", ({ runDir }) => {
+    if (runDir === value.version2Run) {
+      return JSON.parse(fs.readFileSync(path.join(runDir, "run.json"), "utf8"));
+    }
+    return originalReadRunRecord({ runDir });
+  });
+
+  const scan = scanAllRuns({ relayHome: value.relayHome });
+  assert.equal(scan.rows.some((row) => row.run_id === "version-2"), false);
+  assert.equal(scan.terminalRows.some((row) => row.run_id === "version-2"), false);
+  assert.ok(scan.legacyBySlug.get(value.slug).some((entry) => entry.path === value.version2Run));
+
+  const candidate = worktreeCandidates(scan, { minAgeDays: 14 })
+    .find((row) => row.worktree_path === value.version2Candidate);
+  assert.equal(candidate.classification, "unprovable");
+  assert.equal(candidate.reason, "legacy_bound");
+  assert.equal(candidate.eligible, false);
 });
 
 test("--gc is a dry run and classifies both layouts without mutating bytes", (t) => {
@@ -225,6 +259,9 @@ test("--gc is a dry run and classifies both layouts without mutating bytes", (t)
   assert.equal(byPath.get(value.orphanHash).classification, "orphan");
   assert.equal(byPath.get(value.nonTerminalCandidate).reason, "non_terminal");
   assert.equal(byPath.get(value.legacyCandidate).reason, "legacy_bound");
+  assert.equal(byPath.get(value.version2Candidate).classification, "unprovable");
+  assert.equal(byPath.get(value.version2Candidate).reason, "legacy_bound");
+  assert.equal(byPath.get(value.version2Candidate).eligible, false);
   assert.equal(byPath.get(value.youngCandidate).reason, "terminal_too_young");
   assert.equal(byPath.get(value.mismatchCandidate).classification, "terminal_aged");
   assert.deepEqual(output.gc.candidates.map((row) => row.worktree_path).sort(), [
@@ -233,6 +270,7 @@ test("--gc is a dry run and classifies both layouts without mutating bytes", (t)
     value.nonTerminalCandidate,
     value.mismatchCandidate,
     value.legacyCandidate,
+    value.version2Candidate,
     value.orphanCandidate,
     value.orphanHash,
   ].sort());
@@ -249,13 +287,14 @@ test("--gc --apply deletes only eligible revalidated paths and reports binding m
   assert.equal(fs.existsSync(value.orphanHash), false);
   assert.equal(fs.readFileSync(path.join(value.nonTerminalWorktree, "marker.txt"), "utf8"), "protected");
   assert.equal(fs.readFileSync(path.join(value.legacyBound, "marker.txt"), "utf8"), "legacy");
+  assert.equal(fs.readFileSync(path.join(value.version2Bound, "marker.txt"), "utf8"), "version-2");
   assert.equal(fs.readFileSync(path.join(value.youngWorktree, "marker.txt"), "utf8"), "young");
   assert.equal(fs.readFileSync(path.join(value.mismatchWorktree, "marker.txt"), "utf8"), "mismatch");
   assert.equal(fs.existsSync(value.mismatchCandidate), true);
   assert.equal(byPath.get(value.mismatchCandidate).applied, false);
   assert.ok(byPath.get(value.mismatchCandidate).diagnostics.some((entry) => entry.code === "worktree_binding_mismatch"));
   assert.equal(output.gc.summary.removed, 3);
-  for (const runId of ["terminal-aged", "binding-mismatch", "legacy-run"]) {
+  for (const runId of ["terminal-aged", "binding-mismatch", "legacy-run", "version-2"]) {
     assert.equal(fs.existsSync(path.join(value.runs, runId)), true, `${runId} run artifacts stay retained`);
   }
 });
