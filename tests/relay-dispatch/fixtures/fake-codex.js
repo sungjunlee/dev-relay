@@ -23,3 +23,10 @@ if (controls.delay_ms) {
 fs.writeFileSync(path.join(cwd, "executor-change.txt"), "review me\n", "utf8");
 if (controls.empty === true) process.exit(0);
 fs.writeFileSync(output, "fake executor completed\n", "utf8");
+if (controls.partial_then_hang === true) {
+  process.on("SIGTERM", () => {});
+  setInterval(() => fs.appendFileSync(output, ".", "utf8"), 50);
+} else if (controls.hang_after_output === true) {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
+}

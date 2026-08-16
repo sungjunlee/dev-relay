@@ -860,7 +860,7 @@ function waitForStartup({ child, paths, owner, configSha, timeoutMs }) {
   fail("supervisor startup timed out", "HOST_START_FAILED", { recommended_action: "inspect" });
 }
 function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedWorktreeRoot, cwd, stdoutPath, stderrPath, resultPath,
-  inputFiles = [], stdinPath = null, stdinSha256 = null, executorResultPath = null, executorSandbox = "workspace-write", executorNetworkAccess = "disabled", timeoutMs = 30_000,
+  inputFiles = [], stdinPath = null, stdinSha256 = null, executorResultPath = null, executorCompletionSignal = null, executorSandbox = "workspace-write", executorNetworkAccess = "disabled", timeoutMs = 30_000,
   cancelGraceMs = 1_000, supervisorStartupTimeoutMs = 30_000, executorEnv = {}, processContainment = PROCESS_CONTRACT,
   runtimeDependencies = { executableParent: null, interpreterParent: null }, testGateBarrierPath = null, testBeforeSupervisorSpawn = null, lockContext,
   providerUnavailableSignals = [] } = {}) {
@@ -879,6 +879,12 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
   if (!Array.isArray(inputFiles)) fail("inputFiles must be an array", "INVALID_INVOCATION");
   if (Boolean(stdinPath) !== Boolean(stdinSha256) || (stdinSha256 && !/^[0-9a-f]{64}$/.test(stdinSha256))) fail("stdinPath and stdinSha256 must form an exact binding", "INVALID_INVOCATION");
   const declaredInputs = [...new Set([...inputFiles, ...(stdinPath ? [stdinPath] : [])])];
+  if (executorCompletionSignal !== null && (!executorResultPath || !executorCompletionSignal || typeof executorCompletionSignal !== "object"
+    || Array.isArray(executorCompletionSignal) || Object.keys(executorCompletionSignal).sort().join(",") !== "kind,stableMs"
+    || executorCompletionSignal.kind !== "stable_result_file" || !Number.isInteger(executorCompletionSignal.stableMs)
+    || executorCompletionSignal.stableMs < 100 || executorCompletionSignal.stableMs > 10_000)) {
+    fail("executor completion signal is invalid", "INVALID_INVOCATION");
+  }
   const inputSources = declaredInputs.map((file) => directChild(run, file, "executor input", { exists: true }));
   const explicitEnvironment = environmentEntries(executorEnv, "executorEnv");
   if (Object.hasOwn(explicitEnvironment, PROCESS_SCOPE_KEY)) fail(`${PROCESS_SCOPE_KEY} is host-reserved`, "INVALID_INVOCATION");
@@ -921,6 +927,7 @@ function launchLocalSupervisor({ runDir, attemptId, command, args = [], trustedW
     stdin_binding: stdinIndex < 0 ? null : { index: stdinIndex, size: inputBindings[stdinIndex].size, sha256: stdinSha256 },
     scope_seal: scopeSeal(scopeToken),
     worktree, cwd: worktree, stdout, stderr, result, executor_result: executorResult,
+    executor_completion_signal: executorCompletionSignal,
     tmp, sandbox: executorSandbox, network: "enabled", tool_network: executorNetworkAccess, runtime_dependencies: runtimeDependencies, runtime_files: runtime.runtime_files, timeout_ms: timeoutMs, grace_ms: cancelGraceMs,
     supervisor: paths.supervisor, running: paths.running, cleanup: paths.cleanup, cancel: paths.cancel, ownership: path.dirname(state.ownerPath), test_gate_barrier: gateBarrier,
     ...(providerUnavailableSignals.length ? { provider_unavailable_signals: providerUnavailableSignals } : {}) };
@@ -1067,13 +1074,47 @@ function runSupervisor(configPath, configSha) {
     || config.provider_unavailable_signals.some((signal) => typeof signal !== "string" || !signal.trim() || signal.length > 200 || /[\u0000-\u001f]/.test(signal)))) {
     fail("provider unavailable signal declaration is invalid", "HOST_CONFIG_MISMATCH");
   }
+  if (config.executor_completion_signal !== null && (!config.executor_completion_signal || typeof config.executor_completion_signal !== "object"
+    || Array.isArray(config.executor_completion_signal)
+    || Object.keys(config.executor_completion_signal).sort().join(",") !== "kind,stableMs"
+    || config.executor_completion_signal.kind !== "stable_result_file"
+    || !Number.isInteger(config.executor_completion_signal.stableMs)
+    || config.executor_completion_signal.stableMs < 100 || config.executor_completion_signal.stableMs > 10_000
+    || typeof config.executor_result !== "string")) fail("executor completion signal declaration is invalid", "HOST_CONFIG_MISMATCH");
   const declaredSignals = (config.provider_unavailable_signals || []).map((signal) => signal.trim().toLowerCase());
   publishOnce(config.supervisor, signed({ v: 2, attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
     config_sha256: configSha, nonce: config.nonce, supervisor, started_at: new Date().toISOString() }, secret));
   let child, childClosed = false, executorIdentity = null, finished = false, requested = null, requestedReason = null, pendingClose = null,
-    deadline, escalation, cancelPoll, barrierPoll, stderrPoll = null, stderrCursor = 0, stderrTail = "", signalSeen = false, providerLivePolls = 0, outcome = "", overflow = false;
+    deadline, escalation, cancelPoll, barrierPoll, stderrPoll = null, completionPoll = null, stderrCursor = 0, stderrTail = "", signalSeen = false, providerLivePolls = 0, outcome = "", overflow = false,
+    completionObservation = null, terminationRequestedAt = null;
+  const observeCompletion = () => {
+    if (!config.executor_completion_signal || requested) return;
+    try {
+      const binding = regularFileBinding(config.executor_result, "executor result", { canonical: false });
+      if (!binding.size) { completionObservation = null; return; }
+      const key = `${binding.dev}:${binding.ino}:${binding.size}:${binding.sha256}`;
+      if (completionObservation?.key !== key) completionObservation = { key, since: Date.now() };
+    } catch { completionObservation = null; }
+  };
+  const completedAfterTermination = (fallback) => {
+    // The first exact binding must predate timeout termination, remain stable for
+    // the adapter's window, and still match after the scoped group is proven dead.
+    // A file that is still being written therefore cannot supply completion proof.
+    if (requested !== "timed_out" || !terminationRequestedAt || !completionObservation
+      || completionObservation.since > terminationRequestedAt
+      || Date.now() - completionObservation.since < config.executor_completion_signal.stableMs) return null;
+    try {
+      const binding = regularFileBinding(config.executor_result, "executor result", { canonical: false });
+      const key = `${binding.dev}:${binding.ino}:${binding.size}:${binding.sha256}`;
+      return binding.size && key === completionObservation.key
+        ? { status: "completed", exit_code: 0, signal: fallback.signal || null, error: null, termination: "timeout_after_completion",
+          completion: { kind: "stable_result_file", size: binding.size, sha256: binding.sha256, stable_ms: config.executor_completion_signal.stableMs } }
+        : null;
+    } catch { return null; }
+  };
+  const settleAfterTermination = (fallback) => finish(completedAfterTermination(fallback) || fallback);
   const cleanupIncomplete = (error, obligation = null, terminal = {}) => {
-    if (finished) return; finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll); clearInterval(stderrPoll);
+    if (finished) return; finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll); clearInterval(stderrPoll); clearInterval(completionPoll);
     const priorStatus = TERMINAL.has(terminal.status) ? terminal.status : "failed", provided = obligation?.processes || [];
     const processes = [supervisor, executorIdentity, ...provided].filter(Boolean).map((identity) => exactIdentity(identity));
     publishOnce(config.cleanup, signed({ v: 2, kind: "executor", attempt_id: config.attempt_id, lock_id: config.lock_id, host_handle: config.host_handle,
@@ -1085,26 +1126,26 @@ function runSupervisor(configPath, configSha) {
   };
   function finish(fields) {
     if (finished) return;
-    finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll); clearInterval(stderrPoll);
+    finished = true; clearTimeout(deadline); clearTimeout(escalation); clearInterval(cancelPoll); clearInterval(barrierPoll); clearInterval(stderrPoll); clearInterval(completionPoll);
     const body = { attempt_id: config.attempt_id, lock_id: config.lock_id, host_kind: "local_supervisor", host_handle: config.host_handle,
       ...fields, ...(requestedReason ? { termination: requestedReason } : {}), completed_at: new Date().toISOString() };
     atomicWrite(config.result, `${JSON.stringify(signed(body, secret, "result_auth_sha256"))}\n`);
   }
   const unverifiedGroup = (status) => cleanupIncomplete(new Error("executor process group could not be bound to the run process scope"), null, { status });
   function terminate(status, reason = null) {
-    if (finished || requested || !child) return; requested = status; requestedReason = reason;
+    if (finished || requested || !child) return; observeCompletion(); requested = status; requestedReason = reason; terminationRequestedAt = Date.now();
     const identity = { pid: child.pid, pgid: child.pid, started_at: config.executor_started_at };
     const term = signalScopedGroup(identity, "SIGTERM", config.scope_seal);
     if (!term.delivered && !term.absent) return unverifiedGroup(status);
-    if (term.absent && pendingClose) return finish(pendingClose);
+    if (term.absent && pendingClose) return settleAfterTermination(pendingClose);
     escalation = setTimeout(() => {
       if (finished) return;
-      if (pendingClose && !groupExists(child.pid)) return finish(pendingClose);
+      if (pendingClose && !groupExists(child.pid)) return settleAfterTermination(pendingClose);
       const killed = signalScopedGroup(identity, "SIGKILL", config.scope_seal);
       if (!killed.delivered && !killed.absent) return unverifiedGroup(status);
-      if (killed.absent) return finish(pendingClose || { status, exit_code: null, signal: "SIGKILL", error: null });
+      if (killed.absent) return settleAfterTermination(pendingClose || { status, exit_code: null, signal: "SIGKILL", error: null });
       const end = Date.now() + Math.max(1_000, config.grace_ms), poll = setInterval(() => {
-        if (!groupExists(child.pid)) { clearInterval(poll); finish(pendingClose || { status, exit_code: null, signal: "SIGKILL", error: null }); }
+        if (!groupExists(child.pid)) { clearInterval(poll); settleAfterTermination(pendingClose || { status, exit_code: null, signal: "SIGKILL", error: null }); }
         else if (Date.now() >= end) { clearInterval(poll); cleanupIncomplete(new Error(`process group cleanup bound elapsed; prior_status=${pendingClose?.status || status}`)); }
       }, 25);
     }, config.grace_ms);
@@ -1132,12 +1173,14 @@ function runSupervisor(configPath, configSha) {
         ? { status: requested, exit_code: code, signal: signal || null, error: null }
         : natural || { status: "failed", exit_code: code, signal: signal || null, error: "executor gate returned no valid outcome" };
       if (groupExists(child.pid)) { pendingClose = fields; if (!requested) terminate(fields.status); }
+      else if (requested) settleAfterTermination(fields);
       else finish(fields);
     });
     if (config.test_gate_barrier) barrierPoll = setInterval(() => { if (fs.existsSync(config.test_gate_barrier)) { clearInterval(barrierPoll); child.stdio[3].end(Buffer.from([1])); } }, 10);
     else child.stdio[3].end(Buffer.from([1]));
     deadline = setTimeout(() => terminate("timed_out"), config.timeout_ms);
     cancelPoll = setInterval(() => { if (fs.existsSync(config.cancel)) terminate("cancelled"); }, 25);
+    if (config.executor_completion_signal) completionPoll = setInterval(observeCompletion, 25);
     if (declaredSignals.length) {
       const overlap = Math.max(0, Math.max(...declaredSignals.map((signal) => signal.length)) - 1);
       stderrPoll = setInterval(() => {

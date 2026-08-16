@@ -38,6 +38,17 @@ function normalizeProviderUnavailableSignals(value) {
   return Object.freeze(normalized);
 }
 
+function normalizeCompletionSignal(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== "kind,stableMs"
+    || value.kind !== "stable_result_file"
+    || !Number.isInteger(value.stableMs) || value.stableMs < 100 || value.stableMs > 10_000) {
+    throw new Error("adapter completionSignal must declare stable_result_file with a bounded stableMs");
+  }
+  return Object.freeze({ kind: value.kind, stableMs: value.stableMs });
+}
+
 class AdapterCapabilityError extends Error {
   constructor(adapter, phase, reason) {
     super(`adapter '${adapter}' cannot run ${phase}: ${reason}`); this.name = "AdapterCapabilityError";
@@ -164,10 +175,10 @@ function outcomeStatus({ exitCode, signal, timedOut, cancelled, text }) {
 }
 
 function makeParseOutcome(outputProtocol) {
-  return function parseOutcome({ phase = "dispatch", exitCode = 0, signal = null, timedOut = false, cancelled = false, stdoutPath, stderrPath, resultPath }) {
+  return function parseOutcome({ phase = "dispatch", exitCode = 0, signal = null, timedOut = false, cancelled = false, completionProven = false, stdoutPath, stderrPath, resultPath }) {
     let parsed = { text: "", value: null };
     let parseError = null;
-    if (exitCode === 0 && !signal && !timedOut && !cancelled) {
+    if (completionProven || (exitCode === 0 && !signal && !timedOut && !cancelled)) {
       try {
         const protocol = typeof outputProtocol === "function" ? outputProtocol(phase) : outputProtocol;
         parsed = parseOutput(protocol, { stdoutPath, resultPath });
@@ -182,7 +193,10 @@ function makeParseOutcome(outputProtocol) {
         parseError = error;
       }
     }
-    const status = parseError ? "failed" : outcomeStatus({ exitCode, signal, timedOut, cancelled, text: parsed.text });
+    let status;
+    if (parseError) status = "failed";
+    else if (completionProven) status = parsed.text && parsed.text.trim() ? "succeeded" : "empty";
+    else status = outcomeStatus({ exitCode, signal, timedOut, cancelled, text: parsed.text });
     return Object.freeze({
       status,
       summary: parseError ? parseError.message : parsed.text.trim().slice(0, 500),
@@ -303,6 +317,7 @@ function createNativeAdapter({
   validateModel = null,
   validateDispatch = null,
   providerUnavailableSignals = null,
+  completionSignal = null,
 }) {
   const phaseMetadata = Object.freeze({ ...phases });
   const parseOutcomeForProtocol = makeParseOutcome(outputProtocol);
@@ -327,11 +342,13 @@ function createNativeAdapter({
   }
   const runtimeDependencies = normalizeRuntimeDependencies(metadata.runtimeDependencies);
   const providerUnavailable = normalizeProviderUnavailableSignals(providerUnavailableSignals);
+  const normalizedCompletionSignal = normalizeCompletionSignal(completionSignal);
   const bindInvocationPolicy = (invocation, toolNetworkAccess) => Object.freeze({ ...invocation, networkAccess: "enabled", toolNetworkAccess, runtimeDependencies });
   return Object.freeze({
     name,
     defaults: Object.freeze({ timeoutMs }),
     providerUnavailableSignals: providerUnavailable,
+    completionSignal: normalizedCompletionSignal,
     metadata: deepFreeze({ ...metadata, runtimeDependencies }),
     probe({ env = process.env, timeoutMs: probeTimeoutMs = 5000, spawn = spawnSync } = {}) {
       const binary = env[metadata.cliBinaryEnv] || cliBinary;
