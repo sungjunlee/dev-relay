@@ -24,7 +24,7 @@ measured subset). No new lifecycle writer, facts, mutable state, or registry.
 
 ### Batch 2 — cockpit + GC (after Batch 1: rows name `relay-advance.js` as the next command)
 
-- [ ] #1265 — relay-status --all cockpit + retained-worktree GC
+- [x] #1265 — relay-status --all cockpit + retained-worktree GC (ready_to_merge, PR #1275)
 
 ### Batch 3 — naming honesty (docs-only; disjoint files, may interleave with Batch 2)
 
@@ -83,6 +83,17 @@ measured subset). No new lifecycle writer, facts, mutable state, or registry.
   observed, not yet filed: run-full-gate wedges ~1h when its own test suite
   runs under it (nested machine lock without timeout).
 - Superseded PRs closed: #1267, #1269.
+- 2026-08-16 — #1265 reached ready_to_merge on PR #1275 (head 5e853996): codex
+  reviewer, 6 rounds, every round a real defect (half-deletion under real
+  worktree layout, v1/v2 legacy routing, legacy-orphan deletion safety,
+  stale-lifecycle classification, single-run parser adjacency). The
+  legacy-orphan clause flip-flopped across rounds 3-5; operator adjudication
+  escalated to the user, who chose conditional reclaim (orphan only when no v3
+  claim AND zero legacy run dirs machine-wide; else manual). Salvage tax paid
+  again: #1273 4th instance, plus a PID-reuse wedge on an unkillable SIP
+  daemon (recorded on #1271 — start-time comparison is load-bearing).
+  Verification recorded as a split gate (two ordered commands, 665/665) after
+  the #1271 flake burned three full-gate attempts.
 - 2026-08-16 — #1266 turned out to be already delivered and merged as PR #1270
   (parallel operator work) before this sprint dispatched it; the redundant run
   `issue-1266-20260815194916879-83dfcd5a` was aborted pre-work
