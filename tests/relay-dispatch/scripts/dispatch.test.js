@@ -94,6 +94,26 @@ function run(value, args, env = value.env) {
 
 function json(stdout) { return JSON.parse(stdout); }
 
+const CLEANUP_REFUSALS = new Set(["HOST_CLEANUP_INCOMPLETE", "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED"]);
+function typedOpenCodeProviderUnavailable(result) {
+  if (result.stdout.trim()) {
+    assert.ok(new Set([0, 1]).has(result.status), `${result.stderr}\n${result.stdout}`);
+    const output = json(result.stdout);
+    assert.equal(output.termination, "provider_unavailable", JSON.stringify(output));
+    return { kind: "result", output };
+  }
+  assert.equal(result.status, 1, `cleanup refusal must retain exit 1:\n${result.stderr}`);
+  assert.notEqual(result.stderr.trim(), "", "empty stdout requires a typed cleanup refusal on stderr");
+  let output;
+  try { output = json(result.stderr); }
+  catch (error) { assert.fail(`empty stdout requires JSON stderr, got ${error.message}:\n${result.stderr}`); }
+  assert.equal(output.ok, false, JSON.stringify(output));
+  assert.ok(CLEANUP_REFUSALS.has(output.code), JSON.stringify(output));
+  assert.equal(output.terminal?.termination, "provider_unavailable", JSON.stringify(output));
+  if (output.code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED") assert.ok(output.process_identity, JSON.stringify(output));
+  return { kind: "refusal", output };
+}
+
 function fixtureRunsDir(value) {
   const canonical = fs.realpathSync(value.repo);
   const base = path.basename(canonical).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
@@ -926,10 +946,11 @@ test("recognized OpenCode provider-unavailable stderr terminates dispatch with t
   const value = fixture("opencode-provider-unavailable"), raw = "credential=hidden insufficient_quota trailing provider text", started = Date.now();
   const result = run(value, ["--executor", "opencode", "--branch", "opencode-provider-unavailable", "--prompt-file", value.prompt,
     "--rubric-file", value.rubric, "--timeout", "30", "--json"], { ...value.env, FAKE_OPENCODE_SIGNAL: raw, FAKE_OPENCODE_STAY_ALIVE: "1" });
-  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
-  const output = json(result.stdout); assert.equal(output.status, "cancelled"); assert.equal(output.host_status, "cancelled");
-  assert.equal(output.termination, "provider_unavailable"); assert.doesNotMatch(JSON.stringify(output), /credential=hidden|insufficient_quota/);
+  const typed = typedOpenCodeProviderUnavailable(result), output = typed.output;
+  assert.doesNotMatch(JSON.stringify(output), /credential=hidden|insufficient_quota/);
   assert.ok(Date.now() - started < 25_000);
+  if (typed.kind === "refusal") return;
+  assert.equal(output.status, "cancelled"); assert.equal(output.host_status, "cancelled");
   const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
   const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
   assert.deepEqual(attempts.map((fact) => fact.type), ["attempt_started", "attempt_finished"]);
@@ -962,11 +983,9 @@ test("recognized OpenCode stderr remains typed when the gate exits during Relay 
     "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
     ...value.env, FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_EXIT_ON_TERM: "1",
   });
-  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
-  assert.notEqual(result.stdout, "", `dispatch must emit its typed cancellation result on stdout:\n${result.stderr}`);
-  const output = json(result.stdout);
+  const typed = typedOpenCodeProviderUnavailable(result), output = typed.output;
+  if (typed.kind === "refusal") return;
   assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
-  assert.equal(output.termination, "provider_unavailable", JSON.stringify(output));
 });
 
 test("a malformed structured adapter result cannot turn an exit-zero host result into a completed attempt", () => {

@@ -41,6 +41,7 @@ const OPTIONS = Object.freeze({
 });
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "timed_out", "spawn_error"]);
+const CLEANUP_REFUSALS = new Set(["HOST_CLEANUP_INCOMPLETE", "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED"]);
 const RUN_ID_RE = /^[a-z0-9][a-z0-9-]{0,126}$/;
 const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 function usage() {
@@ -719,7 +720,16 @@ async function main(argv = process.argv.slice(2)) {
     console.log(cli.values.json ? JSON.stringify(result, null, 2) : `${result.status}: ${result.run_id}`);
     return new Set(["failed", "cancelled", "timed_out", "spawn_error"]).has(result.status) ? 1 : 0;
   } catch (error) {
-    const payload = { ok: false, code: error.code || "DISPATCH_FAILED", error: error.message };
+    const code = error.code || "DISPATCH_FAILED";
+    const payload = { ok: false, code, error: error.message };
+    if (CLEANUP_REFUSALS.has(code) && error.terminal) {
+      payload.terminal = error.terminal;
+    }
+    if (code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED") {
+      payload.recommended_action = error.recommended_action;
+      payload.process_identity = error.process_identity;
+      payload.relay_signalled = false;
+    }
     if (process.env.RELAY_DISPATCH_NOTIFY_PATH) {
       try { atomicJson(process.env.RELAY_DISPATCH_NOTIFY_PATH, payload); } catch {}
     }

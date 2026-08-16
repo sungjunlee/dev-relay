@@ -11,6 +11,7 @@ const OWNER_RE = /^(\d{12})\.owner\.json$/;
 const ATTEMPT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,126}[A-Za-z0-9])?$/;
 const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out", "spawn_error"]);
 const PROVIDER_UNAVAILABLE = "provider_unavailable";
+const CLEANUP_REFUSALS = new Set(["HOST_CLEANUP_INCOMPLETE", "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED"]);
 const BREAK_PROBE_MS = 10_000;
 const PROCESS_SCOPE_KEY = "RELAY_PROCESS_SCOPE";
 const PROCESS_CONTRACT = "inherited_scope_no_daemon";
@@ -679,6 +680,14 @@ function cleanupObligation(value, runDir, owner) {
     || (terminal.termination !== undefined && terminal.termination !== PROVIDER_UNAVAILABLE)) fail("cleanup terminal context is invalid", "HOST_ARTIFACT_INVALID");
   return { kind: value.kind, processes, staged_input_root: staged ? { ...staged } : null, scope_seal: seal, terminal };
 }
+function readCleanupObligation(cleanupPath, runDir, owner) {
+  const artifact = readBoundArtifactEnvelope(cleanupPath, "cleanup-incomplete status", owner, { host_handle: owner.host_handle });
+  return { ...artifact, obligation: cleanupObligation(artifact.value, runDir, owner) };
+}
+function attachCleanupTerminal(error, terminal) {
+  if (CLEANUP_REFUSALS.has(error?.code)) error.terminal = { ...terminal };
+  return error;
+}
 function identityGone(identity, timeoutMs) {
   return Boolean(pollUntil(() => { const row = probeRow(identity.pid); return !sameProcess(row?.identity, identity) || /^Z/.test(row.identity.state); }, timeoutMs));
 }
@@ -788,26 +797,26 @@ function removeExactStagedInputRoot(root, fault) {
     { recommended_action: "inspect", quarantinePath: surviving[0] });
 }
 function settleCleanup({ state, cleanupPath, fault, terminalStatus = "failed" }) {
-  const read = secureRead(cleanupPath, "cleanup-incomplete status"), owner = state.owner;
-  if (!verifySigned(read.value, owner.secret) || read.value.lock_id !== owner.lock_id || read.value.attempt_id !== owner.attempt_id
-    || read.value.host_handle !== owner.host_handle) fail("cleanup status is unauthenticated", "HOST_ARTIFACT_INVALID");
-  const obligation = cleanupObligation(read.value, state.runDir, owner), paths = attemptPaths(state.runDir, owner.attempt_id);
-  for (const identity of obligation.processes) reapExactIdentity(identity, obligation.scope_seal);
-  if (obligation.kind === "reviewer") reapSealedScope(obligation.scope_seal);
-  removeExactStagedInputRoot(obligation.staged_input_root, fault); fault?.("after_cleanup");
-  const settledBody = { v: 2, attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_handle: owner.host_handle,
-    cleanup_sha256: sha256(read.bytes), settled_at: new Date().toISOString() };
-  if (!publishOnce(paths.settled, signed(settledBody, owner.secret))) readBoundArtifact(paths.settled, "cleanup settled", owner, { cleanup_sha256: settledBody.cleanup_sha256 });
-  fault?.("after_settled");
-  const resultPath = path.join(state.runDir, `attempt-${owner.attempt_id}.result.json`), body = {
-    attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_kind: "local_supervisor", host_handle: owner.host_handle,
-    status: terminalStatus, exit_code: obligation.terminal.exit_code, signal: obligation.terminal.signal,
-    ...(obligation.terminal.termination ? { termination: obligation.terminal.termination } : {}),
-    error: terminalStatus === "completed" ? null : `cleanup recovered after incomplete host settlement: ${read.value.error}`, completed_at: new Date().toISOString(),
-  };
-  if (!publishOnce(resultPath, signed(body, owner.secret, "result_auth_sha256"))
-    && !validTerminal(secureRead(resultPath, "terminal result").value, owner)) fail("terminal result conflicts with cleanup recovery", "HOST_ARTIFACT_INVALID");
-  fault?.("after_terminal"); return resultPath;
+  const owner = state.owner, cleanup = readCleanupObligation(cleanupPath, state.runDir, owner);
+  const obligation = cleanup.obligation, paths = attemptPaths(state.runDir, owner.attempt_id);
+  try {
+    for (const identity of obligation.processes) reapExactIdentity(identity, obligation.scope_seal);
+    if (obligation.kind === "reviewer") reapSealedScope(obligation.scope_seal);
+    removeExactStagedInputRoot(obligation.staged_input_root, fault); fault?.("after_cleanup");
+    const settledBody = { v: 2, attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_handle: owner.host_handle,
+      cleanup_sha256: cleanup.sha256, settled_at: new Date().toISOString() };
+    if (!publishOnce(paths.settled, signed(settledBody, owner.secret))) readBoundArtifact(paths.settled, "cleanup settled", owner, { cleanup_sha256: settledBody.cleanup_sha256 });
+    fault?.("after_settled");
+    const resultPath = path.join(state.runDir, `attempt-${owner.attempt_id}.result.json`), body = {
+      attempt_id: owner.attempt_id, lock_id: owner.lock_id, host_kind: "local_supervisor", host_handle: owner.host_handle,
+      status: terminalStatus, exit_code: obligation.terminal.exit_code, signal: obligation.terminal.signal,
+      ...(obligation.terminal.termination ? { termination: obligation.terminal.termination } : {}),
+      error: terminalStatus === "completed" ? null : `cleanup recovered after incomplete host settlement: ${cleanup.value.error}`, completed_at: new Date().toISOString(),
+    };
+    if (!publishOnce(resultPath, signed(body, owner.secret, "result_auth_sha256"))
+      && !validTerminal(secureRead(resultPath, "terminal result").value, owner)) fail("terminal result conflicts with cleanup recovery", "HOST_ARTIFACT_INVALID");
+    fault?.("after_terminal"); return resultPath;
+  } catch (error) { throw attachCleanupTerminal(error, obligation.terminal); }
 }
 function retainReviewerCleanup(capability, { root, binding, scopeSeal } = {}) {
   const state = stateFor(capability); assertRunLockHeld(capability, state.runDir);
@@ -986,8 +995,10 @@ async function waitForTerminalResult(receipt, { timeoutMs = receipt.timeout_ms +
     }
     const cleanupPath = receiptStates.get(receipt).paths.cleanup;
     if (fs.existsSync(cleanupPath)) {
-      const cleanup = readBoundArtifactEnvelope(cleanupPath, "cleanup-incomplete status", owner);
-      fail("executor cleanup is incomplete; no terminal result was published", "HOST_CLEANUP_INCOMPLETE", { cleanup_sha256: cleanup.sha256, recommended_action: "inspect" });
+      const cleanup = readCleanupObligation(cleanupPath, receipt.run_dir, owner);
+      fail("executor cleanup is incomplete; no terminal result was published", "HOST_CLEANUP_INCOMPLETE", {
+        cleanup_sha256: cleanup.sha256, recommended_action: "inspect", terminal: { ...cleanup.obligation.terminal },
+      });
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
