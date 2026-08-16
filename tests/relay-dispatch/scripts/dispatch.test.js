@@ -909,12 +909,15 @@ test("Codex output written just before timeout is not positive completion eviden
   // or move it after termination; it cannot run it 4.65s early and reverse this verdict.
   assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
   const output = json(result.stdout);
-  assert.equal(output.host_status, "timed_out");
-  assert.equal(output.status, "cancelled");
-  assert.notEqual(output.status, "completed");
+  // Bind the fail-closed class, not one racing shape: when the write slips past the
+  // deadline the SIGTERM'd gate can close naturally as "failed" before the timeout
+  // settle path stamps "timed_out"; both are correct refusals of completion.
+  assert.ok(new Set(["timed_out", "failed"]).has(output.host_status), JSON.stringify(output));
+  assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
+  assert.notEqual(output.termination, "timeout_after_completion");
   const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
   const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
-  assert.equal(attempts.at(-1).payload.status, "cancelled");
+  assert.ok(new Set(["cancelled", "failed"]).has(attempts.at(-1).payload.status), JSON.stringify(attempts.at(-1).payload));
   assert.notEqual(attempts.at(-1).payload.status, "completed");
 });
 
