@@ -64,6 +64,16 @@ failures across the loop; base tree: at least one reproduced failure within the
 bounded loop). Ambient process churn dominates reproduction, so a zero-failure
 base batch is a statement about the host at that moment, not about the defect.
 
+- Measurement (2026-08-16, this host; 12 busy-loop CPU oversubscription;
+  single-test loops of the OpenCode cancellation test):
+  - Fix tree: 0 failures / 10 runs, plus earlier same-day batches of 0/10
+    unloaded and 0/20 oversubscribed with fork churn — zero failures in 40
+    total fix-tree runs.
+  - Base `0f579a1` (isolated worktree): first reproduced failure at run 2 of a
+    bounded 40-run loop; earlier same-day 20-run base batches under varying
+    ambient churn measured 3/20 and 0/20. Reproduction tracks ambient process
+    churn, as explained above.
+
 ## Safety contract
 
 - Treat `run.json`, the fact journal, intents, receipts, and merge

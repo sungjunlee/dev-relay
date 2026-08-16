@@ -95,7 +95,7 @@ function stagedInputRoot(t) {
   return root;
 }
 
-test("escaped-process audit rejects a recycled holder instead of recording the impostor identity", () => {
+test("pre-fix tracked-pid admission admits a recycled holder that the shipped exact-identity guard rejects", () => {
   const observed = { pid: 99_000_001, ppid: 1, pgid: 99_000_001, scope: null,
     identity: { pid: 99_000_001, pgid: 99_000_001, state: "Ss", started_at: "2026-08-16T09:35:06.000Z" } };
   const recorded = { pid: 99_000_001, pgid: 99_000_001, started_at: "2026-08-16T09:16:28.000Z" };
@@ -104,6 +104,10 @@ test("escaped-process audit rejects a recycled holder instead of recording the i
     gateIdentity: { pid: 99_000_002, pgid: 99_000_002, started_at: "2026-08-16T09:16:27.000Z" },
   });
   assert.deepEqual(candidates, [], "a tracked PID alone must not promote its recycled holder into the signed cleanup obligation");
+
+  const preFixTrackedPidAdmission = (row, tracked) => tracked.some((identity) => identity.pid === row.pid);
+  assert.equal(preFixTrackedPidAdmission(observed, [recorded]), true,
+    "the pre-fix tracked-PID seed would admit the recycled holder as a cleanup obligation");
 });
 
 test("escaped-process audit keeps an identity-indistinguishable unsealed holder fail-closed", () => {
