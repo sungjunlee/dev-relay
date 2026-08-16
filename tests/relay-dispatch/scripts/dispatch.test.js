@@ -963,6 +963,7 @@ test("recognized OpenCode stderr remains typed when the gate exits during Relay 
     ...value.env, FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_EXIT_ON_TERM: "1",
   });
   assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  assert.notEqual(result.stdout, "", `dispatch must emit its typed cancellation result on stdout:\n${result.stderr}`);
   const output = json(result.stdout);
   assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
   assert.equal(output.termination, "provider_unavailable", JSON.stringify(output));
