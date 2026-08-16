@@ -860,9 +860,10 @@ test("dispatch persists immutable bindings and exact attempt facts but never aut
 
 test("Codex completion written before a timeout is durably completed after the hung executor is killed", { timeout: 30_000 }, async () => {
   const value = fixture("codex-completion-then-hang");
+  const github = githubObservationFixture(value, "completion-then-hang");
   fs.writeFileSync(value.prompt, JSON.stringify({ hang_after_output: true }));
   const result = run(value, ["--branch", "completion-then-hang", "--prompt-file", value.prompt,
-    "--rubric-file", value.rubric, "--timeout", "1", "--json"]);
+    "--rubric-file", value.rubric, "--timeout", "5", "--json"], github.env);
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const output = json(result.stdout);
   assert.equal(output.status, "completed");
@@ -884,7 +885,17 @@ test("Codex completion written before a timeout is durably completed after the h
     stable_ms: 250,
   });
   assert.match(hostResult.result_auth_sha256, /^[0-9a-f]{64}$/);
-  const inspected = await runtime.inspectRun({ runDir: output.run_dir });
+  const stubKeys = ["RELAY_GIT_BIN", "RELAY_GH_BIN", "RELAY_TEST_GITHUB_STATE", "RELAY_TEST_REAL_GIT"];
+  const prevEnv = Object.fromEntries(stubKeys.map((key) => [key, process.env[key]]));
+  for (const key of stubKeys) process.env[key] = github.env[key];
+  let inspected;
+  try {
+    inspected = await runtime.inspectRun({ runDir: output.run_dir });
+  } finally {
+    for (const key of stubKeys) {
+      if (prevEnv[key] === undefined) delete process.env[key]; else process.env[key] = prevEnv[key];
+    }
+  }
   assert.equal(inspected.derived.reason, "publication_incomplete");
   assert.equal(inspected.recommended_action.steps.includes("close_dead_attempt"), false);
 });
