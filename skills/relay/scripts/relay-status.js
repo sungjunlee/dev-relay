@@ -358,7 +358,7 @@ function publicRunRow(row) {
 
 function pathClaimsCandidate(claimedPath, candidatePath) {
   const claimed = path.resolve(claimedPath), candidate = path.resolve(candidatePath);
-  return claimed === candidate || claimed.startsWith(`${candidate}${path.sep}`) || candidate.startsWith(`${claimed}${path.sep}`);
+  return claimed === candidate || claimed.startsWith(`${candidate}${path.sep}`);
 }
 
 function worktreeCandidates(scan, { minAgeDays, nowMs = Date.now() }) {
@@ -425,19 +425,7 @@ function worktreeCandidates(scan, { minAgeDays, nowMs = Date.now() }) {
     for (const runEntry of runEntries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
       const bucket = path.join(topPath, runEntry.name);
       const runDir = path.join(scan.runsRoot, topEntry.name, runEntry.name);
-      let leafEntries;
-      try {
-        leafEntries = fs.readdirSync(bucket, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-      } catch (error) {
-        candidates.push({ repo_slug: topEntry.name, run_id: runEntry.name, run_dir: runDir, worktree_path: bucket,
-          layout: "current", classification: "unprovable", reason: "worktree_scan_failed", eligible: false,
-          age_days: null, applied: false, diagnostics: [{ code: "worktree_scan_failed", message: error.message }] });
-        continue;
-      }
-      if (!leafEntries.length) addCandidate(bucket, topEntry.name, runEntry.name, runDir, "current");
-      for (const leaf of leafEntries.sort((a, b) => a.name.localeCompare(b.name))) {
-        addCandidate(path.join(bucket, leaf.name), topEntry.name, runEntry.name, runDir, "current");
-      }
+      addCandidate(bucket, topEntry.name, runEntry.name, runDir, "current");
     }
   }
   return candidates;
@@ -462,7 +450,7 @@ function applyGcCandidate(candidate, scan, { minAgeDays, nowMs = Date.now() }) {
     if (refreshed.derived.terminal !== true || refreshed.age_days === null || refreshed.age_days < minAgeDays) {
       throw Object.assign(new Error("run is no longer terminal and aged"), { code: "terminal_age_revalidation_failed" });
     }
-    if (path.resolve(refreshed.record.git.worktree) !== path.resolve(candidate.worktree_path)) {
+    if (!pathClaimsCandidate(refreshed.record.git.worktree, candidate.worktree_path)) {
       throw Object.assign(new Error(`run.json git.worktree does not match ${candidate.worktree_path}`), { code: "worktree_binding_mismatch" });
     }
     fs.rmSync(candidate.worktree_path, { recursive: true });

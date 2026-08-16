@@ -134,23 +134,39 @@ function fixture(t) {
   createRun(value, "reviewed", [started("reviewed"), finished("reviewed"), verified("reviewed"), reviewed("reviewed")]);
   createRun(value, "merged-unclosed", [started("merged-unclosed"), finished("merged-unclosed"), merged("merged-unclosed")], { local: false });
 
-  const terminalWorktree = marker(path.join(relayHome, "worktrees", slug, "terminal-aged", "repo"), "terminal");
+  const terminalCandidate = path.join(relayHome, "worktrees", slug, "terminal-aged");
+  const terminalWorktree = marker(path.join(terminalCandidate, "repo"), "terminal");
   createRun(value, "terminal-aged", [closed("terminal-aged")], { worktree: terminalWorktree, age: 30 });
-  const youngWorktree = marker(path.join(relayHome, "worktrees", slug, "terminal-young", "repo"), "young");
+  const youngCandidate = path.join(relayHome, "worktrees", slug, "terminal-young");
+  const youngWorktree = marker(path.join(youngCandidate, "repo"), "young");
   createRun(value, "terminal-young", [closed("terminal-young")], { worktree: youngWorktree, age: 2 });
-  const nonTerminalWorktree = marker(path.join(relayHome, "worktrees", slug, "protected-open", "repo"), "protected");
+  const nonTerminalCandidate = path.join(relayHome, "worktrees", slug, "protected-open");
+  const nonTerminalWorktree = marker(path.join(nonTerminalCandidate, "repo"), "protected");
   createRun(value, "protected-open", [started("protected-open")], { worktree: nonTerminalWorktree });
-  const mismatchWorktree = marker(path.join(relayHome, "worktrees", slug, "binding-mismatch", "repo"), "mismatch");
+  const mismatchCandidate = path.join(relayHome, "worktrees", slug, "binding-mismatch");
+  const mismatchWorktree = marker(path.join(mismatchCandidate, "repo"), "mismatch");
   createRun(value, "binding-mismatch", [closed("binding-mismatch")], { worktree: path.join(root, "different-worktree"), age: 30 });
 
   const legacyRun = path.join(runs, "legacy-run");
   fs.mkdirSync(legacyRun);
   fs.writeFileSync(path.join(legacyRun, "legacy.json"), "{}\n");
-  const legacyBound = marker(path.join(relayHome, "worktrees", slug, "legacy-run", "repo"), "legacy");
-  const orphanCurrent = marker(path.join(relayHome, "worktrees", slug, "orphan-current", "repo"), "orphan-current");
+  const legacyCandidate = path.join(relayHome, "worktrees", slug, "legacy-run");
+  const legacyBound = marker(path.join(legacyCandidate, "repo"), "legacy");
+  const orphanCandidate = path.join(relayHome, "worktrees", slug, "orphan-current");
+  const orphanCurrent = marker(path.join(orphanCandidate, "repo"), "orphan-current");
+  fs.writeFileSync(path.join(orphanCandidate, "root-marker.txt"), "remove the candidate root\n");
   const orphanHash = marker(path.join(relayHome, "worktrees", "abcdef123456"), "orphan-hash");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  return { ...value, terminalWorktree, youngWorktree, nonTerminalWorktree, mismatchWorktree, legacyBound, orphanCurrent, orphanHash };
+  return {
+    ...value,
+    terminalCandidate, terminalWorktree,
+    youngCandidate, youngWorktree,
+    nonTerminalCandidate, nonTerminalWorktree,
+    mismatchCandidate, mismatchWorktree,
+    legacyCandidate, legacyBound,
+    orphanCandidate, orphanCurrent,
+    orphanHash,
+  };
 }
 
 function treeSnapshot(root) {
@@ -204,13 +220,22 @@ test("--gc is a dry run and classifies both layouts without mutating bytes", (t)
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout), byPath = new Map(output.gc.candidates.map((row) => [row.worktree_path, row]));
   assert.equal(output.gc.apply, false);
-  assert.equal(byPath.get(value.terminalWorktree).classification, "terminal_aged");
-  assert.equal(byPath.get(value.orphanCurrent).classification, "orphan");
+  assert.equal(byPath.get(value.terminalCandidate).classification, "terminal_aged");
+  assert.equal(byPath.get(value.orphanCandidate).classification, "orphan");
   assert.equal(byPath.get(value.orphanHash).classification, "orphan");
-  assert.equal(byPath.get(value.nonTerminalWorktree).reason, "non_terminal");
-  assert.equal(byPath.get(value.legacyBound).reason, "legacy_bound");
-  assert.equal(byPath.get(value.youngWorktree).reason, "terminal_too_young");
-  assert.equal(byPath.get(value.mismatchWorktree).classification, "terminal_aged");
+  assert.equal(byPath.get(value.nonTerminalCandidate).reason, "non_terminal");
+  assert.equal(byPath.get(value.legacyCandidate).reason, "legacy_bound");
+  assert.equal(byPath.get(value.youngCandidate).reason, "terminal_too_young");
+  assert.equal(byPath.get(value.mismatchCandidate).classification, "terminal_aged");
+  assert.deepEqual(output.gc.candidates.map((row) => row.worktree_path).sort(), [
+    value.terminalCandidate,
+    value.youngCandidate,
+    value.nonTerminalCandidate,
+    value.mismatchCandidate,
+    value.legacyCandidate,
+    value.orphanCandidate,
+    value.orphanHash,
+  ].sort());
   assert.deepEqual(treeSnapshot(value.relayHome), before);
 });
 
@@ -219,15 +244,16 @@ test("--gc --apply deletes only eligible revalidated paths and reports binding m
   const result = run(["--all", "--gc", "--apply", "--min-age-days=14", "--json"], value.relayHome);
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout), byPath = new Map(output.gc.candidates.map((row) => [row.worktree_path, row]));
-  assert.equal(fs.existsSync(value.terminalWorktree), false);
-  assert.equal(fs.existsSync(value.orphanCurrent), false);
+  assert.equal(fs.existsSync(value.terminalCandidate), false);
+  assert.equal(fs.existsSync(value.orphanCandidate), false);
   assert.equal(fs.existsSync(value.orphanHash), false);
   assert.equal(fs.readFileSync(path.join(value.nonTerminalWorktree, "marker.txt"), "utf8"), "protected");
   assert.equal(fs.readFileSync(path.join(value.legacyBound, "marker.txt"), "utf8"), "legacy");
   assert.equal(fs.readFileSync(path.join(value.youngWorktree, "marker.txt"), "utf8"), "young");
   assert.equal(fs.readFileSync(path.join(value.mismatchWorktree, "marker.txt"), "utf8"), "mismatch");
-  assert.equal(byPath.get(value.mismatchWorktree).applied, false);
-  assert.ok(byPath.get(value.mismatchWorktree).diagnostics.some((entry) => entry.code === "worktree_binding_mismatch"));
+  assert.equal(fs.existsSync(value.mismatchCandidate), true);
+  assert.equal(byPath.get(value.mismatchCandidate).applied, false);
+  assert.ok(byPath.get(value.mismatchCandidate).diagnostics.some((entry) => entry.code === "worktree_binding_mismatch"));
   assert.equal(output.gc.summary.removed, 3);
   for (const runId of ["terminal-aged", "binding-mismatch", "legacy-run"]) {
     assert.equal(fs.existsSync(path.join(value.runs, runId)), true, `${runId} run artifacts stay retained`);
@@ -238,7 +264,7 @@ test("threshold boundary and strict flag adjacency fail closed", (t) => {
   const value = fixture(t);
   const protectedAt31 = run(["--all", "--gc", "--min-age-days", "31", "--json"], value.relayHome);
   assert.equal(protectedAt31.status, 0, protectedAt31.stderr);
-  const terminal = JSON.parse(protectedAt31.stdout).gc.candidates.find((row) => row.worktree_path === value.terminalWorktree);
+  const terminal = JSON.parse(protectedAt31.stdout).gc.candidates.find((row) => row.worktree_path === value.terminalCandidate);
   assert.equal(terminal.classification, "unprovable");
   assert.equal(terminal.reason, "terminal_too_young");
 
