@@ -13,7 +13,7 @@ const { createRunRecord } = runStore;
 
 const ROOT = path.resolve(__dirname, "../../..");
 const STATUS = path.join(ROOT, "skills/relay/scripts/relay-status.js");
-const { scanAllRuns, worktreeCandidates } = require(STATUS);
+const { applyGcCandidate, scanAllRuns, worktreeCandidates } = require(STATUS);
 const SHA = "a".repeat(40);
 const TARGET = "b".repeat(40);
 const HASH = "c".repeat(64);
@@ -164,7 +164,7 @@ function fixture(t) {
   const orphanCandidate = path.join(relayHome, "worktrees", slug, "orphan-current");
   const orphanCurrent = marker(path.join(orphanCandidate, "repo"), "orphan-current");
   fs.writeFileSync(path.join(orphanCandidate, "root-marker.txt"), "remove the candidate root\n");
-  const orphanHash = marker(path.join(relayHome, "worktrees", "abcdef123456"), "orphan-hash");
+  const legacyHash = marker(path.join(relayHome, "worktrees", "abcdef123456"), "legacy-hash");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return {
     ...value,
@@ -175,7 +175,7 @@ function fixture(t) {
     legacyCandidate, legacyBound,
     version2Candidate, version2Bound, version2Run,
     orphanCandidate, orphanCurrent,
-    orphanHash,
+    legacyHash,
   };
 }
 
@@ -256,7 +256,9 @@ test("--gc is a dry run and classifies both layouts without mutating bytes", (t)
   assert.equal(output.gc.apply, false);
   assert.equal(byPath.get(value.terminalCandidate).classification, "terminal_aged");
   assert.equal(byPath.get(value.orphanCandidate).classification, "orphan");
-  assert.equal(byPath.get(value.orphanHash).classification, "orphan");
+  assert.equal(byPath.get(value.legacyHash).classification, "unprovable");
+  assert.equal(byPath.get(value.legacyHash).reason, "legacy_layout_unprovable");
+  assert.equal(byPath.get(value.legacyHash).eligible, false);
   assert.equal(byPath.get(value.nonTerminalCandidate).reason, "non_terminal");
   assert.equal(byPath.get(value.legacyCandidate).reason, "legacy_bound");
   assert.equal(byPath.get(value.version2Candidate).classification, "unprovable");
@@ -272,19 +274,21 @@ test("--gc is a dry run and classifies both layouts without mutating bytes", (t)
     value.legacyCandidate,
     value.version2Candidate,
     value.orphanCandidate,
-    value.orphanHash,
+    value.legacyHash,
   ].sort());
   assert.deepEqual(treeSnapshot(value.relayHome), before);
 });
 
 test("--gc --apply deletes only eligible revalidated paths and reports binding mismatch", (t) => {
   const value = fixture(t);
+  const legacyHashBefore = treeSnapshot(value.legacyHash);
   const result = run(["--all", "--gc", "--apply", "--min-age-days=14", "--json"], value.relayHome);
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout), byPath = new Map(output.gc.candidates.map((row) => [row.worktree_path, row]));
   assert.equal(fs.existsSync(value.terminalCandidate), false);
   assert.equal(fs.existsSync(value.orphanCandidate), false);
-  assert.equal(fs.existsSync(value.orphanHash), false);
+  assert.equal(fs.existsSync(value.legacyHash), true);
+  assert.deepEqual(treeSnapshot(value.legacyHash), legacyHashBefore);
   assert.equal(fs.readFileSync(path.join(value.nonTerminalWorktree, "marker.txt"), "utf8"), "protected");
   assert.equal(fs.readFileSync(path.join(value.legacyBound, "marker.txt"), "utf8"), "legacy");
   assert.equal(fs.readFileSync(path.join(value.version2Bound, "marker.txt"), "utf8"), "version-2");
@@ -293,10 +297,41 @@ test("--gc --apply deletes only eligible revalidated paths and reports binding m
   assert.equal(fs.existsSync(value.mismatchCandidate), true);
   assert.equal(byPath.get(value.mismatchCandidate).applied, false);
   assert.ok(byPath.get(value.mismatchCandidate).diagnostics.some((entry) => entry.code === "worktree_binding_mismatch"));
-  assert.equal(output.gc.summary.removed, 3);
+  assert.equal(output.gc.summary.removed, 2);
   for (const runId of ["terminal-aged", "binding-mismatch", "legacy-run", "version-2"]) {
     assert.equal(fs.existsSync(path.join(value.runs, runId)), true, `${runId} run artifacts stay retained`);
   }
+});
+
+test("legacy top-level layout stays unprovable even with a v3 ledger claim", (t) => {
+  const value = fixture(t);
+  const scan = scanAllRuns({ relayHome: value.relayHome });
+  scan.rows[0].record.git.worktree = path.join(value.legacyHash, "repo");
+
+  const candidate = worktreeCandidates(scan, { minAgeDays: 14 })
+    .find((row) => row.worktree_path === value.legacyHash);
+
+  assert.equal(candidate.classification, "unprovable");
+  assert.equal(candidate.reason, "legacy_layout_unprovable");
+  assert.equal(candidate.eligible, false);
+});
+
+test("orphan apply skips deletion when the exact run directory materializes after scan", (t) => {
+  const value = fixture(t);
+  const scan = scanAllRuns({ relayHome: value.relayHome });
+  const candidate = worktreeCandidates(scan, { minAgeDays: 14 })
+    .find((row) => row.worktree_path === value.orphanCandidate);
+  const before = treeSnapshot(value.orphanCandidate);
+
+  assert.equal(candidate.layout, "current");
+  assert.equal(candidate.classification, "orphan");
+  fs.mkdirSync(candidate.run_dir, { recursive: true });
+
+  applyGcCandidate(candidate, scan, { minAgeDays: 14 });
+
+  assert.equal(candidate.applied, false);
+  assert.ok(candidate.diagnostics.some((entry) => entry.code === "run_directory_appeared"));
+  assert.deepEqual(treeSnapshot(value.orphanCandidate), before);
 });
 
 test("threshold boundary and strict flag adjacency fail closed", (t) => {

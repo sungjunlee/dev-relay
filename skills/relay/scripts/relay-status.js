@@ -389,7 +389,9 @@ function worktreeCandidates(scan, { minAgeDays, nowMs = Date.now() }) {
     const runExists = runDir ? fs.existsSync(runDir) : false;
     const row = runDir ? byRunDir.get(path.resolve(runDir)) : null;
     let classification = "unprovable", reason = "ledger_state_unprovable", eligible = false;
-    if (!runExists && !owner) {
+    if (layout === "legacy_hash") {
+      reason = "legacy_layout_unprovable";
+    } else if (!runExists && !owner) {
       classification = "orphan"; reason = "run_directory_missing"; eligible = true;
     } else if (!runExists && owner) {
       reason = "claimed_by_ledger";
@@ -446,11 +448,14 @@ function applyGcCandidate(candidate, scan, { minAgeDays, nowMs = Date.now() }) {
     const stat = fs.lstatSync(candidate.worktree_path);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw Object.assign(new Error("candidate is not a regular directory"), { code: "candidate_identity_changed" });
     if (candidate.classification === "orphan") {
-      if (candidate.run_dir && fs.existsSync(candidate.run_dir)) throw Object.assign(new Error("run directory appeared before removal"), { code: "run_directory_appeared" });
+      if (candidate.layout !== "current" || !candidate.run_dir) {
+        throw Object.assign(new Error("orphan removal requires an exact current-layout run directory"), { code: "orphan_layout_unprovable" });
+      }
       const refreshedScan = scanAllRuns({ relayHome: scan.relayHome, nowMs });
       const claimedNow = [...refreshedScan.rows, ...refreshedScan.terminalRows]
         .find((row) => pathClaimsCandidate(row.record.git.worktree, candidate.worktree_path));
       if (claimedNow) throw Object.assign(new Error(`worktree is claimed by ${claimedNow.run_id}`), { code: "claimed_by_ledger" });
+      if (fs.existsSync(candidate.run_dir)) throw Object.assign(new Error("run directory appeared before removal"), { code: "run_directory_appeared" });
       fs.rmSync(candidate.worktree_path, { recursive: true });
       candidate.applied = true;
       return candidate;
