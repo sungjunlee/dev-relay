@@ -1,6 +1,6 @@
 ---
 milestone: single-user-friction
-status: active
+status: completed
 started: 2026-08-15
 due: TBD
 component: "operator-surface"
@@ -24,7 +24,7 @@ measured subset). No new lifecycle writer, facts, mutable state, or registry.
 
 ### Batch 2 — cockpit + GC (after Batch 1: rows name `relay-advance.js` as the next command)
 
-- [x] #1265 — relay-status --all cockpit + retained-worktree GC (ready_to_merge, PR #1275)
+- [x] #1265 — relay-status --all cockpit + retained-worktree GC (MERGED, PR #1275)
 
 ### Batch 3 — naming honesty (docs-only; disjoint files, may interleave with Batch 2)
 
