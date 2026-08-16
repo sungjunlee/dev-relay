@@ -1097,12 +1097,12 @@ function runSupervisor(configPath, configSha) {
     } catch { completionObservation = null; }
   };
   const completedAfterTermination = (fallback) => {
-    // The first exact binding must predate timeout termination, remain stable for
-    // the adapter's window, and still match after the scoped group is proven dead.
+    // The first exact binding must remain stable for the adapter's full window
+    // before timeout termination is requested, then still match after the scoped group is proven dead.
     // A file that is still being written therefore cannot supply completion proof.
     if (requested !== "timed_out" || !terminationRequestedAt || !completionObservation
       || completionObservation.since > terminationRequestedAt
-      || Date.now() - completionObservation.since < config.executor_completion_signal.stableMs) return null;
+      || terminationRequestedAt - completionObservation.since < config.executor_completion_signal.stableMs) return null;
     try {
       const binding = regularFileBinding(config.executor_result, "executor result", { canonical: false });
       const key = `${binding.dev}:${binding.ino}:${binding.size}:${binding.sha256}`;

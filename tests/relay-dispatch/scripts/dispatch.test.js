@@ -900,6 +900,24 @@ test("Codex completion written before a timeout is durably completed after the h
   assert.equal(inspected.recommended_action.steps.includes("close_dead_attempt"), false);
 });
 
+test("Codex output written just before timeout is not positive completion evidence", { timeout: 30_000 }, () => {
+  const value = fixture("codex-output-at-timeout");
+  fs.writeFileSync(value.prompt, JSON.stringify({ write_output_after_ms: 4900, hang_after_output: true }));
+  const result = run(value, ["--branch", "output-at-timeout", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "5", "--json"]);
+  // Scheduling jitter can only delay the write, shrinking the pre-termination stable window,
+  // or move it after termination; it cannot run it 4.65s early and reverse this verdict.
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(output.host_status, "timed_out");
+  assert.equal(output.status, "cancelled");
+  assert.notEqual(output.status, "completed");
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
+  assert.equal(attempts.at(-1).payload.status, "cancelled");
+  assert.notEqual(attempts.at(-1).payload.status, "completed");
+});
+
 test("a Codex result that keeps changing until timeout is not positive completion evidence", { timeout: 30_000 }, () => {
   const value = fixture("codex-partial-at-timeout");
   fs.writeFileSync(value.prompt, JSON.stringify({ partial_then_hang: true }));

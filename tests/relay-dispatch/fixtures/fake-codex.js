@@ -22,6 +22,9 @@ if (controls.delay_ms) {
 }
 fs.writeFileSync(path.join(cwd, "executor-change.txt"), "review me\n", "utf8");
 if (controls.empty === true) process.exit(0);
+if (controls.write_output_after_ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(controls.write_output_after_ms));
+}
 fs.writeFileSync(output, "fake executor completed\n", "utf8");
 if (controls.partial_then_hang === true) {
   process.on("SIGTERM", () => {});
