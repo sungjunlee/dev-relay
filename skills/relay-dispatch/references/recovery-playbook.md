@@ -55,6 +55,15 @@ continues recovery idempotently.
 The refusal payload is advisory; the signed `cleanup-incomplete` artifact is the
 authoritative source for its terminal context.
 
+To reproduce or base-control the recycled-PID refusal class, generic CPU load is
+not sufficient: the race needs a same-window recycle of the specific freed
+cleanup pid. Run the OpenCode cancellation test in a loop under CPU
+oversubscription in an isolated worktree checked out at the exact SHA under
+measurement, and bind the claim to the loop's exit predicate (fix tree: zero
+failures across the loop; base tree: at least one reproduced failure within the
+bounded loop). Ambient process churn dominates reproduction, so a zero-failure
+base batch is a statement about the host at that moment, not about the defect.
+
 ## Safety contract
 
 - Treat `run.json`, the fact journal, intents, receipts, and merge
