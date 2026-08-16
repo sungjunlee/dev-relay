@@ -105,6 +105,9 @@ operator attention, or its step budget; it never dispatches, reviews, merges,
 or acquires a lifecycle lock itself. Supply `--verification-file` when the
 recommended recovery requires immutable verification evidence.
 
+Use `relay-status.js --all` for the offline cross-run cockpit. Add `--gc` for a
+retained-worktree dry run and `--apply` only for explicit reclamation.
+
 Capture `run_id`, `run_dir`, and the current action key. The immutable record is `~/.relay/runs/<repo-slug>/<run-id>/run.json`; lifecycle state is folded from `events.jsonl` plus live observations, never stored as mutable lifecycle state. For in-flight writes, resolve ownership per the same [sprint-integration.md](references/sprint-integration.md) contract.
 
 ## Step 4: Review (relay-review)
