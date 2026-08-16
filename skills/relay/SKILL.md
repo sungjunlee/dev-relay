@@ -91,6 +91,20 @@ Follow `inspection.recommended_action` exactly:
 - `redispatch` → call dispatch with the immutable `run_id`; all other resume attempts fail before writing.
 - `wait` → keep polling; `operator_attention` or `none` → stop and resolve the blocker.
 
+After dispatch, the default conveyor for repeated `wait`/`recover` polling is the
+caller-only advance driver. It re-inspects before every action and invokes only
+canonical recovery, then prints the typed stop and exact next operator command:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/relay-advance.js" \
+  --run-dir "$RUN_DIR" --json
+```
+
+Advance stops for review, merge, redispatch, missing verification evidence,
+operator attention, or its step budget; it never dispatches, reviews, merges,
+or acquires a lifecycle lock itself. Supply `--verification-file` when the
+recommended recovery requires immutable verification evidence.
+
 Capture `run_id`, `run_dir`, and the current action key. The immutable record is `~/.relay/runs/<repo-slug>/<run-id>/run.json`; lifecycle state is folded from `events.jsonl` plus live observations, never stored as mutable lifecycle state. For in-flight writes, resolve ownership per the same [sprint-integration.md](references/sprint-integration.md) contract.
 
 ## Step 4: Review (relay-review)
