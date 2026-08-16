@@ -43,20 +43,20 @@ function baseFact(runId, type, index, payload, attemptId = null) {
   };
 }
 
-function started(runId, index = 1) {
+function started(runId, index = 1, attemptId = "attempt-1") {
   return baseFact(runId, "attempt_started", index, {
     executor: "codex", model: "gpt-5.6-sol", start_sha: SHA,
     host_kind: "local_supervisor", host_handle: "fixture",
     stdout_path: "/tmp/stdout", stderr_path: "/tmp/stderr", result_path: "/tmp/result",
     timeout_ms: 60_000,
-  }, "attempt-1");
+  }, attemptId);
 }
 
-function finished(runId, index = 2) {
+function finished(runId, index = 2, attemptId = "attempt-1") {
   return baseFact(runId, "attempt_finished", index, {
     status: "completed", start_sha: SHA, final_sha: TARGET, tree_sha: TARGET,
     result_path: "/tmp/result", exit_code: 0, verification_status: "passed",
-  }, "attempt-1");
+  }, attemptId);
 }
 
 function verified(runId, index = 3) {
@@ -69,9 +69,9 @@ function verified(runId, index = 3) {
   });
 }
 
-function reviewed(runId, index = 4) {
+function reviewed(runId, index = 4, verdict = "lgtm") {
   return baseFact(runId, "review_recorded", index, {
-    round: 1, verdict: "lgtm", reviewed_sha: TARGET,
+    round: 1, verdict, reviewed_sha: TARGET,
     done_criteria_sha256: HASH, reviewer: "reviewer",
     review_artifact: "/tmp/review", override: null,
   });
@@ -134,6 +134,15 @@ function fixture(t) {
   createRun(value, "attempt-dangling", [started("attempt-dangling"), finished("attempt-dangling")]);
   createRun(value, "verified", [started("verified"), finished("verified"), verified("verified")]);
   createRun(value, "reviewed", [started("reviewed"), finished("reviewed"), verified("reviewed"), reviewed("reviewed")]);
+  createRun(value, "retry-open", [
+    started("retry-open"), finished("retry-open"), verified("retry-open"),
+    reviewed("retry-open", 4, "changes_requested"), started("retry-open", 5, "attempt-2"),
+  ]);
+  createRun(value, "retry-dangling", [
+    started("retry-dangling"), finished("retry-dangling"), verified("retry-dangling"),
+    reviewed("retry-dangling", 4, "changes_requested"),
+    started("retry-dangling", 5, "attempt-2"), finished("retry-dangling", 6, "attempt-2"),
+  ]);
   createRun(value, "merged-unclosed", [started("merged-unclosed"), finished("merged-unclosed"), merged("merged-unclosed")], { local: false });
 
   const terminalCandidate = path.join(relayHome, "worktrees", slug, "terminal-aged");
@@ -207,9 +216,13 @@ test("--all classifies every durable state, summarizes legacy and is byte-preser
   assert.equal(classes.get("attempt-dangling"), "attempt_dangling");
   assert.equal(classes.get("verified"), "verified");
   assert.equal(classes.get("reviewed"), "reviewed");
+  assert.equal(classes.get("retry-open"), "attempt_open");
+  assert.equal(classes.get("retry-dangling"), "attempt_dangling");
   assert.equal(classes.get("merged-unclosed"), "merged_unclosed");
   assert.match(output.runs.find((row) => row.run_id === "verified").next_command, /relay-advance\.js/);
   assert.match(output.runs.find((row) => row.run_id === "reviewed").next_command, /relay-recover\.js.*inspect/);
+  assert.match(output.runs.find((row) => row.run_id === "retry-open").next_command, /relay-recover\.js.*inspect/);
+  assert.doesNotMatch(output.runs.find((row) => row.run_id === "retry-open").next_command, /relay-advance\.js/);
   assert.equal(output.summary.terminal, 3);
   assert.deepEqual(output.terminal_runs.map((row) => row.run_id).sort(), ["binding-mismatch", "terminal-aged", "terminal-young"]);
   assert.equal(output.legacy.length, 1);

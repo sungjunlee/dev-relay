@@ -247,13 +247,15 @@ function durableClassification(record, facts, derived) {
   if (types.has("run_closed")) return "terminal";
   if (types.has("merge_recorded")) return "merged_unclosed";
   if (derived.terminal === true) return "terminal";
-  if (types.has("review_recorded")) return "reviewed";
-  if (types.has("verification_recorded")) return "verified";
   const starts = facts.filter((fact) => fact.type === "attempt_started");
   const latestStart = starts.at(-1);
+  const startIndex = latestStart ? facts.indexOf(latestStart) : -1;
+  const currentFacts = facts.slice(startIndex + 1);
+  const currentTypes = new Set(currentFacts.map((fact) => fact.type));
+  if (currentTypes.has("review_recorded")) return "reviewed";
+  if (currentTypes.has("verification_recorded")) return "verified";
   if (!latestStart) return "empty";
-  const startIndex = facts.indexOf(latestStart);
-  const finished = facts.slice(startIndex + 1).some((fact) => (
+  const finished = currentFacts.some((fact) => (
     fact.attempt_id === latestStart.attempt_id
     && (fact.type === "attempt_finished" || fact.type === "attempt_interrupted")
   ));
