@@ -59,7 +59,7 @@ The CLI has a closed option contract. Unsupported flags fail closed.
 
 Essential flags:
 
-- `--branch, -b` starts a new retained run; `--run-id` requests a same-run redispatch.
+- `--branch, -b` starts a new retained run; `--base <ref>` selects the publication base (`origin/HEAD` by default). `--run-id` requests a same-run redispatch.
 - `--prompt, -p` or `--prompt-file` supplies the executor prompt.
 - `--rubric-file` is required for new dispatches. `--done-criteria-file` freezes a separate review anchor; otherwise the rubric is frozen as Done Criteria.
 - `--executor, -e` and `--model, -m` select execution. On `--run-id`, omit `--executor` to use the immutable executor bound in `run.json`; an explicit different executor fails before reading the prompt or writing an attempt. `--model` remains per-attempt.
