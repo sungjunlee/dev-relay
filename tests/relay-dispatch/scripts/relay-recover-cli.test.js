@@ -12,6 +12,7 @@ const { createRunRecord } = require("../../../skills/relay-dispatch/scripts/run-
 const factsApi = require("../../../skills/relay-dispatch/scripts/facts");
 const { validateFact } = factsApi;
 const host = require("../../../skills/relay-dispatch/scripts/host");
+const recovery = require("../../../skills/relay-dispatch/scripts/recover");
 
 const ROOT = path.resolve(__dirname, "../../..");
 const CLI = path.join(ROOT, "skills/relay/scripts/relay-recover.js");
@@ -96,6 +97,32 @@ function fixture({ branch = "main", delivery = "github" } = {}) {
 function writeFacts(runDir, facts) {
   facts.forEach((fact) => validateFact(fact));
   fs.writeFileSync(path.join(runDir, "events.jsonl"), `${facts.map(JSON.stringify).join("\n")}\n`);
+}
+
+function configureSuccessfulPrPublisher(f, headSha, { lag = false } = {}) {
+  const listCount = path.join(f.root, "fake-gh-list-count.txt");
+  const postCreateListCount = path.join(f.root, "fake-gh-post-create-list-count.txt");
+  const created = path.join(f.root, "fake-gh-created.txt");
+  const mode = path.join(f.root, "fake-gh-mode.txt");
+  fs.writeFileSync(mode, lag ? "lag" : "missing");
+  const row = {
+    number: 73, state: "OPEN", url: "https://example.test/pull/73",
+    headRefName: f.branch, headRefOid: headSha, baseRefName: "main",
+    headRepository: { nameWithOwner: f.remote }, headRepositoryOwner: { login: "owner" },
+    isCrossRepository: false, mergedAt: null, mergeCommit: null, body: "",
+  };
+  fs.writeFileSync(f.gh, [
+    "#!/usr/bin/env node",
+    "const fs=require('fs');",
+    `const count=${JSON.stringify(listCount)},post=${JSON.stringify(postCreateListCount)},created=${JSON.stringify(created)},mode=${JSON.stringify(mode)},row=${JSON.stringify(row)};`,
+    "const cmd=process.argv[2]+' '+process.argv[3];",
+    "if(cmd==='pr list'){const n=fs.existsSync(count)?Number(fs.readFileSync(count,'utf8')):0;fs.writeFileSync(count,String(n+1));if(!fs.existsSync(created)){process.stdout.write('[]');process.exit(0);}const m=fs.readFileSync(mode,'utf8').trim();if(m==='match'){process.stdout.write(JSON.stringify([row]));process.exit(0);}const p=fs.existsSync(post)?Number(fs.readFileSync(post,'utf8')):0;fs.writeFileSync(post,String(p+1));if(m==='lag'&&p>=1){fs.writeFileSync(mode,'match');process.stdout.write(JSON.stringify([row]));}else process.stdout.write('[]');}",
+    "else if(cmd==='pr create'){fs.writeFileSync(created,'1');process.exit(0);}",
+    "else{process.stderr.write('unsupported fake gh argv\\n');process.exit(2);}",
+    "",
+  ].join("\n"));
+  fs.chmodSync(f.gh, 0o755);
+  return { created, mode, postCreateListCount };
 }
 
 function durableSnapshot(runDir) {
@@ -691,6 +718,135 @@ test("production publication converges on an exact concurrently created PR witho
   assert.equal(activeFactBytes(eventsPath), activeFactsAfter);
   assert.equal(fs.readFileSync(receiptPath, "utf8"), receiptAfter);
   assert.equal(fs.readFileSync(countPath, "utf8"), "1");
+});
+
+test("PR publication re-observation has a bounded mismatch-then-match window", async (t) => {
+  const f = fixture({ branch: "recovery" });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const previousGh = process.env.RELAY_GH_BIN;
+  process.env.RELAY_GH_BIN = f.gh;
+  t.after(() => {
+    if (previousGh === undefined) delete process.env.RELAY_GH_BIN;
+    else process.env.RELAY_GH_BIN = previousGh;
+  });
+  const fake = configureSuccessfulPrPublisher(f, f.head, { lag: true });
+  execFileSync(f.gh, ["pr", "create"], { cwd: f.repo });
+  const github = await recovery.__testing.reobservePublishedPr({
+    repo: { root: f.repo, remote: f.remote },
+    git: { branch: f.branch, base_branch: "main" },
+  }, f.head);
+  assert.equal(github.matching_pr_count, 1);
+  assert.equal(github.pr_head_sha, f.head);
+  assert.equal(Number(fs.readFileSync(fake.postCreateListCount, "utf8")), 2);
+});
+
+test("PR publication re-observation stops after five persistent mismatches", async (t) => {
+  const f = fixture({ branch: "recovery" });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const previousGh = process.env.RELAY_GH_BIN;
+  process.env.RELAY_GH_BIN = f.gh;
+  t.after(() => {
+    if (previousGh === undefined) delete process.env.RELAY_GH_BIN;
+    else process.env.RELAY_GH_BIN = previousGh;
+  });
+  const fake = configureSuccessfulPrPublisher(f, f.head);
+  execFileSync(f.gh, ["pr", "create"], { cwd: f.repo });
+  const github = await recovery.__testing.reobservePublishedPr({
+    repo: { root: f.repo, remote: f.remote },
+    git: { branch: f.branch, base_branch: "main" },
+  }, f.head);
+  assert.equal(github.matching_pr_count, 0);
+  assert.equal(Number(fs.readFileSync(fake.postCreateListCount, "utf8")), 5);
+});
+
+test("successful PR create retries lagging list reads and converges once", (t) => {
+  const f = fixture({ branch: "recovery" });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(f.repo, "README.md"), "retry publication\n");
+  git(f.repo, ["add", "README.md"]);
+  git(f.repo, ["commit", "-m", "retry publication"]);
+  const finalHead = git(f.repo, ["rev-parse", "HEAD"]);
+  const finalTree = git(f.repo, ["rev-parse", "HEAD^{tree}"]);
+  writeFacts(f.runDir, [{
+    event_id: "attempt-finished", run_id: "issue-1135-cli", attempt_id: "attempt-1",
+    type: "attempt_finished", at: "2026-08-01T00:01:00Z", actor: "codex",
+    payload: { status: "completed", start_sha: f.head, final_sha: finalHead, tree_sha: finalTree,
+      result_path: path.join(f.runDir, "result.txt"), exit_code: 0, verification_status: "not_declared" },
+  }]);
+  const fake = configureSuccessfulPrPublisher(f, finalHead, { lag: true });
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const inspected = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  });
+  assert.equal(inspected.status, 0, inspected.stderr);
+  const action = JSON.parse(inspected.stdout).recommended_action;
+  const recovered = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "publish with retry", "--actor", "owner",
+    "--expected-action-key", action.key, "--json",
+  ], { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.equal(JSON.parse(recovered.stdout).status, "converged");
+  assert.equal(fs.readFileSync(fake.created, "utf8"), "1");
+  assert.equal(Number(fs.readFileSync(fake.postCreateListCount, "utf8")), 2);
+  assert.equal(fs.readdirSync(f.runDir).filter((name) => name.startsWith("recovery-intent-")).length, 1);
+  assert.equal(fs.readdirSync(f.runDir).filter((name) => name.startsWith("recovery-receipt-")).length, 1);
+});
+
+test("persistent PR publication mismatch strands an intent that inspect can resume", (t) => {
+  const f = fixture({ branch: "recovery" });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(f.repo, "README.md"), "persistent publication\n");
+  git(f.repo, ["add", "README.md"]);
+  git(f.repo, ["commit", "-m", "persistent publication"]);
+  const finalHead = git(f.repo, ["rev-parse", "HEAD"]);
+  const finalTree = git(f.repo, ["rev-parse", "HEAD^{tree}"]);
+  writeFacts(f.runDir, [{
+    event_id: "attempt-finished", run_id: "issue-1135-cli", attempt_id: "attempt-1",
+    type: "attempt_finished", at: "2026-08-01T00:01:00Z", actor: "codex",
+    payload: { status: "completed", start_sha: f.head, final_sha: finalHead, tree_sha: finalTree,
+      result_path: path.join(f.runDir, "result.txt"), exit_code: 0, verification_status: "not_declared" },
+  }]);
+  const fake = configureSuccessfulPrPublisher(f, finalHead);
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const inspected = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  });
+  assert.equal(inspected.status, 0, inspected.stderr);
+  const action = JSON.parse(inspected.stdout).recommended_action;
+  const failed = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "operator's publication", "--actor", "owner",
+    "--expected-action-key", action.key, "--json",
+  ], { cwd: ROOT, encoding: "utf8", env });
+  assert.notEqual(failed.status, 0);
+  assert.match(failed.stderr, /PR publication did not re-observe one exact repo\/head\/base\/SHA match/);
+  assert.equal(fs.readFileSync(fake.created, "utf8"), "1");
+  assert.equal(Number(fs.readFileSync(fake.postCreateListCount, "utf8")), 5);
+  const stranded = JSON.parse(spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  }).stdout);
+  assert.equal(stranded.blockers[0].code, "active_intent_pending");
+  assert.equal(stranded.recommended_action.kind, "operator_attention");
+  assert.equal(stranded.blockers[0].details.action_key, action.key);
+  assert.equal(stranded.blockers[0].details.actor, "owner");
+  assert.equal(stranded.blockers[0].details.reason, "operator's publication");
+  assert.equal(stranded.blockers[0].details.reason_code, "publication_incomplete");
+  assert.match(stranded.blockers[0].details.created_at, /^\d{4}-\d{2}-\d{2}T/);
+  const fresh = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "operator's publication", "--actor", "owner",
+    "--expected-action-key", stranded.recommended_action.key, "--json",
+  ], { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(fresh.status, 0, fresh.stderr);
+  const freshOutput = JSON.parse(fresh.stdout);
+  assert.equal(freshOutput.status, "refused");
+  assert.equal(freshOutput.blockers[0].code, "active_intent_pending");
+  assert.deepEqual(freshOutput.blockers[0].details, stranded.blockers[0].details);
+  const resume = stranded.blockers[0].details.resume_invocation;
+  assert.match(resume, /--expected-action-key [0-9a-f]{64}/);
+  assert.match(resume, /operator.*publication/);
+  fs.writeFileSync(fake.mode, "match");
+  const resumed = spawnSync("sh", ["-c", resume], { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(resumed.status, 0, resumed.stderr);
+  assert.equal(JSON.parse(resumed.stdout).status, "converged");
 });
 
 test("production recovery refuses a tracked remote outside the immutable run repository", (t) => {

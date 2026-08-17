@@ -657,6 +657,81 @@ test("recover refuses a stale inspect key before effects or durable writes", asy
   assert.equal(h.state.writes, 0);
 });
 
+test("pending intent exposes an exact resume command and exact identity resumes it", async () => {
+  const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
+  const intentKey = "1".repeat(64);
+  h.state.intent = {
+    schema_version: 1,
+    action_key: intentKey,
+    operation_id: `recover-${intentKey.slice(0, 32)}`,
+    created_at: "2026-08-01T00:03:00Z",
+    steps: ["record_or_create_pr"],
+    actor: "owner",
+    reason: "resume operator's publication",
+    reason_code: "publication_incomplete",
+    observed_event_id: "attempt-finished",
+    before_sha: HEAD,
+  };
+  const stale = await recoverRun({
+    ...h,
+    runDir: "/run",
+    actor: "owner",
+    reason: "fresh publication",
+    expectedActionKey: "2".repeat(64),
+    effects: { converge: async () => { throw new Error("effect called"); } },
+  });
+  assert.equal(stale.status, "refused");
+  assert.equal(stale.blockers[0].code, "active_intent_pending");
+  assert.deepEqual(stale.blockers[0].details, {
+    action_key: intentKey,
+    actor: "owner",
+    reason: "resume operator's publication",
+    reason_code: "publication_incomplete",
+    created_at: "2026-08-01T00:03:00Z",
+    resume_invocation: "node skills/relay/scripts/relay-recover.js recover --run-dir '/run' --expected-action-key 1111111111111111111111111111111111111111111111111111111111111111 --actor 'owner' --reason 'resume operator'\\''s publication' --json",
+  });
+  assert.deepEqual(h.state.effects, []);
+  const resumed = await recoverRun({
+    ...h,
+    runDir: "/run",
+    actor: "owner",
+    reason: "resume operator's publication",
+    expectedActionKey: intentKey,
+    effects: { converge: async () => ({ converged: true, applied: false }) },
+  });
+  assert.equal(resumed.status, "converged");
+  assert.equal(resumed.action_key, intentKey);
+  assert.equal(h.state.receipts.size, 1);
+});
+
+test("pending intent with mismatched actor or reason preserves identity refusal", async () => {
+  const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
+  const intentKey = "3".repeat(64);
+  h.state.intent = {
+    schema_version: 1,
+    action_key: intentKey,
+    operation_id: `recover-${intentKey.slice(0, 32)}`,
+    created_at: "2026-08-01T00:03:00Z",
+    steps: ["record_or_create_pr"],
+    actor: "owner",
+    reason: "publish safely",
+    reason_code: "publication_incomplete",
+    observed_event_id: "attempt-finished",
+    before_sha: HEAD,
+  };
+  const result = await recoverRun({
+    ...h,
+    runDir: "/run",
+    actor: "different-operator",
+    reason: "publish safely",
+    expectedActionKey: intentKey,
+    effects: { converge: async () => { throw new Error("effect called"); } },
+  });
+  assert.equal(result.status, "refused");
+  assert.equal(result.blockers[0].code, "active_intent_identity_mismatch");
+  assert.deepEqual(h.state.effects, []);
+});
+
 test("#1209 recovery reinspection requires the same action after live observations change", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
   const inspected = await inspectRun(h);
