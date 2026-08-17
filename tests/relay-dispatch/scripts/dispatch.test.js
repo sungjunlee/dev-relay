@@ -26,6 +26,7 @@ const CRASH_AFTER_START = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatc
 const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/adapter-runtime-preload.js");
 const READ_ONCE_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-prompt-read-once-preload.js");
 const RUN_CLAIM_RACE = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-run-claim-race-preload.js");
+const POST_SETTLE_FAULT = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-post-settle-fault-preload.js");
 
 function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -1026,6 +1027,28 @@ test("recognized OpenCode stderr remains typed when the gate exits during Relay 
   const typed = typedOpenCodeProviderUnavailable(result, value), output = typed.output;
   if (typed.kind === "refusal") return;
   assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
+});
+
+test("a settled attempt keeps its typed stdout shape when the gate faults during Relay cancellation", { timeout: 60_000 }, () => {
+  const value = fixture("opencode-post-settle-fault");
+  const result = run(value, ["--executor", "opencode", "--branch", "opencode-post-settle-fault", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
+    ...value.env,
+    FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_STAY_ALIVE: "1",
+    NODE_OPTIONS: [value.env.NODE_OPTIONS, `--require=${POST_SETTLE_FAULT}`].filter(Boolean).join(" "),
+    RELAY_TEST_POST_SETTLE_FAULT: "1",
+  });
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  assert.match(result.stderr, /simulated post-settle gate exit/, "the injected fault must actually fire");
+  const output = json(result.stdout);
+  assert.equal(output.status, "cancelled");
+  assert.equal(output.host_status, "cancelled");
+  assert.equal(output.termination, "provider_unavailable");
+  assert.ok(output.run_dir && output.attempt_id);
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const finished = journal.facts.find((fact) => fact.type === "attempt_finished");
+  assert.equal(finished.payload.status, "cancelled");
+  assert.equal(finished.attempt_id, output.attempt_id);
 });
 
 test("a malformed structured adapter result cannot turn an exit-zero host result into a completed attempt", () => {

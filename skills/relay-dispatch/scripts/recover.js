@@ -88,6 +88,32 @@ function commandFailure(error) {
 }
 function intentPath(runDir, key) { return path.join(runDir, `recovery-intent-${key}.json`); }
 function receiptPath(runDir, key) { return path.join(runDir, `recovery-receipt-${key}.json`); }
+function shellQuote(value) { return `'${String(value).replaceAll("'", "'\\''")}'`; }
+function recoveryResumeInvocation(runDir, intent) {
+  return [
+    "node", "skills/relay/scripts/relay-recover.js", "recover",
+    "--run-dir", shellQuote(runDir),
+    "--expected-action-key", intent.action_key,
+    "--actor", shellQuote(intent.actor),
+    "--reason", shellQuote(intent.reason),
+    "--json",
+  ].join(" ");
+}
+function pendingIntentBlocker(runDir, intent) {
+  return blocker(
+    "active_intent_pending",
+    "an unreceipted recovery intent is waiting; resume it with the exact immutable action identity",
+    false,
+    {
+      action_key: intent.action_key,
+      actor: intent.actor,
+      reason: intent.reason,
+      reason_code: intent.reason_code,
+      created_at: intent.created_at,
+      resume_invocation: recoveryResumeInvocation(runDir, intent),
+    },
+  );
+}
 function productionRecoveryIo(runDir) {
   return {
     readIntent({ facts = [] } = {}) {
@@ -569,6 +595,29 @@ function observeGithub(runRecord, { localHeadSha = null, recordedPrNumber = null
       error: commandFailure(error),
     };
   }
+}
+// GitHub's list endpoint can lag a successful PR create. Five observations at
+// 400ms intervals add at most 1.6s while bounding the read-after-write wait.
+const PR_REOBSERVE_ATTEMPTS = 5;
+const PR_REOBSERVE_BACKOFF_MS = 400;
+function exactPublishedPr(github, record, headSha) {
+  return github.available === true
+    && github.matching_pr_count === 1
+    && Number.isInteger(github.pr_number)
+    && github.head_ref === record.git.branch
+    && github.base_ref === record.git.base_branch
+    && github.pr_head_sha === headSha;
+}
+async function reobservePublishedPr(record, headSha) {
+  let github;
+  for (let attempt = 0; attempt < PR_REOBSERVE_ATTEMPTS; attempt += 1) {
+    github = observeGithub(record, { localHeadSha: headSha });
+    if (exactPublishedPr(github, record, headSha)) return github;
+    if (attempt + 1 < PR_REOBSERVE_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, PR_REOBSERVE_BACKOFF_MS));
+    }
+  }
+  return github;
 }
 function externalMergeObserver(record) {
   const token = resolveGithubObserverToken(record.repo.root);
@@ -1060,7 +1109,9 @@ async function recoverRun({
         status: "refused",
         operationId,
         actionKeyValue,
-        blockers: [blocker("stale_action", "inspect action changed before recovery", true)],
+        blockers: [intent
+          ? pendingIntentBlocker(runDir, intent)
+          : blocker("stale_action", "inspect action changed before recovery", true)],
       });
     }
     if (!intent && (before.derived.terminal === true || before.recommended_action.kind === "none")) {
@@ -1528,7 +1579,7 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
             github = observeGithub(record, { localHeadSha: observed.git.head_sha });
             if (github.matching_pr_count !== 1) throw createError;
           }
-          if (created) github = observeGithub(record, { localHeadSha: observed.git.head_sha });
+          if (created) github = await reobservePublishedPr(record, observed.git.head_sha);
         }
         if (
           github.available !== true
@@ -1660,10 +1711,18 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
 }
 async function inspectProductionRun({ runDir, activeRunLock = null } = {}) {
   if (activeRunLock !== null) host.assertRunLockHeld(activeRunLock, { runDir });
-  return inspectRun({
+  const inspection = await inspectRun({
     runDir,
-    observer: (input) => observeProduction({ ...input, activeRecoveryLock: activeRunLock }),
+    observer: async (input) => {
+      const observed = await observeProduction({ ...input, activeRecoveryLock: activeRunLock });
+      if (activeRunLock !== null) return observed;
+      const intent = productionRecoveryIo(runDir).readIntent({ facts: input.facts });
+      if (!intent) return observed;
+      validateRecoveryIntent(intent);
+      return { ...observed, blockers: [pendingIntentBlocker(runDir, intent), ...observed.blockers] };
+    },
   });
+  return inspection;
 }
 async function withProductionRecoveryLock({
   runDir,
@@ -1846,6 +1905,7 @@ module.exports = {
     assertCleanVerificationObservation,
     commitVerifiedStaging,
     parsePorcelainV1Z,
+    reobservePublishedPr,
     selectGithubPr,
     stageReviewableWork,
   },
