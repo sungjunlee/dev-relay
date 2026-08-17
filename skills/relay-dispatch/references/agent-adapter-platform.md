@@ -76,6 +76,12 @@ server-side or managed-policy tool is network-disabled. Tool networking
 defaults to `enabled` for trusted-local dispatch; an explicit `disabled`
 request requires a native deny and fails closed for a phase without one.
 
+Loopback listen is a separate static capability from tool-network control.
+Codex `workspace-write` and `read-only` cannot bind loopback sockets (`listen
+EPERM`); dispatch JSON reports `loopback_listen.available: "unavailable"` so
+`relay-plan` can send workerd/dev-server checks to an operator gate. Adapters
+without a native sandbox declare `available`. Others declare `unknown`.
+
 Relay owns no filesystem profile or platform admission. Codex requests its
 native `workspace-write` dispatch or `read-only` review sandbox, Cursor enables
 its native sandbox, Claude enables its documented Bash sandbox for dispatch

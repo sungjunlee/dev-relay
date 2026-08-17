@@ -21,8 +21,8 @@ module.exports = createNativeAdapter({
   },
   phases: {
     // Codex has no fail-closed tool-network switch; provider transport remains enabled.
-    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "workspace-write", cancellation: "process", structuredOutput: "text" },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "read-only", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "workspace-write", loopbackListen: "unavailable", cancellation: "process", structuredOutput: "text" },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "read-only", loopbackListen: "unavailable", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, resultPath, model, networkAccess, reasoning }) {

@@ -20,8 +20,8 @@ module.exports = createNativeAdapter({
     promptTransport: "stdin",
   },
   phases: {
-    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "enabled", cancellation: "process", structuredOutput: "text" },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "enabled", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "enabled", loopbackListen: "unknown", cancellation: "process", structuredOutput: "text" },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "enabled", loopbackListen: "unknown", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, model }) {

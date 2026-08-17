@@ -90,7 +90,7 @@ timeout/cancellation, inherited-scope cleanup, and durable facts. Relay itself
 never commits, publishes on the GitHub route, records verification, or closes a
 local result; those lifecycle actions belong to canonical `relay-recover recover`.
 
-JSON uses snake_case. Foreground output includes `status`, `run_id`, `run_dir`, `worktree`, `attempt_id`, `host_handle`, `host_status`, `outcome`, `inspection`, and non-durable `filesystem_isolation`. A detached launch receipt includes `status: "dispatched"`, those durable identities, `dispatcher_pid`, and the initial `inspection`. Per-attempt log paths are recorded in `attempt_started`.
+JSON uses snake_case. Foreground output includes `status`, `run_id`, `run_dir`, `worktree`, `attempt_id`, `host_handle`, `host_status`, `outcome`, `inspection`, and non-durable `filesystem_isolation` plus `loopback_listen`. A detached launch receipt includes `status: "dispatched"`, those durable identities, `dispatcher_pid`, and the initial `inspection`. Per-attempt log paths are recorded in `attempt_started`.
 
 ### Timeout guidance
 
