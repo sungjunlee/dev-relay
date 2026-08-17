@@ -1597,7 +1597,7 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
           } catch (createError) {
             // A concurrent publisher may have won after the zero-match
             // observation. Re-observe once and converge only if the exact
-            // immutable repo/head/base/SHA identity now exists.
+            // immutable repo/head/SHA identity now exists.
             github = observeGithub(record, { localHeadSha: observed.git.head_sha });
             if (github.matching_pr_count !== 1) throw createError;
           }

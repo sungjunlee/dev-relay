@@ -932,7 +932,7 @@ test("persistent PR publication mismatch strands an intent that inspect can resu
     "--expected-action-key", action.key, "--json",
   ], { cwd: ROOT, encoding: "utf8", env });
   assert.notEqual(failed.status, 0);
-  assert.match(failed.stderr, /PR publication did not re-observe one exact repo\/head\/base\/SHA match/);
+  assert.match(failed.stderr, /PR publication did not re-observe one exact repo\/head\/SHA match/);
   assert.equal(fs.readFileSync(fake.created, "utf8"), "1");
   assert.equal(Number(fs.readFileSync(fake.postCreateListCount, "utf8")), 5);
   const stranded = JSON.parse(spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
