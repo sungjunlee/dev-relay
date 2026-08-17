@@ -820,7 +820,7 @@ test("pending intent with mismatched actor or reason preserves identity refusal"
   assert.deepEqual(h.state.effects, []);
 });
 
-test("observation-changed pending intent requires exact identity discharge before the fresh action", async () => {
+test("head-drifted MERGED PR pending intent requires exact identity discharge before external-merge recovery", async () => {
   const intentKey = "4".repeat(64);
   const intent = {
     schema_version: 1,
@@ -835,7 +835,7 @@ test("observation-changed pending intent requires exact identity discharge befor
     before_sha: HEAD,
   };
   const h = harness({
-    facts: [attemptFinished(), pullRequestFact(HEAD)],
+    facts: [attemptFinished(), pullRequestFact(START)],
     observations: publicationObservations({
       github: {
         available: true, pr_lookup_complete: true, matching_pr_count: 1,
@@ -1253,7 +1253,24 @@ test("an unrelated historical MERGED PR cannot become terminal without a durable
   assert.deepEqual(inspected.recommended_action.steps, []);
 });
 
-test("a MERGED PR with a different recorded head also requires operator attention", async () => {
+test("a MERGED PR with a different durable PR number remains unrecorded", async () => {
+  const h = harness({
+    facts: [attemptFinished(), pullRequestFact(HEAD)],
+    observations: publicationObservations({
+      github: {
+        available: true, pr_lookup_complete: true, matching_pr_count: 1,
+        repo: "owner/repo", pr_number: 7, pr_state: "MERGED",
+        head_ref: "issue-1135", base_ref: "main", pr_head_sha: HEAD, merge_sha: TARGET,
+      },
+    }),
+  });
+  const inspected = await inspectRun(h);
+  assert.equal(inspected.recommended_action.kind, "operator_attention");
+  assert.equal(inspected.blockers[0].code, "unrecorded_merged_pr");
+  assert.deepEqual(inspected.recommended_action.steps, []);
+});
+
+test("a MERGED PR with durable identity ignores a different recorded head", async () => {
   const h = harness({
     facts: [attemptFinished(), pullRequestFact(START)],
     observations: publicationObservations({
@@ -1266,8 +1283,9 @@ test("a MERGED PR with a different recorded head also requires operator attentio
   });
   const inspected = await inspectRun(h);
   assert.equal(inspected.derived.reason, "merged_pr_unrecorded");
-  assert.equal(inspected.recommended_action.kind, "operator_attention");
-  assert.equal(inspected.blockers[0].code, "unrecorded_merged_pr");
+  assert.equal(inspected.recommended_action.kind, "recover");
+  assert.deepEqual(inspected.recommended_action.steps, ["record_external_merge"]);
+  assert.equal(inspected.blockers.some((item) => item.code === "unrecorded_merged_pr"), false);
 });
 
 test("an open PR with local head drift pushes, refreshes its durable head, then verifies", async () => {

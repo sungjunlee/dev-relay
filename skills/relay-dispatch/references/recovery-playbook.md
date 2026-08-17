@@ -81,6 +81,10 @@ An unreceipted recovery intent normally remains `active_intent_pending` and is
 resumed with the exact `action_key`, actor, and reason printed by `inspect`. The
 ordered rules under the run lock are:
 
+A MERGED PR binds through its durable recorded identity (`repo`, `pr_number`,
+`head_ref`, and `base_ref`); its last recorded `head_sha` need not equal the
+live `pr_head_sha`.
+
 1. R1 — if the operation already has its exact `recovery_applied` completion
    (ordinary intent steps or the audited `active_intent_observation_changed`
    discharge), or its matching terminal fact, Relay validates/reuses it and

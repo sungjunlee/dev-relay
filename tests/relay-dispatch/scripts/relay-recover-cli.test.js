@@ -1201,6 +1201,7 @@ test("inspect advertises exact-identity discharge for an obsolete merged-PR inte
   const f = fixture();
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   const mergeSha = "d".repeat(40);
+  const recordedHead = "a".repeat(40);
   const merged = {
     number: 42, state: "MERGED", url: "https://example.test/pull/42",
     headRefName: f.branch, headRefOid: f.head, baseRefName: "main",
@@ -1227,7 +1228,7 @@ test("inspect advertises exact-identity discharge for an obsolete merged-PR inte
     event_id: "pr", run_id: "issue-1135-cli", type: "pull_request_recorded",
     at: "2026-08-01T00:02:00Z", actor: "codex",
     payload: { pr_number: 42, repo: f.remote, head_ref: f.branch, base_ref: "main",
-      head_sha: f.head, created_by_relay: false },
+      head_sha: recordedHead, created_by_relay: false },
   }]);
   const intentKey = "8".repeat(64);
   const intent = {
