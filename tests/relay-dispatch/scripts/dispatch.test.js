@@ -282,6 +282,7 @@ test("dry-run validates the closed Relay surface while writing zero durable byte
   assert.equal(fs.existsSync(value.relayHome), false);
   const cursor = run(value, ["--executor", "cursor", "--branch", "cursor-dry", "--prompt", "x", "--rubric-file", value.rubric, "--dry-run", "--json"]);
   assert.equal(cursor.status, 0, cursor.stderr);
+  assert.equal(json(cursor.stdout).loopback_listen.available, "unknown");
   assert.equal(Object.hasOwn(json(cursor.stdout).invocation, "private_env_paths"), false);
   const retired = run(value, ["--branch", "retired-credential", "--prompt", "x", "--rubric-file", value.rubric,
     "--credential-env", "OPENAI_API_KEY", "--dry-run", "--json"]);
