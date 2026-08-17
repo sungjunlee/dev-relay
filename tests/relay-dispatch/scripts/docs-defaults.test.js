@@ -93,7 +93,9 @@ test("#1209 docs freeze ReviewSubject derivation and minimized aggregate invento
   ]) assert.ok(adr.toLowerCase().includes(`| ${member.toLowerCase()} |`), member);
   assert.match(adr, /20 bytes represented by exactly 40 hexadecimal characters/);
   assert.doesNotMatch(adr, /40 hexadecimal bytes/);
-  assert.match(adr, /git diff --binary --no-ext-diff <base>\.\.<head> --/);
+  assert.match(adr, /git diff --binary --no-ext-diff <live_pr_base>\.\.\.<head> --/);
+  assert.match(adr, /<start_sha>\.\.<head>/);
+  assert.doesNotMatch(adr, /git diff --binary --no-ext-diff <base>\.\.<head> --/);
   assert.match(adr, /no runtime field, fact, helper hierarchy, adapter/);
 
   const inventory = readRepoFile("docs/run-inventory-1209.md");
