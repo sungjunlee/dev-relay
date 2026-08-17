@@ -9,6 +9,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const recovery = require("../../../skills/relay-dispatch/scripts/recover");
+const dispatch = require("../../../skills/relay-dispatch/scripts/dispatch");
 const { inspectRun, recoverRun } = recovery;
 
 const START = "a".repeat(40);
@@ -152,7 +153,7 @@ function verificationFact() {
   };
 }
 
-function reviewFact({ eventId, verdict = "escalated", escalationKind, retryOfEventId, baseSha } = {}) {
+function reviewFact({ eventId, verdict = "escalated", escalationKind, retryOfEventId, resolutionOfEventId, baseSha } = {}) {
   return {
     event_id: eventId,
     run_id: "issue-1135-test",
@@ -169,7 +170,22 @@ function reviewFact({ eventId, verdict = "escalated", escalationKind, retryOfEve
       review_artifact: "/run/review.json",
       ...(escalationKind ? { escalation_kind: escalationKind } : {}),
       ...(retryOfEventId ? { retry_of_event_id: retryOfEventId } : {}),
+      ...(resolutionOfEventId ? { resolution_of_event_id: resolutionOfEventId } : {}),
       override: null,
+    },
+  };
+}
+
+function resolutionFact({ eventId, reviewEventId, disposition = "re_review", actor = "owner" }) {
+  return {
+    event_id: eventId,
+    run_id: "issue-1135-test",
+    type: "review_escalation_resolved",
+    at: "2026-08-01T00:05:00Z",
+    actor,
+    payload: {
+      actor, reason: "operator adjudication", disposition,
+      escalated_review_event_id: reviewEventId,
     },
   };
 }
@@ -523,6 +539,77 @@ test("inspect exposes one retry for a runtime escalation and exhausts that subje
   assert.equal(exhausted.derived.action, "none");
   assert.equal(exhausted.derived.reason, "review_escalated_retry_exhausted");
   assert.equal(exhausted.recommended_action.kind, "none");
+});
+
+test("reviewer escalation exposes adjudication exits and re-review stays bound until a passing review", async () => {
+  const observations = publicationObservations({
+    git: { ...publicationObservations().git, reviewable_work: false },
+    github: { ...publicationObservations().github, matching_pr_count: 1, pr_number: 42,
+      pr_state: "OPEN", pr_head_sha: HEAD, pr_base_sha: START },
+  });
+  const escalation = reviewFact({ eventId: "reviewer-escalation-1", escalationKind: "reviewer" });
+  const deadEnd = await inspectRun(harness({ facts: [pullRequestFact(HEAD), verificationFact(), escalation], observations }));
+  assert.equal(deadEnd.derived.reason, "review_escalated");
+  assert.deepEqual(deadEnd.derived.diagnostics.at(-1).available_exits, ["re_review", "redispatch", "close"]);
+
+  const resolution = resolutionFact({ eventId: "resolution-rereview-1", reviewEventId: escalation.event_id });
+  const adjudicated = await inspectRun(harness({ facts: [pullRequestFact(HEAD), verificationFact(), escalation, resolution], observations }));
+  assert.equal(adjudicated.derived.action, "review");
+  assert.equal(adjudicated.derived.resolution_of_event_id, resolution.event_id);
+  assert.notEqual(adjudicated.derived.action, "merge");
+
+  const pass = reviewFact({ eventId: "resolved-pass-1", verdict: "pass", baseSha: START,
+    resolutionOfEventId: resolution.event_id });
+  const ready = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), escalation, resolution, pass], observations,
+  }));
+  assert.equal(ready.derived.reason, "ready_to_merge");
+});
+
+test("reviewer escalation redispatch resolution derives the changes-requested lifecycle exit", async () => {
+  const observations = publicationObservations({
+    git: { ...publicationObservations().git, reviewable_work: false },
+    github: { ...publicationObservations().github, matching_pr_count: 1, pr_number: 42,
+      pr_state: "OPEN", pr_head_sha: HEAD, pr_base_sha: START },
+  });
+  const escalation = reviewFact({ eventId: "reviewer-escalation-redispatch", escalationKind: "reviewer" });
+  const resolution = resolutionFact({ eventId: "resolution-redispatch", reviewEventId: escalation.event_id, disposition: "redispatch" });
+  const result = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), escalation, resolution], observations,
+  }));
+  assert.equal(result.derived.action, "redispatch");
+  assert.equal(result.derived.reason, "review_resolution_redispatch");
+  assert.equal(result.derived.resolution_of_event_id, resolution.event_id);
+  assert.equal(dispatch.assertResumeInspection(result), result);
+});
+
+test("review resolution lineage violations fail closed with a typed diagnostic", async () => {
+  const observations = publicationObservations({
+    git: { ...publicationObservations().git, reviewable_work: false },
+    github: { ...publicationObservations().github, matching_pr_count: 1, pr_number: 42,
+      pr_state: "OPEN", pr_head_sha: HEAD, pr_base_sha: START },
+  });
+  const escalation = reviewFact({ eventId: "reviewer-escalation-invalid", escalationKind: "reviewer" });
+  const valid = resolutionFact({ eventId: "resolution-valid", reviewEventId: escalation.event_id });
+  const duplicate = resolutionFact({ eventId: "resolution-duplicate", reviewEventId: escalation.event_id });
+  const duplicateResult = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), escalation, valid, duplicate], observations,
+  }));
+  assert.equal(duplicateResult.derived.reason, "review_resolution_binding_invalid");
+
+  const unboundPass = reviewFact({ eventId: "resolution-unbound-pass", verdict: "pass", baseSha: START });
+  const unboundResult = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), escalation, valid, unboundPass], observations,
+  }));
+  assert.equal(unboundResult.derived.reason, "review_resolution_binding_invalid");
+
+  const passing = reviewFact({ eventId: "already-passing", verdict: "pass", baseSha: START });
+  const illegal = resolutionFact({ eventId: "resolution-after-pass", reviewEventId: passing.event_id });
+  const illegalResult = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), passing, illegal], observations,
+  }));
+  assert.equal(illegalResult.derived.reason, "review_resolution_binding_invalid");
+  assert.equal(illegalResult.derived.diagnostics.at(-1).code, "review_resolution_binding_invalid");
 });
 
 test("inspect accepts the immediate single passing retry", async () => {

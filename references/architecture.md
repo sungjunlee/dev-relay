@@ -78,9 +78,10 @@ Each Relay run is a directory below `~/.relay/runs/<repo-slug>/<run-id>/`:
 | attempt artifacts | Immutable prompt, stdout, stderr, result, and review/verification bundles bound by the attempt facts. |
 | recovery and merge artifacts | Immutable intent, authorization, and receipt files used for crash-safe convergence. |
 
-The eleven fact types are `attempt_started`, `attempt_finished`,
+The twelve fact types are `attempt_started`, `attempt_finished`,
 `attempt_interrupted`, `verification_recorded`, `lock_acquired`,
 `lock_released`, `pull_request_recorded`, `review_recorded`,
+`review_escalation_resolved`,
 `recovery_applied`, `merge_recorded`, and `run_closed`. They are the only
 lifecycle evidence. There is no mutable lifecycle record, transition API,
 execution-evidence sidecar, score log, route catalog, or app-registration

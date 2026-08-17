@@ -21,6 +21,28 @@ node skills/relay/scripts/relay-recover.js recover \
   --reason "operator explanation" --json
 ```
 
+When `inspect` reports `review_escalated`, use the reported review event id to
+record an explicit adjudication. `re_review` authorizes exactly one fresh review
+of the same subject; `redispatch` enters the same correction lifecycle as
+`changes_requested`. Neither disposition is a passing review.
+
+```bash
+node skills/relay/scripts/relay-recover.js recover \
+  --repo . --run-id <id> --reason "operator adjudication" \
+  --resolve-review re_review --review-event-id <review-event-id> --json
+
+node skills/relay/scripts/relay-recover.js recover \
+  --repo . --run-id <id> --reason "operator adjudication" \
+  --resolve-review redispatch --review-event-id <review-event-id> --json
+
+node skills/relay/scripts/relay-recover.js recover \
+  --repo . --run-id <id> --reason "superseded" --close --json
+```
+
+All three exits append typed facts under the run lock. Do not edit
+`events.jsonl`, create a replacement run, or supersede the PR merely to escape
+a reviewer escalation.
+
 Dispatch unwinds a branch/worktree pair when a caught failure occurs during
 creation. A `SIGKILL` after `git worktree add` but before immutable `run.json`
 creation cannot run that unwind, so the branch and registered worktree remain.

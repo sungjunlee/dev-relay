@@ -101,6 +101,10 @@ function payload(type) {
       done_criteria_sha256: HASH, reviewer: "claude",
       review_artifact: "/r/review.json", override: null,
     },
+    review_escalation_resolved: {
+      actor: "owner", reason: "operator adjudication", disposition: "re_review",
+      escalated_review_event_id: "review-escalated-1",
+    },
     recovery_applied: {
       rule: "publication", observed_event_id: "e1", before_sha: SHA,
       after_sha: SHA2, side_effects: ["push", "pr"], reason: "recover",
@@ -164,9 +168,9 @@ function acquireFactLock(eventsPath) {
   });
 }
 
-test("all eleven fact payloads have closed, executable schemas", () => {
+test("all twelve fact payloads have closed, executable schemas", () => {
   const types = Object.keys(PAYLOAD_SCHEMAS);
-  assert.equal(types.length, 11);
+  assert.equal(types.length, 12);
   types.forEach((type, index) => {
     assert.equal(validateFact(fact(type, index + 1)).known, true);
     assert.throws(
@@ -214,6 +218,17 @@ test("all eleven fact payloads have closed, executable schemas", () => {
       exit_code: 1,
     },
   }).known, true);
+  assert.throws(() => validateFact({
+    ...fact("review_escalation_resolved"),
+    payload: { ...payload("review_escalation_resolved"), disposition: "approve" },
+  }), /disposition is invalid/);
+  assert.throws(() => validateFact({
+    ...fact("review_escalation_resolved"), actor: "different-operator",
+  }), /actor must equal payload.actor/);
+  assert.throws(() => validateFact({
+    ...fact("review_recorded"),
+    payload: { ...payload("review_recorded"), retry_of_event_id: "review-1", resolution_of_event_id: "resolution-1" },
+  }), /cannot carry both retry and resolution bindings/);
   assert.throws(
     () => validateFact({
       ...fact("verification_recorded"),
