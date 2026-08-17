@@ -890,6 +890,75 @@ test("observation-changed pending intent requires exact identity discharge befor
   assert.notEqual(fresh.recommended_action.key, intentKey);
 });
 
+test("observation-changed discharge retry writes only the missing receipt", async () => {
+  const intentKey = "5".repeat(64);
+  const intent = {
+    schema_version: 1,
+    action_key: intentKey,
+    operation_id: `recover-${intentKey.slice(0, 32)}`,
+    created_at: "2026-08-01T00:03:00Z",
+    steps: ["push_branch", "record_or_create_pr", "record_verification"],
+    actor: "owner",
+    reason: "publish and verify reviewed work",
+    reason_code: "publication_incomplete",
+    observed_event_id: "attempt-finished",
+    before_sha: HEAD,
+  };
+  const h = harness({
+    facts: [attemptFinished(), pullRequestFact(HEAD)],
+    observations: publicationObservations({
+      github: {
+        available: true, pr_lookup_complete: true, matching_pr_count: 1,
+        repo: "owner/repo", pr_number: 42, pr_state: "MERGED",
+        head_ref: "issue-1135", base_ref: "main", pr_head_sha: HEAD, merge_sha: TARGET,
+      },
+    }),
+  });
+  h.state.intent = structuredClone(intent);
+  let appendCalls = 0;
+  const appendFact = async (fact) => {
+    appendCalls += 1;
+    if (h.state.facts.some((entry) => entry.event_id === fact.event_id)) {
+      throw new Error(`duplicate event_id: ${fact.event_id}`);
+    }
+    h.state.facts.push(structuredClone(fact));
+  };
+  let crashBeforeReceipt = true;
+  const writeReceipt = async (input) => {
+    if (crashBeforeReceipt) {
+      crashBeforeReceipt = false;
+      throw new Error("crash_before_discharge_receipt");
+    }
+    await h.writeReceipt(input);
+  };
+  const effects = { converge: async () => { throw new Error("obsolete effect called"); } };
+
+  await assert.rejects(recoverRun({
+    ...h, appendFact, writeReceipt,
+    actor: intent.actor, reason: intent.reason, expectedActionKey: intentKey, effects,
+  }), /crash_before_discharge_receipt/);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 1);
+  const strandedFact = h.state.facts.find((fact) => fact.type === "recovery_applied");
+  assert.equal(strandedFact.payload.rule, "active_intent_observation_changed");
+  assert.deepEqual(strandedFact.payload.side_effects, ["discharge_obsolete_intent"]);
+  assert.equal(appendCalls, 1);
+  assert.equal(h.state.receipts.size, 0);
+  assert.deepEqual(await h.readIntent({ facts: h.state.facts }), intent);
+
+  const retried = await recoverRun({
+    ...h, appendFact, writeReceipt,
+    actor: intent.actor, reason: intent.reason, expectedActionKey: intentKey, effects,
+  });
+  assert.equal(retried.status, "converged");
+  assert.deepEqual(h.state.effects, []);
+  assert.equal(await h.readIntent({ facts: h.state.facts }), null);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 1);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "merge_recorded").length, 0);
+  assert.equal(appendCalls, 1);
+  assert.equal(h.state.writes, 1);
+  assert.deepEqual(retried.receipt.fact_event_ids, [strandedFact.event_id]);
+});
+
 test("#1209 recovery reinspection requires the same action after live observations change", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
   const inspected = await inspectRun(h);

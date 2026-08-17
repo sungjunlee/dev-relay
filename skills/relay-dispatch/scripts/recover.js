@@ -1328,15 +1328,26 @@ async function recoverRun({
       });
     }
     if (dischargeAuthorized) {
-      const recoveryFact = recoveryAppliedFact({
-        runId: before.run_id,
-        intent,
-        after: before,
-        applied: [],
-        rule: "active_intent_observation_changed",
-        sideEffects: [DISCHARGE_STEP],
-      });
-      await appendFact(recoveryFact);
+      const recoveryEventId = deterministicEventId(operationId, "recovery_applied");
+      let recoveryFact = before.facts.find((fact) => fact.event_id === recoveryEventId) || null;
+      if (recoveryFact) {
+        if (recoveryFact.type !== "recovery_applied"
+          || !recoveryFactMatchesIdentity(recoveryFact, { intent })
+          || recoveryFact.payload?.rule !== "active_intent_observation_changed"
+          || !isDeepStrictEqual(recoveryFact.payload?.side_effects, [DISCHARGE_STEP])) {
+          throw new Error(`duplicate event_id: ${recoveryEventId}`);
+        }
+      } else {
+        recoveryFact = recoveryAppliedFact({
+          runId: before.run_id,
+          intent,
+          after: before,
+          applied: [],
+          rule: "active_intent_observation_changed",
+          sideEffects: [DISCHARGE_STEP],
+        });
+        await appendFact(recoveryFact);
+      }
       const receipt = recoveryReceipt(operationId, actionKeyValue, [recoveryFact.event_id]);
       await writeReceipt({ runDir, actionKey: actionKeyValue, operationId, receipt });
       const after = await inspectRun({ runDir, observer, readSnapshot });
