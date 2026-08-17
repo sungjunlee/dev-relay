@@ -283,10 +283,11 @@ function selectGithubPr(rows, { remote, branch, baseBranch, localHeadSha = null,
     || (row?.headRepositoryOwner?.login && row?.headRepository?.name
       ? `${row.headRepositoryOwner.login}/${row.headRepository.name}`
       : null);
-  const identityMatches = (Array.isArray(rows) ? rows : []).filter((row) => (
-    row.headRefName === branch && row.baseRefName === baseBranch && headRepo(row) === remote
-  ));
-  const byState = (state) => identityMatches.filter((row) => row.state === state);
+  const rowsList = Array.isArray(rows) ? rows : [];
+  const sameHead = (row) => row.headRefName === branch && headRepo(row) === remote;
+  const identityMatches = rowsList.filter((row) => sameHead(row) && row.baseRefName === baseBranch);
+  const pool = identityMatches.length ? identityMatches : rowsList.filter(sameHead);
+  const byState = (state) => pool.filter((row) => row.state === state);
   const open = byState("OPEN");
   const merged = byState("MERGED");
   const closed = byState("CLOSED");
@@ -605,8 +606,19 @@ function exactPublishedPr(github, record, headSha) {
     && github.matching_pr_count === 1
     && Number.isInteger(github.pr_number)
     && github.head_ref === record.git.branch
-    && github.base_ref === record.git.base_branch
     && github.pr_head_sha === headSha;
+}
+
+function originBranchExists(cwd, name) {
+  let listed;
+  try {
+    listed = execGit(cwd, ["ls-remote", "--heads", "origin", `refs/heads/${name}`]);
+  } catch (error) {
+    const lookup = new Error(`could not revalidate recorded base ${name}: ${error.message}`);
+    lookup.code = "BASE_LOOKUP_FAILED";
+    throw lookup;
+  }
+  return listed.split("\n").some((line) => line.endsWith(`\trefs/heads/${name}`));
 }
 async function reobservePublishedPr(record, headSha) {
   let github;
@@ -623,7 +635,6 @@ function externalMergeObserver(record) {
   const token = resolveGithubObserverToken(record.repo.root);
   const expectedRepo = JSON.stringify(record.repo.remote);
   const expectedHead = JSON.stringify(record.git.branch);
-  const expectedBase = JSON.stringify(record.git.base_branch);
   const code = [
     "const fs=require('fs'),{execFileSync}=require('child_process');",
     "const i=process.argv.indexOf('--request-file');",
@@ -638,7 +649,7 @@ function externalMergeObserver(record) {
     "const raw=execFileSync(nodeScript?process.execPath:bin,nodeScript?[bin,...ghArgs]:ghArgs,{encoding:'utf8',stdio:['ignore','pipe','pipe']});",
     "const p=JSON.parse(raw);",
     "const hr=p.headRepository&&p.headRepository.nameWithOwner||(p.headRepositoryOwner&&p.headRepositoryOwner.login&&p.headRepository&&p.headRepository.name?`${p.headRepositoryOwner.login}/${p.headRepository.name}`:null);",
-    `if((q.repo&&q.repo!==repo)||p.headRefName!==${expectedHead}||p.baseRefName!==${expectedBase}||hr!==repo)throw new Error('exact PR repo/head/base identity mismatch');`,
+    `if((q.repo&&q.repo!==repo)||p.headRefName!==${expectedHead}||hr!==repo)throw new Error('exact PR repo/head identity mismatch');`,
     "process.stdout.write(JSON.stringify({nonce:input.nonce,repo,head_repo:hr,pr_number:p.number,pr_state:p.state,pr_head_sha:p.headRefOid,pr_base_sha:p.baseRefOid,head_ref:p.headRefName,base_ref:p.baseRefName,merge_sha:p.mergeCommit&&p.mergeCommit.oid}));",
   ].join("");
   const args = [
@@ -1559,6 +1570,17 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
         let created = false;
         const marker = `<!-- relay-recovery-operation:${context.operationId} -->`;
         if (github.matching_pr_count === 0) {
+          if (!originBranchExists(worktree, record.git.base_branch)) {
+            return {
+              converged: false,
+              blockers: [blocker(
+                "stale_base_branch",
+                `recorded base is gone: ${record.git.base_branch}`,
+                false,
+                { recorded_base: record.git.base_branch },
+              )],
+            };
+          }
           const title = execGit(worktree, ["log", "-1", "--format=%s", "HEAD"])
             || `Recover ${record.git.branch}`;
           try {
@@ -1575,7 +1597,7 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
           } catch (createError) {
             // A concurrent publisher may have won after the zero-match
             // observation. Re-observe once and converge only if the exact
-            // immutable repo/head/base/SHA identity now exists.
+            // immutable repo/head/SHA identity now exists.
             github = observeGithub(record, { localHeadSha: observed.git.head_sha });
             if (github.matching_pr_count !== 1) throw createError;
           }
@@ -1586,10 +1608,9 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
           || github.matching_pr_count !== 1
           || !Number.isInteger(github.pr_number)
           || github.head_ref !== record.git.branch
-          || github.base_ref !== record.git.base_branch
           || github.pr_head_sha !== observed.git.head_sha
         ) {
-          throw new Error("PR publication did not re-observe one exact repo/head/base/SHA match");
+          throw new Error("PR publication did not re-observe one exact repo/head/SHA match");
         }
         if (github.pr_state !== "OPEN") {
           return {
@@ -1612,7 +1633,6 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
           && fact.payload.pr_number === github.pr_number
           && fact.payload.repo === record.repo.remote
           && fact.payload.head_ref === record.git.branch
-          && fact.payload.base_ref === record.git.base_branch
         )).at(-1) || null;
         return {
           converged: true,
@@ -1625,7 +1645,7 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
               pr_number: github.pr_number,
               repo: record.repo.remote,
               head_ref: record.git.branch,
-              base_ref: record.git.base_branch,
+              base_ref: github.base_ref,
               head_sha: github.pr_head_sha,
               created_by_relay: created
                 || priorIdentity?.payload.created_by_relay === true
@@ -1655,7 +1675,7 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
               || live.pr_state !== "MERGED"
               || live.pr_head_sha !== observed.github.pr_head_sha
               || live.head_ref !== record.git.branch
-              || live.base_ref !== record.git.base_branch
+              || live.base_ref !== observed.github.base_ref
               || live.merge_sha !== observed.github.merge_sha
             ) throw new Error("fresh external merge observation changed identity");
             return { authorized: true };

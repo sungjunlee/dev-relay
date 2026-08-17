@@ -21,7 +21,7 @@ function git(cwd, args) {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
 }
 
-function fixture({ branch = "main", delivery = "github" } = {}) {
+function fixture({ branch = "main", delivery = "github", baseBranch = "main" } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-cli-")));
   const repo = path.join(root, "repo");
   const active = path.join(root, "active");
@@ -55,7 +55,7 @@ function fixture({ branch = "main", delivery = "github" } = {}) {
       version: 3,
       run_id: runId,
       repo: { root: active, remote: delivery === "local" ? "local/active" : remote },
-      git: { branch, base_branch: "main", worktree: repo, start_sha: head },
+      git: { branch, base_branch: baseBranch, worktree: repo, start_sha: head },
       contract: { done_criteria_path: donePath, done_criteria_sha256: doneHash },
       roles: { orchestrator: "codex", executor: "codex", reviewer: "claude" },
       parent: null,
@@ -720,6 +720,120 @@ test("production publication converges on an exact concurrently created PR witho
   assert.equal(fs.readFileSync(countPath, "utf8"), "1");
 });
 
+test("publication adopts an existing head PR when the recorded base is gone", (t) => {
+  const f = fixture({ branch: "recovery", baseBranch: "deleted-docs" });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(f.repo, "README.md"), "adopt recovery work\n");
+  git(f.repo, ["add", "README.md"]);
+  git(f.repo, ["commit", "-m", "adopt recovery"]);
+  const finalHead = git(f.repo, ["rev-parse", "HEAD"]);
+  const finalTree = git(f.repo, ["rev-parse", "HEAD^{tree}"]);
+  writeFacts(f.runDir, [{
+    event_id: "attempt-finished", run_id: "issue-1135-cli", attempt_id: "attempt-1",
+    type: "attempt_finished", at: "2026-08-01T00:01:00Z", actor: "codex",
+    payload: {
+      status: "completed", start_sha: f.head, final_sha: finalHead, tree_sha: finalTree,
+      result_path: path.join(f.runDir, "result.txt"), exit_code: 0,
+      verification_status: "not_declared",
+    },
+  }]);
+  const countPath = path.join(f.root, "fake-gh-create-count.txt");
+  const row = {
+    number: 91, state: "OPEN", url: "https://example.test/pull/91",
+    headRefName: f.branch, headRefOid: finalHead, baseRefName: "main",
+    headRepository: { nameWithOwner: f.remote },
+    headRepositoryOwner: { login: "owner" }, isCrossRepository: false,
+    mergedAt: null, mergeCommit: null, body: "operator published independently",
+  };
+  fs.writeFileSync(f.gh, [
+    "#!/usr/bin/env node",
+    "const fs=require('fs');",
+    `const count=${JSON.stringify(countPath)},row=${JSON.stringify(row)};`,
+    "const cmd=process.argv[2]+' '+process.argv[3];",
+    "if(cmd==='pr list'){process.stdout.write(JSON.stringify([row]));}",
+    "else if(cmd==='pr create'){const n=fs.existsSync(count)?Number(fs.readFileSync(count,'utf8')):0;fs.writeFileSync(count,String(n+1));process.exit(2);}",
+    "else{process.stderr.write('unsupported fake gh argv\\n');process.exit(2);}",
+    "",
+  ].join("\n"));
+  fs.chmodSync(f.gh, 0o755);
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const inspected = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  });
+  assert.equal(inspected.status, 0, inspected.stderr);
+  const action = JSON.parse(inspected.stdout).recommended_action;
+  assert.deepEqual(action.steps, ["push_branch", "record_or_create_pr"]);
+  const recovered = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "adopt existing head PR",
+    "--actor", "owner", "--expected-action-key", action.key, "--json",
+  ], { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.equal(JSON.parse(recovered.stdout).status, "converged");
+  assert.equal(fs.existsSync(countPath), false, "adopt must not call gh pr create");
+  const prFacts = fs.readFileSync(path.join(f.runDir, "events.jsonl"), "utf8").trim().split("\n")
+    .map(JSON.parse).filter((fact) => fact.type === "pull_request_recorded");
+  assert.equal(prFacts.length, 1);
+  assert.equal(prFacts[0].payload.pr_number, 91);
+  assert.equal(prFacts[0].payload.base_ref, "main");
+  assert.equal(prFacts[0].payload.head_sha, finalHead);
+  assert.equal(prFacts[0].payload.created_by_relay, false);
+  const after = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  });
+  assert.equal(after.status, 0, after.stderr);
+  const inspectedAfter = JSON.parse(after.stdout);
+  assert.notEqual(inspectedAfter.derived.reason, "fact_conflict");
+  assert.notEqual(inspectedAfter.recommended_action.kind, "operator_attention");
+});
+
+test("publication refuses to create when the recorded base is gone and no head PR exists", (t) => {
+  const f = fixture({ branch: "recovery", baseBranch: "deleted-docs" });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(f.repo, "README.md"), "stale base recovery work\n");
+  git(f.repo, ["add", "README.md"]);
+  git(f.repo, ["commit", "-m", "stale base recovery"]);
+  const finalHead = git(f.repo, ["rev-parse", "HEAD"]);
+  const finalTree = git(f.repo, ["rev-parse", "HEAD^{tree}"]);
+  writeFacts(f.runDir, [{
+    event_id: "attempt-finished", run_id: "issue-1135-cli", attempt_id: "attempt-1",
+    type: "attempt_finished", at: "2026-08-01T00:01:00Z", actor: "codex",
+    payload: {
+      status: "completed", start_sha: f.head, final_sha: finalHead, tree_sha: finalTree,
+      result_path: path.join(f.runDir, "result.txt"), exit_code: 0,
+      verification_status: "not_declared",
+    },
+  }]);
+  const countPath = path.join(f.root, "fake-gh-create-count.txt");
+  fs.writeFileSync(f.gh, [
+    "#!/usr/bin/env node",
+    "const fs=require('fs');",
+    `const count=${JSON.stringify(countPath)};`,
+    "const cmd=process.argv[2]+' '+process.argv[3];",
+    "if(cmd==='pr list'){process.stdout.write('[]');}",
+    "else if(cmd==='pr create'){const n=fs.existsSync(count)?Number(fs.readFileSync(count,'utf8')):0;fs.writeFileSync(count,String(n+1));process.exit(2);}",
+    "else{process.stderr.write('unsupported fake gh argv\\n');process.exit(2);}",
+    "",
+  ].join("\n"));
+  fs.chmodSync(f.gh, 0o755);
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh, RELAY_WORKTREE_BASE: f.root };
+  const inspected = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  });
+  assert.equal(inspected.status, 0, inspected.stderr);
+  const action = JSON.parse(inspected.stdout).recommended_action;
+  assert.ok(action.steps.includes("record_or_create_pr"));
+  const recovered = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "publish with stale base",
+    "--actor", "owner", "--expected-action-key", action.key, "--json",
+  ], { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(recovered.status, 0, recovered.stderr);
+  const output = JSON.parse(recovered.stdout);
+  assert.equal(output.status, "refused");
+  assert.equal(output.blockers[0].code, "stale_base_branch");
+  assert.match(output.blockers[0].message, /deleted-docs/);
+  assert.equal(fs.existsSync(countPath), false, "stale base must not call gh pr create");
+});
+
 test("PR publication re-observation has a bounded mismatch-then-match window", async (t) => {
   const f = fixture({ branch: "recovery" });
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
@@ -818,7 +932,7 @@ test("persistent PR publication mismatch strands an intent that inspect can resu
     "--expected-action-key", action.key, "--json",
   ], { cwd: ROOT, encoding: "utf8", env });
   assert.notEqual(failed.status, 0);
-  assert.match(failed.stderr, /PR publication did not re-observe one exact repo\/head\/base\/SHA match/);
+  assert.match(failed.stderr, /PR publication did not re-observe one exact repo\/head\/SHA match/);
   assert.equal(fs.readFileSync(fake.created, "utf8"), "1");
   assert.equal(Number(fs.readFileSync(fake.postCreateListCount, "utf8")), 5);
   const stranded = JSON.parse(spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {

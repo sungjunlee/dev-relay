@@ -1120,6 +1120,14 @@ test("PR selection reuses exact OPEN, reconciles exact MERGED, and ignores CLOSE
   ], options);
   assert.equal(mergedExact.pr.number, 42);
   assert.equal(mergedExact.pr.state, "MERGED");
+
+  const adopted = recovery.__testing.selectGithubPr([
+    { ...row(88, "OPEN"), baseRefName: "main" },
+  ], { ...options, baseBranch: "deleted-docs" });
+  assert.equal(adopted.pr.number, 88);
+  assert.equal(adopted.pr.baseRefName, "main");
+  assert.equal(adopted.matchingPrCount, 1);
+  assert.equal(adopted.identityMatchCount, 0);
 });
 
 test("a lone CLOSED PR is ignored so publication can create a new exact OPEN PR", async () => {

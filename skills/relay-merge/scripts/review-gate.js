@@ -110,7 +110,6 @@ function requireMergeAction(inspection, record) {
     || github.pr_number !== prNumber
     || github.repo !== record.repo.remote
     || github.head_ref !== record.git.branch
-    || github.base_ref !== record.git.base_branch
   ) fail("live PR identity does not match the immutable run", "MERGE_PR_MISMATCH");
   if (
     !SHA1_RE.test(String(head || ""))
@@ -129,7 +128,7 @@ function requireMergeAction(inspection, record) {
     || durablePr.payload.pr_number !== prNumber
     || durablePr.payload.repo !== record.repo.remote
     || durablePr.payload.head_ref !== record.git.branch
-    || durablePr.payload.base_ref !== record.git.base_branch
+    || durablePr.payload.base_ref !== github.base_ref
     || durablePr.payload.head_sha !== head
   ) fail("durable PR fact does not match the exact live PR", "MERGE_PR_FACT_MISMATCH");
 
@@ -158,7 +157,12 @@ function requireMergeAction(inspection, record) {
     || verification.payload.done_criteria_sha256 !== record.contract.done_criteria_sha256
   ) fail("passing verification is not bound to the exact head, tree, and Done Criteria", "MERGE_VERIFICATION_MISMATCH");
 
-  return { head, prNumber, review, verification, reviewedBase: review.payload.base_sha, liveBase: github.pr_base_sha };
+  return {
+    head, prNumber, review, verification,
+    reviewedBase: review.payload.base_sha,
+    liveBase: github.pr_base_sha,
+    liveBaseRef: github.base_ref,
+  };
 }
 
 function terminalMergeFact(runDir, factsModule) {
