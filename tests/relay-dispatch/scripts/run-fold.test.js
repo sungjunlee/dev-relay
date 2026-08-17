@@ -504,6 +504,36 @@ test("#1190 review corrections reach canonical publication recovery only after c
     "commit_work", "push_branch", "record_or_create_pr",
   ]);
 
+  const matchingHeadNoop = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [...beforeReview, started(6, "a2"), finished(7, "a2")],
+    gitFacts: {
+      head_sha: HEAD,
+      tree_sha: TREE,
+      reviewable_work: true,
+      branch_commit_exists: true,
+      reviewable_dirty: false,
+    },
+    githubFacts: livePrFacts(42, { pr_lookup_complete: true }),
+  });
+  assert.equal(matchingHeadNoop.action, "redispatch");
+  assert.equal(matchingHeadNoop.reason, "changes_requested");
+
+  const driftedHead = "9".repeat(40);
+  const unpublishedCommit = foldRunFacts({
+    runRecord: runRecord(),
+    facts: [...beforeReview, started(6, "a2"), finished(7, "a2", { final_sha: driftedHead })],
+    gitFacts: {
+      head_sha: driftedHead,
+      tree_sha: TREE,
+      reviewable_work: true,
+      reviewable_dirty: false,
+    },
+    githubFacts: livePrFacts(42, { pr_lookup_complete: true }),
+  });
+  assert.equal(unpublishedCommit.action, "recover");
+  assert.equal(unpublishedCommit.reason, "publication_incomplete");
+
   const boundaries = [
     { name: "no post-review attempt", facts: [pr(3), verification(4), review("changes_requested", 5)] },
     { name: "attempt before review", facts: beforeReview },

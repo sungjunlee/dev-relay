@@ -66,9 +66,12 @@ function hasReviewableWork(gitFacts, interrupted = null) {
     || gitFacts.branch_commit_exists === true
     || gitFacts.result_artifact_regular === true;
 }
-function hasUnpublishedRetryWork(gitFacts, headSha, prHead) {
+function hasUnpublishedRetryWork(gitFacts, headSha, livePrHead, recordedPrHead = null) {
+  let publishedHead = null;
+  if (SHA1_RE.test(String(livePrHead || ""))) publishedHead = livePrHead;
+  else if (SHA1_RE.test(String(recordedPrHead || ""))) publishedHead = recordedPrHead;
   return gitFacts.reviewable_dirty === true
-    || Boolean(headSha && prHead && headSha !== prHead);
+    || Boolean(publishedHead && headSha !== publishedHead);
 }
 function hostIsLive(hostFacts, attempt) {
   if (typeof hostFacts.live === "boolean") return hostFacts.live;
@@ -632,7 +635,12 @@ function foldRunFacts({
     }
     if (["verification_failed", "verification_observation_incomplete"].includes(githubVerification.reason)
       && completedFailedVerificationRetry(known, prHead, criteriaHash)
-      && hasUnpublishedRetryWork(gitFacts, headSha, prHead)) {
+      && hasUnpublishedRetryWork(
+        gitFacts,
+        headSha,
+        githubFacts.pr_head_sha,
+        prFact?.payload?.head_sha,
+      )) {
       return withGithubAvailability(result("recover", "publication_incomplete", {
         head_sha: headSha,
         reviewed_sha: latestReview?.payload?.reviewed_sha || null,
@@ -694,8 +702,9 @@ function foldRunFacts({
   const resolvedRedispatch = currentResolution?.payload?.disposition === "redispatch";
   if (latestReview && reviewBindingMatches
     && (latestReview.payload.verdict === "changes_requested" || resolvedRedispatch)) {
-    // A completed review correction must return to recover, the sole commit/push owner;
-    // redispatch here would strand corrected bytes. #1191 worktree-base validation is untouched.
+    // A completed review correction with unpublished bytes must return to recover,
+    // the sole commit/push owner. A clean same-head no-op remains redispatchable.
+    // #1191 worktree-base validation is untouched.
     const latestPostReviewTerminal = known
       .slice(known.indexOf(latestReview) + 1)
       .filter((fact) => fact.type === "attempt_finished" || fact.type === "attempt_interrupted")
@@ -703,7 +712,12 @@ function foldRunFacts({
     if (!localReviewReady && (
       latestPostReviewTerminal?.type === "attempt_finished"
       && latestPostReviewTerminal.payload.status === "completed"
-      && hasReviewableWork(gitFacts)
+      && hasUnpublishedRetryWork(
+        gitFacts,
+        headSha,
+        githubFacts.pr_head_sha,
+        prFact?.payload?.head_sha,
+      )
     )) {
       return withGithubAvailability(result("recover", "publication_incomplete", {
         head_sha: headSha,
