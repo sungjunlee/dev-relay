@@ -703,6 +703,29 @@ async function executeDetached(cli, argv) {
   fail("detached dispatcher did not publish a launch receipt", "DISPATCH_START_FAILED");
 }
 
+// When a foreground dispatch throws after the attempt already settled (the gate
+// exiting mid-flight during Relay cancellation, e.g. a post-settle inspection
+// fault), the terminal state is still durable: an attempt_finished fact and its
+// host result file. Salvage the typed shape for stdout instead of losing it to a
+// stderr-only error. Exit-code semantics are unchanged: the caller still returns 1.
+async function salvageTerminalResult(cli) {
+  if (!cli || !cli.runId || !cli.repo || cli.values["dry-run"]) return null;
+  const runDir = runStore.resolveRunDirectory(canonicalCheckout(cli.repo), cli.runId);
+  const inspection = await recover.inspectProductionRun({ runDir });
+  const finished = inspection.facts.filter((fact) => fact.type === "attempt_finished"
+    && new Set(["cancelled", "failed", "timed_out"]).has(fact.payload?.status)).at(-1);
+  if (!finished) return null;
+  const hostResult = JSON.parse(fs.readFileSync(finished.payload.result_path, "utf8"));
+  if (!TERMINAL_STATUSES.has(hostResult.status)) return null;
+  const adapter = getAdapter(cli.values.executor);
+  const capabilityRequest = { networkAccess: cli.values["network-access"], model: cli.values.model || null };
+  return { status: finished.payload.status, host_status: hostResult.status,
+    ...(hostResult.termination ? { termination: hostResult.termination } : {}),
+    run_id: cli.runId, run_dir: runDir, attempt_id: finished.attempt_id,
+    filesystem_isolation: filesystemIsolationDiagnostic(adapter, "dispatch", capabilityRequest),
+    recovery: "canonical relay-recover only", inspection };
+}
+
 async function main(argv = process.argv.slice(2)) {
   let cli;
   try {
@@ -724,6 +747,11 @@ async function main(argv = process.argv.slice(2)) {
     const payload = { ok: false, code: error.code || "DISPATCH_FAILED", error: error.message };
     if (process.env.RELAY_DISPATCH_NOTIFY_PATH) {
       try { atomicJson(process.env.RELAY_DISPATCH_NOTIFY_PATH, payload); } catch {}
+    }
+    let salvaged = null;
+    try { salvaged = await salvageTerminalResult(cli); } catch {}
+    if (salvaged) {
+      console.log(cli?.values?.json ? JSON.stringify(salvaged, null, 2) : `${salvaged.status}: ${salvaged.run_id}`);
     }
     console.error(cli?.values?.json ? JSON.stringify(payload) : `relay-dispatch: ${error.message}`);
     return 1;
