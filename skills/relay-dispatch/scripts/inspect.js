@@ -894,8 +894,7 @@ function blocker(code, message, retryable = false, details = {}) { return { code
 function matchingRecordedPr(facts, github) {
   const fact = facts.filter((item) => item.type === "pull_request_recorded").at(-1);
   return fact && fact.payload.pr_number === github.pr_number && fact.payload.repo === github.repo
-    && fact.payload.head_ref === github.head_ref && fact.payload.base_ref === github.base_ref
-    && fact.payload.head_sha === github.pr_head_sha ? fact : null;
+    && fact.payload.head_ref === github.head_ref && fact.payload.base_ref === github.base_ref ? fact : null;
 }
 function recoverySteps(derived, seen, facts = []) {
   if (isLocalDelivery(seen.git)) {
