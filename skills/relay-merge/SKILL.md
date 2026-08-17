@@ -75,14 +75,18 @@ intent. If a crash leaves that intent but GitHub proves neither the exact merge
 nor a queued request, finalize fails with an ambiguous-outcome error and
 requires canonical recovery instead of risking a duplicate call.
 
-The final preflight rechecks the immutable configured base and source SHA. If
-the base commit advanced since review, finalize requires the reviewed base to
-be its ancestor and compares the exact reviewed Git path set with GitHub's base
-advance paths. Zero overlap remains mergeable; overlap fails typed and requires
-updating the branch onto the current base, then canonical verification and
-review. Path overlap is a proxy, so semantic conflicts across different paths
-remain outside this proof. GitHub compare caps file evidence at 300 entries;
-that boundary and incomplete commit pagination fail closed.
+The final preflight rechecks the immutable configured base and source SHA.
+GitHub review stages its patch from the live reviewed base with three-dot
+semantics, so a required pre-review base update does not attribute base-only
+paths to the branch. If the base commit advances after review, finalize requires
+the reviewed base to be its ancestor and compares the exact reviewed Git path
+set with GitHub's base advance paths. Zero overlap remains mergeable; overlap
+fails typed and requires updating the branch onto the current base, then
+canonical verification. The ensuing re-review uses that new live PR base as
+the three-dot left side and therefore stages only branch-unique changes. Path
+overlap is a proxy, so semantic conflicts across different paths remain outside
+this proof. GitHub compare caps file evidence at 300 entries; that boundary and
+incomplete commit pagination fail closed.
 
 The
 GitHub merge API provides an atomic expected-source-SHA guard

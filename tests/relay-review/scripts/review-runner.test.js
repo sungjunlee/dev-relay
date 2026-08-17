@@ -41,7 +41,7 @@ function reviewerSuccess(input, output) {
   return { status: "succeeded", output, review_binding: reviewBinding(input), executed_runtime: EXECUTED_RUNTIME };
 }
 
-async function fixture(label, { local = false, reviewer = "codex" } = {}) {
+async function fixture(label, { local = false, reviewer = "codex", baseAdvance = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-review-${label}-`)));
   const repo = path.join(root, "repo");
   const runId = `review-${label}`;
@@ -56,8 +56,24 @@ async function fixture(label, { local = false, reviewer = "codex" } = {}) {
   git(repo, ["commit", "-m", "initial"]);
   const startSha = git(repo, ["rev-parse", "HEAD"]);
   git(repo, ["checkout", "-b", `issue-${label}`]);
-  fs.writeFileSync(path.join(repo, "file.txt"), "after\n");
-  git(repo, ["commit", "-am", "change"]);
+  if (baseAdvance) {
+    fs.writeFileSync(path.join(repo, "branch-only.txt"), "branch change\n");
+    git(repo, ["add", "branch-only.txt"]);
+    git(repo, ["commit", "-m", "branch change"]);
+  } else {
+    fs.writeFileSync(path.join(repo, "file.txt"), "after\n");
+    git(repo, ["commit", "-am", "change"]);
+  }
+  let baseSha = startSha;
+  if (baseAdvance) {
+    git(repo, ["checkout", "main"]);
+    fs.writeFileSync(path.join(repo, "base-only.txt"), "base change\n");
+    git(repo, ["add", "base-only.txt"]);
+    git(repo, ["commit", "-m", "base change"]);
+    baseSha = git(repo, ["rev-parse", "HEAD"]);
+    git(repo, ["checkout", `issue-${label}`]);
+    git(repo, ["merge", "--no-edit", "main"]);
+  }
   const head = git(repo, ["rev-parse", "HEAD"]);
   const tree = git(repo, ["rev-parse", "HEAD^{tree}"]);
   let worktree = repo;
@@ -70,7 +86,7 @@ async function fixture(label, { local = false, reviewer = "codex" } = {}) {
     execFileSync("git", ["-C", repo, "worktree", "add", worktree, `issue-${label}`], { stdio: "ignore" });
   }
   const criteriaPath = path.join(runDir, "done-criteria.md");
-  fs.writeFileSync(criteriaPath, "- file.txt says after\n");
+  fs.writeFileSync(criteriaPath, baseAdvance ? "- branch-only.txt exists\n" : "- file.txt says after\n");
   const criteriaHash = crypto.createHash("sha256").update(fs.readFileSync(criteriaPath)).digest("hex");
   const remote = `local/${path.basename(repo)}`;
   const record = {
@@ -124,7 +140,7 @@ async function fixture(label, { local = false, reviewer = "codex" } = {}) {
       facts: current,
       observations: local
         ? { git: { local_delivery: true, head_sha: head, tree_sha: tree, reviewable_dirty: false }, github: {} }
-        : { github: { pr_number: 42, pr_head_sha: head, pr_base_sha: startSha, pr_state: "OPEN" } },
+        : { github: { pr_number: 42, pr_head_sha: head, pr_base_sha: baseSha, pr_state: "OPEN" } },
       derived: { action, head_sha: head, pr_number: local ? null : 42,
         retry_of_event_id: retryable ? review.event_id : null,
         resolution_of_event_id: resolving ? resolution.event_id : null },
@@ -136,7 +152,7 @@ async function fixture(label, { local = false, reviewer = "codex" } = {}) {
     };
   };
   const cli = runner.parseCli(["--repo", worktree, "--run-dir", runDir, "--json"]);
-  return { root, repo: worktree, repoRoot: repo, worktreeBase, runDir, record, startSha, head, tree, criteriaHash, eventsPath, inspectRun, cli };
+  return { root, repo: worktree, repoRoot: repo, worktreeBase, runDir, record, startSha, baseSha, head, tree, criteriaHash, eventsPath, inspectRun, cli };
 }
 
 test("Relay runner records one exact-SHA pass and the derived action advances to merge", async () => {
@@ -196,6 +212,41 @@ test("Relay runner records one exact-SHA pass and the derived action advances to
   );
   await assert.rejects(runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer: async () => { throw new Error("must not run"); } }), /not 'review'/);
   assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 1);
+});
+
+test("GitHub review stages only branch changes after the live PR base is merged", async () => {
+  const value = await fixture("advanced-base", { baseAdvance: true });
+  let captured;
+  const result = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    async invokeReviewer(input) {
+      captured = input;
+      return reviewerSuccess(input, { verdict: "pass", summary: "branch changes only", issues: [] });
+    },
+  });
+
+  assert.notEqual(value.startSha, value.baseSha);
+  assert.equal(git(value.repo, ["merge-base", value.baseSha, value.head]), value.baseSha);
+  assert.equal(result.reviewed_sha, value.head);
+  assert.equal(captured.request.base_sha, value.baseSha);
+  assert.equal(captured.request.reviewed_sha, value.head);
+  assert.equal(captured.request.current_sha, value.head);
+  const prompt = fs.readFileSync(captured.request.prompt_path, "utf8");
+  assert.match(prompt, new RegExp(`Base SHA: ${value.baseSha}`));
+  const rawDiff = execFileSync("git", ["-C", value.repo, "diff", "--binary", "--no-ext-diff",
+    `${value.baseSha}...${value.head}`, "--"], { encoding: "utf8" });
+  const exactDiff = Buffer.from(`${rawDiff}${rawDiff.endsWith("\n") || !rawDiff ? "" : "\n"}`, "utf8");
+  const stagedPatch = fs.readFileSync(captured.request.diff_path);
+  assert.deepEqual(stagedPatch, exactDiff);
+  assert.equal(captured.request.diff_sha256, crypto.createHash("sha256").update(exactDiff).digest("hex"));
+  const patch = stagedPatch.toString("utf8");
+  assert.match(patch, /branch-only\.txt/);
+  assert.doesNotMatch(patch, /base-only\.txt/);
+  const review = facts.readFacts({ eventsPath: value.eventsPath }).facts.find((fact) => fact.type === "review_recorded");
+  assert.equal(review.payload.base_sha, value.baseSha);
+  assert.equal(review.payload.reviewed_sha, value.head);
+  const artifact = JSON.parse(fs.readFileSync(review.payload.review_artifact, "utf8"));
+  assert.equal(Object.hasOwn(artifact, "base_sha"), false);
 });
 
 test("pass with advisory issues records lgtm and preserves advisories in the artifact", async () => {
