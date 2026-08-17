@@ -56,6 +56,7 @@ durable merge authorization, invokes GitHub, revalidates
 the exact merged PR, and appends one `merge_recorded` fact. It then removes the
 clean linked worktree. A dirty, changed, unregistered, or repository-mismatched
 worktree is retained rather than forced away.
+Finalize does not call the GitHub REST `/user` endpoint; `--actor` records the merge operator.
 
 The authorization and merge receipt make retries idempotent across crashes.
 Re-run the same command, with the same actor and method, after an interruption.

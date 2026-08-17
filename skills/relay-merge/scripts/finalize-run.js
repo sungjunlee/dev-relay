@@ -446,15 +446,8 @@ function githubToken(repo) {
   fail("GitHub revalidation requires GH_TOKEN/GITHUB_TOKEN or `gh auth login`", "GITHUB_AUTH_REQUIRED");
 }
 
-function authenticatedGithubLogin(record) {
-  const login = gh(record.repo.root, ["api", "user", "--jq", ".login"]);
-  if (!login || login.length > 255 || login.includes("\0") || /[\r\n]/.test(login)) {
-    fail("GitHub returned an invalid authenticated login", "GITHUB_AUTH_IDENTITY_INVALID");
-  }
-  return login;
-}
-
 function assertQueueRequestor(live, authorization) {
+  if (authorization.githubLogin === null) return;
   const enabledBy = live.auto_merge_request?.enabledBy?.login;
   if (!enabledBy || enabledBy !== authorization.githubLogin) {
     fail(
@@ -584,7 +577,6 @@ function productionServices() {
       hostKind: "local_supervisor", hostHandle: `merge:${process.pid}`, worktreeDir: canonical }, callback);
   }
   return {
-    authenticatedGithubLogin,
     cleanupWorktree,
     assertBaseIntegrity,
     inspectRun: inspectProductionRun,
@@ -822,7 +814,6 @@ async function finalizeRun(cli, overrides = {}) {
     if (!hasAuthorization && isMergePending(revalidated.facts)) {
       fail("an existing external merge queue request requires canonical recover", "MERGE_RECOVER_REQUIRED");
     }
-    const githubLogin = await services.authenticatedGithubLogin(record);
     const authorization = hasAuthorization
       ? services.resumeOperatorMerge({
           runDir,
@@ -834,7 +825,7 @@ async function finalizeRun(cli, overrides = {}) {
           runDir,
           lockContext,
           freshObservation: revalidated.observationCapability,
-          operatorAction: { actor, method, operationId: id, githubLogin },
+          operatorAction: { actor, method, operationId: id },
           currentHead: binding.head,
           currentDoneCriteriaSha256: record.contract.done_criteria_sha256,
           verdict: {
@@ -844,13 +835,6 @@ async function finalizeRun(cli, overrides = {}) {
           },
           prNumber: binding.prNumber,
         });
-
-    if (authorization.githubLogin !== githubLogin) {
-      fail(
-        "authenticated GitHub identity differs from the durable merge authorization",
-        "MERGE_AUTH_IDENTITY_DRIFT",
-      );
-    }
 
     if (hasAuthorization && (authorization.method !== method || authorization.actor !== actor)) {
       fail(
@@ -918,13 +902,6 @@ async function finalizeRun(cli, overrides = {}) {
       services.assertBaseIntegrity(record, freshBinding, preflight.pr_base_sha);
       if (isMergePending(preflight)) {
         fail("merge queue state changed immediately before the merge request", "MERGE_QUEUE_OBSERVATION_MISMATCH");
-      }
-      const finalGithubLogin = await services.authenticatedGithubLogin(record);
-      if (finalGithubLogin !== authorization.githubLogin) {
-        fail(
-          "authenticated GitHub identity changed immediately before the merge request",
-          "MERGE_AUTH_IDENTITY_DRIFT",
-        );
       }
       await services.beforeMerge({ record, binding, authorization });
       requestIntent = recordRequestIntent(runDir, authorization, binding);
