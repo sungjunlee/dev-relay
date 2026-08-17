@@ -819,6 +819,77 @@ test("pending intent with mismatched actor or reason preserves identity refusal"
   assert.deepEqual(h.state.effects, []);
 });
 
+test("observation-changed pending intent requires exact identity discharge before the fresh action", async () => {
+  const intentKey = "4".repeat(64);
+  const intent = {
+    schema_version: 1,
+    action_key: intentKey,
+    operation_id: `recover-${intentKey.slice(0, 32)}`,
+    created_at: "2026-08-01T00:03:00Z",
+    steps: ["push_branch", "record_or_create_pr", "record_verification"],
+    actor: "owner",
+    reason: "publish and verify reviewed work",
+    reason_code: "publication_incomplete",
+    observed_event_id: "attempt-finished",
+    before_sha: HEAD,
+  };
+  const h = harness({
+    facts: [attemptFinished(), pullRequestFact(HEAD)],
+    observations: publicationObservations({
+      github: {
+        available: true, pr_lookup_complete: true, matching_pr_count: 1,
+        repo: "owner/repo", pr_number: 42, pr_state: "MERGED",
+        head_ref: "issue-1135", base_ref: "main", pr_head_sha: HEAD, merge_sha: TARGET,
+      },
+    }),
+  });
+  h.state.intent = structuredClone(intent);
+  const factCount = h.state.facts.length;
+
+  for (const identity of [
+    { actor: "different-operator", reason: intent.reason },
+    { actor: intent.actor, reason: "different reason" },
+  ]) {
+    const mismatch = await recoverRun({
+      ...h,
+      ...identity,
+      expectedActionKey: intentKey,
+      effects: { converge: async () => { throw new Error("obsolete effect called"); } },
+    });
+    assert.equal(mismatch.status, "refused");
+    assert.equal(mismatch.blockers[0].code, "active_intent_identity_mismatch");
+    assert.equal(h.state.facts.length, factCount);
+    assert.equal(h.state.receipts.size, 0);
+    assert.deepEqual(await h.readIntent({ facts: h.state.facts }), intent);
+  }
+
+  const discharged = await recoverRun({
+    ...h,
+    actor: intent.actor,
+    reason: intent.reason,
+    expectedActionKey: intentKey,
+    effects: { converge: async () => { throw new Error("obsolete effect called"); } },
+  });
+  assert.equal(discharged.status, "converged");
+  assert.deepEqual(h.state.effects, []);
+  assert.deepEqual(h.state.intent, intent);
+  assert.equal(await h.readIntent({ facts: h.state.facts }), null);
+  const completion = h.state.facts.at(-1);
+  assert.equal(completion.type, "recovery_applied");
+  assert.equal(completion.actor, intent.actor);
+  assert.equal(completion.payload.operator, intent.actor);
+  assert.equal(completion.payload.reason, intent.reason);
+  assert.equal(completion.payload.rule, "active_intent_observation_changed");
+  assert.deepEqual(completion.payload.side_effects, ["discharge_obsolete_intent"]);
+  assert.equal(h.state.facts.some((fact) => fact.type === "merge_recorded"), false);
+
+  const fresh = await inspectRun(h);
+  assert.equal(fresh.recommended_action.kind, "recover");
+  assert.equal(fresh.recommended_action.reason, "merged_pr_unrecorded");
+  assert.deepEqual(fresh.recommended_action.steps, ["record_external_merge"]);
+  assert.notEqual(fresh.recommended_action.key, intentKey);
+});
+
 test("#1209 recovery reinspection requires the same action after live observations change", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
   const inspected = await inspectRun(h);
@@ -876,6 +947,29 @@ test("recover rejects a regular forged receipt without its durable completion fa
   }), /missing durable fact/);
   assert.equal(effectCalls, 0);
   assert.deepEqual(h.state.facts, [attemptFinished()]);
+});
+
+test("recover rejects a forged discharge completion with a mismatched operator identity", async () => {
+  const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
+  const key = "9".repeat(64);
+  const operationId = `recover-${key.slice(0, 32)}`;
+  const eventId = `recovery-${crypto.createHash("sha256")
+    .update(`${operationId}:recovery_applied`).digest("hex").slice(0, 32)}`;
+  h.state.facts.push({
+    event_id: eventId, run_id: "issue-1135-test", type: "recovery_applied",
+    at: "2026-08-01T00:03:00Z", actor: "forged-operator",
+    payload: { rule: "active_intent_observation_changed", observed_event_id: "attempt-finished",
+      before_sha: HEAD, after_sha: HEAD, side_effects: ["discharge_obsolete_intent"],
+      reason: "publish safely", operator: "forged-operator" },
+  });
+  h.state.receipts.set(key, {
+    schema_version: 1, operation_id: operationId, action_key: key, fact_event_ids: [eventId],
+  });
+  await assert.rejects(recoverRun({
+    ...h, actor: "owner", reason: "publish safely", expectedActionKey: key,
+    effects: { converge: async () => { throw new Error("effect called"); } },
+  }), /not bound to a completion fact/);
+  assert.equal(h.state.writes, 0);
 });
 
 test("terminal recovery is a no-write noop", async () => {

@@ -21,6 +21,7 @@ const RECOVERY_STEPS = new Set([
   "record_external_merge",
   "close_reviewed_result",
 ]);
+const DISCHARGE_STEP = "discharge_obsolete_intent";
 function sha256(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function stable(value, { omitVolatile = false } = {}) { return inspect.stable(value, omitVolatile); }
 const actionKey = inspect.actionKey;
@@ -113,6 +114,24 @@ function pendingIntentBlocker(runDir, intent) {
       resume_invocation: recoveryResumeInvocation(runDir, intent),
     },
   );
+}
+function stepSetCovers(needed, available) {
+  const have = new Set(available);
+  return needed.length > 0 && needed.every((step) => have.has(step));
+}
+function intentStepsAuthorized(intent, recommendedAction) {
+  if (recommendedAction.kind !== "recover") return false;
+  const fresh = recommendedAction.steps || [];
+  return stepSetCovers(intent.steps, fresh) || stepSetCovers(fresh, intent.steps);
+}
+function dischargeRecommendedAction(intent) {
+  return {
+    kind: "recover",
+    reason: "active_intent_observation_changed",
+    steps: [DISCHARGE_STEP],
+    required_inputs: [],
+    key: intent.action_key,
+  };
 }
 function productionRecoveryIo(runDir) {
   return {
@@ -952,7 +971,24 @@ function validateRecoveryIntent(intent) {
   ) throw new Error("active recovery intent is malformed");
   return intent;
 }
-function validateRecoveryReceipt(receipt, { actionKey: actionKeyValue, facts, requiredStep = null, intent = null }) {
+function recoveryFactMatchesIdentity(fact, { intent = null, actor = null, reason = null }) {
+  const expectedActor = intent?.actor || actor;
+  const expectedReason = intent?.reason || reason;
+  if (expectedActor && (fact.actor !== expectedActor || fact.payload?.operator !== expectedActor)) return false;
+  if (expectedReason && fact.payload?.reason !== expectedReason) return false;
+  if (!intent) return true;
+  if (fact.at !== intent.created_at
+    || fact.payload?.observed_event_id !== intent.observed_event_id
+    || fact.payload?.before_sha !== intent.before_sha) return false;
+  const ordinary = fact.payload?.rule === intent.reason_code
+    && isDeepStrictEqual(fact.payload?.side_effects, intent.steps);
+  const discharge = fact.payload?.rule === "active_intent_observation_changed"
+    && isDeepStrictEqual(fact.payload?.side_effects, [DISCHARGE_STEP]);
+  return ordinary || discharge;
+}
+function validateRecoveryReceipt(receipt, {
+  actionKey: actionKeyValue, facts, requiredStep = null, intent = null, actor = null, reason = null,
+}) {
   const expectedKeys = ["action_key", "fact_event_ids", "operation_id", "schema_version"];
   const operationId = `recover-${actionKeyValue.slice(0, 32)}`;
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
@@ -969,7 +1005,8 @@ function validateRecoveryReceipt(receipt, { actionKey: actionKeyValue, facts, re
   const recoveryEventId = deterministicEventId(operationId, "recovery_applied");
   const recoveryFact = byId.get(recoveryEventId);
   const hasRecoveryFact = receipt.fact_event_ids.includes(recoveryEventId)
-    && recoveryFact?.type === "recovery_applied";
+    && recoveryFact?.type === "recovery_applied"
+    && recoveryFactMatchesIdentity(recoveryFact, { intent, actor, reason });
   const hasTerminalMergeFact = receipt.fact_event_ids.some((eventId) => {
     const fact = byId.get(eventId);
     return fact?.type === "merge_recorded" && fact.payload?.operation_id === operationId;
@@ -993,7 +1030,7 @@ function validateRecoveryReceipt(receipt, { actionKey: actionKeyValue, facts, re
   }
   return receipt;
 }
-function recoveryAppliedFact({ runId, intent, after, applied }) {
+function recoveryAppliedFact({ runId, intent, after, applied, rule = intent.reason_code, sideEffects = intent.steps }) {
   const stepEventIds = new Set(applied.map((entry) => entry.fact_event_id).filter(Boolean));
   const durableOutcomeSha = after.facts.filter((fact) => stepEventIds.has(fact.event_id))
     .map((fact) => fact.payload?.head_sha || fact.payload?.last_known_sha || null).filter(Boolean).at(-1);
@@ -1004,12 +1041,12 @@ function recoveryAppliedFact({ runId, intent, after, applied }) {
     at: intent.created_at,
     actor: intent.actor,
     payload: {
-      rule: intent.reason_code,
+      rule,
       observed_event_id: intent.observed_event_id,
       before_sha: intent.before_sha,
       // Bind retries to immutable step facts, not a freshly observed HEAD.
       after_sha: durableOutcomeSha || intent.before_sha || null,
-      side_effects: [...intent.steps],
+      side_effects: [...sideEffects],
       reason: intent.reason,
       operator: intent.actor,
     },
@@ -1094,6 +1131,8 @@ async function recoverRun({
       const completed = completedCandidate && validateRecoveryReceipt(completedCandidate, {
         actionKey: expectedActionKey,
         facts: before.facts,
+        actor,
+        reason,
         requiredStep: (before.derived.reason === "reviewed_result_ready" ||
           (Array.isArray(before.recommended_action.steps)
             && before.recommended_action.steps.includes("close_reviewed_result")))
@@ -1186,20 +1225,9 @@ async function recoverRun({
         )],
       });
     }
-    if (intent && before.recommended_action.kind === "operator_attention") {
-      return recoverResult({
-        before, status: "refused", operationId, actionKeyValue,
-        blockers: [blocker(
-          "active_intent_observation_changed",
-          "live observations no longer authorize the active recovery intent; preserve it for audited operator resolution",
-          false,
-        ), ...before.blockers],
-      });
-    }
-    // An effect may have reached a durable terminal fact before its receipt was
-    // published. Never append a non-terminal recovery fact after that terminal;
-    // the immutable intent is sufficient to finish the receipt.
-    if (before.derived.terminal === true) {
+    // A terminal fact already bound to this intent is authoritative crash
+    // recovery, not an observation-changed discharge candidate.
+    if (intent && before.derived.terminal === true) {
       const matchingTerminalFacts = terminalCompletionFacts(before.facts, intent);
       if (matchingTerminalFacts.length !== 1) {
         return recoverResult({
@@ -1221,6 +1249,35 @@ async function recoverRun({
         operationId,
         actionKeyValue,
         receipt,
+      });
+    }
+    const authorized = intent && intentStepsAuthorized(intent, before.recommended_action);
+    const dischargeAuthorized = intent && before.recommended_action.kind === "recover" && !authorized;
+    if (intent && before.recommended_action.kind !== "recover") {
+      return recoverResult({
+        before, status: "refused", operationId, actionKeyValue,
+        blockers: [blocker(
+          "active_intent_observation_changed",
+          "live observations no longer authorize the active recovery intent; preserve it for audited operator resolution",
+          false,
+        ), ...before.blockers],
+      });
+    }
+    if (dischargeAuthorized) {
+      const recoveryFact = recoveryAppliedFact({
+        runId: before.run_id,
+        intent,
+        after: before,
+        applied: [],
+        rule: "active_intent_observation_changed",
+        sideEffects: [DISCHARGE_STEP],
+      });
+      await appendFact(recoveryFact);
+      const receipt = recoveryReceipt(operationId, actionKeyValue, [recoveryFact.event_id]);
+      await writeReceipt({ runDir, actionKey: actionKeyValue, operationId, receipt });
+      const after = await inspectRun({ runDir, observer, readSnapshot });
+      return recoverResult({
+        before, status: "converged", operationId, actionKeyValue, receipt, after,
       });
     }
     const applied = [];
@@ -1742,6 +1799,22 @@ async function inspectProductionRun({ runDir, activeRunLock = null } = {}) {
       return { ...observed, blockers: [pendingIntentBlocker(runDir, intent), ...observed.blockers] };
     },
   });
+  if (activeRunLock === null) {
+    const intent = productionRecoveryIo(runDir).readIntent({ facts: inspection.facts });
+    if (intent) {
+      validateRecoveryIntent(intent);
+      const freshSteps = inspect.recoverySteps(inspection.derived, inspection.observations, inspection.facts);
+      const otherBlockers = inspection.blockers.filter((item) => item.code !== "active_intent_pending");
+      const lockedEquivalent = {
+        kind: inspection.derived.action === "recover" && freshSteps.length && !otherBlockers.length
+          ? "recover" : "operator_attention",
+        steps: freshSteps,
+      };
+      if (lockedEquivalent.kind === "recover" && !intentStepsAuthorized(intent, lockedEquivalent)) {
+        inspection.recommended_action = dischargeRecommendedAction(intent);
+      }
+    }
+  }
   return inspection;
 }
 async function withProductionRecoveryLock({

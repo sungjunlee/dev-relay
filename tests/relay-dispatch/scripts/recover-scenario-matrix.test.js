@@ -445,7 +445,15 @@ test("#1135 recovery crash matrix is idempotent before and after every emitted d
           };
           await assert.rejects(recover(h, { appendFact }), new RegExp(`injected crash ${phase} ${targetType}`));
 
+          const verificationChangedAction = definition.name === "partial-verification"
+            && h.state.facts.some((entry) => entry.type === "verification_recorded"
+              && entry.payload.status === "passed");
           const converged = await recover(h, { appendFact });
+          if (verificationChangedAction) {
+            assert.equal(converged.status, "refused");
+            assert.equal(converged.blockers[0].code, "active_intent_observation_changed");
+            return;
+          }
           assert.equal(converged.status, "converged");
           assert.equal(h.state.pr_creations, definition.steps.includes("record_or_create_pr") ? 1 : 0);
           for (const count of countByEventId(h.state.facts).values()) assert.equal(count, 1, "event IDs are append-idempotent");
