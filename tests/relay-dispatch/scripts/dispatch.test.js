@@ -1311,6 +1311,36 @@ test("dispatch from a non-default checkout branches from origin/HEAD, not incide
   assert.notEqual(record.git.start_sha, incidentalSha);
 });
 
+test("dispatch uses the origin default tip when local main is behind origin/main", () => {
+  const value = fixture("stale-local-main");
+  fs.writeFileSync(path.join(value.repo, "ahead.txt"), "origin ahead\n");
+  git(value.repo, ["add", "ahead.txt"]);
+  git(value.repo, ["commit", "-m", "origin ahead"]);
+  git(value.repo, ["push", "origin", "main"]);
+  const originSha = git(value.repo, ["rev-parse", "refs/remotes/origin/main"]);
+  git(value.repo, ["reset", "--hard", "HEAD~1"]);
+  const localSha = git(value.repo, ["rev-parse", "HEAD"]);
+  assert.notEqual(localSha, originSha);
+
+  const result = run(value, ["--branch", "issue-1280-stale-local", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const record = readRunRecord({ runDir: json(result.stdout).run_dir });
+  assert.equal(record.git.base_branch, "main");
+  assert.equal(record.git.start_sha, originSha);
+  assert.equal(git(record.git.worktree, ["rev-parse", "HEAD"]), originSha);
+  assert.notEqual(record.git.start_sha, localSha);
+});
+
+test("empty --base fails typed", () => {
+  const value = fixture("empty-base");
+  const result = run(value, [
+    "--branch", "issue-1280-empty-base", "--base", "",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--dry-run", "--json",
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /--base must be a branch name|BASE_INVALID/);
+});
+
 test("explicit --base records that origin ref and starts the run there", () => {
   const value = fixture("explicit-base");
   git(value.repo, ["checkout", "-q", "-b", "stack-base"]);

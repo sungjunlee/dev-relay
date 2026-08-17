@@ -194,6 +194,7 @@ function parseCli(argv) {
   if (values.branch && values["run-id"] && !internalRunId) fail("--branch and --run-id are mutually exclusive");
   if (!values.branch && !values["run-id"] && !internalRunId) fail("--branch or --run-id is required");
   if (values.base !== undefined && !values.branch) fail("--base is only valid for new dispatch", "BASE_INVALID");
+  if (values.base !== undefined && !String(values.base).trim()) fail("--base must be a branch name", "BASE_INVALID");
   if (values.prompt === undefined && values["prompt-file"] === undefined) fail("--prompt or --prompt-file is required");
   if (values.prompt !== undefined && values["prompt-file"] !== undefined) fail("--prompt and --prompt-file are mutually exclusive");
   if (!new Set(["disabled", "enabled"]).has(values["network-access"])) fail("--network-access must be disabled or enabled");
@@ -314,7 +315,7 @@ function resolveExplicitBase(checkout, requestedBase, runBranch) {
   assertBranchName(checkout, name, "--base");
   if (tryGit(checkout, ["remote", "get-url", "origin"])) {
     const startSha = tryGit(checkout, ["rev-parse", "--verify", `refs/remotes/origin/${name}`]);
-    if (!startSha) fail(`--base is not on origin: ${name}`, "BASE_NOT_ON_ORIGIN");
+    if (!startSha) fail(`--base is not a fetched origin branch: ${name}`, "BASE_NOT_ON_ORIGIN");
     return { baseBranch: name, startSha };
   }
   const startSha = tryGit(checkout, ["rev-parse", "--verify", `refs/heads/${name}`]);
