@@ -26,6 +26,7 @@ const CRASH_AFTER_START = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatc
 const ADAPTER_RUNTIME_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/adapter-runtime-preload.js");
 const READ_ONCE_PRELOAD = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-prompt-read-once-preload.js");
 const RUN_CLAIM_RACE = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-run-claim-race-preload.js");
+const POST_SETTLE_FAULT = path.join(ROOT, "tests/relay-dispatch/fixtures/dispatch-post-settle-fault-preload.js");
 
 function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -64,6 +65,7 @@ function fixture(label, { objectFormat = "sha1" } = {}) {
   git(repo, ["commit", "-m", "initial"]);
   git(repo, ["remote", "add", "origin", remote]);
   git(repo, ["push", "-u", "origin", "main"]);
+  git(repo, ["remote", "set-head", "origin", "main"]);
   const prompt = path.join(root, "prompt.md");
   const rubric = path.join(root, "rubric.yaml");
   fs.writeFileSync(prompt, "Implement the requested change.\n");
@@ -93,6 +95,66 @@ function run(value, args, env = value.env) {
 }
 
 function json(stdout) { return JSON.parse(stdout); }
+
+const CLEANUP_REFUSALS = new Set(["HOST_CLEANUP_INCOMPLETE", "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED"]);
+function cleanupIncompleteArtifact(value) {
+  const runsRoot = fixtureRunsDir(value);
+  const runDirs = fs.existsSync(runsRoot) ? fs.readdirSync(runsRoot)
+    .map((entry) => path.join(runsRoot, entry)).filter((entry) => fs.statSync(entry).isDirectory()) : [];
+  const artifacts = [];
+  for (const runDir of runDirs) {
+    if (!fs.existsSync(runDir)) continue;
+    for (const entry of fs.readdirSync(runDir)) {
+      if (/^host-attempt-[A-Za-z0-9_-]+\.cleanup-incomplete\.json$/.test(entry)) {
+        artifacts.push({ runDir, path: path.join(runDir, entry) });
+      }
+    }
+  }
+  assert.equal(artifacts.length, 1, "a cleanup refusal requires exactly one durable cleanup-incomplete artifact");
+  return artifacts[0];
+}
+
+function readSignedCleanupArtifact(value) {
+  const artifactRef = cleanupIncompleteArtifact(value);
+  const artifact = JSON.parse(fs.readFileSync(artifactRef.path, "utf8"));
+  assert.equal(path.basename(artifactRef.path), `host-attempt-${artifact.attempt_id}.cleanup-incomplete.json`,
+    "cleanup artifact path must bind the signed attempt id");
+  const ownerDir = path.join(artifactRef.runDir, "ownership");
+  const owners = fs.readdirSync(ownerDir).filter((entry) => entry.endsWith(".owner.json"))
+    .map((entry) => JSON.parse(fs.readFileSync(path.join(ownerDir, entry), "utf8")))
+    .filter((owner) => artifact.lock_id === owner.lock_id && artifact.attempt_id === owner.attempt_id
+      && artifact.host_handle === owner.host_handle);
+  assert.equal(owners.length, 1, "cleanup artifact must bind to exactly one durable owner record");
+  const owner = owners[0];
+  const { auth_sha256: signature, ...body } = artifact;
+  const expected = crypto.createHmac("sha256", owner.secret).update(JSON.stringify(body)).digest("hex");
+  assert.match(signature || "", /^[0-9a-f]{64}$/i, "cleanup-incomplete artifact must carry a SHA-256 HMAC");
+  assert.ok(crypto.timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(expected, "hex")),
+    "cleanup-incomplete artifact must authenticate with the bound owner secret");
+  return artifact;
+}
+
+function typedOpenCodeProviderUnavailable(result, value) {
+  if (result.stdout.trim()) {
+    assert.ok(new Set([0, 1]).has(result.status), `${result.stderr}\n${result.stdout}`);
+    const output = json(result.stdout);
+    assert.equal(output.termination, "provider_unavailable", JSON.stringify(output));
+    return { kind: "result", output };
+  }
+  assert.equal(result.status, 1, `cleanup refusal must retain exit 1:\n${result.stderr}`);
+  assert.notEqual(result.stderr.trim(), "", "empty stdout requires a typed cleanup refusal on stderr");
+  let output;
+  try { output = json(result.stderr); }
+  catch (error) { assert.fail(`empty stdout requires JSON stderr, got ${error.message}:\n${result.stderr}`); }
+  assert.equal(output.ok, false, JSON.stringify(output));
+  assert.ok(CLEANUP_REFUSALS.has(output.code), JSON.stringify(output));
+  if (output.code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED") assert.ok(output.process_identity, JSON.stringify(output));
+  const artifact = readSignedCleanupArtifact(value);
+  assert.ok(new Set(["cancelled", "failed"]).has(artifact.terminal?.status), JSON.stringify(artifact));
+  assert.equal(artifact.terminal?.termination, "provider_unavailable", JSON.stringify(artifact));
+  if (output.terminal !== undefined) assert.deepEqual(output.terminal, artifact.terminal);
+  return { kind: "refusal", output, artifact };
+}
 
 function fixtureRunsDir(value) {
   const canonical = fs.realpathSync(value.repo);
@@ -212,10 +274,15 @@ test("dry-run validates the closed Relay surface while writing zero durable byte
   assert.equal(json(result.stdout).invocation.network_access, "enabled", "routine dispatch defaults tool networking to enabled");
   assert.equal(json(result.stdout).invocation.tool_network_access, "enabled", "routine dispatch defaults tool networking to enabled");
   assert.deepEqual(json(result.stdout).filesystem_isolation, { requested: "workspace-write", effective: "native", diagnostic: null });
+  assert.deepEqual(json(result.stdout).loopback_listen, {
+    available: "unavailable",
+    diagnostic: "codex cannot bind loopback sockets in this phase; route socket-bound checks to an operator gate.",
+  });
   assert.equal(fs.existsSync(stateDir), false);
   assert.equal(fs.existsSync(value.relayHome), false);
   const cursor = run(value, ["--executor", "cursor", "--branch", "cursor-dry", "--prompt", "x", "--rubric-file", value.rubric, "--dry-run", "--json"]);
   assert.equal(cursor.status, 0, cursor.stderr);
+  assert.equal(json(cursor.stdout).loopback_listen.available, "unknown");
   assert.equal(Object.hasOwn(json(cursor.stdout).invocation, "private_env_paths"), false);
   const retired = run(value, ["--branch", "retired-credential", "--prompt", "x", "--rubric-file", value.rubric,
     "--credential-env", "OPENAI_API_KEY", "--dry-run", "--json"]);
@@ -858,6 +925,98 @@ test("dispatch persists immutable bindings and exact attempt facts but never aut
   assert.deepEqual(output.inspection.recommended_action, independentlyInspected.recommended_action);
 });
 
+test("Codex completion written before a timeout is durably completed after the hung executor is killed", { timeout: 30_000 }, async () => {
+  const value = fixture("codex-completion-then-hang");
+  const github = githubObservationFixture(value, "completion-then-hang");
+  fs.writeFileSync(value.prompt, JSON.stringify({ hang_after_output: true, print_completion_marker: true }));
+  const result = run(value, ["--branch", "completion-then-hang", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "5", "--json"], github.env);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(output.status, "completed");
+  assert.equal(output.host_status, "completed");
+  assert.equal(output.termination, "timeout_after_completion");
+  assert.equal(output.outcome.status, "succeeded");
+  assert.equal(output.outcome.output, "fake executor completed\n");
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
+  assert.deepEqual(attempts.map((fact) => fact.type), ["attempt_started", "attempt_finished"]);
+  assert.equal(attempts[1].payload.status, "completed");
+  const hostResult = JSON.parse(fs.readFileSync(attempts[1].payload.result_path, "utf8"));
+  assert.equal(hostResult.status, "completed");
+  assert.equal(hostResult.termination, "timeout_after_completion");
+  assert.deepEqual(hostResult.completion, {
+    kind: "stable_result_file",
+    size: Buffer.byteLength("fake executor completed\n"),
+    sha256: crypto.createHash("sha256").update("fake executor completed\n").digest("hex"),
+    stable_ms: 250,
+    stream_marker: "tokens used",
+  });
+  assert.match(hostResult.result_auth_sha256, /^[0-9a-f]{64}$/);
+  const stubKeys = ["RELAY_GIT_BIN", "RELAY_GH_BIN", "RELAY_TEST_GITHUB_STATE", "RELAY_TEST_REAL_GIT"];
+  const prevEnv = Object.fromEntries(stubKeys.map((key) => [key, process.env[key]]));
+  for (const key of stubKeys) process.env[key] = github.env[key];
+  let inspected;
+  try {
+    inspected = await runtime.inspectRun({ runDir: output.run_dir });
+  } finally {
+    for (const key of stubKeys) {
+      if (prevEnv[key] === undefined) delete process.env[key]; else process.env[key] = prevEnv[key];
+    }
+  }
+  assert.equal(inspected.derived.reason, "publication_incomplete");
+  assert.equal(inspected.recommended_action.steps.includes("close_dead_attempt"), false);
+});
+
+test("Codex output written just before timeout is not positive completion evidence", { timeout: 30_000 }, () => {
+  const value = fixture("codex-output-at-timeout");
+  fs.writeFileSync(value.prompt, JSON.stringify({ write_output_after_ms: 4900, hang_after_output: true }));
+  const result = run(value, ["--branch", "output-at-timeout", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "5", "--json"]);
+  // Scheduling jitter can only delay the write, shrinking the pre-termination stable window,
+  // or move it after termination; it cannot run it 4.65s early and reverse this verdict.
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  // Bind the fail-closed class, not one racing shape: when the write slips past the
+  // deadline the SIGTERM'd gate can close naturally as "failed" before the timeout
+  // settle path stamps "timed_out"; both are correct refusals of completion.
+  assert.ok(new Set(["timed_out", "failed"]).has(output.host_status), JSON.stringify(output));
+  assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
+  assert.notEqual(output.termination, "timeout_after_completion");
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
+  assert.ok(new Set(["cancelled", "failed"]).has(attempts.at(-1).payload.status), JSON.stringify(attempts.at(-1).payload));
+  assert.notEqual(attempts.at(-1).payload.status, "completed");
+});
+
+test("a Codex result that keeps changing until timeout is not positive completion evidence", { timeout: 30_000 }, () => {
+  const value = fixture("codex-partial-at-timeout");
+  fs.writeFileSync(value.prompt, JSON.stringify({ partial_then_hang: true }));
+  const result = run(value, ["--branch", "partial-at-timeout", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "1", "--json"]);
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(output.host_status, "timed_out");
+  assert.equal(output.status, "cancelled");
+  assert.equal(output.termination, undefined);
+});
+
+test("a stable partial Codex result without a stream completion marker fails closed at timeout", { timeout: 30_000 }, () => {
+  const value = fixture("codex-partial-then-stall");
+  fs.writeFileSync(value.prompt, JSON.stringify({ partial_then_stall: true }));
+  const result = run(value, ["--branch", "partial-then-stall", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "1", "--json"]);
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.ok(new Set(["timed_out", "failed"]).has(output.host_status), JSON.stringify(output));
+  assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
+  assert.notEqual(output.termination, "timeout_after_completion");
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
+  assert.ok(new Set(["cancelled", "failed"]).has(attempts.at(-1).payload.status), JSON.stringify(attempts.at(-1).payload));
+  assert.notEqual(attempts.at(-1).payload.status, "completed");
+});
+
 test("trusted-local dispatch needs no Relay sandbox admission and reports native capability", () => {
   const value = fixture("native-host");
   const result = run(value, ["--branch", "native-host", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
@@ -926,10 +1085,11 @@ test("recognized OpenCode provider-unavailable stderr terminates dispatch with t
   const value = fixture("opencode-provider-unavailable"), raw = "credential=hidden insufficient_quota trailing provider text", started = Date.now();
   const result = run(value, ["--executor", "opencode", "--branch", "opencode-provider-unavailable", "--prompt-file", value.prompt,
     "--rubric-file", value.rubric, "--timeout", "30", "--json"], { ...value.env, FAKE_OPENCODE_SIGNAL: raw, FAKE_OPENCODE_STAY_ALIVE: "1" });
-  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
-  const output = json(result.stdout); assert.equal(output.status, "cancelled"); assert.equal(output.host_status, "cancelled");
-  assert.equal(output.termination, "provider_unavailable"); assert.doesNotMatch(JSON.stringify(output), /credential=hidden|insufficient_quota/);
+  const typed = typedOpenCodeProviderUnavailable(result, value), output = typed.output;
+  assert.doesNotMatch(JSON.stringify(output), /credential=hidden|insufficient_quota/);
   assert.ok(Date.now() - started < 25_000);
+  if (typed.kind === "refusal") return;
+  assert.equal(output.status, "cancelled"); assert.equal(output.host_status, "cancelled");
   const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
   const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
   assert.deepEqual(attempts.map((fact) => fact.type), ["attempt_started", "attempt_finished"]);
@@ -962,10 +1122,31 @@ test("recognized OpenCode stderr remains typed when the gate exits during Relay 
     "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
     ...value.env, FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_STAY_ALIVE: "1", FAKE_OPENCODE_EXIT_ON_TERM: "1",
   });
-  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
-  const output = json(result.stdout);
+  const typed = typedOpenCodeProviderUnavailable(result, value), output = typed.output;
+  if (typed.kind === "refusal") return;
   assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
-  assert.equal(output.termination, "provider_unavailable", JSON.stringify(output));
+});
+
+test("a settled attempt keeps its typed stdout shape when the gate faults during Relay cancellation", { timeout: 60_000 }, () => {
+  const value = fixture("opencode-post-settle-fault");
+  const result = run(value, ["--executor", "opencode", "--branch", "opencode-post-settle-fault", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "30", "--json"], {
+    ...value.env,
+    FAKE_OPENCODE_SIGNAL: "insufficient_quota", FAKE_OPENCODE_STAY_ALIVE: "1",
+    NODE_OPTIONS: [value.env.NODE_OPTIONS, `--require=${POST_SETTLE_FAULT}`].filter(Boolean).join(" "),
+    RELAY_TEST_POST_SETTLE_FAULT: "1",
+  });
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  assert.match(result.stderr, /simulated post-settle gate exit/, "the injected fault must actually fire");
+  const output = json(result.stdout);
+  assert.equal(output.status, "cancelled");
+  assert.equal(output.host_status, "cancelled");
+  assert.equal(output.termination, "provider_unavailable");
+  assert.ok(output.run_dir && output.attempt_id);
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const finished = journal.facts.find((fact) => fact.type === "attempt_finished");
+  assert.equal(finished.payload.status, "cancelled");
+  assert.equal(finished.attempt_id, output.attempt_id);
 });
 
 test("a malformed structured adapter result cannot turn an exit-zero host result into a completed attempt", () => {
@@ -1229,7 +1410,7 @@ test("a denied resume writes no prompt, attempt, or fact before failing closed",
 test("resume without --executor resolves the immutable Pi adapter and appends a Pi attempt", () => {
   const value = fixture("resume-bound-pi");
   git(value.repo, ["remote", "remove", "origin"]);
-  const first = run(value, ["--branch", "resume-bound-pi", "--executor", "pi", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+  const first = run(value, ["--branch", "resume-bound-pi", "--base", "main", "--executor", "pi", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
     ...value.env, RELAY_PI_BIN: value.fakePi, PI_FIXTURE_FAIL_NO_WORK: "1",
   });
   assert.equal(first.status, 1, `${first.stderr}\n${first.stdout}`);
@@ -1266,4 +1447,133 @@ test("explicit resume executor mismatch fails before prompt, attempt, or fact wr
   assert.equal(json(mismatch.stderr).code, "RUN_EXECUTOR_MISMATCH");
   assert.deepEqual(fs.readdirSync(output.run_dir).sort(), beforeFiles);
   assert.deepEqual(facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") }).facts, beforeFacts);
+});
+
+test("dispatch from a non-default checkout branches from origin/HEAD, not incidental HEAD", () => {
+  const value = fixture("incidental-head");
+  const defaultSha = git(value.repo, ["rev-parse", "refs/remotes/origin/main"]);
+  git(value.repo, ["checkout", "-q", "-b", "temp-docs"]);
+  fs.writeFileSync(path.join(value.repo, "docs-only.txt"), "unrelated\n");
+  git(value.repo, ["add", "docs-only.txt"]);
+  git(value.repo, ["commit", "-m", "unrelated docs"]);
+  const incidentalSha = git(value.repo, ["rev-parse", "HEAD"]);
+  assert.notEqual(incidentalSha, defaultSha);
+
+  const result = run(value, ["--branch", "issue-1280-default", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const record = readRunRecord({ runDir: json(result.stdout).run_dir });
+  assert.equal(record.git.base_branch, "main");
+  assert.equal(record.git.start_sha, defaultSha);
+  assert.equal(git(record.git.worktree, ["rev-parse", "HEAD"]), defaultSha);
+  assert.notEqual(record.git.start_sha, incidentalSha);
+});
+
+test("dispatch uses the origin default tip when local main is behind origin/main", () => {
+  const value = fixture("stale-local-main");
+  fs.writeFileSync(path.join(value.repo, "ahead.txt"), "origin ahead\n");
+  git(value.repo, ["add", "ahead.txt"]);
+  git(value.repo, ["commit", "-m", "origin ahead"]);
+  git(value.repo, ["push", "origin", "main"]);
+  const originSha = git(value.repo, ["rev-parse", "refs/remotes/origin/main"]);
+  git(value.repo, ["reset", "--hard", "HEAD~1"]);
+  const localSha = git(value.repo, ["rev-parse", "HEAD"]);
+  assert.notEqual(localSha, originSha);
+
+  const result = run(value, ["--branch", "issue-1280-stale-local", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const record = readRunRecord({ runDir: json(result.stdout).run_dir });
+  assert.equal(record.git.base_branch, "main");
+  assert.equal(record.git.start_sha, originSha);
+  assert.equal(git(record.git.worktree, ["rev-parse", "HEAD"]), originSha);
+  assert.notEqual(record.git.start_sha, localSha);
+});
+
+test("empty --base fails typed", () => {
+  const value = fixture("empty-base");
+  const result = run(value, [
+    "--branch", "issue-1280-empty-base", "--base", "",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--dry-run", "--json",
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /--base must be a branch name|BASE_INVALID/);
+});
+
+test("explicit --base records that origin ref and starts the run there", () => {
+  const value = fixture("explicit-base");
+  git(value.repo, ["checkout", "-q", "-b", "stack-base"]);
+  fs.writeFileSync(path.join(value.repo, "stack.txt"), "stack\n");
+  git(value.repo, ["add", "stack.txt"]);
+  git(value.repo, ["commit", "-m", "stack base"]);
+  git(value.repo, ["push", "-u", "origin", "stack-base"]);
+  const stackSha = git(value.repo, ["rev-parse", "refs/remotes/origin/stack-base"]);
+  git(value.repo, ["checkout", "-q", "main"]);
+
+  const result = run(value, [
+    "--branch", "issue-1280-stack", "--base", "stack-base",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
+  ]);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const record = readRunRecord({ runDir: json(result.stdout).run_dir });
+  assert.equal(record.git.base_branch, "stack-base");
+  assert.equal(record.git.start_sha, stackSha);
+});
+
+test("missing origin/HEAD without --base fails typed before creating a branch", () => {
+  const value = fixture("unresolved-base");
+  git(value.repo, ["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"]);
+  const result = run(value, ["--branch", "issue-1280-unresolved", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.notEqual(result.status, 0);
+  assert.equal(json(result.stderr).code, "BASE_UNRESOLVED");
+  assert.equal(git(value.repo, ["branch", "--list", "issue-1280-unresolved"]), "");
+  assert.equal(fs.existsSync(fixtureRunsDir(value)), false);
+});
+
+test("a local-only --base on a repo with origin fails typed", () => {
+  const value = fixture("local-only-base");
+  git(value.repo, ["branch", "local-only"]);
+  const result = run(value, [
+    "--branch", "issue-1280-local-base", "--base", "local-only",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.equal(json(result.stderr).code, "BASE_NOT_ON_ORIGIN");
+  assert.equal(git(value.repo, ["branch", "--list", "issue-1280-local-base"]), "");
+});
+
+test("--base cannot be the run branch", () => {
+  const value = fixture("base-is-run");
+  const result = run(value, [
+    "--branch", "issue-1280-same", "--base", "issue-1280-same",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--dry-run", "--json",
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.equal(json(result.stderr).code, "BASE_INVALID");
+});
+
+test("no-origin dispatch requires an explicit local --base", () => {
+  const value = fixture("no-origin-base");
+  const mainSha = git(value.repo, ["rev-parse", "refs/heads/main"]);
+  git(value.repo, ["remote", "remove", "origin"]);
+
+  const missing = run(value, ["--branch", "issue-1280-local", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.notEqual(missing.status, 0);
+  assert.equal(json(missing.stderr).code, "BASE_UNRESOLVED");
+
+  const created = run(value, [
+    "--branch", "issue-1280-local", "--base", "main",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
+  ]);
+  assert.equal(created.status, 0, `${created.stderr}\n${created.stdout}`);
+  const record = readRunRecord({ runDir: json(created.stdout).run_dir });
+  assert.equal(record.git.base_branch, "main");
+  assert.equal(record.git.start_sha, mainSha);
+});
+
+test("--base is rejected on redispatch", () => {
+  const value = fixture("base-on-resume");
+  const first = run(value, ["--branch", "issue-1280-resume", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.equal(first.status, 0, first.stderr);
+  const denied = run(value, ["--run-id", json(first.stdout).run_id, "--base", "main", "--prompt", "retry", "--json"]);
+  assert.notEqual(denied.status, 0);
+  assert.match(`${denied.stdout}${denied.stderr}`, /--base is only valid for new dispatch/);
 });

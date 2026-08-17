@@ -95,6 +95,88 @@ function stagedInputRoot(t) {
   return root;
 }
 
+test("pre-fix tracked-pid admission admits a recycled holder that the shipped exact-identity guard rejects", () => {
+  const observed = { pid: 99_000_001, ppid: 1, pgid: 99_000_001, scope: null,
+    identity: { pid: 99_000_001, pgid: 99_000_001, state: "Ss", started_at: "2026-08-16T09:35:06.000Z" } };
+  const recorded = { pid: 99_000_001, pgid: 99_000_001, started_at: "2026-08-16T09:16:28.000Z" };
+  const candidates = host.hostInvocation.classifyEscapedProcessRows({
+    rows: [observed], tracked: [recorded], seal: "0".repeat(64),
+    gateIdentity: { pid: 99_000_002, pgid: 99_000_002, started_at: "2026-08-16T09:16:27.000Z" },
+  });
+  assert.deepEqual(candidates, [], "a tracked PID alone must not promote its recycled holder into the signed cleanup obligation");
+
+  const preFixTrackedPidAdmission = (row, tracked) => tracked.some((identity) => identity.pid === row.pid);
+  assert.equal(preFixTrackedPidAdmission(observed, [recorded]), true,
+    "the pre-fix tracked-PID seed would admit the recycled holder as a cleanup obligation");
+});
+
+test("escaped-process audit keeps an identity-indistinguishable unsealed holder fail-closed", () => {
+  const recorded = { pid: 99_000_003, pgid: 99_000_003, started_at: "2026-08-16T09:35:06.000Z" };
+  const observed = { pid: recorded.pid, ppid: 1, pgid: recorded.pgid, scope: null,
+    identity: { ...recorded, state: "Ss" } };
+  const candidates = host.hostInvocation.classifyEscapedProcessRows({
+    rows: [observed], tracked: [recorded], seal: "0".repeat(64),
+    gateIdentity: { pid: 99_000_002, pgid: 99_000_002, started_at: "2026-08-16T09:16:27.000Z" },
+  });
+  assert.deepEqual(candidates, [observed.identity], "without positive non-identity evidence the exact holder remains a cleanup obligation");
+});
+
+test("escaped-process audit does not expand lineage from scope proof alone", () => {
+  const token = "a".repeat(64), seal = crypto.createHash("sha256").update(token).digest("hex");
+  const scoped = { pid: 99_000_004, ppid: 1, pgid: 99_000_004, scope: token,
+    identity: { pid: 99_000_004, pgid: 99_000_004, state: "Ss", started_at: "2026-08-16T09:35:06.000Z" } };
+  const unsealedChild = { pid: 99_000_005, ppid: scoped.pid, pgid: scoped.pgid, scope: null,
+    identity: { pid: 99_000_005, pgid: scoped.pgid, state: "S", started_at: "2026-08-16T09:35:07.000Z" } };
+  const candidates = host.hostInvocation.classifyEscapedProcessRows({
+    rows: [scoped, unsealedChild], seal,
+    gateIdentity: { pid: 99_000_002, pgid: 99_000_002, started_at: "2026-08-16T09:16:27.000Z" },
+  });
+  assert.deepEqual(candidates, [scoped.identity]);
+});
+
+test("cleanup auto-clears a signed identity positively disproven by the live holder", { timeout: 30_000 }, async (t) => {
+  const value = roots("proven-recycled"), attemptId = "proven-recycled", capability = lock(value, attemptId);
+  const foreign = spawnIdle({ PATH: process.env.PATH });
+  t.after(() => { if (!processDead(foreign.pid)) try { process.kill(-foreign.pid, "SIGKILL"); } catch {} try { host.releaseRunLock(capability); } catch {} });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const observed = liveIdentity(foreign.pid), recorded = {
+    ...observed, started_at: new Date(Date.parse(observed.started_at) - 60_000).toISOString(),
+  };
+  writeCleanupObligation(value.runDir, attemptId, {
+    processes: [recorded], staged_input_root: null, scope_seal: "0".repeat(64),
+  });
+  await host.breakStaleRunLock({
+    inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "settle a positively recycled cleanup identity",
+  });
+  assert.equal(processDead(foreign.pid), false, "the unrelated live holder must never be signalled");
+  assert.equal(host.inspectOwnership({ runDir: value.runDir }).status, "absent");
+  assert.equal(fs.existsSync(path.join(value.runDir, `host-attempt-${attemptId}.cleanup-settled.json`)), true);
+});
+
+test("cleanup refusal captures the recorded identity and refusal-time observation", { timeout: 30_000 }, async (t) => {
+  const value = roots("refusal-observation"), attemptId = "refusal-observation", capability = lock(value, attemptId);
+  const foreign = spawnIdle({ PATH: process.env.PATH });
+  t.after(() => { if (!processDead(foreign.pid)) try { process.kill(-foreign.pid, "SIGKILL"); } catch {} try { host.releaseRunLock(capability); } catch {} });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const recorded = liveIdentity(foreign.pid);
+  writeCleanupObligation(value.runDir, attemptId, {
+    processes: [recorded], staged_input_root: null, scope_seal: "0".repeat(64),
+  });
+  await assert.rejects(
+    host.breakStaleRunLock({ inspection: host.inspectOwnership({ runDir: value.runDir }), reason: "capture refusal observation" }),
+    (error) => {
+      assert.equal(error.code, "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED");
+      assert.deepEqual(error.process_identity, recorded);
+      assert.deepEqual(error.observed_process?.identity, recorded);
+      assert.equal(error.observed_process?.scope_visible, false);
+      assert.match(error.observed_process?.state || "", /^[A-Z]/);
+      assert.equal(error.relay_signalled, false);
+      return true;
+    },
+  );
+  assert.equal(processDead(foreign.pid), false);
+});
+
 test("a same-second PID reuse without the inherited scope token is never signalled", { timeout: 30_000 }, async (t) => {
   const scope = host.hostInvocation.beginProcessScope();
   const foreign = spawnIdle({ PATH: process.env.PATH }), member = spawnIdle({ PATH: process.env.PATH, ...scope.env });

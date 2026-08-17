@@ -68,7 +68,7 @@ test("#1206 real no-origin journey reaches one terminal reviewed result without 
     RELAY_GIT_BIN: value.gitBin, RELAY_GH_BIN: value.gh, RELAY_CURSOR_AGENT_BIN: value.cursor };
   const route = run(PREFLIGHT, ["--stage", "route", "--repo", value.repo, "--issue-number", "1206", "--json"], env);
   assert.equal(route.status, 0, route.stderr); assert.equal(JSON.parse(route.stdout).source.route, "local-reviewed-result");
-  const dispatched = run(DISPATCH, [value.repo, "--branch", "issue-1206-closure", "--issue-number", "1206", "--prompt-file", value.prompt,
+  const dispatched = run(DISPATCH, [value.repo, "--branch", "issue-1206-closure", "--base", "main", "--issue-number", "1206", "--prompt-file", value.prompt,
     "--rubric-file", value.rubric, "--executor", "cursor", "--network-access", "enabled", "--json"], env);
   assert.equal(dispatched.status, 0, dispatched.stderr);
   const launch = JSON.parse(dispatched.stdout);
@@ -202,7 +202,7 @@ async function crashMatrixJourney(cut, t) {
   assert.equal(route.status, 0, route.stderr);
   assert.equal(JSON.parse(route.stdout).source.route, "local-reviewed-result");
   const dispatchArgs = [
-    value.repo, "--branch", `issue-1206-${cut}`, "--issue-number", "1206",
+    value.repo, "--branch", `issue-1206-${cut}`, "--base", "main", "--issue-number", "1206",
     "--prompt-file", value.prompt, "--rubric-file", value.rubric,
     "--executor", "cursor", "--network-access", "enabled", "--json",
   ];

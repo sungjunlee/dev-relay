@@ -65,13 +65,36 @@ authenticated terminal-result checks described in the output can succeed.
 
 If cleanup reports `HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED`, the signed
 obligation still names a live process but Relay can no longer prove its inherited
-scope marker. Relay sends no signal in that state. Independently inspect the
+scope marker. Relay sends no signal in that state. The typed refusal payload
+includes the exact `process_identity` and the signed cleanup artifact's validated
+`terminal` context. Independently inspect the
 reported `pid`, `pgid`, and `started_at`, terminate only that exact process using
 an operator-controlled facility, then rerun the same canonical `recover
 --break-lock` command. Do not kill by process name or reuse an old PID-only
 command: the identity may have changed. Once the recorded identity is absent,
 Relay signs cleanup settlement, publishes the terminal attempt result, and
 continues recovery idempotently.
+The refusal payload is advisory; the signed `cleanup-incomplete` artifact is the
+authoritative source for its terminal context.
+
+To reproduce or base-control the recycled-PID refusal class, generic CPU load is
+not sufficient: the race needs a same-window recycle of the specific freed
+cleanup pid. Run the OpenCode cancellation test in a loop under CPU
+oversubscription in an isolated worktree checked out at the exact SHA under
+measurement, and bind the claim to the loop's exit predicate (fix tree: zero
+failures across the loop; base tree: at least one reproduced failure within the
+bounded loop). Ambient process churn dominates reproduction, so a zero-failure
+base batch is a statement about the host at that moment, not about the defect.
+
+- Measurement (2026-08-16, this host; 12 busy-loop CPU oversubscription;
+  single-test loops of the OpenCode cancellation test):
+  - Fix tree: 0 failures / 10 runs, plus earlier same-day batches of 0/10
+    unloaded and 0/20 oversubscribed with fork churn — zero failures in 40
+    total fix-tree runs.
+  - Base `0f579a1` (isolated worktree): first reproduced failure at run 2 of a
+    bounded 40-run loop; earlier same-day 20-run base batches under varying
+    ambient churn measured 3/20 and 0/20. Reproduction tracks ambient process
+    churn, as explained above.
 
 ## Safety contract
 

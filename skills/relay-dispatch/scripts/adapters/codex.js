@@ -9,6 +9,7 @@ module.exports = createNativeAdapter({
   name: "codex",
   timeoutMs: 2400000,
   outputProtocol: (phase) => phase === "primary_review" ? "json_result" : "text_stdout",
+  completionSignal: { kind: "stable_result_file", stableMs: 250, streamMarkers: ["tokens used"] },
   metadata: {
     cliBinary: "codex",
     outputProtocol: "text_stdout",
@@ -21,8 +22,8 @@ module.exports = createNativeAdapter({
   },
   phases: {
     // Codex has no fail-closed tool-network switch; provider transport remains enabled.
-    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "workspace-write", cancellation: "process", structuredOutput: "text" },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "read-only", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "workspace-write", loopbackListen: "unavailable", cancellation: "process", structuredOutput: "text" },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "native", filesystemIsolationRequest: "read-only", loopbackListen: "unavailable", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, resultPath, model, networkAccess, reasoning }) {

@@ -59,7 +59,7 @@ The CLI has a closed option contract. Unsupported flags fail closed.
 
 Essential flags:
 
-- `--branch, -b` starts a new retained run; `--run-id` requests a same-run redispatch.
+- `--branch, -b` starts a new retained run; `--base <ref>` selects the publication base (`origin/HEAD` by default; required when origin/HEAD is missing). `--run-id` requests a same-run redispatch.
 - `--prompt, -p` or `--prompt-file` supplies the executor prompt.
 - `--rubric-file` is required for new dispatches. `--done-criteria-file` freezes a separate review anchor; otherwise the rubric is frozen as Done Criteria.
 - `--executor, -e` and `--model, -m` select execution. On `--run-id`, omit `--executor` to use the immutable executor bound in `run.json`; an explicit different executor fails before reading the prompt or writing an attempt. `--model` remains per-attempt.
@@ -90,7 +90,7 @@ timeout/cancellation, inherited-scope cleanup, and durable facts. Relay itself
 never commits, publishes on the GitHub route, records verification, or closes a
 local result; those lifecycle actions belong to canonical `relay-recover recover`.
 
-JSON uses snake_case. Foreground output includes `status`, `run_id`, `run_dir`, `worktree`, `attempt_id`, `host_handle`, `host_status`, `outcome`, `inspection`, and non-durable `filesystem_isolation`. A detached launch receipt includes `status: "dispatched"`, those durable identities, `dispatcher_pid`, and the initial `inspection`. Per-attempt log paths are recorded in `attempt_started`.
+JSON uses snake_case. Foreground output includes `status`, `run_id`, `run_dir`, `worktree`, `attempt_id`, `host_handle`, `host_status`, `outcome`, `inspection`, and non-durable `filesystem_isolation` plus `loopback_listen`. A detached launch receipt includes `status: "dispatched"`, those durable identities, `dispatcher_pid`, and the initial `inspection`. Per-attempt log paths are recorded in `attempt_started`.
 
 ### Timeout guidance
 

@@ -33,8 +33,8 @@ const native = createNativeAdapter({
   metadata: { cliBinary: "agy", cliBinaryEnv: "RELAY_ANTIGRAVITY_BIN", outputProtocol: "json_success_envelope", providerDefault: "google", providerFromModel: true, promptTransport: "argv_visible", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", runtimeDependencies: { executableParent: null, interpreterParent: null }, promptTransportWarning: "prompt content is visible in the local process list; bounded to less than 256 KiB" },
   phases: {
     // `agy --sandbox` does not provide a verifiable tool-network block.
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "declaration_only", cancellation: "process", structuredOutput: "json" },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "declaration_only", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "declaration_only", loopbackListen: "unknown", cancellation: "process", structuredOutput: "json" },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "declaration_only", loopbackListen: "unknown", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, prompt, timeoutSeconds }) {
