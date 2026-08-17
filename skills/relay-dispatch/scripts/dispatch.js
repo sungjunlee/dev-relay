@@ -20,6 +20,7 @@ const runStore = require("./run-store");
 const OPTIONS = Object.freeze({
   repo: { type: "string" },
   branch: { type: "string", short: "b" },
+  base: { type: "string" },
   "run-id": { type: "string" },
   prompt: { type: "string", short: "p" },
   "prompt-file": { type: "string" },
@@ -41,12 +42,13 @@ const OPTIONS = Object.freeze({
 });
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "timed_out", "spawn_error"]);
+const CLEANUP_REFUSALS = new Set(["HOST_CLEANUP_INCOMPLETE", "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED"]);
 const RUN_ID_RE = /^[a-z0-9][a-z0-9-]{0,126}$/;
 const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 function usage() {
   return [
     "Usage:",
-    "  dispatch.js [<repo>] --branch <name> (--prompt <text> | --prompt-file <path>) --rubric-file <path> [options]",
+    "  dispatch.js [<repo>] --branch <name> [--base <ref>] (--prompt <text> | --prompt-file <path>) --rubric-file <path> [options]",
     "  dispatch.js [<repo>] --run-id <id> (--prompt <text> | --prompt-file <path>) [options]",
     "",
     `Executors: ${listAdapters().join(", ")}`,
@@ -192,6 +194,8 @@ function parseCli(argv) {
   const internalRunId = process.env.RELAY_DISPATCH_INTERNAL_RUN_ID || null;
   if (values.branch && values["run-id"] && !internalRunId) fail("--branch and --run-id are mutually exclusive");
   if (!values.branch && !values["run-id"] && !internalRunId) fail("--branch or --run-id is required");
+  if (values.base !== undefined && !values.branch) fail("--base is only valid for new dispatch", "BASE_INVALID");
+  if (values.base !== undefined && !String(values.base).trim()) fail("--base must be a branch name", "BASE_INVALID");
   if (values.prompt === undefined && values["prompt-file"] === undefined) fail("--prompt or --prompt-file is required");
   if (values.prompt !== undefined && values["prompt-file"] !== undefined) fail("--prompt and --prompt-file are mutually exclusive");
   if (!new Set(["disabled", "enabled"]).has(values["network-access"])) fail("--network-access must be disabled or enabled");
@@ -285,10 +289,63 @@ function createWorktreeBase(directory, ownedRoot) {
   return fs.realpathSync(resolved);
 }
 
-function createRetainedWorktree(identity, runId, branch) {
+function tryGit(checkout, args) {
+  try { return git(checkout, args); } catch { return null; }
+}
+
+function publicationBaseName(ref) {
+  const raw = String(ref || "").trim();
+  if (!raw || raw.startsWith("-")) fail(`publication base must be a branch name: ${JSON.stringify(ref)}`, "BASE_INVALID");
+  const name = raw.replace(/^refs\/remotes\/origin\//, "").replace(/^refs\/heads\//, "").replace(/^origin\//, "");
+  if (!name || name === "HEAD" || name.includes("..")) fail(`publication base is not a branch name: ${ref}`, "BASE_INVALID");
+  return name;
+}
+
+function assertBranchName(checkout, name, label) {
+  try { git(checkout, ["check-ref-format", "--branch", name]); }
+  catch { fail(`${label} is not a branch name: ${name}`, "BASE_INVALID"); }
+}
+
+function rejectRunBranchBase(name, runBranch) {
+  if (name === runBranch) fail(`publication base cannot be the run branch: ${name}`, "BASE_INVALID");
+}
+
+function resolveExplicitBase(checkout, requestedBase, runBranch) {
+  const name = publicationBaseName(requestedBase);
+  rejectRunBranchBase(name, runBranch);
+  assertBranchName(checkout, name, "--base");
+  if (tryGit(checkout, ["remote", "get-url", "origin"])) {
+    const startSha = tryGit(checkout, ["rev-parse", "--verify", `refs/remotes/origin/${name}`]);
+    if (!startSha) fail(`--base is not a fetched origin branch: ${name}`, "BASE_NOT_ON_ORIGIN");
+    return { baseBranch: name, startSha };
+  }
+  const startSha = tryGit(checkout, ["rev-parse", "--verify", `refs/heads/${name}`]);
+  if (!startSha) fail(`--base does not resolve to a local branch: ${name}`, "BASE_UNRESOLVED");
+  return { baseBranch: name, startSha };
+}
+
+function resolveDefaultBase(checkout, runBranch) {
+  if (!tryGit(checkout, ["remote", "get-url", "origin"])) {
+    fail("no origin default branch; pass --base <ref>", "BASE_UNRESOLVED");
+  }
+  const ref = tryGit(checkout, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+  const name = ref && /^refs\/remotes\/origin\/(.+)$/.exec(ref)?.[1];
+  if (!name) fail("repository default branch is unresolved; set origin/HEAD or pass --base", "BASE_UNRESOLVED");
+  rejectRunBranchBase(name, runBranch);
+  const startSha = tryGit(checkout, ["rev-parse", "--verify", `refs/remotes/origin/${name}`]);
+  if (!startSha) fail(`origin/HEAD ${name} does not resolve`, "BASE_UNRESOLVED");
+  return { baseBranch: name, startSha };
+}
+
+function resolvePublicationBase(checkout, { requestedBase, runBranch }) {
+  return requestedBase
+    ? resolveExplicitBase(checkout, requestedBase, runBranch)
+    : resolveDefaultBase(checkout, runBranch);
+}
+
+function createRetainedWorktree(identity, runId, branch, publicationBase) {
   git(identity.checkout, ["check-ref-format", "--branch", branch]);
-  const baseBranch = git(identity.checkout, ["symbolic-ref", "--short", "HEAD"]);
-  const startSha = git(identity.checkout, ["rev-parse", "HEAD"]);
+  const { baseBranch, startSha } = publicationBase;
   const base = worktreeBase();
   // Canonicalize the stable prefix so platform aliases such as macOS /tmp remain valid, then
   // no-follow only the path Relay owns: RELAY_HOME through its default worktrees child, or an
@@ -402,6 +459,10 @@ function assertResumeInspection(inspection, expectedActionKey = null) {
 function dryRunInvocation({ cli, identity, adapter, inputs }) {
   if (cli.creating) {
     git(identity.checkout, ["check-ref-format", "--branch", cli.values.branch]);
+    resolvePublicationBase(identity.checkout, {
+      requestedBase: cli.values.base || null,
+      runBranch: cli.values.branch,
+    });
     const existing = git(identity.checkout, ["branch", "--list", cli.values.branch]);
     if (existing) fail(branchExistsMessage(cli.values.branch), "BRANCH_EXISTS");
   }
@@ -456,7 +517,10 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
     // Reject a duplicate run id before any Git work. This is an optimization, not the
     // guard: the authoritative claim is the non-recursive mkdir below.
     if (fs.existsSync(runDir)) fail(`run already exists: ${cli.runId}`, "RUN_RECORD_CONFLICT");
-    const worktree = createRetainedWorktree(identity, cli.runId, cli.values.branch);
+    const worktree = createRetainedWorktree(identity, cli.runId, cli.values.branch, resolvePublicationBase(identity.checkout, {
+      requestedBase: cli.values.base || null,
+      runBranch: cli.values.branch,
+    }));
     let claimed = false;
     try {
       // Claim the run directory atomically. A repository-wide lock used to serialize the
@@ -744,7 +808,16 @@ async function main(argv = process.argv.slice(2)) {
     console.log(cli.values.json ? JSON.stringify(result, null, 2) : `${result.status}: ${result.run_id}`);
     return new Set(["failed", "cancelled", "timed_out", "spawn_error"]).has(result.status) ? 1 : 0;
   } catch (error) {
-    const payload = { ok: false, code: error.code || "DISPATCH_FAILED", error: error.message };
+    const code = error.code || "DISPATCH_FAILED";
+    const payload = { ok: false, code, error: error.message };
+    if (CLEANUP_REFUSALS.has(code) && error.terminal) {
+      payload.terminal = error.terminal;
+    }
+    if (code === "HOST_CLEANUP_EXTERNAL_ACTION_REQUIRED") {
+      payload.recommended_action = error.recommended_action;
+      payload.process_identity = error.process_identity;
+      payload.relay_signalled = false;
+    }
     if (process.env.RELAY_DISPATCH_NOTIFY_PATH) {
       try { atomicJson(process.env.RELAY_DISPATCH_NOTIFY_PATH, payload); } catch {}
     }
@@ -760,4 +833,4 @@ async function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main().then((code) => { process.exitCode = code; });
 
-module.exports = { assertResumeInspection, dryRunInvocation, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, startAttempt, validateCopyInputs };
+module.exports = { assertResumeInspection, dryRunInvocation, executeForeground, finishAttempt, main, parseCli, repositoryIdentity, resolvePublicationBase, startAttempt, validateCopyInputs };
