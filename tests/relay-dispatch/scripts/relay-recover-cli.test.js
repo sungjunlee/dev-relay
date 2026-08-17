@@ -963,7 +963,7 @@ test("successful PR create retries lagging list reads and converges once", (t) =
   assert.equal(fs.readdirSync(f.runDir).filter((name) => name.startsWith("recovery-receipt-")).length, 1);
 });
 
-test("persistent PR publication mismatch strands an intent that inspect can resume", (t) => {
+test("persistent PR publication mismatch discharges the prefix-dropped intent before recording the exact PR", (t) => {
   const f = fixture({ branch: "recovery" });
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(f.repo, "README.md"), "persistent publication\n");
@@ -996,28 +996,38 @@ test("persistent PR publication mismatch strands an intent that inspect can resu
     cwd: ROOT, encoding: "utf8", env,
   }).stdout);
   assert.equal(stranded.blockers[0].code, "active_intent_pending");
-  assert.equal(stranded.recommended_action.kind, "operator_attention");
+  assert.equal(stranded.recommended_action.kind, "recover");
+  assert.equal(stranded.recommended_action.reason, "active_intent_observation_changed");
+  assert.deepEqual(stranded.recommended_action.steps, ["discharge_obsolete_intent"]);
   assert.equal(stranded.blockers[0].details.action_key, action.key);
   assert.equal(stranded.blockers[0].details.actor, "owner");
   assert.equal(stranded.blockers[0].details.reason, "operator's publication");
   assert.equal(stranded.blockers[0].details.reason_code, "publication_incomplete");
   assert.match(stranded.blockers[0].details.created_at, /^\d{4}-\d{2}-\d{2}T/);
-  const fresh = spawnSync(process.execPath, [
+  const discharged = spawnSync(process.execPath, [
     CLI, "recover", "--run-dir", f.runDir, "--reason", "operator's publication", "--actor", "owner",
     "--expected-action-key", stranded.recommended_action.key, "--json",
   ], { cwd: ROOT, encoding: "utf8", env });
-  assert.equal(fresh.status, 0, fresh.stderr);
-  const freshOutput = JSON.parse(fresh.stdout);
-  assert.equal(freshOutput.status, "refused");
-  assert.equal(freshOutput.blockers[0].code, "active_intent_pending");
-  assert.deepEqual(freshOutput.blockers[0].details, stranded.blockers[0].details);
-  const resume = stranded.blockers[0].details.resume_invocation;
-  assert.match(resume, /--expected-action-key [0-9a-f]{64}/);
-  assert.match(resume, /operator.*publication/);
+  assert.equal(discharged.status, 0, discharged.stderr);
+  const dischargedOutput = JSON.parse(discharged.stdout);
+  assert.equal(dischargedOutput.status, "converged");
+  assert.equal(dischargedOutput.after.recommended_action.reason, "publication_incomplete");
+  assert.deepEqual(dischargedOutput.after.recommended_action.steps, ["record_or_create_pr"]);
   fs.writeFileSync(fake.mode, "match");
-  const resumed = spawnSync("sh", ["-c", resume], { cwd: ROOT, encoding: "utf8", env });
-  assert.equal(resumed.status, 0, resumed.stderr);
-  assert.equal(JSON.parse(resumed.stdout).status, "converged");
+  const matched = JSON.parse(spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  }).stdout);
+  assert.deepEqual(matched.recommended_action.steps, ["record_or_create_pr"]);
+  const fresh = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "record the existing exact PR", "--actor", "owner",
+    "--expected-action-key", matched.recommended_action.key, "--json",
+  ], { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(fresh.status, 0, fresh.stderr);
+  assert.equal(JSON.parse(fresh.stdout).status, "converged");
+  assert.equal(fs.readFileSync(fake.created, "utf8"), "1");
+  const journal = fs.readFileSync(path.join(f.runDir, "events.jsonl"), "utf8")
+    .trim().split("\n").map(JSON.parse);
+  assert.equal(journal.filter((fact) => fact.type === "pull_request_recorded").length, 1);
 });
 
 test("production recovery refuses a tracked remote outside the immutable run repository", (t) => {
@@ -1185,4 +1195,62 @@ test("production external MERGED recovery records durable provenance and no post
   assert.equal(JSON.parse(retry.stdout).status, "noop");
   assert.equal(activeFactBytes(eventsPath), activeFactsBytes);
   assert.equal(fs.readFileSync(recoveryReceipt, "utf8"), receiptBytes);
+});
+
+test("inspect advertises exact-identity discharge for an obsolete merged-PR intent", (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const mergeSha = "d".repeat(40);
+  const merged = {
+    number: 42, state: "MERGED", url: "https://example.test/pull/42",
+    headRefName: f.branch, headRefOid: f.head, baseRefName: "main",
+    headRepository: { nameWithOwner: f.remote }, headRepositoryOwner: { login: "owner" },
+    isCrossRepository: false, mergedAt: "2026-08-01T00:04:00Z",
+    mergeCommit: { oid: mergeSha }, body: "",
+  };
+  fs.writeFileSync(f.gh, [
+    "#!/usr/bin/env node",
+    `const row=${JSON.stringify(merged)};`,
+    "const cmd=process.argv[2]+' '+process.argv[3];",
+    "if(cmd==='pr list')process.stdout.write(JSON.stringify([row]));",
+    "else if(cmd==='pr view')process.stdout.write(JSON.stringify(row));",
+    "else{process.stderr.write('unsupported fake gh argv\\n');process.exit(2);}",
+    "",
+  ].join("\n"));
+  fs.chmodSync(f.gh, 0o755);
+  writeFacts(f.runDir, [{
+    event_id: "attempt-finished", run_id: "issue-1135-cli", attempt_id: "attempt-1",
+    type: "attempt_finished", at: "2026-08-01T00:01:00Z", actor: "codex",
+    payload: { status: "completed", start_sha: f.head, final_sha: f.head, tree_sha: f.tree,
+      result_path: path.join(f.runDir, "result.txt"), exit_code: 0, verification_status: "not_declared" },
+  }, {
+    event_id: "pr", run_id: "issue-1135-cli", type: "pull_request_recorded",
+    at: "2026-08-01T00:02:00Z", actor: "codex",
+    payload: { pr_number: 42, repo: f.remote, head_ref: f.branch, base_ref: "main",
+      head_sha: f.head, created_by_relay: false },
+  }]);
+  const intentKey = "8".repeat(64);
+  const intent = {
+    schema_version: 1, action_key: intentKey,
+    operation_id: `recover-${intentKey.slice(0, 32)}`, created_at: "2026-08-01T00:03:00Z",
+    steps: ["push_branch", "record_or_create_pr", "record_verification"],
+    actor: "owner", reason: "publish and verify reviewed work",
+    reason_code: "publication_incomplete", observed_event_id: "attempt-finished", before_sha: f.head,
+  };
+  const intentPath = path.join(f.runDir, `recovery-intent-${intentKey}.json`);
+  fs.writeFileSync(intentPath, `${JSON.stringify(intent)}\n`);
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh,
+    RELAY_WORKTREE_BASE: f.root, GH_TOKEN: "ephemeral-observer-token" };
+  const inspect = () => spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  });
+  const stranded = inspect();
+  assert.equal(stranded.status, 0, stranded.stderr);
+  const advertised = JSON.parse(stranded.stdout);
+  assert.equal(advertised.blockers[0].code, "active_intent_pending");
+  assert.equal(advertised.blockers[0].details.action_key, intentKey);
+  assert.equal(advertised.recommended_action.kind, "recover");
+  assert.equal(advertised.recommended_action.reason, "active_intent_observation_changed");
+  assert.deepEqual(advertised.recommended_action.steps, ["discharge_obsolete_intent"]);
+  assert.equal(advertised.recommended_action.key, intentKey);
 });

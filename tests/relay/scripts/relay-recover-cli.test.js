@@ -299,6 +299,53 @@ test("#1244 exact payload dedupe refuses pass/fail alias after a fact crash", (t
   assert.ok(fs.existsSync(path.join(f.runDir, `recovery-receipt-${before.recommended_action.key}.json`)));
 });
 
+test("R1 validates exact verification payload before receipting an existing recovery fact", (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  f.writeVerification();
+  const before = JSON.parse(cli(f, "inspect", []).stdout);
+  const reason = "preserve exact verification across the receipt cut";
+  const args = ["--reason", reason, "--actor", "owner", "--expected-action-key",
+    before.recommended_action.key, "--verification-file", f.verificationPath];
+  const crashed = cli(f, "recover", args, envFor(f, {
+    crash: true, RELAY_CRASH_AFTER_FACT: "recovery_applied", RELAY_CRASH_EXIT: "86",
+  }));
+  assert.equal(crashed.status, 86, crashed.stderr);
+  const receiptPath = path.join(f.runDir, `recovery-receipt-${before.recommended_action.key}.json`);
+  const strandedFacts = fs.readFileSync(f.eventsPath);
+  assert.equal(verificationFacts(f).length, 1);
+  assert.equal(facts.readFacts({ eventsPath: f.eventsPath }).facts
+    .filter((fact) => fact.type === "recovery_applied").length, 1);
+  assert.equal(fs.existsSync(receiptPath), false);
+
+  f.writeVerification({
+    completed_commands: [
+      { command: "node --test", exit_code: 0 },
+      { command: "node --check index.js", exit_code: 0 },
+    ],
+  });
+  const aliased = cli(f, "recover", args);
+  assert.notEqual(aliased.status, 0);
+  assert.match(aliased.stderr, /duplicate event_id/i);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), strandedFacts);
+  assert.equal(fs.existsSync(receiptPath), false);
+
+  f.writeVerification();
+  const restored = cli(f, "recover", args);
+  assert.equal(restored.status, 0, restored.stderr);
+  assert.equal(JSON.parse(restored.stdout).status, "converged");
+  assert.deepEqual(fs.readFileSync(f.eventsPath), strandedFacts);
+  assert.ok(fs.existsSync(receiptPath));
+  assert.deepEqual(JSON.parse(fs.readFileSync(receiptPath)), {
+    schema_version: 1,
+    operation_id: `recover-${before.recommended_action.key.slice(0, 32)}`,
+    action_key: before.recommended_action.key,
+    fact_event_ids: facts.readFacts({ eventsPath: f.eventsPath }).facts
+      .filter((fact) => ["verification_recorded", "recovery_applied"].includes(fact.type))
+      .map((fact) => fact.event_id),
+  });
+});
+
 test("#1244 a later exact pass returns failed local verification to review", (t) => {
   const f = fixture();
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
