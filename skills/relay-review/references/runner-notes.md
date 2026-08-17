@@ -31,12 +31,12 @@ must equal the latest durable `pull_request_recorded` fact and derived head.
 In operator terminology, the Git repository and immutable `start_sha` are the
 Source; the exact GitHub PR is the current Change Request when that route is
 used. The runner derives the ReviewSubject without adding a runtime object:
-SHA-1 object format, `start_sha` base OID, exact fresh Git reviewed head OID (or
-exact live/durable PR head), the passed
-verification tree OID, the binary diff digest, and the frozen Done Criteria
-digest. The resulting Reviewed Result is terminal proof of exact verification
-and independent review; it does not imply Publication or Landing. Landing
-remains a separate explicit merge operation.
+SHA-1 object format, the exact live PR base OID for GitHub delivery (or
+`start_sha` for local delivery), exact fresh Git reviewed head OID (or exact
+live/durable PR head), the passed verification tree OID, the binary diff
+digest, and the frozen Done Criteria digest. The resulting Reviewed Result is
+terminal proof of exact verification and independent review; it does not imply
+Publication or Landing. Landing remains a separate explicit merge operation.
 
 The runner writes content-addressed immutable inputs below `review-inputs/`:
 
@@ -44,8 +44,9 @@ The runner writes content-addressed immutable inputs below `review-inputs/`:
 - `prompt-<sha>-<digest>.md`
 
 The diff digest is exactly SHA-256 over the immutable newline-normalized output
-of `git diff --binary --no-ext-diff <start_sha>..<head> --`. No
-`--full-index` or alternate patch format is implied.
+of `git diff --binary --no-ext-diff <live_pr_base>...<head> --` for GitHub
+delivery, or `git diff --binary --no-ext-diff <start_sha>..<head> --` for local
+delivery. No `--full-index` or alternate patch format is implied.
 
 The durable result is `review-<round>-<digest>.json`. For local delivery only,
 it projects the exact verification event id and immutable run digest alongside
