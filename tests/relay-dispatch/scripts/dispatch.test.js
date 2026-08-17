@@ -65,6 +65,7 @@ function fixture(label, { objectFormat = "sha1" } = {}) {
   git(repo, ["commit", "-m", "initial"]);
   git(repo, ["remote", "add", "origin", remote]);
   git(repo, ["push", "-u", "origin", "main"]);
+  git(repo, ["remote", "set-head", "origin", "main"]);
   const prompt = path.join(root, "prompt.md");
   const rubric = path.join(root, "rubric.yaml");
   fs.writeFileSync(prompt, "Implement the requested change.\n");
@@ -1252,7 +1253,7 @@ test("a denied resume writes no prompt, attempt, or fact before failing closed",
 test("resume without --executor resolves the immutable Pi adapter and appends a Pi attempt", () => {
   const value = fixture("resume-bound-pi");
   git(value.repo, ["remote", "remove", "origin"]);
-  const first = run(value, ["--branch", "resume-bound-pi", "--executor", "pi", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
+  const first = run(value, ["--branch", "resume-bound-pi", "--base", "main", "--executor", "pi", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"], {
     ...value.env, RELAY_PI_BIN: value.fakePi, PI_FIXTURE_FAIL_NO_WORK: "1",
   });
   assert.equal(first.status, 1, `${first.stderr}\n${first.stdout}`);
@@ -1289,4 +1290,133 @@ test("explicit resume executor mismatch fails before prompt, attempt, or fact wr
   assert.equal(json(mismatch.stderr).code, "RUN_EXECUTOR_MISMATCH");
   assert.deepEqual(fs.readdirSync(output.run_dir).sort(), beforeFiles);
   assert.deepEqual(facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") }).facts, beforeFacts);
+});
+
+test("dispatch from a non-default checkout branches from origin/HEAD, not incidental HEAD", () => {
+  const value = fixture("incidental-head");
+  const defaultSha = git(value.repo, ["rev-parse", "refs/remotes/origin/main"]);
+  git(value.repo, ["checkout", "-q", "-b", "temp-docs"]);
+  fs.writeFileSync(path.join(value.repo, "docs-only.txt"), "unrelated\n");
+  git(value.repo, ["add", "docs-only.txt"]);
+  git(value.repo, ["commit", "-m", "unrelated docs"]);
+  const incidentalSha = git(value.repo, ["rev-parse", "HEAD"]);
+  assert.notEqual(incidentalSha, defaultSha);
+
+  const result = run(value, ["--branch", "issue-1280-default", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const record = readRunRecord({ runDir: json(result.stdout).run_dir });
+  assert.equal(record.git.base_branch, "main");
+  assert.equal(record.git.start_sha, defaultSha);
+  assert.equal(git(record.git.worktree, ["rev-parse", "HEAD"]), defaultSha);
+  assert.notEqual(record.git.start_sha, incidentalSha);
+});
+
+test("dispatch uses the origin default tip when local main is behind origin/main", () => {
+  const value = fixture("stale-local-main");
+  fs.writeFileSync(path.join(value.repo, "ahead.txt"), "origin ahead\n");
+  git(value.repo, ["add", "ahead.txt"]);
+  git(value.repo, ["commit", "-m", "origin ahead"]);
+  git(value.repo, ["push", "origin", "main"]);
+  const originSha = git(value.repo, ["rev-parse", "refs/remotes/origin/main"]);
+  git(value.repo, ["reset", "--hard", "HEAD~1"]);
+  const localSha = git(value.repo, ["rev-parse", "HEAD"]);
+  assert.notEqual(localSha, originSha);
+
+  const result = run(value, ["--branch", "issue-1280-stale-local", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const record = readRunRecord({ runDir: json(result.stdout).run_dir });
+  assert.equal(record.git.base_branch, "main");
+  assert.equal(record.git.start_sha, originSha);
+  assert.equal(git(record.git.worktree, ["rev-parse", "HEAD"]), originSha);
+  assert.notEqual(record.git.start_sha, localSha);
+});
+
+test("empty --base fails typed", () => {
+  const value = fixture("empty-base");
+  const result = run(value, [
+    "--branch", "issue-1280-empty-base", "--base", "",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--dry-run", "--json",
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /--base must be a branch name|BASE_INVALID/);
+});
+
+test("explicit --base records that origin ref and starts the run there", () => {
+  const value = fixture("explicit-base");
+  git(value.repo, ["checkout", "-q", "-b", "stack-base"]);
+  fs.writeFileSync(path.join(value.repo, "stack.txt"), "stack\n");
+  git(value.repo, ["add", "stack.txt"]);
+  git(value.repo, ["commit", "-m", "stack base"]);
+  git(value.repo, ["push", "-u", "origin", "stack-base"]);
+  const stackSha = git(value.repo, ["rev-parse", "refs/remotes/origin/stack-base"]);
+  git(value.repo, ["checkout", "-q", "main"]);
+
+  const result = run(value, [
+    "--branch", "issue-1280-stack", "--base", "stack-base",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
+  ]);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const record = readRunRecord({ runDir: json(result.stdout).run_dir });
+  assert.equal(record.git.base_branch, "stack-base");
+  assert.equal(record.git.start_sha, stackSha);
+});
+
+test("missing origin/HEAD without --base fails typed before creating a branch", () => {
+  const value = fixture("unresolved-base");
+  git(value.repo, ["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"]);
+  const result = run(value, ["--branch", "issue-1280-unresolved", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.notEqual(result.status, 0);
+  assert.equal(json(result.stderr).code, "BASE_UNRESOLVED");
+  assert.equal(git(value.repo, ["branch", "--list", "issue-1280-unresolved"]), "");
+  assert.equal(fs.existsSync(fixtureRunsDir(value)), false);
+});
+
+test("a local-only --base on a repo with origin fails typed", () => {
+  const value = fixture("local-only-base");
+  git(value.repo, ["branch", "local-only"]);
+  const result = run(value, [
+    "--branch", "issue-1280-local-base", "--base", "local-only",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.equal(json(result.stderr).code, "BASE_NOT_ON_ORIGIN");
+  assert.equal(git(value.repo, ["branch", "--list", "issue-1280-local-base"]), "");
+});
+
+test("--base cannot be the run branch", () => {
+  const value = fixture("base-is-run");
+  const result = run(value, [
+    "--branch", "issue-1280-same", "--base", "issue-1280-same",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--dry-run", "--json",
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.equal(json(result.stderr).code, "BASE_INVALID");
+});
+
+test("no-origin dispatch requires an explicit local --base", () => {
+  const value = fixture("no-origin-base");
+  const mainSha = git(value.repo, ["rev-parse", "refs/heads/main"]);
+  git(value.repo, ["remote", "remove", "origin"]);
+
+  const missing = run(value, ["--branch", "issue-1280-local", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.notEqual(missing.status, 0);
+  assert.equal(json(missing.stderr).code, "BASE_UNRESOLVED");
+
+  const created = run(value, [
+    "--branch", "issue-1280-local", "--base", "main",
+    "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json",
+  ]);
+  assert.equal(created.status, 0, `${created.stderr}\n${created.stdout}`);
+  const record = readRunRecord({ runDir: json(created.stdout).run_dir });
+  assert.equal(record.git.base_branch, "main");
+  assert.equal(record.git.start_sha, mainSha);
+});
+
+test("--base is rejected on redispatch", () => {
+  const value = fixture("base-on-resume");
+  const first = run(value, ["--branch", "issue-1280-resume", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);
+  assert.equal(first.status, 0, first.stderr);
+  const denied = run(value, ["--run-id", json(first.stdout).run_id, "--base", "main", "--prompt", "retry", "--json"]);
+  assert.notEqual(denied.status, 0);
+  assert.match(`${denied.stdout}${denied.stderr}`, /--base is only valid for new dispatch/);
 });
