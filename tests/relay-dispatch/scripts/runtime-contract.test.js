@@ -473,7 +473,7 @@ test("RR-08 Relay explicit merge", gate(async (runtime) => {
       runDir,
       lockContext,
       freshObservation: fresh.observationCapability,
-      operatorAction: { actor: "owner", method: "squash", githubLogin: "relay-bot" },
+      operatorAction: { actor: "owner", method: "squash" },
       currentHead: head,
       currentDoneCriteriaSha256: verdict.done_criteria_sha256,
       prNumber: 42,
@@ -481,6 +481,7 @@ test("RR-08 Relay explicit merge", gate(async (runtime) => {
     });
     assert.equal(plan.authorized, true);
     assert.equal(plan.headSha, head);
+    assert.equal(plan.githubLogin, null);
     assert.equal(fs.existsSync(path.join(runDir, `merge-authorization-${plan.operationId}.json`)), true);
   });
 }));

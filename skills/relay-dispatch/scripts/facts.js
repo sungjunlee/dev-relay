@@ -699,9 +699,12 @@ function planOperatorMerge({ runDir, lockContext, freshObservation, operatorActi
   const canonical = requireObservation(runDir, lockContext, freshObservation);
   if (!operatorAction?.actor || !["squash", "merge", "rebase", "external"].includes(operatorAction.method)) throw new Error("an explicit operator merge action is required");
   const external = operatorAction.method === "external";
-  const githubLogin = external ? null : String(operatorAction.githubLogin || "").trim();
-  if (!external && (!githubLogin || githubLogin.length > 255 || githubLogin.includes("\0") || /[\r\n]/.test(githubLogin))) {
-    throw new Error("an authenticated GitHub login is required for a requested merge");
+  let githubLogin = null;
+  if (!external && operatorAction.githubLogin !== undefined && operatorAction.githubLogin !== null) {
+    githubLogin = String(operatorAction.githubLogin).trim();
+    if (!githubLogin || githubLogin.length > 255 || githubLogin.includes("\0") || /[\r\n]/.test(githubLogin)) {
+      throw new Error("the optional authenticated GitHub login is invalid");
+    }
   }
   if (external ? freshObservation.facts.pr_state !== "MERGED" || !operatorAction.overrideReason?.trim()
     : !validateReviewBinding({ verdict, currentSha: currentHead, doneCriteriaSha256: currentDoneCriteriaSha256 }).valid || !["lgtm", "pass"].includes(verdict?.verdict)) throw new Error("merge review binding is not current");

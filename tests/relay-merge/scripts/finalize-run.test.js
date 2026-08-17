@@ -61,7 +61,13 @@ function row() {
   };
 }
 if (args[0] === "auth" && args[1] === "token") process.stdout.write("test-token\\n");
-else if (args[0] === "api" && args[1] === "user") process.stdout.write(state.authLogin + "\\n");
+else if (args[0] === "api" && args[1] === "user") {
+  if (state.apiUserFailure) {
+    process.stderr.write("HTTP 503: service unavailable");
+    process.exit(1);
+  }
+  process.stdout.write(state.authLogin + "\\n");
+}
 else if (args[0] === "api" && args.includes("--slurp")) process.stdout.write(JSON.stringify(state.comparePages || [state.compareResponse]));
 else if (args[0] === "pr" && args[1] === "list") process.stdout.write(JSON.stringify([row()]));
 else if (args[0] === "pr" && args[1] === "view") {
@@ -364,6 +370,16 @@ test("Relay finalize performs one explicit merge, records exact provenance, and 
   assert.match(log, new RegExp(`pr merge 42 .*--match-head-commit ${value.head}`));
 });
 
+test("REST /user failure does not gate a requested squash merge", async () => {
+  const value = await fixture("rest-user-unavailable", { github: { apiUserFailure: true } });
+  const result = await withGh(value, () => finalize.finalizeRun(value.cli, services()));
+  assert.equal(result.status, "merged");
+  assert.equal(mergeFacts(value).length, 1);
+  const log = fs.readFileSync(value.gh.logPath, "utf8");
+  assert.match(log, /^pr merge /m);
+  assert.doesNotMatch(log, /^api \/?user(?: |$)/m);
+});
+
 test("base movement allows zero reviewed-path overlap and rejects unsafe or incomplete evidence", async () => {
   const value = await fixture("base-integrity");
   const prior = process.env.RELAY_GH_BIN;
@@ -661,7 +677,7 @@ test("pre-call intent cannot claim a later external merge as Relay-requested", a
   assert.equal((log.match(/^pr merge /gm) || []).length, 0);
 });
 
-test("intent-only recovery rejects an external queue requested by a different GitHub login", async () => {
+test("intent-only recovery accepts the queue without a REST requestor preflight", async () => {
   const value = await fixture("intent-external-queue");
   await assert.rejects(withGh(value, () => finalize.finalizeRun(value.cli, services({
     afterRequestIntent() { throw new Error("fault after request intent"); },
@@ -675,17 +691,15 @@ test("intent-only recovery rejects an external queue requested by a different Gi
   state.mergeStateStatus = "QUEUED";
   fs.writeFileSync(value.gh.statePath, JSON.stringify(state));
 
-  await assert.rejects(
-    withGh(value, () => finalize.finalizeRun(value.cli, services())),
-    (error) => error.code === "MERGE_QUEUE_REQUESTOR_MISMATCH",
-  );
-  assert.equal(fs.readdirSync(value.runDir).some((name) => name.startsWith("merge-pending-")), false);
+  const result = await withGh(value, () => finalize.finalizeRun(value.cli, services()));
+  assert.equal(result.status, "merge_pending");
+  assert.equal(fs.readdirSync(value.runDir).some((name) => name.startsWith("merge-pending-")), true);
   assert.equal(mergeFacts(value).length, 0);
   const log = fs.readFileSync(value.gh.logPath, "utf8");
   assert.equal((log.match(/^pr merge /gm) || []).length, 0);
 });
 
-test("accepted queue by the authenticated login converges after a pre-pending crash without a second call", async () => {
+test("accepted queue converges from durable request intent without a second call", async () => {
   const value = await fixture("authenticated-queue-recovery", {
     github: { queueOnMerge: "SQUASH" },
   });
@@ -699,7 +713,7 @@ test("accepted queue by the authenticated login converges after a pre-pending cr
   assert.equal(resumed.status, "merge_pending");
   assert.equal(resumed.merge_performed, false);
   const pendingFile = fs.readdirSync(value.runDir).find((name) => name.startsWith("merge-pending-"));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(value.runDir, pendingFile), "utf8")).github_login, "relay-bot");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(value.runDir, pendingFile), "utf8")).github_login, null);
 
   const state = JSON.parse(fs.readFileSync(value.gh.statePath, "utf8"));
   state.state = "MERGED";
@@ -714,22 +728,16 @@ test("accepted queue by the authenticated login converges after a pre-pending cr
   assert.equal((log.match(/^pr merge /gm) || []).length, 1);
 });
 
-test("authenticated GitHub login drift fails before the merge side effect", async () => {
+test("requested merge does not call the authenticated GitHub login seam", async () => {
   const value = await fixture("auth-login-drift");
-  let observations = 0;
-  await assert.rejects(
-    withGh(value, () => finalize.finalizeRun(value.cli, services({
-      authenticatedGithubLogin() {
-        observations += 1;
-        return observations === 1 ? "relay-bot" : "different-login";
-      },
-    }))),
-    (error) => error.code === "MERGE_AUTH_IDENTITY_DRIFT",
-  );
-  assert.equal(fs.readdirSync(value.runDir).some((name) => name.startsWith("merge-request-intent-")), false);
-  assert.equal(mergeFacts(value).length, 0);
+  const result = await withGh(value, () => finalize.finalizeRun(value.cli, services({
+    authenticatedGithubLogin() { throw new Error("must not be called"); },
+  })));
+  assert.equal(result.status, "merged");
+  assert.equal(mergeFacts(value).length, 1);
   const log = fs.readFileSync(value.gh.logPath, "utf8");
-  assert.equal((log.match(/^pr merge /gm) || []).length, 0);
+  assert.equal((log.match(/^pr merge /gm) || []).length, 1);
+  assert.doesNotMatch(log, /^api \/?user(?: |$)/m);
 });
 
 test("tampering the authenticated GitHub principal invalidates durable authorization", async () => {
