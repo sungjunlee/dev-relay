@@ -22,4 +22,18 @@ if (controls.delay_ms) {
 }
 fs.writeFileSync(path.join(cwd, "executor-change.txt"), "review me\n", "utf8");
 if (controls.empty === true) process.exit(0);
-fs.writeFileSync(output, "fake executor completed\n", "utf8");
+if (controls.write_output_after_ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(controls.write_output_after_ms));
+}
+fs.writeFileSync(output, controls.partial_then_stall === true ? "PARTIAL\n" : "fake executor completed\n", "utf8");
+if (controls.print_completion_marker === true && controls.partial_then_stall !== true) process.stderr.write("tokens used\n");
+if (controls.partial_then_stall === true) {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
+} else if (controls.partial_then_hang === true) {
+  process.on("SIGTERM", () => {});
+  setInterval(() => fs.appendFileSync(output, ".", "utf8"), 50);
+} else if (controls.hang_after_output === true) {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
+}

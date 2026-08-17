@@ -616,6 +616,7 @@ async function startAttempt({ cli, identity, adapter, prompt, rubric, criteria, 
       stdinPath: invocation.stdinPath || null,
       stdinSha256: invocation.stdinSha256 || null,
       executorResultPath: outputPath,
+      executorCompletionSignal: adapter.completionSignal,
       executorNetworkAccess: cli.values["network-access"],
       runtimeDependencies: invocation.runtimeDependencies,
       timeoutMs,
@@ -684,6 +685,7 @@ async function finishAttempt({ cli, adapter, started }) {
   const parsed = adapter.parseOutcome({
     phase: "dispatch", exitCode: terminal.exit_code, signal: terminal.signal,
     timedOut: terminal.status === "timed_out", cancelled: terminal.status === "cancelled",
+    completionProven: terminal.status === "completed" && terminal.termination === "timeout_after_completion",
     stdoutPath: started.receipt.stdout_path, stderrPath: started.receipt.stderr_path, resultPath: started.outputPath,
   });
   const status = terminal.status === "completed" && terminal.exit_code === 0 && parsed.status === "succeeded" ? "completed"

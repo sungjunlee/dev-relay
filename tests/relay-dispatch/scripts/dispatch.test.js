@@ -920,6 +920,98 @@ test("dispatch persists immutable bindings and exact attempt facts but never aut
   assert.deepEqual(output.inspection.recommended_action, independentlyInspected.recommended_action);
 });
 
+test("Codex completion written before a timeout is durably completed after the hung executor is killed", { timeout: 30_000 }, async () => {
+  const value = fixture("codex-completion-then-hang");
+  const github = githubObservationFixture(value, "completion-then-hang");
+  fs.writeFileSync(value.prompt, JSON.stringify({ hang_after_output: true, print_completion_marker: true }));
+  const result = run(value, ["--branch", "completion-then-hang", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "5", "--json"], github.env);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(output.status, "completed");
+  assert.equal(output.host_status, "completed");
+  assert.equal(output.termination, "timeout_after_completion");
+  assert.equal(output.outcome.status, "succeeded");
+  assert.equal(output.outcome.output, "fake executor completed\n");
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
+  assert.deepEqual(attempts.map((fact) => fact.type), ["attempt_started", "attempt_finished"]);
+  assert.equal(attempts[1].payload.status, "completed");
+  const hostResult = JSON.parse(fs.readFileSync(attempts[1].payload.result_path, "utf8"));
+  assert.equal(hostResult.status, "completed");
+  assert.equal(hostResult.termination, "timeout_after_completion");
+  assert.deepEqual(hostResult.completion, {
+    kind: "stable_result_file",
+    size: Buffer.byteLength("fake executor completed\n"),
+    sha256: crypto.createHash("sha256").update("fake executor completed\n").digest("hex"),
+    stable_ms: 250,
+    stream_marker: "tokens used",
+  });
+  assert.match(hostResult.result_auth_sha256, /^[0-9a-f]{64}$/);
+  const stubKeys = ["RELAY_GIT_BIN", "RELAY_GH_BIN", "RELAY_TEST_GITHUB_STATE", "RELAY_TEST_REAL_GIT"];
+  const prevEnv = Object.fromEntries(stubKeys.map((key) => [key, process.env[key]]));
+  for (const key of stubKeys) process.env[key] = github.env[key];
+  let inspected;
+  try {
+    inspected = await runtime.inspectRun({ runDir: output.run_dir });
+  } finally {
+    for (const key of stubKeys) {
+      if (prevEnv[key] === undefined) delete process.env[key]; else process.env[key] = prevEnv[key];
+    }
+  }
+  assert.equal(inspected.derived.reason, "publication_incomplete");
+  assert.equal(inspected.recommended_action.steps.includes("close_dead_attempt"), false);
+});
+
+test("Codex output written just before timeout is not positive completion evidence", { timeout: 30_000 }, () => {
+  const value = fixture("codex-output-at-timeout");
+  fs.writeFileSync(value.prompt, JSON.stringify({ write_output_after_ms: 4900, hang_after_output: true }));
+  const result = run(value, ["--branch", "output-at-timeout", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "5", "--json"]);
+  // Scheduling jitter can only delay the write, shrinking the pre-termination stable window,
+  // or move it after termination; it cannot run it 4.65s early and reverse this verdict.
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  // Bind the fail-closed class, not one racing shape: when the write slips past the
+  // deadline the SIGTERM'd gate can close naturally as "failed" before the timeout
+  // settle path stamps "timed_out"; both are correct refusals of completion.
+  assert.ok(new Set(["timed_out", "failed"]).has(output.host_status), JSON.stringify(output));
+  assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
+  assert.notEqual(output.termination, "timeout_after_completion");
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
+  assert.ok(new Set(["cancelled", "failed"]).has(attempts.at(-1).payload.status), JSON.stringify(attempts.at(-1).payload));
+  assert.notEqual(attempts.at(-1).payload.status, "completed");
+});
+
+test("a Codex result that keeps changing until timeout is not positive completion evidence", { timeout: 30_000 }, () => {
+  const value = fixture("codex-partial-at-timeout");
+  fs.writeFileSync(value.prompt, JSON.stringify({ partial_then_hang: true }));
+  const result = run(value, ["--branch", "partial-at-timeout", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "1", "--json"]);
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.equal(output.host_status, "timed_out");
+  assert.equal(output.status, "cancelled");
+  assert.equal(output.termination, undefined);
+});
+
+test("a stable partial Codex result without a stream completion marker fails closed at timeout", { timeout: 30_000 }, () => {
+  const value = fixture("codex-partial-then-stall");
+  fs.writeFileSync(value.prompt, JSON.stringify({ partial_then_stall: true }));
+  const result = run(value, ["--branch", "partial-then-stall", "--prompt-file", value.prompt,
+    "--rubric-file", value.rubric, "--timeout", "1", "--json"]);
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const output = json(result.stdout);
+  assert.ok(new Set(["timed_out", "failed"]).has(output.host_status), JSON.stringify(output));
+  assert.ok(new Set(["cancelled", "failed"]).has(output.status), JSON.stringify(output));
+  assert.notEqual(output.termination, "timeout_after_completion");
+  const journal = facts.readFacts({ eventsPath: path.join(output.run_dir, "events.jsonl") });
+  const attempts = journal.facts.filter((fact) => fact.type.startsWith("attempt_"));
+  assert.ok(new Set(["cancelled", "failed"]).has(attempts.at(-1).payload.status), JSON.stringify(attempts.at(-1).payload));
+  assert.notEqual(attempts.at(-1).payload.status, "completed");
+});
+
 test("trusted-local dispatch needs no Relay sandbox admission and reports native capability", () => {
   const value = fixture("native-host");
   const result = run(value, ["--branch", "native-host", "--prompt-file", value.prompt, "--rubric-file", value.rubric, "--json"]);

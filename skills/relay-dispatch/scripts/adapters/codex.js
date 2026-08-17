@@ -9,6 +9,7 @@ module.exports = createNativeAdapter({
   name: "codex",
   timeoutMs: 2400000,
   outputProtocol: (phase) => phase === "primary_review" ? "json_result" : "text_stdout",
+  completionSignal: { kind: "stable_result_file", stableMs: 250, streamMarkers: ["tokens used"] },
   metadata: {
     cliBinary: "codex",
     outputProtocol: "text_stdout",
