@@ -183,13 +183,14 @@ test("adapter filesystem-isolation metadata is a closed static contract", () => 
     outputProtocol: "text_stdout",
     buildDispatch: () => ({ command: "fixture", args: [], cwd }),
   });
-  const base = { supported: true, write: true, readOnly: false, networkControl: "informational", cancellation: "process", structuredOutput: "text" };
+  const base = { supported: true, write: true, readOnly: false, networkControl: "informational", loopbackListen: "unknown", cancellation: "process", structuredOutput: "text" };
   assert.doesNotThrow(() => create({ ...base, filesystemIsolation: "native", filesystemIsolationRequest: "workspace-write" }));
   assert.throws(() => create({ ...base, filesystemIsolation: "natvie", filesystemIsolationRequest: "workspace-write" }), /known filesystemIsolation/);
   assert.throws(() => create({ ...base, filesystemIsolation: "native" }), /native filesystemIsolationRequest/);
   assert.throws(() => create({ ...base, filesystemIsolation: "native", filesystemIsolationRequest: "writeable" }), /native filesystemIsolationRequest/);
   assert.doesNotThrow(() => create({ ...base, filesystemIsolation: "not_requested" }));
   assert.throws(() => create({ ...base, filesystemIsolation: "none", filesystemIsolationRequest: "read-only" }), /only valid with native/);
+  assert.throws(() => create({ ...base, filesystemIsolation: "none", loopbackListen: "loopback" }), /known loopbackListen/);
 });
 
 test("supported primary review roles build direct read-only CLI invocations, never wrapper or shell commands", () => {

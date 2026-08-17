@@ -150,8 +150,8 @@ module.exports = createNativeAdapter({
   metadata: { cliBinary: "pi", cliBinaryEnv: "RELAY_PI_BIN", outputProtocol: "phase-specific", providerDefault: "pi", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", runtimeDependencies: { executableParent: 1, interpreterParent: null } },
   phases: {
     // buildDispatch pins Pi's actual read, search, and edit tools; no shell is requested.
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "native", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text" },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "native", filesystemIsolation: "none", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "native", filesystemIsolation: "none", loopbackListen: "available", cancellation: "process", structuredOutput: "text" },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "native", filesystemIsolation: "none", loopbackListen: "available", cancellation: "process", structuredOutput: "json" },
   },
   validateModel,
   validateDispatch,

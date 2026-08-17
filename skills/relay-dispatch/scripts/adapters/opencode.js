@@ -18,8 +18,8 @@ module.exports = createNativeAdapter({
   ],
   metadata: { cliBinary: "opencode", outputProtocol: "phase-specific", providerDefault: "opencode", providerFromModel: true, promptTransport: "stdin", processContainment: "inherited_scope_no_daemon", providerTransport: "remote_required", runtimeDependencies: { executableParent: null, interpreterParent: null } },
   phases: {
-    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "text" },
-    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "none", cancellation: "process", structuredOutput: "json" },
+    dispatch: { supported: true, write: true, readOnly: false, networkControl: "informational", filesystemIsolation: "none", loopbackListen: "available", cancellation: "process", structuredOutput: "text" },
+    primary_review: { supported: true, write: false, readOnly: true, networkControl: "informational", filesystemIsolation: "none", loopbackListen: "available", cancellation: "process", structuredOutput: "json" },
   },
   validateDispatch,
   buildDispatch({ cwd, promptPath, promptSha256, model }) {

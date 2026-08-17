@@ -11,7 +11,7 @@ const path = require("path");
 const { parseArgs: parseNodeArgs } = require("util");
 
 const { getAdapter, listAdapters } = require("./adapters");
-const { assertInvocationShape, filesystemIsolationDiagnostic, validateCapabilities } = require("./adapter-contract");
+const { assertInvocationShape, filesystemIsolationDiagnostic, loopbackListenDiagnostic, validateCapabilities } = require("./adapter-contract");
 const facts = require("./facts");
 const host = require("./host");
 const recover = require("./recover");
@@ -721,6 +721,7 @@ async function executeForeground(cli, overrides = {}) {
   const capabilityRequest = { networkAccess: cli.values["network-access"], model: cli.values.model || null };
   validateCapabilities(adapter, "dispatch", capabilityRequest);
   const filesystemIsolation = filesystemIsolationDiagnostic(adapter, "dispatch", capabilityRequest);
+  const loopbackListen = loopbackListenDiagnostic(adapter, "dispatch", capabilityRequest);
   let resumeInspection = null;
   if (!cli.creating) {
     const runDir = runStore.resolveRunDirectory(identity.checkout, cli.runId);
@@ -729,10 +730,10 @@ async function executeForeground(cli, overrides = {}) {
   const inputs = loadInputs(cli, prompt);
   if (cli.values["dry-run"]) {
     const invocation = dryRunInvocation({ cli, identity, adapter, inputs });
-    return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, filesystem_isolation: filesystemIsolation, durable_bytes_written: 0, invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
+    return { status: "dry-run", run_id: cli.runId, repo: identity.repoRoot, executor: adapter.name, model: cli.values.model || null, filesystem_isolation: filesystemIsolation, loopback_listen: loopbackListen, durable_bytes_written: 0, invocation, ...(resumeInspection ? { inspection: resumeInspection } : {}), recovery: "canonical relay-recover only" };
   }
   const started = await startAttempt({ cli, identity, adapter, prompt: inputs.prompt, rubric: inputs.rubric, criteria: inputs.criteria, resumeInspection, inspectRun });
-  const launch = { status: "dispatched", run_id: cli.runId, run_dir: started.runDir, worktree: started.record.git.worktree, attempt_id: started.attemptId, host_handle: started.receipt.host_handle, filesystem_isolation: filesystemIsolation };
+  const launch = { status: "dispatched", run_id: cli.runId, run_dir: started.runDir, worktree: started.record.git.worktree, attempt_id: started.attemptId, host_handle: started.receipt.host_handle, filesystem_isolation: filesystemIsolation, loopback_listen: loopbackListen };
   if (process.env.RELAY_DISPATCH_NOTIFY_PATH) {
     const inspection = await recover.inspectProductionRun({ runDir: started.runDir });
     atomicJson(process.env.RELAY_DISPATCH_NOTIFY_PATH, { ...launch, dispatcher_pid: process.pid, inspection });
@@ -787,6 +788,7 @@ async function salvageTerminalResult(cli) {
     ...(hostResult.termination ? { termination: hostResult.termination } : {}),
     run_id: cli.runId, run_dir: runDir, attempt_id: finished.attempt_id,
     filesystem_isolation: filesystemIsolationDiagnostic(adapter, "dispatch", capabilityRequest),
+    loopback_listen: loopbackListenDiagnostic(adapter, "dispatch", capabilityRequest),
     recovery: "canonical relay-recover only", inspection };
 }
 

@@ -7,6 +7,7 @@ const OUTPUT_PROTOCOLS = Object.freeze(["text_stdout", "json_result", "jsonl_run
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const FILESYSTEM_ISOLATION = new Set(["native", "native_bash", "declaration_only", "not_requested", "none"]);
 const NATIVE_FILESYSTEM_REQUESTS = new Set(["workspace-write", "read-only", "enabled"]);
+const LOOPBACK_LISTEN = new Set(["available", "unavailable", "unknown"]);
 // Supported CLIs must preserve the inherited scope marker and must not daemonize
 // or clear it from descendants; host cleanup relies on that contract.
 const PROCESS_CONTAINMENT = "inherited_scope_no_daemon";
@@ -264,6 +265,18 @@ function filesystemIsolationDiagnostic(adapter, phase, request = {}) {
   return Object.freeze({ requested, effective, diagnostic });
 }
 
+function loopbackListenDiagnostic(adapter, phase, request = {}) {
+  const capability = validateCapabilities(adapter, phase, request);
+  const available = capability.loopbackListen || "unknown";
+  let diagnostic = null;
+  if (available === "unavailable") {
+    diagnostic = `${adapter.name} cannot bind loopback sockets in this phase; route socket-bound checks to an operator gate.`;
+  } else if (available === "unknown") {
+    diagnostic = `${adapter.name} does not declare loopback listen; treat socket-bound checks as operator-gated unless proven.`;
+  }
+  return Object.freeze({ available, diagnostic });
+}
+
 function resolveAdapterProvider(adapter, model) {
   if (adapter.metadata.providerFromModel && typeof model === "string") {
     const separator = model.indexOf("/");
@@ -347,6 +360,9 @@ function createNativeAdapter({
     } else if (hasRequest) {
       throw new Error(`native adapter ${phase} filesystemIsolationRequest is only valid with native filesystemIsolation`);
     }
+    if (!LOOPBACK_LISTEN.has(capability.loopbackListen)) {
+      throw new Error(`native adapter ${phase} phase must declare a known loopbackListen`);
+    }
   }
   const runtimeDependencies = normalizeRuntimeDependencies(metadata.runtimeDependencies);
   const providerUnavailable = normalizeProviderUnavailableSignals(providerUnavailableSignals);
@@ -418,6 +434,7 @@ module.exports = {
   assertInvocationShape: normalizeInvocationShape,
   createNativeAdapter,
   filesystemIsolationDiagnostic,
+  loopbackListenDiagnostic,
   decodeTrustedPrompt,
   formatAdapterPhase,
   makeParseOutcome,
