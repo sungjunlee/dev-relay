@@ -881,6 +881,14 @@ function existingIntentCompletionFactIds(facts, intent) {
     .filter(Boolean);
   return [...new Set([...ids, ...terminalCompletionFacts(facts, intent).map((fact) => fact.event_id)])];
 }
+async function validateExistingVerificationFact(facts, intent, effects, context) {
+  if (!intent.steps.includes("record_verification")
+    || typeof effects.validateCompletedFact !== "function") return;
+  const eventId = deterministicEventId(intent.operation_id, "record_verification");
+  const fact = facts.find((entry) => entry.event_id === eventId);
+  if (fact?.type !== "verification_recorded") return;
+  await effects.validateCompletedFact("record_verification", context, fact);
+}
 function terminalCompletionFacts(facts, intent) {
   const operationId = intent.operation_id;
   if (!intent.steps.includes("close_reviewed_result")) {
@@ -1253,6 +1261,16 @@ async function recoverRun({
         || !recoveryFactMatchesIdentity(existingRecoveryFact, { intent })) {
         throw new Error(`duplicate event_id: ${recoveryEventId}`);
       }
+      await validateExistingVerificationFact(before.facts, intent, effects, {
+        runDir,
+        runId: before.run_id,
+        operationId,
+        actionKey: actionKeyValue,
+        actor: intent.actor,
+        reason: intent.reason,
+        intent,
+        before,
+      });
       const receipt = recoveryReceipt(operationId, actionKeyValue, [
         ...existingIntentCompletionFactIds(before.facts, intent),
         existingRecoveryFact.event_id,
