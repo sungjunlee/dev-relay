@@ -55,6 +55,17 @@ test("merge gate binds live PR, remote/worktree head, verification, review, and 
   assert.equal(binding.prNumber, 42);
   assert.equal(binding.reviewedBase, base);
   assert.equal(binding.liveBase, base);
+  assert.equal(binding.liveBaseRef, "main");
+});
+
+test("merge gate adopts a live PR whose base differs from the frozen run.json base", () => {
+  const value = inspection();
+  const adopted = { ...record, git: { ...record.git, base_branch: "deleted-docs" } };
+  value.observations.github.base_ref = "main";
+  value.facts[0].payload.base_ref = "main";
+  const binding = requireMergeAction(value, adopted);
+  assert.equal(binding.prNumber, 42);
+  assert.equal(binding.liveBaseRef, "main");
 });
 
 test("merge gate rejects mutable observation, review, and verification drift", () => {

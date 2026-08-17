@@ -474,7 +474,7 @@ function mergeObserver(record) {
     "const a=['pr','view',String(q.pr_number),'--repo',repo,'--json','number,state,headRefName,headRefOid,baseRefName,baseRefOid,headRepository,headRepositoryOwner,mergeCommit,autoMergeRequest,mergeStateStatus'];",
     "const raw=execFileSync(process.argv.includes('--gh-node-script')?process.execPath:bin,process.argv.includes('--gh-node-script')?[bin,...a]:a,{encoding:'utf8',stdio:['ignore','pipe','pipe']});",
     "const p=JSON.parse(raw),hr=p.headRepository&&p.headRepository.nameWithOwner||(p.headRepositoryOwner&&p.headRepositoryOwner.login&&p.headRepository&&p.headRepository.name?`${p.headRepositoryOwner.login}/${p.headRepository.name}`:null);",
-    `if((q.repo&&q.repo!==repo)||hr!==repo||p.headRefName!==${JSON.stringify(record.git.branch)}||p.baseRefName!==${JSON.stringify(record.git.base_branch)})throw new Error('exact PR identity mismatch');`,
+    `if((q.repo&&q.repo!==repo)||hr!==repo||p.headRefName!==${JSON.stringify(record.git.branch)})throw new Error('exact PR repo/head identity mismatch');`,
     "process.stdout.write(JSON.stringify({nonce:input.nonce,repo,head_repo:hr,pr_number:p.number,pr_state:p.state,pr_head_sha:p.headRefOid,pr_base_sha:p.baseRefOid,head_ref:p.headRefName,base_ref:p.baseRefName,merge_sha:p.mergeCommit&&p.mergeCommit.oid||null,auto_merge_request:p.autoMergeRequest||null,merge_state_status:p.mergeStateStatus||null}));",
   ].join("");
   const args = [
@@ -508,7 +508,7 @@ function assertExactPr(observed, record, binding, allowedStates) {
     || observed.pr_head_sha !== binding.head
     || !SHA1_RE.test(String(observed.pr_base_sha || ""))
     || observed.head_ref !== record.git.branch
-    || observed.base_ref !== record.git.base_branch
+    || (binding.liveBaseRef && observed.base_ref !== binding.liveBaseRef)
   ) fail("fresh GitHub observation changed PR identity or state", "MERGE_LIVE_OBSERVATION_MISMATCH");
   if (observed.pr_state === "MERGED" && !SHA1_RE.test(String(observed.merge_sha || ""))) {
     fail("merged PR observation is missing the result target SHA", "MERGE_TARGET_MISSING");
@@ -730,6 +730,7 @@ async function finalizeRun(cli, overrides = {}) {
       prNumber: derivedPr,
       reviewedBase: review?.payload?.base_sha,
       liveBase: initial.observations?.github?.pr_base_sha,
+      liveBaseRef: initial.observations?.github?.base_ref,
     };
   }
   const method = cli.values["merge-method"];

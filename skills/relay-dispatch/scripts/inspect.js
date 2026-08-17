@@ -250,11 +250,10 @@ function foldRunFacts({
     || (!firstReviewedResultClose && gitFacts.base_branch && gitFacts.base_branch !== runRecord.git?.base_branch)
     || (prFact && prFact.payload.repo !== runRecord.repo?.remote)
     || (prFact && prFact.payload.head_ref !== runRecord.git?.branch)
-    || (prFact && prFact.payload.base_ref !== runRecord.git?.base_branch)
     || (!firstReviewedResultClose && githubFacts.repo && githubFacts.repo !== runRecord.repo?.remote)
     || (!firstReviewedResultClose && githubFacts.head_ref && githubFacts.head_ref !== runRecord.git?.branch)
-    || (!firstReviewedResultClose && githubFacts.base_ref && githubFacts.base_ref !== runRecord.git?.base_branch)
     || (!firstReviewedResultClose && prFact && githubFacts.pr_number && githubFacts.pr_number !== prFact.payload.pr_number)
+    || (!firstReviewedResultClose && prFact && githubFacts.base_ref && prFact.payload.base_ref !== githubFacts.base_ref)
   );
   if (branchConflict) {
     return none("fact_conflict", {
@@ -343,7 +342,7 @@ function foldRunFacts({
     const laterPrIdentityMismatch = laterPrFacts.some((fact) => (
       fact.payload.repo !== runRecord.repo?.remote
       || fact.payload.head_ref !== runRecord.git?.branch
-      || fact.payload.base_ref !== runRecord.git?.base_branch
+      || (prFact && fact.payload.base_ref !== prFact.payload.base_ref)
     ));
     if (laterPrFacts.length > 1 || laterPrIdentityMismatch) {
       diagnostics.push({ code: "pull_request_identity_after_terminal" });
