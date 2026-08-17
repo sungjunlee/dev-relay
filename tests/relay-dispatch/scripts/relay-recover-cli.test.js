@@ -777,6 +777,13 @@ test("publication adopts an existing head PR when the recorded base is gone", (t
   assert.equal(prFacts[0].payload.base_ref, "main");
   assert.equal(prFacts[0].payload.head_sha, finalHead);
   assert.equal(prFacts[0].payload.created_by_relay, false);
+  const after = spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  });
+  assert.equal(after.status, 0, after.stderr);
+  const inspectedAfter = JSON.parse(after.stdout);
+  assert.notEqual(inspectedAfter.derived.reason, "fact_conflict");
+  assert.notEqual(inspectedAfter.recommended_action.kind, "operator_attention");
 });
 
 test("publication refuses to create when the recorded base is gone and no head PR exists", (t) => {

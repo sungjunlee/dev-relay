@@ -68,6 +68,13 @@ test("merge gate adopts a live PR whose base differs from the frozen run.json ba
   assert.equal(binding.liveBaseRef, "main");
 });
 
+test("merge gate refuses when the durable PR base and live PR base disagree", () => {
+  const value = inspection();
+  value.observations.github.base_ref = "release";
+  value.facts[0].payload.base_ref = "main";
+  assert.throws(() => requireMergeAction(value, record), /MERGE_PR_FACT_MISMATCH|does not match the exact live PR/);
+});
+
 test("merge gate rejects mutable observation, review, and verification drift", () => {
   const mutations = [
     (value) => { value.observations.github.pr_head_sha = "e".repeat(40); },

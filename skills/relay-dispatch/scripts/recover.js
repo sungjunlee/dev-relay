@@ -610,7 +610,14 @@ function exactPublishedPr(github, record, headSha) {
 }
 
 function originBranchExists(cwd, name) {
-  const listed = execGit(cwd, ["ls-remote", "--heads", "origin", `refs/heads/${name}`]);
+  let listed;
+  try {
+    listed = execGit(cwd, ["ls-remote", "--heads", "origin", `refs/heads/${name}`]);
+  } catch (error) {
+    const lookup = new Error(`could not revalidate recorded base ${name}: ${error.message}`);
+    lookup.code = "BASE_LOOKUP_FAILED";
+    throw lookup;
+  }
   return listed.split("\n").some((line) => line.endsWith(`\trefs/heads/${name}`));
 }
 async function reobservePublishedPr(record, headSha) {
@@ -1603,7 +1610,7 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
           || github.head_ref !== record.git.branch
           || github.pr_head_sha !== observed.git.head_sha
         ) {
-          throw new Error("PR publication did not re-observe one exact repo/head/base/SHA match");
+          throw new Error("PR publication did not re-observe one exact repo/head/SHA match");
         }
         if (github.pr_state !== "OPEN") {
           return {
@@ -1668,6 +1675,7 @@ function createProductionEffects({ verificationFile = null, getLockContext = () 
               || live.pr_state !== "MERGED"
               || live.pr_head_sha !== observed.github.pr_head_sha
               || live.head_ref !== record.git.branch
+              || live.base_ref !== observed.github.base_ref
               || live.merge_sha !== observed.github.merge_sha
             ) throw new Error("fresh external merge observation changed identity");
             return { authorized: true };

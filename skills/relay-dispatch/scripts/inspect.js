@@ -247,6 +247,7 @@ function foldRunFacts({
   }
   const branchConflict = Boolean(
     (!firstReviewedResultClose && gitFacts.branch && gitFacts.branch !== runRecord.git?.branch)
+    // gitFacts.base_branch is copied from run.json by observeProduction; a mismatch is a forged observation.
     || (!firstReviewedResultClose && gitFacts.base_branch && gitFacts.base_branch !== runRecord.git?.base_branch)
     || (prFact && prFact.payload.repo !== runRecord.repo?.remote)
     || (prFact && prFact.payload.head_ref !== runRecord.git?.branch)

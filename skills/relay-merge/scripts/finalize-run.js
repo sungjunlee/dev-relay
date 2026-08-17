@@ -508,6 +508,7 @@ function assertExactPr(observed, record, binding, allowedStates) {
     || observed.pr_head_sha !== binding.head
     || !SHA1_RE.test(String(observed.pr_base_sha || ""))
     || observed.head_ref !== record.git.branch
+    || !observed.base_ref
     || (binding.liveBaseRef && observed.base_ref !== binding.liveBaseRef)
   ) fail("fresh GitHub observation changed PR identity or state", "MERGE_LIVE_OBSERVATION_MISMATCH");
   if (observed.pr_state === "MERGED" && !SHA1_RE.test(String(observed.merge_sha || ""))) {
