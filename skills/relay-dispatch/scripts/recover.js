@@ -1253,7 +1253,7 @@ async function recoverRun({
     }
     const authorized = intent && intentStepsAuthorized(intent, before.recommended_action);
     const dischargeAuthorized = intent && before.recommended_action.kind === "recover" && !authorized;
-    if (intent && before.recommended_action.kind !== "recover") {
+    if (intent && before.recommended_action.kind === "operator_attention") {
       return recoverResult({
         before, status: "refused", operationId, actionKeyValue,
         blockers: [blocker(
