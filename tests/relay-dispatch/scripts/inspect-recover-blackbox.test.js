@@ -74,7 +74,8 @@ function harness({ facts = [], observations = {}, record = runRecord() } = {}) {
         : null
     ),
     writeIntent: async ({ intent }) => {
-      if (state.intent && JSON.stringify(state.intent) !== JSON.stringify(intent)) {
+      if (state.intent && !state.receipts.has(state.intent.action_key)
+        && JSON.stringify(state.intent) !== JSON.stringify(intent)) {
         throw new Error("intent conflict");
       }
       state.intent = structuredClone(intent);
@@ -819,6 +820,203 @@ test("pending intent with mismatched actor or reason preserves identity refusal"
   assert.deepEqual(h.state.effects, []);
 });
 
+test("observation-changed pending intent requires exact identity discharge before the fresh action", async () => {
+  const intentKey = "4".repeat(64);
+  const intent = {
+    schema_version: 1,
+    action_key: intentKey,
+    operation_id: `recover-${intentKey.slice(0, 32)}`,
+    created_at: "2026-08-01T00:03:00Z",
+    steps: ["push_branch", "record_or_create_pr", "record_verification"],
+    actor: "owner",
+    reason: "publish and verify reviewed work",
+    reason_code: "publication_incomplete",
+    observed_event_id: "attempt-finished",
+    before_sha: HEAD,
+  };
+  const h = harness({
+    facts: [attemptFinished(), pullRequestFact(HEAD)],
+    observations: publicationObservations({
+      github: {
+        available: true, pr_lookup_complete: true, matching_pr_count: 1,
+        repo: "owner/repo", pr_number: 42, pr_state: "MERGED",
+        head_ref: "issue-1135", base_ref: "main", pr_head_sha: HEAD, merge_sha: TARGET,
+      },
+    }),
+  });
+  h.state.intent = structuredClone(intent);
+  const factCount = h.state.facts.length;
+
+  for (const identity of [
+    { actor: "different-operator", reason: intent.reason },
+    { actor: intent.actor, reason: "different reason" },
+  ]) {
+    const mismatch = await recoverRun({
+      ...h,
+      ...identity,
+      expectedActionKey: intentKey,
+      effects: { converge: async () => { throw new Error("obsolete effect called"); } },
+    });
+    assert.equal(mismatch.status, "refused");
+    assert.equal(mismatch.blockers[0].code, "active_intent_identity_mismatch");
+    assert.equal(h.state.facts.length, factCount);
+    assert.equal(h.state.receipts.size, 0);
+    assert.deepEqual(await h.readIntent({ facts: h.state.facts }), intent);
+  }
+
+  const discharged = await recoverRun({
+    ...h,
+    actor: intent.actor,
+    reason: intent.reason,
+    expectedActionKey: intentKey,
+    effects: { converge: async () => { throw new Error("obsolete effect called"); } },
+  });
+  assert.equal(discharged.status, "converged");
+  assert.deepEqual(h.state.effects, []);
+  assert.deepEqual(h.state.intent, intent);
+  assert.equal(await h.readIntent({ facts: h.state.facts }), null);
+  const completion = h.state.facts.at(-1);
+  assert.equal(completion.type, "recovery_applied");
+  assert.equal(completion.actor, intent.actor);
+  assert.equal(completion.payload.operator, intent.actor);
+  assert.equal(completion.payload.reason, intent.reason);
+  assert.equal(completion.payload.rule, "active_intent_observation_changed");
+  assert.deepEqual(completion.payload.side_effects, ["discharge_obsolete_intent"]);
+  assert.equal(h.state.facts.some((fact) => fact.type === "merge_recorded"), false);
+
+  const fresh = await inspectRun(h);
+  assert.equal(fresh.recommended_action.kind, "recover");
+  assert.equal(fresh.recommended_action.reason, "merged_pr_unrecorded");
+  assert.deepEqual(fresh.recommended_action.steps, ["record_external_merge"]);
+  assert.notEqual(fresh.recommended_action.key, intentKey);
+});
+
+test("observation-changed discharge retry writes only the missing receipt", async () => {
+  const intentKey = "5".repeat(64);
+  const intent = {
+    schema_version: 1,
+    action_key: intentKey,
+    operation_id: `recover-${intentKey.slice(0, 32)}`,
+    created_at: "2026-08-01T00:03:00Z",
+    steps: ["push_branch", "record_or_create_pr", "record_verification"],
+    actor: "owner",
+    reason: "publish and verify reviewed work",
+    reason_code: "publication_incomplete",
+    observed_event_id: "attempt-finished",
+    before_sha: HEAD,
+  };
+  const h = harness({
+    facts: [attemptFinished(), pullRequestFact(HEAD)],
+    observations: publicationObservations({
+      github: {
+        available: true, pr_lookup_complete: true, matching_pr_count: 1,
+        repo: "owner/repo", pr_number: 42, pr_state: "MERGED",
+        head_ref: "issue-1135", base_ref: "main", pr_head_sha: HEAD, merge_sha: TARGET,
+      },
+    }),
+  });
+  h.state.intent = structuredClone(intent);
+  let appendCalls = 0;
+  const appendFact = async (fact) => {
+    appendCalls += 1;
+    if (h.state.facts.some((entry) => entry.event_id === fact.event_id)) {
+      throw new Error(`duplicate event_id: ${fact.event_id}`);
+    }
+    h.state.facts.push(structuredClone(fact));
+  };
+  let crashBeforeReceipt = true;
+  const writeReceipt = async (input) => {
+    if (crashBeforeReceipt) {
+      crashBeforeReceipt = false;
+      throw new Error("crash_before_discharge_receipt");
+    }
+    await h.writeReceipt(input);
+  };
+  const effects = { converge: async () => { throw new Error("obsolete effect called"); } };
+
+  await assert.rejects(recoverRun({
+    ...h, appendFact, writeReceipt,
+    actor: intent.actor, reason: intent.reason, expectedActionKey: intentKey, effects,
+  }), /crash_before_discharge_receipt/);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 1);
+  const strandedFact = h.state.facts.find((fact) => fact.type === "recovery_applied");
+  assert.equal(strandedFact.payload.rule, "active_intent_observation_changed");
+  assert.deepEqual(strandedFact.payload.side_effects, ["discharge_obsolete_intent"]);
+  assert.equal(appendCalls, 1);
+  assert.equal(h.state.receipts.size, 0);
+  assert.deepEqual(await h.readIntent({ facts: h.state.facts }), intent);
+
+  const retried = await recoverRun({
+    ...h, appendFact, writeReceipt,
+    actor: intent.actor, reason: intent.reason, expectedActionKey: intentKey, effects,
+  });
+  assert.equal(retried.status, "converged");
+  assert.deepEqual(h.state.effects, []);
+  assert.equal(await h.readIntent({ facts: h.state.facts }), null);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 1);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "merge_recorded").length, 0);
+  assert.equal(appendCalls, 1);
+  assert.equal(h.state.writes, 1);
+  assert.deepEqual(retried.receipt.fact_event_ids, [strandedFact.event_id]);
+});
+
+test("R1 completes a verification intent receipt after inspect advances to review", async () => {
+  const intentKey = "6".repeat(64);
+  const operationId = `recover-${intentKey.slice(0, 32)}`;
+  const intent = {
+    schema_version: 1,
+    action_key: intentKey,
+    operation_id: operationId,
+    created_at: "2026-08-01T00:03:00Z",
+    steps: ["record_verification"],
+    actor: "owner",
+    reason: "record passed verification",
+    reason_code: "verification_missing",
+    observed_event_id: "pr-bbbb",
+    before_sha: HEAD,
+  };
+  const completedVerification = {
+    ...verificationFact(),
+    event_id: `recovery-${crypto.createHash("sha256")
+      .update(`${operationId}:record_verification`).digest("hex").slice(0, 32)}`,
+    at: intent.created_at,
+  };
+  const h = harness({
+    facts: [pullRequestFact(HEAD), completedVerification],
+    observations: publicationObservations({
+      git: {
+        ...publicationObservations().git,
+        remote_head_sha: HEAD,
+        remote_relation: "equal",
+      },
+      github: {
+        available: true, pr_lookup_complete: true, matching_pr_count: 1,
+        repo: "owner/repo", pr_number: 42, pr_state: "OPEN",
+        head_ref: "issue-1135", base_ref: "main", pr_head_sha: HEAD, merge_sha: null,
+      },
+    }),
+  });
+  h.state.intent = structuredClone(intent);
+  const before = await inspectRun(h);
+  assert.equal(before.recommended_action.kind, "review");
+  let effectCalls = 0;
+
+  const result = await recoverRun({
+    ...h,
+    actor: intent.actor,
+    reason: intent.reason,
+    expectedActionKey: intentKey,
+    effects: { converge: async () => { effectCalls += 1; throw new Error("effect called"); } },
+  });
+
+  assert.equal(result.status, "converged");
+  assert.equal(effectCalls, 0);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "verification_recorded").length, 1);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 1);
+  assert.equal(h.state.receipts.size, 1);
+  assert.equal(await h.readIntent({ facts: h.state.facts }), null);
+});
+
 test("#1209 recovery reinspection requires the same action after live observations change", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
   const inspected = await inspectRun(h);
@@ -920,7 +1118,7 @@ test("terminal run refuses an unrelated active intent without publishing a recei
   assert.equal(h.state.facts.length, 1);
 });
 
-test("effect-before-fact retry reuses the exact PR and appends each deterministic fact once", async () => {
+test("effect-before-fact retry discharges a prefix-dropped intent before recording the exact PR", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
   let prCreates = 0;
   let failFirstPrFact = true;
@@ -975,16 +1173,28 @@ test("effect-before-fact retry reuses the exact PR and appends each deterministi
     ...h, appendFact, actor: "owner", reason: "publish", effects,
   });
   assert.equal(retry.status, "converged");
+  assert.equal(retry.after.recommended_action.kind, "recover");
+  assert.deepEqual(retry.after.recommended_action.steps, ["record_or_create_pr"]);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "pull_request_recorded").length, 0);
+  const discharge = h.state.facts.find((fact) => fact.type === "recovery_applied");
+  assert.equal(discharge.payload.rule, "active_intent_observation_changed");
+  assert.deepEqual(discharge.payload.side_effects, ["discharge_obsolete_intent"]);
+
+  const recovered = await recoverRun({
+    ...h, appendFact, actor: "owner", reason: "record the exact PR",
+    expectedActionKey: retry.after.recommended_action.key, effects,
+  });
+  assert.equal(recovered.status, "converged");
   assert.equal(prCreates, 1);
   assert.equal(h.state.facts.filter((fact) => fact.type === "pull_request_recorded").length, 1);
-  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 1);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 2);
 
   const factBytes = JSON.stringify(h.state.facts);
   const effectCount = h.state.effects.length;
   const receiptWrites = h.state.writes;
   const again = await recoverRun({
-    ...h, appendFact, actor: "owner", reason: "publish", effects,
-    expectedActionKey: retry.action_key,
+    ...h, appendFact, actor: "owner", reason: "record the exact PR", effects,
+    expectedActionKey: recovered.action_key,
   });
   assert.equal(again.status, "noop");
   assert.equal(JSON.stringify(h.state.facts), factBytes);

@@ -77,6 +77,31 @@ continues recovery idempotently.
 The refusal payload is advisory; the signed `cleanup-incomplete` artifact is the
 authoritative source for its terminal context.
 
+An unreceipted recovery intent normally remains `active_intent_pending` and is
+resumed with the exact `action_key`, actor, and reason printed by `inspect`. The
+ordered rules under the run lock are:
+
+1. R1 — if the operation already has its exact `recovery_applied` completion
+   (ordinary intent steps or the audited `active_intent_observation_changed`
+   discharge), or its matching terminal fact, Relay validates/reuses it and
+   writes the missing receipt. If every fact-emitting step already has its
+   exact deterministic fact, Relay validates those facts, appends the missing
+   `recovery_applied`, and writes the receipt. It never replays an effect.
+2. R2 — if the fresh action is `recover` and every immutable intent step is in
+   the fresh steps (a one-way, order-insensitive subset), Relay resumes exactly
+   those immutable intent steps.
+3. R3 — if the fresh action is still `recover` but the subset test fails,
+   `inspect` recommends the typed `discharge_obsolete_intent` step with the
+   same intent action key. Run `recover` with the intent's exact actor and
+   reason. Relay appends an audited `active_intent_observation_changed`
+   completion and masks the obsolete intent with its receipt. Discharge
+   executes neither the obsolete steps nor the fresh action; inspect again and
+   recover the newly derived action separately.
+4. R4 — if the fresh action is not `recover`, Relay refuses the changed intent
+   without executing or discharging it. Transient `operator_attention` stays
+   here. Actor/reason mismatch and a fresh-key retry remain refusals with no
+   writes.
+
 To reproduce or base-control the recycled-PID refusal class, generic CPU load is
 not sufficient: the race needs a same-window recycle of the specific freed
 cleanup pid. Run the OpenCode cancellation test in a loop under CPU
