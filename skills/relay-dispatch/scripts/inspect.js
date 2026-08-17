@@ -18,12 +18,47 @@ function result(action, reason, base = {}) {
     activeAttempt: base.activeAttempt || null,
     diagnostics: base.diagnostics || [],
   };
-  for (const field of ["review_event_id", "verification_event_id"]) {
+  for (const field of ["review_event_id", "verification_event_id", "resolution_of_event_id"]) {
     if (Object.prototype.hasOwnProperty.call(base, field)) output[field] = base[field];
   }
   return output;
 }
 function none(reason, base = {}) { return result("none", reason, { ...base, activeAttempt: null }); }
+function sameReviewSubject(left, right) {
+  return left?.payload?.reviewed_sha === right?.payload?.reviewed_sha
+    && left?.payload?.done_criteria_sha256 === right?.payload?.done_criteria_sha256;
+}
+function reviewResolutionLineage(known) {
+  const reviews = known.filter((fact) => fact.type === "review_recorded");
+  const resolutions = known.filter((fact) => fact.type === "review_escalation_resolved");
+  const targets = new Set();
+  for (const resolution of resolutions) {
+    const index = known.indexOf(resolution);
+    const latest = known.slice(0, index).filter((fact) => fact.type === "review_recorded").at(-1);
+    const targetId = resolution.payload.escalated_review_event_id;
+    if (!latest || latest.event_id !== targetId || latest.payload.verdict !== "escalated"
+      || latest.payload.escalation_kind !== "reviewer" || targets.has(targetId)) {
+      return { valid: false, eventId: resolution.event_id };
+    }
+    const next = reviews.find((fact) => known.indexOf(fact) > index && sameReviewSubject(fact, latest));
+    if (resolution.payload.disposition === "re_review"
+      && next && next.payload.resolution_of_event_id !== resolution.event_id) {
+      return { valid: false, eventId: next.event_id };
+    }
+    targets.add(targetId);
+  }
+  for (const review of reviews.filter((fact) => fact.payload.resolution_of_event_id !== undefined)) {
+    const resolution = resolutions.find((fact) => fact.event_id === review.payload.resolution_of_event_id);
+    const target = resolution && reviews.find((fact) => fact.event_id === resolution.payload.escalated_review_event_id);
+    const next = resolution && reviews.find((fact) => known.indexOf(fact) > known.indexOf(resolution) && sameReviewSubject(fact, target));
+    const count = reviews.filter((fact) => fact.payload.resolution_of_event_id === resolution?.event_id).length;
+    if (!resolution || resolution.payload.disposition !== "re_review" || !target
+      || known.indexOf(resolution) > known.indexOf(review) || next !== review || count !== 1) {
+      return { valid: false, eventId: review.event_id };
+    }
+  }
+  return { valid: true, resolutions };
+}
 function hasReviewableWork(gitFacts, interrupted = null) {
   return interrupted?.payload?.reviewable_work === true
     || gitFacts.reviewable_work === true
@@ -392,6 +427,18 @@ function foldRunFacts({
   const reviews = known.filter((fact) => fact.type === "review_recorded");
   const latestReview = reviews.at(-1) || null;
   const headSha = gitFacts.head_sha || prHead || finalAttempt?.payload?.final_sha || interrupted?.payload?.last_known_sha || null;
+  const resolutionLineage = reviewResolutionLineage(known);
+  if (!resolutionLineage.valid) {
+    return none("review_resolution_binding_invalid", {
+      head_sha: headSha,
+      reviewed_sha: latestReview?.payload?.reviewed_sha || null,
+      pr_number: prNumber,
+      diagnostics: [...diagnostics, {
+        code: "review_resolution_binding_invalid",
+        event_id: resolutionLineage.eventId,
+      }],
+    });
+  }
   if (prFact && isLocalDelivery(gitFacts)) {
     return none("fact_conflict", {
       head_sha: headSha,
@@ -608,6 +655,11 @@ function foldRunFacts({
       && fact.payload.done_criteria_sha256 === latestReview.payload.done_criteria_sha256
     ))
     : [];
+  const currentResolution = latestReview
+    ? resolutionLineage.resolutions.findLast((fact) => (
+      fact.payload.escalated_review_event_id === latestReview.event_id
+    )) || null
+    : null;
   const firstRuntimeFailure = subjectReviews.find((fact) => (
     fact.payload.verdict === "escalated"
     && fact.payload.escalation_kind === "runtime_failure"
@@ -628,6 +680,7 @@ function foldRunFacts({
         firstRuntimeFailure
         && latestReview.event_id !== firstRuntimeFailure.event_id
         && latestReview.payload.retry_of_event_id !== firstRuntimeFailure.event_id
+        && latestReview.payload.resolution_of_event_id === undefined
       )
     )
   ) {
@@ -638,11 +691,9 @@ function foldRunFacts({
       diagnostics: [...diagnostics, { code: "review_retry_binding_invalid", event_id: latestReview.event_id }],
     });
   }
-  if (
-    latestReview
-    && latestReview.payload.verdict === "changes_requested"
-    && reviewBindingMatches
-  ) {
+  const resolvedRedispatch = currentResolution?.payload?.disposition === "redispatch";
+  if (latestReview && reviewBindingMatches
+    && (latestReview.payload.verdict === "changes_requested" || resolvedRedispatch)) {
     // A completed review correction must return to recover, the sole commit/push owner;
     // redispatch here would strand corrected bytes. #1191 worktree-base validation is untouched.
     const latestPostReviewTerminal = known
@@ -661,10 +712,11 @@ function foldRunFacts({
         diagnostics,
       }), githubFacts);
     }
-    const correction = result("redispatch", "changes_requested", {
+    const correction = result("redispatch", resolvedRedispatch ? "review_resolution_redispatch" : "changes_requested", {
       head_sha: headSha,
       reviewed_sha: latestReview.payload.reviewed_sha,
       pr_number: prNumber,
+      ...(resolvedRedispatch ? { resolution_of_event_id: currentResolution.event_id } : {}),
       diagnostics,
     });
     return localReviewReady ? correction : withGithubAvailability(correction, githubFacts);
@@ -699,6 +751,17 @@ function foldRunFacts({
       reviewed_sha: latestReview.payload.reviewed_sha,
       diagnostics,
     });
+  }
+  if (latestReview && reviewBindingMatches
+    && currentResolution?.payload?.disposition === "re_review") {
+    const adjudicated = result("review", "review_resolution_re_review", {
+      head_sha: headSha,
+      reviewed_sha: latestReview.payload.reviewed_sha,
+      pr_number: prNumber,
+      resolution_of_event_id: currentResolution.event_id,
+      diagnostics,
+    });
+    return localReviewReady ? adjudicated : withGithubAvailability(adjudicated, githubFacts);
   }
   if (latestReview && PASS_VERDICTS.has(latestReview.payload.verdict) && reviewBindingMatches) {
     // The reviewed commit remains authoritative, but a retained GitHub
@@ -773,7 +836,11 @@ function foldRunFacts({
       head_sha: headSha,
       reviewed_sha: latestReview.payload.reviewed_sha,
       pr_number: prNumber,
-      diagnostics,
+      diagnostics: [...diagnostics, {
+        code: "review_escalated",
+        event_id: latestReview.event_id,
+        available_exits: ["re_review", "redispatch", "close"],
+      }],
     });
   }
   if (prFact) {

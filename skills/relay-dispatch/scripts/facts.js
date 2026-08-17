@@ -51,7 +51,10 @@ const PAYLOAD_SCHEMAS = Object.freeze({
     required: [
       "round", "verdict", "reviewed_sha", "done_criteria_sha256",
       "reviewer", "review_artifact", "override",
-    ], optional: ["base_sha", "executed_runtime", "escalation_kind", "retry_of_event_id"],
+    ], optional: ["base_sha", "executed_runtime", "escalation_kind", "retry_of_event_id", "resolution_of_event_id"],
+  },
+  review_escalation_resolved: {
+    required: ["actor", "reason", "disposition", "escalated_review_event_id"],
   },
   // Optional above so historical journals stay readable; required below on every append this runtime makes.
   recovery_applied: {
@@ -259,6 +262,10 @@ function validatePayload(type, payload, { allowFutureFields = false, appending =
         fail("INVALID_FACT", "payload.escalation_kind is invalid");
       }
       if (payload.retry_of_event_id !== undefined) string(payload.retry_of_event_id, "payload.retry_of_event_id");
+      if (payload.resolution_of_event_id !== undefined) string(payload.resolution_of_event_id, "payload.resolution_of_event_id");
+      if (payload.retry_of_event_id !== undefined && payload.resolution_of_event_id !== undefined) {
+        fail("INVALID_FACT", "review_recorded cannot carry both retry and resolution bindings");
+      }
       if (appending) {
         if (payload.verdict === "escalated" && payload.escalation_kind === undefined) {
           fail("INVALID_FACT", "payload.escalation_kind is required when appending escalated review_recorded");
@@ -276,6 +283,14 @@ function validatePayload(type, payload, { allowFutureFields = false, appending =
         sha(payload.executed_runtime.executable.sha256, "payload.executed_runtime.executable.sha256", { sha256: true });
       }
       validateOverride(payload.override, "payload.override", { allowFutureFields });
+      break;
+    case "review_escalation_resolved":
+      string(payload.actor, "payload.actor");
+      string(payload.reason, "payload.reason");
+      if (!new Set(["re_review", "redispatch"]).has(payload.disposition)) {
+        fail("INVALID_FACT", "payload.disposition is invalid");
+      }
+      string(payload.escalated_review_event_id, "payload.escalated_review_event_id");
       break;
     case "recovery_applied":
       string(payload.rule, "payload.rule");
@@ -334,6 +349,9 @@ function validateFact(fact, { allowUnknown = false, allowFutureFields = false, a
   validatePayload(type, fact.payload, { allowFutureFields, appending });
   if (type === "verification_recorded" && fact.actor !== fact.payload.operator) {
     fail("INVALID_FACT", "verification_recorded actor must equal payload.operator");
+  }
+  if (type === "review_escalation_resolved" && fact.actor !== fact.payload.actor) {
+    fail("INVALID_FACT", "review_escalation_resolved actor must equal payload.actor");
   }
   return { known: true, fact };
 }

@@ -1735,6 +1735,7 @@ async function recoverProductionRun({
   actor,
   reason,
   closeIntent = null,
+  resolutionIntent = null,
   expectedActionKey = null,
   verificationFile = null,
   breakLock = false,
@@ -1749,6 +1750,9 @@ async function recoverProductionRun({
     relayWorktreeBase: relayWorktreeBase || runStore.relayWorktreeBase(),
     worktree: record.git.worktree,
   });
+  if (closeIntent !== null && resolutionIntent !== null) {
+    throw new Error("closeIntent and resolutionIntent are mutually exclusive");
+  }
   if (closeIntent !== null) {
     if (!closeIntent || typeof closeIntent !== "object" || Array.isArray(closeIntent)
       || Object.keys(closeIntent).sort().join(",") !== "operator,reason"
@@ -1794,6 +1798,54 @@ async function recoverProductionRun({
       const after = await inspectProductionRun({ runDir: canonicalRunDir, activeRunLock: capability });
       if (after.derived?.reason !== "closed" || after.derived?.terminal !== true) throw new Error("run close fact did not converge");
       return { before, after, closed: true, idempotent: false };
+    });
+  }
+  if (resolutionIntent !== null) {
+    if (!resolutionIntent || typeof resolutionIntent !== "object" || Array.isArray(resolutionIntent)
+      || Object.keys(resolutionIntent).sort().join(",") !== "disposition,escalatedReviewEventId,operator,reason"
+      || !new Set(["re_review", "redispatch"]).has(resolutionIntent.disposition)
+      || typeof resolutionIntent.escalatedReviewEventId !== "string" || !resolutionIntent.escalatedReviewEventId.trim()
+      || typeof resolutionIntent.operator !== "string" || !resolutionIntent.operator.trim()
+      || typeof resolutionIntent.reason !== "string" || !resolutionIntent.reason.trim()) {
+      throw new Error("resolutionIntent must contain an operator, reason, escalatedReviewEventId, and valid disposition");
+    }
+    const initial = await inspectProductionRun({ runDir: canonicalRunDir });
+    return withProductionRecoveryLock({
+      runDir: canonicalRunDir, runId: record.run_id, worktree: trustedWorktree,
+      reason: resolutionIntent.reason, breakLock,
+    }, async (capability) => {
+      const before = await inspectProductionRun({ runDir: canonicalRunDir, activeRunLock: capability });
+      const targetId = resolutionIntent.escalatedReviewEventId.trim();
+      const existing = before.facts.filter((fact) => fact.type === "review_escalation_resolved"
+        && fact.payload.escalated_review_event_id === targetId);
+      if (existing.length) {
+        const payload = existing[0].payload;
+        if (existing.length !== 1 || payload.actor !== resolutionIntent.operator.trim()
+          || payload.reason !== resolutionIntent.reason.trim()
+          || payload.disposition !== resolutionIntent.disposition) {
+          throw Object.assign(new Error("review escalation already has a conflicting resolution"), { code: "REVIEW_RESOLUTION_CONFLICT" });
+        }
+        return { before, after: before, resolved: false, idempotent: true };
+      }
+      if (initial.recommended_action.key !== before.recommended_action.key
+        || (expectedActionKey && expectedActionKey !== before.recommended_action.key)) {
+        throw Object.assign(new Error("review escalation changed before adjudication"), { code: "SNAPSHOT_CHANGED" });
+      }
+      const latestReview = before.facts.filter((fact) => fact.type === "review_recorded").at(-1);
+      if (before.derived?.reason !== "review_escalated" || latestReview?.event_id !== targetId
+        || latestReview.payload.escalation_kind !== "reviewer") {
+        throw Object.assign(new Error("resolution target is not the latest reviewer escalation"), { code: "REVIEW_RESOLUTION_TARGET_INVALID" });
+      }
+      const payload = { actor: resolutionIntent.operator.trim(), reason: resolutionIntent.reason.trim(),
+        disposition: resolutionIntent.disposition, escalated_review_event_id: targetId };
+      const eventId = `review-resolution-${sha256(JSON.stringify(stable({ run_id: record.run_id, payload }))).slice(0, 32)}`;
+      factsModule.appendFact({ eventsPath: path.join(canonicalRunDir, "events.jsonl"), lockContext: capability,
+        fact: { event_id: eventId, run_id: record.run_id, type: "review_escalation_resolved",
+          at: new Date().toISOString(), actor: payload.actor, payload } });
+      const after = await inspectProductionRun({ runDir: canonicalRunDir, activeRunLock: capability });
+      const expected = resolutionIntent.disposition === "re_review" ? "review" : "redispatch";
+      if (after.derived?.action !== expected) throw new Error("review resolution fact did not converge");
+      return { before, after, resolved: true, idempotent: false };
     });
   }
   let lockContext = null;

@@ -106,6 +106,9 @@ async function fixture(label, { local = false, reviewer = "codex" } = {}) {
   const inspectRun = async () => {
     const current = facts.readFacts({ eventsPath }).facts;
     const review = current.filter((fact) => fact.type === "review_recorded").at(-1);
+    const resolution = current.filter((fact) => fact.type === "review_escalation_resolved").at(-1);
+    const resolving = resolution?.payload?.disposition === "re_review"
+      && resolution.payload.escalated_review_event_id === review?.event_id;
     const retryable = review?.payload?.verdict === "escalated"
       && review.payload.escalation_kind === "runtime_failure"
       && review.payload.retry_of_event_id === undefined;
@@ -114,7 +117,7 @@ async function fixture(label, { local = false, reviewer = "codex" } = {}) {
       && review.payload.retry_of_event_id !== undefined;
     const action = !review ? "review" : review.payload.verdict === "lgtm" ? (local ? "recover" : "merge")
       : review.payload.verdict === "changes_requested" ? "redispatch"
-        : retryable ? "review" : "none";
+        : retryable || resolving ? "review" : "none";
     return {
       blockers: [],
       snapshot: { run_sha256: crypto.createHash("sha256").update(JSON.stringify(record)).digest("hex") },
@@ -122,8 +125,14 @@ async function fixture(label, { local = false, reviewer = "codex" } = {}) {
       observations: local
         ? { git: { local_delivery: true, head_sha: head, tree_sha: tree, reviewable_dirty: false }, github: {} }
         : { github: { pr_number: 42, pr_head_sha: head, pr_base_sha: startSha, pr_state: "OPEN" } },
-      derived: { action, head_sha: head, pr_number: local ? null : 42, retry_of_event_id: retryable ? review.event_id : null },
-      recommended_action: { kind: action, reason: retryable ? "review_retryable_escalation" : exhausted ? "review_escalated_retry_exhausted" : review?.payload?.verdict === "escalated" ? "review_escalated" : review ? review.payload.verdict : "review_missing", key: "c".repeat(64), steps: [], required_inputs: [] },
+      derived: { action, head_sha: head, pr_number: local ? null : 42,
+        retry_of_event_id: retryable ? review.event_id : null,
+        resolution_of_event_id: resolving ? resolution.event_id : null },
+      recommended_action: { kind: action, reason: retryable ? "review_retryable_escalation"
+        : resolving ? "review_resolution_re_review"
+          : exhausted ? "review_escalated_retry_exhausted"
+            : review?.payload?.verdict === "escalated" ? "review_escalated"
+              : review ? review.payload.verdict : "review_missing", key: "c".repeat(64), steps: [], required_inputs: [] },
     };
   };
   const cli = runner.parseCli(["--repo", worktree, "--run-dir", runDir, "--json"]);
@@ -187,6 +196,56 @@ test("Relay runner records one exact-SHA pass and the derived action advances to
   );
   await assert.rejects(runner.runReview(value.cli, { inspectRun: value.inspectRun, invokeReviewer: async () => { throw new Error("must not run"); } }), /not 'review'/);
   assert.equal(facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").length, 1);
+});
+
+test("pass with advisory issues records lgtm and preserves advisories in the artifact", async () => {
+  const value = await fixture("pass-advisories");
+  const advisory = { title: "Follow-up", body: "Consider simplifying later", file: "file.txt", line: 1, severity: "low" };
+  const result = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async (input) => reviewerSuccess(input, {
+      verdict: "pass", summary: "all criteria met", issues: [advisory],
+    }),
+  });
+  const review = facts.readFacts({ eventsPath: value.eventsPath }).facts.find((fact) => fact.type === "review_recorded");
+  const artifact = JSON.parse(fs.readFileSync(review.payload.review_artifact, "utf8"));
+  assert.equal(result.verdict, "lgtm");
+  assert.equal(review.payload.escalation_kind, undefined);
+  assert.deepEqual(artifact.verdict.issues, [advisory]);
+});
+
+test("resolved re-review records and rechecks the exact adjudication binding", async () => {
+  const value = await fixture("resolved-rereview");
+  await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    invokeReviewer: async (input) => reviewerSuccess(input, {
+      verdict: "pass", summary: "invalid protocol", issues: [], unexpected: true,
+    }),
+  });
+  const escalation = facts.readFacts({ eventsPath: value.eventsPath }).facts.at(-1);
+  const resolutionId = "resolution-rereview";
+  await runtime.withRunLock(value.runDir, (lockContext) => facts.appendFact({
+    eventsPath: value.eventsPath,
+    lockContext,
+    fact: {
+      event_id: resolutionId, run_id: value.record.run_id, type: "review_escalation_resolved",
+      at: "2026-08-01T00:04:00.000Z", actor: "owner",
+      payload: { actor: "owner", reason: "adjudicated", disposition: "re_review",
+        escalated_review_event_id: escalation.event_id },
+    },
+  }));
+  const result = await runner.runReview(value.cli, {
+    inspectRun: value.inspectRun,
+    async invokeReviewer(input) {
+      assert.equal(input.request.resolution_of_event_id, resolutionId);
+      return reviewerSuccess(input, { verdict: "pass", summary: "resolved", issues: [] });
+    },
+  });
+  const review = facts.readFacts({ eventsPath: value.eventsPath }).facts.filter((fact) => fact.type === "review_recorded").at(-1);
+  const artifact = JSON.parse(fs.readFileSync(review.payload.review_artifact, "utf8"));
+  assert.equal(result.verdict, "lgtm");
+  assert.equal(review.payload.resolution_of_event_id, resolutionId);
+  assert.equal(artifact.resolution_of_event_id, resolutionId);
 });
 
 test("GitHub base drift during review appends no verdict fact", async () => {
@@ -1128,7 +1187,35 @@ test("immutable reviewer binding and closed CLI reject legacy policy surfaces", 
   assert.throws(() => runner.parseCli(["--repo", value.repo, "--run-dir", value.runDir, "--review-file", "verdict.json"]), /Unknown option/);
   assert.throws(() => runner.normalizeVerdict({ verdict: "pass", summary: "ok", issues: [], score: 10 }), /unknown or missing/);
   assert.throws(() => runner.normalizeVerdict({ verdict: "changes_requested", summary: "bug", issues: [] }), /requires at least one issue/);
-  assert.throws(() => runner.normalizeVerdict({ verdict: "pass", summary: "ok", issues: [{ title: "bug", body: "bad", file: null, line: null, severity: "high" }] }), /cannot contain issues/);
+  assert.deepEqual(
+    runner.normalizeVerdict({ verdict: "pass", summary: "ok", issues: [{ title: "note", body: "advisory", file: null, line: null, severity: "low" }] }),
+    { verdict: "pass", summary: "ok", issues: [{ title: "note", body: "advisory", file: null, line: null, severity: "low" }] },
+  );
+});
+
+test("requireReviewAction rejects a stale resolution binding", () => {
+  const head = "a".repeat(40), base = "b".repeat(40), criteria = "c".repeat(64);
+  const record = { contract: { done_criteria_sha256: criteria }, roles: { reviewer: "claude" } };
+  const review = { event_id: "review-escalated", type: "review_recorded", payload: {
+    verdict: "escalated", escalation_kind: "reviewer", reviewed_sha: head,
+    done_criteria_sha256: criteria, reviewer: "claude",
+  } };
+  const inspection = {
+    blockers: [],
+    recommended_action: { kind: "review", reason: "review_resolution_re_review" },
+    derived: { action: "review", head_sha: head, pr_number: 42, resolution_of_event_id: "stale-resolution" },
+    observations: { github: { pr_head_sha: head, pr_base_sha: base, pr_number: 42 } },
+    facts: [
+      { type: "pull_request_recorded", payload: { pr_number: 42, head_sha: head } },
+      { type: "verification_recorded", payload: { status: "passed", head_sha: head, done_criteria_sha256: criteria } },
+      review,
+      { event_id: "current-resolution", type: "review_escalation_resolved",
+        payload: { escalated_review_event_id: review.event_id, disposition: "re_review" } },
+    ],
+  };
+  assert.throws(() => runner.requireReviewAction(inspection, record), (error) => (
+    error.code === "REVIEW_RESOLUTION_BINDING_MISMATCH"
+  ));
 });
 
 test("review help distinguishes model/tool policy from enabled provider transport", () => {

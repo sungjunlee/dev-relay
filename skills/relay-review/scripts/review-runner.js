@@ -142,6 +142,22 @@ function resolveRun(cli) {
   return { identity, runDir, record };
 }
 
+function reviewActionBindings(inspection, latestReview) {
+  const retrying = inspection.recommended_action.reason === "review_retryable_escalation";
+  const retryOfEventId = retrying ? inspection.derived.retry_of_event_id : null;
+  if (retrying && (typeof retryOfEventId !== "string" || latestReview?.event_id !== retryOfEventId)) {
+    fail("retry review action is not bound to the latest durable escalation", "REVIEW_RETRY_BINDING_MISMATCH");
+  }
+  const resolving = inspection.recommended_action.reason === "review_resolution_re_review";
+  const resolutionOfEventId = resolving ? inspection.derived.resolution_of_event_id : null;
+  const resolution = inspection.facts.filter((fact) => fact.type === "review_escalation_resolved").at(-1);
+  if (resolving && (typeof resolutionOfEventId !== "string" || resolution?.event_id !== resolutionOfEventId
+    || resolution.payload.escalated_review_event_id !== latestReview?.event_id)) {
+    fail("resolved review action is not bound to the latest adjudication", "REVIEW_RESOLUTION_BINDING_MISMATCH");
+  }
+  return { retryOfEventId, resolutionOfEventId };
+}
+
 function requireReviewAction(inspection, record) {
   if (inspection.blockers?.length) fail(`review is blocked: ${inspection.blockers[0].code}`, "REVIEW_BLOCKED");
   const actionKind = inspection.recommended_action?.kind;
@@ -171,16 +187,8 @@ function requireReviewAction(inspection, record) {
       fail("local review requires the exact latest passing verification event", "REVIEW_VERIFICATION_MISSING");
     }
     const latestReview = inspection.facts.filter((fact) => fact.type === "review_recorded").at(-1) || null;
-    const retrying = inspection.recommended_action.reason === "review_retryable_escalation";
-    const retryOfEventId = retrying ? inspection.derived.retry_of_event_id : null;
-    if (retrying && (
-      typeof retryOfEventId !== "string"
-      || !latestReview
-      || latestReview.event_id !== retryOfEventId
-    )) {
-      fail("retry review action is not bound to the latest durable escalation", "REVIEW_RETRY_BINDING_MISMATCH");
-    }
-    return { head, tree, prNumber: null, verification, retryOfEventId, local: true };
+    const { retryOfEventId, resolutionOfEventId } = reviewActionBindings(inspection, latestReview);
+    return { head, tree, prNumber: null, verification, retryOfEventId, resolutionOfEventId, local: true };
   }
   const head = inspection.observations?.github?.pr_head_sha;
   const base = inspection.observations?.github?.pr_base_sha;
@@ -205,16 +213,8 @@ function requireReviewAction(inspection, record) {
   ));
   if (!verification) fail("review requires passed verification for the exact head and Done Criteria", "REVIEW_VERIFICATION_MISSING");
   const latestReview = inspection.facts.filter((fact) => fact.type === "review_recorded").at(-1) || null;
-  const retrying = inspection.recommended_action.reason === "review_retryable_escalation";
-  const retryOfEventId = retrying ? inspection.derived.retry_of_event_id : null;
-  if (retrying && (
-    typeof retryOfEventId !== "string"
-    || !latestReview
-    || latestReview.event_id !== retryOfEventId
-  )) {
-    fail("retry review action is not bound to the latest durable escalation", "REVIEW_RETRY_BINDING_MISMATCH");
-  }
-  return { head, base, prNumber, verification, retryOfEventId, local: false };
+  const { retryOfEventId, resolutionOfEventId } = reviewActionBindings(inspection, latestReview);
+  return { head, base, prNumber, verification, retryOfEventId, resolutionOfEventId, local: false };
 }
 
 function reviewPrompt({ record, binding, criteria, diff }) {
@@ -224,7 +224,7 @@ function reviewPrompt({ record, binding, criteria, diff }) {
     JSON.stringify(REVIEW_RESULT_SCHEMA),
     "No markdown fences or text outside the object.",
     "A pass verdict means every frozen Done Criterion is satisfied at the exact reviewed commit.",
-    "Any substantive issue must return changes_requested. Invocation or evidence uncertainty must return escalated.",
+    "Advisory issues may accompany pass; any substantive issue must return changes_requested. Invocation or evidence uncertainty must return escalated.",
     "Do not modify files, create commits, post comments, or infer state outside this bundle.",
     "",
     `Run: ${record.run_id}`,
@@ -342,7 +342,6 @@ function normalizeVerdict(output) {
     if (!new Set(["low", "medium", "high", "critical"]).has(issue.severity)) fail(`reviewer issues[${index}].severity is invalid`, "REVIEW_RESULT_INVALID");
     return { title: issue.title.trim(), body: issue.body.trim(), file: issue.file, line: issue.line, severity: issue.severity };
   });
-  if (value.verdict === "pass" && issues.length) fail("pass verdict cannot contain issues", "REVIEW_RESULT_INVALID");
   if (value.verdict === "changes_requested" && !issues.length) fail("changes_requested requires at least one issue", "REVIEW_RESULT_INVALID");
   return { verdict: value.verdict, summary: value.summary.trim(), issues };
 }
@@ -439,6 +438,7 @@ async function runReview(cli, overrides = {}) {
         diff_sha256: diffDigest,
         prompt_sha256: promptDigest,
         ...(binding.retryOfEventId ? { retry_of_event_id: binding.retryOfEventId } : {}),
+        ...(binding.resolutionOfEventId ? { resolution_of_event_id: binding.resolutionOfEventId } : {}),
         schema: REVIEW_RESULT_SCHEMA,
       },
     });
@@ -512,9 +512,13 @@ async function runReview(cli, overrides = {}) {
     if ((fresh.derived?.retry_of_event_id || null) !== binding.retryOfEventId) {
       fail("review retry subject changed during independent review", "REVIEW_BINDING_CHANGED");
     }
+    if ((fresh.derived?.resolution_of_event_id || null) !== binding.resolutionOfEventId) {
+      fail("review resolution subject changed during independent review", "REVIEW_BINDING_CHANGED");
+    }
     const freshBinding = requireReviewAction(fresh, freshRecord);
     if (
       freshBinding.retryOfEventId !== binding.retryOfEventId
+      || freshBinding.resolutionOfEventId !== binding.resolutionOfEventId
       || freshBinding.head !== binding.head
       || freshBinding.base !== binding.base
       || freshBinding.local !== binding.local
@@ -540,6 +544,7 @@ async function runReview(cli, overrides = {}) {
       prompt_sha256: promptDigest,
       staging_request_sha256: stagedBinding.request_sha256,
       executed_runtime: executedRuntime,
+      ...(binding.resolutionOfEventId ? { resolution_of_event_id: binding.resolutionOfEventId } : {}),
       verdict,
     };
     const artifactBytes = Buffer.from(`${JSON.stringify(artifact, null, 2)}\n`, "utf8");
@@ -562,6 +567,7 @@ async function runReview(cli, overrides = {}) {
         executed_runtime: executedRuntime,
         ...(escalationKind ? { escalation_kind: escalationKind } : {}),
         ...(binding.retryOfEventId ? { retry_of_event_id: binding.retryOfEventId } : {}),
+        ...(binding.resolutionOfEventId ? { resolution_of_event_id: binding.resolutionOfEventId } : {}),
         override: null,
       },
     };

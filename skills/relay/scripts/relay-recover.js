@@ -9,11 +9,12 @@ const { inspectProductionRun, recoverProductionRun } = require("../../relay-disp
 
 const KNOWN_FLAGS = [
   "--repo", "--run-id", "--run-dir", "--reason", "--actor",
-  "--expected-action-key", "--verification-file", "--break-lock", "--json", "--help", "-h",
+  "--expected-action-key", "--verification-file", "--break-lock", "--close",
+  "--resolve-review", "--review-event-id", "--json", "--help", "-h",
 ];
 const CLI_OPTIONS = {
   reservedFlags: KNOWN_FLAGS,
-  booleanFlags: ["--break-lock", "--json", "--help", "-h"],
+  booleanFlags: ["--break-lock", "--close", "--json", "--help", "-h"],
   verbatimValueFlags: ["--repo", "--run-dir", "--reason", "--actor", "--verification-file"],
 };
 function parseCli(argv) {
@@ -28,6 +29,8 @@ function usage() {
     "Usage:",
     "  relay-recover.js inspect (--repo <path> --run-id <id> | --run-dir <path>) [--json]",
     "  relay-recover.js recover (--repo <path> --run-id <id> | --run-dir <path>) --reason <text> [--actor <name>] [--expected-action-key <sha256>] [--verification-file <path>] [--break-lock] [--json]",
+    "  relay-recover.js recover (--repo <path> --run-id <id> | --run-dir <path>) --reason <text> [--actor <name>] --resolve-review <re_review|redispatch> --review-event-id <id> [--json]",
+    "  relay-recover.js recover (--repo <path> --run-id <id> | --run-dir <path>) --reason <text> [--actor <name>] --close [--json]",
     "",
     "inspect is strictly read-only. recover is the sole idempotent mutation operation for an immutable Relay run.",
   ].join("\n");
@@ -66,6 +69,10 @@ function formatText(result) {
   const action = result.recommended_action || result.after?.recommended_action;
   if (action) lines.push(`Next: ${action.kind} (${action.reason})`);
   for (const item of result.blockers || []) lines.push(`Blocker: ${item.code}: ${item.message}`);
+  for (const item of result.derived?.diagnostics || []) {
+    const exits = Array.isArray(item.available_exits) ? `; exits: ${item.available_exits.join(", ")}` : "";
+    lines.push(`Diagnostic: ${item.code}${exits}`);
+  }
   return lines.join("\n");
 }
 
@@ -109,7 +116,7 @@ async function main(argv = process.argv.slice(2)) {
   let result;
   const runDir = resolveRunDir(cli);
   if (command === "inspect") {
-    for (const flag of ["--reason", "--actor", "--expected-action-key", "--verification-file", "--break-lock"]) {
+    for (const flag of ["--reason", "--actor", "--expected-action-key", "--verification-file", "--break-lock", "--close", "--resolve-review", "--review-event-id"]) {
       if (cli.hasFlag(flag)) throw new Error(`${flag} is only valid for recover`);
     }
     result = await inspectProductionRun({ runDir });
@@ -118,10 +125,27 @@ async function main(argv = process.argv.slice(2)) {
     if (!reason) throw new Error("recover requires --reason <text>");
     const record = runStore.readRunRecord({ runDir });
     const actor = String(cli.getArg("--actor") || getActorName(record.repo.root)).trim();
+    const close = cli.hasFlag("--close");
+    const disposition = cli.getArg("--resolve-review") || null;
+    const reviewEventId = cli.getArg("--review-event-id") || null;
+    if (close && disposition) throw new Error("--close and --resolve-review are mutually exclusive");
+    if (Boolean(disposition) !== Boolean(reviewEventId)) {
+      throw new Error("--resolve-review and --review-event-id must be supplied together");
+    }
+    if (disposition && !new Set(["re_review", "redispatch"]).has(disposition)) {
+      throw new Error("--resolve-review must be re_review or redispatch");
+    }
+    if ((close || disposition) && cli.hasFlag("--verification-file")) {
+      throw new Error("--verification-file cannot be combined with --close or --resolve-review");
+    }
     result = await recoverProductionRun({
       runDir,
       actor,
       reason,
+      closeIntent: close ? { operator: actor, reason } : null,
+      resolutionIntent: disposition ? {
+        operator: actor, reason, disposition, escalatedReviewEventId: reviewEventId,
+      } : null,
       expectedActionKey: cli.getArg("--expected-action-key") || null,
       verificationFile: cli.getArg("--verification-file") || null,
       breakLock: cli.hasFlag("--break-lock"),

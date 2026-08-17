@@ -98,6 +98,30 @@ function writeFacts(runDir, facts) {
   fs.writeFileSync(path.join(runDir, "events.jsonl"), `${facts.map(JSON.stringify).join("\n")}\n`);
 }
 
+function reviewerEscalationFacts(f) {
+  return [
+    { event_id: "pr-reviewer-escalation", run_id: "issue-1135-cli", type: "pull_request_recorded",
+      at: "2026-08-01T00:01:00Z", actor: "codex", payload: { pr_number: 42, repo: f.remote,
+        head_ref: f.branch, base_ref: "main", head_sha: f.head, created_by_relay: true } },
+    { event_id: "verification-reviewer-escalation", run_id: "issue-1135-cli", type: "verification_recorded",
+      at: "2026-08-01T00:02:00Z", actor: "owner", payload: { head_sha: f.head, tree_sha: f.tree,
+        done_criteria_sha256: f.doneHash, command: "node --test", verification_request_sha256: "a".repeat(64),
+        declared_command_count: 1, completed_command_count: 1, result_path: path.join(f.runDir, "verification.log"),
+        result_sha256: "b".repeat(64), exit_code: 0, status: "passed", operator: "owner" } },
+    { event_id: "reviewer-escalation", run_id: "issue-1135-cli", type: "review_recorded",
+      at: "2026-08-01T00:03:00Z", actor: "claude", payload: { round: 1, verdict: "escalated",
+        reviewed_sha: f.head, base_sha: f.head, done_criteria_sha256: f.doneHash, reviewer: "claude",
+        review_artifact: path.join(f.runDir, "review.json"), escalation_kind: "reviewer", override: null } },
+  ];
+}
+
+function openPrObservation(f) {
+  return [{ number: 42, state: "OPEN", url: "https://example.test/pull/42",
+    headRefName: f.branch, headRefOid: f.head, baseRefName: "main",
+    headRepository: { nameWithOwner: f.remote }, headRepositoryOwner: { login: "owner" },
+    isCrossRepository: false, mergedAt: null, mergeCommit: null, body: "" }];
+}
+
 function durableSnapshot(runDir) {
   return fs.readdirSync(runDir).sort().map((name) => ({
     name,
@@ -192,6 +216,39 @@ test("canonical inspect CLI reads a Relay run without changing durable bytes", (
   assert.equal(parsed.run_id, "issue-1135-cli");
   assert.equal(parsed.snapshot.tail_status, "complete");
   assert.deepEqual(durableSnapshot(f.runDir), before);
+});
+
+test("recover CLI adjudicates a reviewer escalation in-ledger", (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  writeFacts(f.runDir, reviewerEscalationFacts(f));
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh,
+    RELAY_WORKTREE_BASE: f.root, FAKE_GH_ROWS: JSON.stringify(openPrObservation(f)) };
+  const result = spawnSync(process.execPath, [CLI, "recover", "--run-dir", f.runDir,
+    "--reason", "operator adjudication", "--actor", "owner", "--resolve-review", "re_review",
+    "--review-event-id", "reviewer-escalation", "--json"], { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(result.status, 0, result.stderr);
+  const journal = factsApi.readFacts({ eventsPath: path.join(f.runDir, "events.jsonl") }).facts;
+  const resolution = journal.find((fact) => fact.type === "review_escalation_resolved");
+  assert.equal(resolution.payload.disposition, "re_review");
+  assert.equal(JSON.parse(result.stdout).after.derived.action, "review");
+});
+
+test("recover CLI closes a reviewer escalation to the typed terminal", (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  writeFacts(f.runDir, reviewerEscalationFacts(f));
+  const env = { ...process.env, RELAY_GIT_BIN: f.gitBin, RELAY_GH_BIN: f.gh,
+    RELAY_WORKTREE_BASE: f.root, FAKE_GH_ROWS: JSON.stringify(openPrObservation(f)) };
+  const args = [CLI, "recover", "--run-dir", f.runDir, "--reason", "superseded",
+    "--actor", "owner", "--close", "--json"];
+  const first = spawnSync(process.execPath, args, { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(JSON.parse(first.stdout).after.derived.terminal_kind, "closed");
+  const second = spawnSync(process.execPath, args, { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(factsApi.readFacts({ eventsPath: path.join(f.runDir, "events.jsonl") }).facts
+    .filter((fact) => fact.type === "run_closed").length, 1);
 });
 
 test("GitHub observation excludes an identical branch from a different head repository", (t) => {
