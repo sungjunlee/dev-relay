@@ -115,14 +115,10 @@ function pendingIntentBlocker(runDir, intent) {
     },
   );
 }
-function stepSetCovers(needed, available) {
-  const have = new Set(available);
-  return needed.length > 0 && needed.every((step) => have.has(step));
-}
 function intentStepsAuthorized(intent, recommendedAction) {
   if (recommendedAction.kind !== "recover") return false;
-  const fresh = recommendedAction.steps || [];
-  return stepSetCovers(intent.steps, fresh) || stepSetCovers(fresh, intent.steps);
+  const fresh = new Set(recommendedAction.steps || []);
+  return intent.steps.every((step) => fresh.has(step));
 }
 function dischargeRecommendedAction(intent) {
   return {
@@ -853,6 +849,27 @@ const inspectRun = inspect.inspectRun;
 const recoverySteps = inspect.recoverySteps;
 function blocker(code, message, retryable = false, details = {}) { return { code, message, retryable, details }; }
 function deterministicEventId(operationId, step) { return `recovery-${sha256(`${operationId}:${step}`).slice(0, 32)}`; }
+const FACT_EMITTING_STEPS = Object.freeze({
+  close_dead_attempt: "attempt_interrupted",
+  record_or_create_pr: "pull_request_recorded",
+  record_verification: "verification_recorded",
+});
+function completedIntentStepFacts(facts, intent) {
+  const expected = intent.steps
+    .filter((step) => Object.hasOwn(FACT_EMITTING_STEPS, step))
+    .map((step) => ({
+      step,
+      eventId: deterministicEventId(intent.operation_id, step),
+      type: FACT_EMITTING_STEPS[step],
+    }));
+  if (!expected.length) return null;
+  const byId = new Map(facts.map((fact) => [fact.event_id, fact]));
+  const completed = expected.map(({ step, eventId, type }) => {
+    const fact = byId.get(eventId);
+    return fact?.type === type ? { step, fact } : null;
+  });
+  return completed.every(Boolean) ? completed : null;
+}
 function terminalCompletionFacts(facts, intent) {
   const operationId = intent.operation_id;
   if (!intent.steps.includes("close_reviewed_result")) {
@@ -1251,9 +1268,56 @@ async function recoverRun({
         receipt,
       });
     }
+    // A crash can land every deterministic step fact before the recovery
+    // receipt is written. In particular, a passed verification immediately
+    // changes inspect from recover to review. Complete that same operation
+    // from its durable facts without replaying now-obsolete effects.
+    const completedSteps = intent && completedIntentStepFacts(before.facts, intent);
+    if (completedSteps) {
+      for (const { step, fact } of completedSteps) {
+        if (typeof effects.validateCompletedFact === "function") {
+          await effects.validateCompletedFact(step, {
+            runDir,
+            runId: before.run_id,
+            operationId,
+            actionKey: actionKeyValue,
+            actor,
+            reason,
+            intent,
+            before,
+          }, fact);
+        }
+      }
+      const applied = completedSteps.map(({ step, fact }) => ({
+        step,
+        status: "already_converged",
+        fact_event_id: fact.event_id,
+      }));
+      const recoveryEventId = deterministicEventId(operationId, "recovery_applied");
+      let recoveryFact = before.facts.find((fact) => fact.event_id === recoveryEventId) || null;
+      if (recoveryFact) {
+        if (recoveryFact.type !== "recovery_applied"
+          || !recoveryFactMatchesIdentity(recoveryFact, { intent })) {
+          throw new Error(`duplicate event_id: ${recoveryEventId}`);
+        }
+      } else {
+        recoveryFact = recoveryAppliedFact({ runId: before.run_id, intent, after: before, applied });
+        await appendFact(recoveryFact);
+      }
+      const receipt = recoveryReceipt(operationId, actionKeyValue, [
+        ...applied.map((entry) => entry.fact_event_id),
+        recoveryFact.event_id,
+      ]);
+      await writeReceipt({ runDir, actionKey: actionKeyValue, operationId, receipt });
+      const after = await inspectRun({ runDir, observer, readSnapshot });
+      return recoverResult({
+        before, status: "converged", operationId, actionKeyValue,
+        applied, receipt, after,
+      });
+    }
     const authorized = intent && intentStepsAuthorized(intent, before.recommended_action);
     const dischargeAuthorized = intent && before.recommended_action.kind === "recover" && !authorized;
-    if (intent && before.recommended_action.kind === "operator_attention") {
+    if (intent && before.recommended_action.kind !== "recover") {
       return recoverResult({
         before, status: "refused", operationId, actionKeyValue,
         blockers: [blocker(
@@ -1445,6 +1509,29 @@ function assertCleanVerificationObservation(observed) {
 }
 function createProductionEffects({ verificationFile = null, getLockContext = () => null } = {}) {
   return {
+    async validateCompletedFact(step, context, fact) {
+      if (step !== "record_verification" || !verificationFile) return;
+      const snapshot = defaultSnapshot(context.runDir);
+      const observed = await observeProduction({
+        runDir: context.runDir,
+        runRecord: snapshot.runRecord,
+        facts: snapshot.facts,
+        verificationFile,
+        activeRecoveryLock: getLockContext(),
+      });
+      if (observed.blockers.length) {
+        throw new Error(`recovery observation blocked: ${observed.blockers[0].code}`);
+      }
+      assertCleanVerificationObservation(observed);
+      const payload = readVerificationPayload(verificationFile, {
+        record: snapshot.runRecord,
+        observed,
+        actor: context.actor,
+      });
+      if (!isDeepStrictEqual(fact.payload, payload)) {
+        throw new Error(`duplicate event_id: ${fact.event_id}`);
+      }
+    },
     async converge(step, context) {
       const snapshot = defaultSnapshot(context.runDir);
       const record = snapshot.runRecord;

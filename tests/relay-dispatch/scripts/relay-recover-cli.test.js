@@ -963,7 +963,7 @@ test("successful PR create retries lagging list reads and converges once", (t) =
   assert.equal(fs.readdirSync(f.runDir).filter((name) => name.startsWith("recovery-receipt-")).length, 1);
 });
 
-test("persistent PR publication mismatch strands an intent that inspect can resume", (t) => {
+test("persistent PR publication mismatch discharges the prefix-dropped intent before recording the exact PR", (t) => {
   const f = fixture({ branch: "recovery" });
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(f.repo, "README.md"), "persistent publication\n");
@@ -996,28 +996,38 @@ test("persistent PR publication mismatch strands an intent that inspect can resu
     cwd: ROOT, encoding: "utf8", env,
   }).stdout);
   assert.equal(stranded.blockers[0].code, "active_intent_pending");
-  assert.equal(stranded.recommended_action.kind, "operator_attention");
+  assert.equal(stranded.recommended_action.kind, "recover");
+  assert.equal(stranded.recommended_action.reason, "active_intent_observation_changed");
+  assert.deepEqual(stranded.recommended_action.steps, ["discharge_obsolete_intent"]);
   assert.equal(stranded.blockers[0].details.action_key, action.key);
   assert.equal(stranded.blockers[0].details.actor, "owner");
   assert.equal(stranded.blockers[0].details.reason, "operator's publication");
   assert.equal(stranded.blockers[0].details.reason_code, "publication_incomplete");
   assert.match(stranded.blockers[0].details.created_at, /^\d{4}-\d{2}-\d{2}T/);
-  const fresh = spawnSync(process.execPath, [
+  const discharged = spawnSync(process.execPath, [
     CLI, "recover", "--run-dir", f.runDir, "--reason", "operator's publication", "--actor", "owner",
     "--expected-action-key", stranded.recommended_action.key, "--json",
   ], { cwd: ROOT, encoding: "utf8", env });
-  assert.equal(fresh.status, 0, fresh.stderr);
-  const freshOutput = JSON.parse(fresh.stdout);
-  assert.equal(freshOutput.status, "refused");
-  assert.equal(freshOutput.blockers[0].code, "active_intent_pending");
-  assert.deepEqual(freshOutput.blockers[0].details, stranded.blockers[0].details);
-  const resume = stranded.blockers[0].details.resume_invocation;
-  assert.match(resume, /--expected-action-key [0-9a-f]{64}/);
-  assert.match(resume, /operator.*publication/);
+  assert.equal(discharged.status, 0, discharged.stderr);
+  const dischargedOutput = JSON.parse(discharged.stdout);
+  assert.equal(dischargedOutput.status, "converged");
+  assert.equal(dischargedOutput.after.recommended_action.reason, "publication_incomplete");
+  assert.deepEqual(dischargedOutput.after.recommended_action.steps, ["record_or_create_pr"]);
   fs.writeFileSync(fake.mode, "match");
-  const resumed = spawnSync("sh", ["-c", resume], { cwd: ROOT, encoding: "utf8", env });
-  assert.equal(resumed.status, 0, resumed.stderr);
-  assert.equal(JSON.parse(resumed.stdout).status, "converged");
+  const matched = JSON.parse(spawnSync(process.execPath, [CLI, "inspect", "--run-dir", f.runDir, "--json"], {
+    cwd: ROOT, encoding: "utf8", env,
+  }).stdout);
+  assert.deepEqual(matched.recommended_action.steps, ["record_or_create_pr"]);
+  const fresh = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "record the existing exact PR", "--actor", "owner",
+    "--expected-action-key", matched.recommended_action.key, "--json",
+  ], { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(fresh.status, 0, fresh.stderr);
+  assert.equal(JSON.parse(fresh.stdout).status, "converged");
+  assert.equal(fs.readFileSync(fake.created, "utf8"), "1");
+  const journal = fs.readFileSync(path.join(f.runDir, "events.jsonl"), "utf8")
+    .trim().split("\n").map(JSON.parse);
+  assert.equal(journal.filter((fact) => fact.type === "pull_request_recorded").length, 1);
 });
 
 test("production recovery refuses a tracked remote outside the immutable run repository", (t) => {

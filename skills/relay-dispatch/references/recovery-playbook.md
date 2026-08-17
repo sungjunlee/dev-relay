@@ -79,14 +79,19 @@ authoritative source for its terminal context.
 
 An unreceipted recovery intent normally remains `active_intent_pending` and is
 resumed with the exact `action_key`, actor, and reason printed by `inspect`. If
-live observations still derive `recover` but the fresh steps and the immutable
-intent steps no longer cover each other, `inspect` instead recommends the typed
+live observations still derive `recover` but the fresh steps do not contain
+every immutable intent step, `inspect` instead recommends the typed
 `discharge_obsolete_intent` step with that same intent action key. Run the same
 `recover` command with the intent's exact actor and reason. Under the run lock,
 Relay re-inspects and either resumes a still-authorized intent or appends an
 audited `active_intent_observation_changed` completion and masks the obsolete
 intent with its receipt. Discharge executes neither the obsolete steps nor the
 fresh action; inspect again and recover the newly derived action separately.
+If the fresh action is not `recover`, Relay refuses the changed intent without
+executing or discharging it. The only earlier exit is receipt crash recovery:
+when every fact-emitting intent step already has its exact deterministic fact,
+Relay validates those facts, appends a missing `recovery_applied`, and writes
+the receipt without replaying any obsolete effect.
 
 To reproduce or base-control the recycled-PID refusal class, generic CPU load is
 not sufficient: the race needs a same-window recycle of the specific freed

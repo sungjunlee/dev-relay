@@ -1014,7 +1014,87 @@ test("terminal run refuses an unrelated active intent without publishing a recei
   assert.equal(h.state.facts.length, 1);
 });
 
-test("effect-before-fact retry reuses the exact PR and appends each deterministic fact once", async () => {
+test("non-recover observation refuses an incomplete intent without replay or discharge", async () => {
+  const intentKey = "9".repeat(64);
+  const h = harness({
+    facts: [attemptFinished(), pullRequestFact(HEAD), verificationFact()],
+    observations: publicationObservations({
+      git: { ...publicationObservations().git, remote_head_sha: HEAD, remote_relation: "equal" },
+      github: {
+        ...publicationObservations().github,
+        matching_pr_count: 1, pr_number: 42, pr_state: "OPEN", pr_head_sha: HEAD,
+      },
+    }),
+  });
+  h.state.intent = {
+    schema_version: 1,
+    action_key: intentKey,
+    operation_id: `recover-${intentKey.slice(0, 32)}`,
+    created_at: "2026-08-01T00:03:00Z",
+    steps: ["record_verification"],
+    actor: "owner",
+    reason: "record verification",
+    reason_code: "verification_missing",
+    observed_event_id: "pr-bbbb",
+    before_sha: HEAD,
+  };
+  const result = await recoverRun({
+    ...h,
+    actor: "owner",
+    reason: "record verification",
+    expectedActionKey: intentKey,
+    effects: { converge: async () => { throw new Error("obsolete effect called"); } },
+  });
+  assert.equal(result.before.recommended_action.kind, "review");
+  assert.equal(result.status, "refused");
+  assert.equal(result.blockers[0].code, "active_intent_observation_changed");
+  assert.equal(h.state.facts.some((fact) => fact.type === "recovery_applied"), false);
+  assert.equal(h.state.receipts.size, 0);
+});
+
+test("a deterministic verification fact completes its crashed intent before review refusal", async () => {
+  const intentKey = "a".repeat(64);
+  const operationId = `recover-${intentKey.slice(0, 32)}`;
+  const verification = verificationFact();
+  verification.event_id = `recovery-${crypto.createHash("sha256")
+    .update(`${operationId}:record_verification`).digest("hex").slice(0, 32)}`;
+  const h = harness({
+    facts: [attemptFinished(), pullRequestFact(HEAD), verification],
+    observations: publicationObservations({
+      git: { ...publicationObservations().git, remote_head_sha: HEAD, remote_relation: "equal" },
+      github: {
+        ...publicationObservations().github,
+        matching_pr_count: 1, pr_number: 42, pr_state: "OPEN", pr_head_sha: HEAD,
+      },
+    }),
+  });
+  h.state.intent = {
+    schema_version: 1,
+    action_key: intentKey,
+    operation_id: operationId,
+    created_at: verification.at,
+    steps: ["record_verification"],
+    actor: "owner",
+    reason: "record verification",
+    reason_code: "verification_missing",
+    observed_event_id: "pr-bbbb",
+    before_sha: HEAD,
+  };
+  const result = await recoverRun({
+    ...h,
+    actor: "owner",
+    reason: "record verification",
+    expectedActionKey: intentKey,
+    effects: { converge: async () => { throw new Error("obsolete effect called"); } },
+  });
+  assert.equal(result.before.recommended_action.kind, "review");
+  assert.equal(result.status, "converged");
+  assert.deepEqual(result.receipt.fact_event_ids, [verification.event_id, h.state.facts.at(-1).event_id]);
+  assert.equal(h.state.facts.at(-1).type, "recovery_applied");
+  assert.equal(h.state.receipts.size, 1);
+});
+
+test("effect-before-fact retry discharges the prefix-dropped intent before reusing the exact PR", async () => {
   const h = harness({ facts: [attemptFinished()], observations: publicationObservations() });
   let prCreates = 0;
   let failFirstPrFact = true;
@@ -1065,20 +1145,39 @@ test("effect-before-fact retry reuses the exact PR and appends each deterministi
   await assert.rejects(recoverRun({
     ...h, appendFact, actor: "owner", reason: "publish", effects,
   }), /crash_after_pr_effect/);
-  const retry = await recoverRun({
+  const discharged = await recoverRun({
     ...h, appendFact, actor: "owner", reason: "publish", effects,
   });
-  assert.equal(retry.status, "converged");
+  assert.equal(discharged.status, "converged");
+  assert.equal(prCreates, 1);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "pull_request_recorded").length, 0);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 1);
+  assert.equal(h.state.facts.at(-1).payload.rule, "active_intent_observation_changed");
+  assert.deepEqual(h.state.facts.at(-1).payload.side_effects, ["discharge_obsolete_intent"]);
+
+  // Production retains the completed immutable intent beside its receipt. The
+  // in-memory harness models one intent slot, so clear it before the fresh
+  // action creates its own identity.
+  h.state.intent = null;
+  const fresh = await recoverRun({
+    ...h,
+    appendFact,
+    actor: "owner",
+    reason: "record the existing exact PR",
+    expectedActionKey: discharged.after.recommended_action.key,
+    effects,
+  });
+  assert.equal(fresh.status, "converged");
   assert.equal(prCreates, 1);
   assert.equal(h.state.facts.filter((fact) => fact.type === "pull_request_recorded").length, 1);
-  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 1);
+  assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 2);
 
   const factBytes = JSON.stringify(h.state.facts);
   const effectCount = h.state.effects.length;
   const receiptWrites = h.state.writes;
   const again = await recoverRun({
-    ...h, appendFact, actor: "owner", reason: "publish", effects,
-    expectedActionKey: retry.action_key,
+    ...h, appendFact, actor: "owner", reason: "record the existing exact PR", effects,
+    expectedActionKey: fresh.action_key,
   });
   assert.equal(again.status, "noop");
   assert.equal(JSON.stringify(h.state.facts), factBytes);
