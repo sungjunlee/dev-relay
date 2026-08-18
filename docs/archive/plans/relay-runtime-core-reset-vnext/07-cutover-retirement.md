@@ -14,7 +14,7 @@ exist in the runtime; `runtime-generation.js` and `legacy-recovery-shim.js` are
 recorded as deleted in
 [06-delete-runtime-accretion.md](06-delete-runtime-accretion.md), and the
 reasoning is in
-[../../decisions/2026-08-03-migration-overlay-disposition.md](../../decisions/2026-08-03-migration-overlay-disposition.md).
+[docs/decisions/2026-08-03-migration-overlay-disposition.md](../../../decisions/2026-08-03-migration-overlay-disposition.md).
 
 ## Outcome
 

@@ -2,7 +2,7 @@
 
 > Historical design record (2026-04). Its manifest-era lifecycle descriptions
 > are superseded by the current contract in
-> [references/architecture.md](../references/architecture.md).
+> [references/architecture.md](../../../references/architecture.md).
 >
 > Drafted 2026-04-09 to lock the implementation contract for #127, #128, #130, and #132 before coding begins.
 
@@ -12,7 +12,7 @@
 
 `/relay-ready` is the standalone shaping front door for raw, ambiguous, or oversized requests, and it is also the internal preflight step that `/relay` may invoke before planning.
 
-Once a relay-ready leaf exists, `/relay` returns to the canonical lifecycle in [references/architecture.md](../references/architecture.md): plan, dispatch, review, stop at `ready_to_merge`; merge only on explicit request.
+Once a relay-ready leaf exists, `/relay` returns to the canonical lifecycle in [references/architecture.md](../../../references/architecture.md): plan, dispatch, review, stop at `ready_to_merge`; merge only on explicit request.
 
 Route preflight detects task-shape risk only; semantic leaf boundaries require operator-approved relay-ready handoffs before `/relay` may continue to planning or dispatch.
 

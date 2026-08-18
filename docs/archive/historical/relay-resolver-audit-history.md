@@ -1,6 +1,6 @@
 # Relay Resolver Audit History
 
-This file carries the resolver's iteration history, selector audit table, and issue/meta-rule ledger so `skills/relay-dispatch/scripts/relay-resolver.js` can keep only the load-bearing invariants inline. Related fail-closed meta-rules: [rubric-fail-closed-history.md](./rubric-fail-closed-history.md). Other distilled ADRs: [decisions/README.md](./decisions/README.md).
+This file carries the resolver's iteration history, selector audit table, and issue/meta-rule ledger so `skills/relay-dispatch/scripts/relay-resolver.js` can keep only the load-bearing invariants inline. Related fail-closed meta-rules: [rubric-fail-closed-history.md](./rubric-fail-closed-history.md). Other distilled ADRs: [decisions/README.md](../../decisions/README.md).
 
 ## Selector x Call-Site Audit Table
 

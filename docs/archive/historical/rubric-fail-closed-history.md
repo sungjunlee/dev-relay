@@ -6,7 +6,7 @@ originSessionId: 49f1a91f-0df3-4cea-ae64-dd258cb2a200
 ---
 # Rubric Fail-Closed History
 
-This is the project-local historical ledger behind the distilled relay-plan guidance in `skills/relay-plan/references/rubric-fail-closed-patterns.md`. Keep detailed PR narratives and dated incident context here; keep installed-skill operating guidance in the reference file. Merge-gate contention policy is also captured in [docs/decisions/0006-merge-gate-contention-policy.md](./decisions/0006-merge-gate-contention-policy.md).
+This is the project-local historical ledger behind the distilled relay-plan guidance in `skills/relay-plan/references/rubric-fail-closed-patterns.md`. Keep detailed PR narratives and dated incident context here; keep installed-skill operating guidance in the reference file. Merge-gate contention policy is also captured in [docs/decisions/0006-merge-gate-contention-policy.md](../../decisions/0006-merge-gate-contention-policy.md).
 
 When a rubric factor concerns a security-sensitive invariant, do not collapse "surfaces a warning" and "fails closed" into one factor. They are different enforcement layers (prompt text vs gate-state transition) and the executor will optimize the easier one.
 

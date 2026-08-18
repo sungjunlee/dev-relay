@@ -1,6 +1,8 @@
 # Documentation Index
 
-Repo-local design notes, operator workflow docs, audit ledgers, and archived issue evidence. Nothing under `docs/` ships with `npx skills add`; runtime guidance lives under `skills/*/references/`.
+Repo-local operator docs and current decisions. Nothing under `docs/` ships
+with `npx skills add`; runtime guidance lives under `skills/*/references/`.
+Historical files live under [archive/](./archive/) and are evidence only.
 
 ## Operator And Policy
 
@@ -9,58 +11,27 @@ Repo-local design notes, operator workflow docs, audit ledgers, and archived iss
 | [workflow-lanes.md](./workflow-lanes.md) | Fast / goal / relay / review-only lane selection |
 | [external-tool-workflow.md](./external-tool-workflow.md) | gstack, superpowers, CE around relay (optional) |
 | [direct-read-relay-operator-note.md](./direct-read-relay-operator-note.md) | Operate relay from a repo checkout without installed skills |
-| [relay-operator-guide.md](./relay-operator-guide.md) | Operator workflow for `/relay`, setup, manual phases, batch dispatch, recovery, and extension points |
-| [trusted-local-native-dogfood-1235.md](./trusted-local-native-dogfood-1235.md) | Bounded real-provider closure evidence for the trusted-local native Relay migration |
-| [references/operator-surface.md](../references/operator-surface.md) | Public/internal/optional skill tiers and placement rules for stable command surfaces |
-| [model-route-policy.md](./model-route-policy.md) | Provider/model route policy via `relay-config` for dispatch and primary review |
-| [script-inventory-and-cleanup.md](./script-inventory-and-cleanup.md) | Runtime script classification and cleanup backlog |
+| [relay-operator-guide.md](./relay-operator-guide.md) | Operator workflow for `/relay`, setup, manual phases, recovery |
+| [references/operator-surface.md](../references/operator-surface.md) | Public/internal/optional skill tiers |
+| [model-route-policy.md](./model-route-policy.md) | Explicit adapter/model selection via `relay-config` |
+| [script-inventory-and-cleanup.md](./script-inventory-and-cleanup.md) | Installed runtime inventory |
 
-## Architecture Decisions
-
-Distilled ADRs (current rules):
+## Current Contract
 
 | Doc | Purpose |
 | --- | --- |
-| [decisions/README.md](./decisions/README.md) | ADR index — current and historical decisions, including the ReviewSubject contract |
-
-Specialized ledgers (not ADRs): [rubric-fail-closed-history.md](./rubric-fail-closed-history.md), [relay-resolver-audit-history.md](./relay-resolver-audit-history.md).
-
-## Design And Roadmaps
-
-| Doc | Purpose |
-| --- | --- |
-| [references/architecture.md](../references/architecture.md) | **Canonical** immutable run schema, append-only facts, derived actions, and recovery model |
-| [relay-lifecycle-manifest-design.md](./relay-lifecycle-manifest-design.md) | 2026-04 design history (#34–#46); superseded for runtime paths |
-| [relay-ready-routing-and-handoff-design.md](./relay-ready-routing-and-handoff-design.md) | relay-ready intake routing (#127–#132) |
-| [relay-scenario-tests.md](./relay-scenario-tests.md) | Scenario-test matrix for lifecycle and reporting |
-| [agentic-patterns-adoption.md](./agentic-patterns-adoption.md) | Willison-pattern adoption roadmap (Phase 0 complete) |
-| [relay-instruction-altitude-prd.md](./relay-instruction-altitude-prd.md) | Retiring the unreliability tax (recovery machinery) via orchestrator-owned commit — the reliability-axis sequel to #1025 (proposal) |
-
-## Analysis And Validation
-
-| Doc | Purpose |
-| --- | --- |
-| [codex-app-server-analysis.md](./codex-app-server-analysis.md) | Codex app-server vs `codex exec` (RELAY-32/33 input) |
-| [codex-orchestrator-e2e-validation-2026-04-03.md](./codex-orchestrator-e2e-validation-2026-04-03.md) | Direct-read relay E2E validation report |
-| [run-inventory-1209.md](./run-inventory-1209.md) | Bounded anonymous Relay run inventory and drain-in-place evidence for #1209 |
-
-## Rubric And Review History
-
-| Doc | Purpose |
-| --- | --- |
-| [rubric-fail-closed-history.md](./rubric-fail-closed-history.md) | Fail-closed rubric incident ledger (distilled in `skills/relay-plan/references/rubric-fail-closed-patterns.md`) |
-| [relay-resolver-audit-history.md](./relay-resolver-audit-history.md) | Resolver selector/call-site audit lineage |
-
-## Archive
-
-Historical epics, dispatch plans, issue evidence mirrors, and research live under [archive/](./archive/). Issue mirrors: [archive/issues/](./archive/issues/).
+| [references/architecture.md](../references/architecture.md) | Immutable run, append-only facts, derived actions, recovery |
+| [decisions/README.md](./decisions/README.md) | Current ADRs and historical records |
+| [contracts/relay-runtime-contracts.v1.json](./contracts/relay-runtime-contracts.v1.json) | Named runtime invariants wired to tests |
 
 ## Maintenance Rules
 
-- Keep local agent memory out of the repo. Durable lessons belong in `docs/` history files or compact `skills/*/references/` guidance.
-- Historical issue evidence may quote orchestrator-local `memory/*` paths or absolute host paths. Treat those as incident context, not files to recreate.
-- Keep installed skill references self-contained. A file under `skills/` must not require `docs/` after install.
-- New post-merge issue mirrors belong under `docs/archive/issues/`, not `docs/` root.
-- When a mirror encodes a durable invariant, add or update an ADR under `docs/decisions/`, then delete the mirror once the ADR (or a specialized ledger) holds the rule.
-- Keep mirrors while audit tables or grep proof are not yet distilled. Sprint logs and PR bodies may still cite old paths.
-- When runtime behavior changes, update `references/architecture.md` first; add a supersede banner to older design drafts rather than deleting them.
+- Keep local agent memory out of the repo.
+- Installed skill references must stay self-contained. A file under `skills/`
+  must not require `docs/` after install.
+- When runtime behavior changes, update `references/architecture.md` first.
+- Finished designs, closeouts, and ledgers go under `docs/archive/`. Do not
+  leave superseded drafts in this lobby with a banner.
+- New post-merge issue mirrors belong under `docs/archive/issues/`.
+- Distill a durable invariant into `docs/decisions/`, then treat the source
+  mirror as archive evidence.

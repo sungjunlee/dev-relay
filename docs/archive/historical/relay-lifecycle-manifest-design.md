@@ -1,6 +1,6 @@
 # Relay Lifecycle Manifest Design
 
-> **Status:** historical design draft (2026-04). For the current immutable `run.json`, append-only facts, derived action, and recovery contract, use [references/architecture.md](../references/architecture.md). This doc predates the current runtime and is kept for design lineage only.
+> **Status:** historical design draft (2026-04). For the current immutable `run.json`, append-only facts, derived action, and recovery contract, use [references/architecture.md](../../../references/architecture.md). This doc predates the current runtime and is kept for design lineage only.
 >
 > Drafted 2026-04-02 as the foundation for #34, #35, #36, #37, #38, and #39.
 >

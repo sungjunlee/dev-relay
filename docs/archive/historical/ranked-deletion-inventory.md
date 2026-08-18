@@ -18,7 +18,7 @@ the ranking below — an earlier proposal to delete the overlay's *retirement-ga
 layer* was reviewed by four independent reviewers and withdrawn on measurement.
 What cut it was measuring the mechanism's entry condition instead: every path to
 a dispatchable marker required an attestation owned by a different UID up to `/`.
-See [the disposition](decisions/2026-08-03-migration-overlay-disposition.md).
+See [the disposition](../../decisions/2026-08-03-migration-overlay-disposition.md).
 
 ## Summary
 

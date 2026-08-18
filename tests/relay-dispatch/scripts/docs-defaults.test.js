@@ -98,7 +98,7 @@ test("#1209 docs freeze ReviewSubject derivation and minimized aggregate invento
   assert.doesNotMatch(adr, /git diff --binary --no-ext-diff <base>\.\.<head> --/);
   assert.match(adr, /no runtime field, fact, helper hierarchy, adapter/);
 
-  const inventory = readRepoFile("docs/run-inventory-1209.md");
+  const inventory = readRepoFile("docs/archive/historical/run-inventory-1209.md");
   for (const contract of [
     "RELAY_RUNS_BASE", "RELAY_HOME", "os.homedir()",
     "MAX_DEPTH = 12", "MAX_ENTRIES", "MAX_RUN_DIRECTORIES", "path.isAbsolute",

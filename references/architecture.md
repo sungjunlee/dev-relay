@@ -44,13 +44,18 @@ frozen input -> run.json + done-criteria.md
      dispatch / recover / review / explicit merge or close
 ```
 
-There is no mutable state machine. The public source gate first classifies the
-checkout: no configured remotes selects local Reviewed Result delivery, while
-an identity-matching GitHub origin selects the retained PR route. Unsupported
-remotes fail before execution. `inspect` then folds immutable facts together
-with fresh Git, GitHub, host, and verification observations and returns one
-typed next action. Writers re-inspect under the per-run lock and require the
-same action key before they make a change.
+There is no mutable state machine. A new run requires frozen Done Criteria, or
+a rubric used as that anchor; there is no grandfather bypass. The public source
+gate first classifies the checkout: no configured remotes selects local
+Reviewed Result delivery, while an identity-matching GitHub origin selects the
+retained PR route. Unsupported remotes fail before execution. `inspect` then
+folds immutable facts together with fresh Git, GitHub, host, and verification
+observations and returns one typed next action. Writers re-inspect under the
+per-run lock and require the same action key before they make a change.
+
+A recorded GitHub PR binds through `{pr_number, repo, head_ref, base_ref}`.
+After `merge_recorded`, the last `pull_request_recorded.head_sha` need not
+equal the live MERGED `pr_head_sha`.
 
 The GitHub action sequence is `wait` -> `recover` -> `review` -> `merge`; the
 local sequence is `wait` -> `recover` -> `review` -> `recover` for terminal
@@ -110,7 +115,11 @@ node skills/relay/scripts/relay-recover.js recover --repo . --run-id <id> \
 Recovery alone may close a dead attempt, commit reviewable work, place a GitHub
 branch revision on the remote ref (Publication), record/create the exact
 Change Request, record verification, or append the local Reviewed Result's
-`run_closed` fact.
+`run_closed` fact. When inspection already derives a merged terminal, recover
+skips GitHub and remote observation and may remove a clean registered worktree
+at the recorded `pr_head_sha` through `cleanup-worktree.js`. Dirty,
+HEAD-changed, unregistered, mismatched, or canonical checkouts are retained;
+removal is never `--force`.
 
 Measurement (2026-08-15): canonical recovery is also the routine publication
 and verification conveyor, not only crash machinery. Across recent vNext runs,
@@ -135,11 +144,12 @@ independent review and does not publish or land the revision. Changes requested
 derive `redispatch`.
 
 `gate-check.js` is read-only. `finalize-run.js` is the explicit merge writer:
-it repeats inspection under the run lock, records an HMAC-bound
-authorization tied to the authenticated GitHub login, uses GitHub's
-expected-source-SHA guard, re-observes the exact merge, records one
-`merge_recorded` fact, and only then removes a clean trusted worktree. GitHub
-does not expose an expected-base CAS; the documented post-check/pre-request
+it repeats inspection under the run lock, records a durable merge
+authorization bound to `--actor` (default `git user.name`; it does not call
+GitHub REST `/user`), uses GitHub's expected-source-SHA guard, re-observes the
+exact merge, records one `merge_recorded` fact, and then removes a clean
+trusted worktree through the same `cleanup-worktree.js` helper. GitHub does not
+expose an expected-base CAS; the documented post-check/pre-request
 base-retarget nanorace is a platform boundary, while source-SHA binding remains
 strict.
 

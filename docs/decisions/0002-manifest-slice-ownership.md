@@ -1,6 +1,10 @@
 # ADR-0002: Manifest Slice Ownership and Facade
 
-Status: Accepted (issue #188)
+Status: Superseded. The manifest runtime was deleted. Current model:
+[architecture.md](../../references/architecture.md).
+
+This record describes the last internal split of the removed
+`relay-manifest.js` facade. Do not restore those modules.
 
 ## Context
 
@@ -33,4 +37,4 @@ Enforcement: `tests/relay-dispatch/scripts/manifest-direct-imports.test.js`.
 ## Evidence
 
 - GitHub issue `#188` (post-merge mirror retired after ADR distill)
-- Architecture: [§ relay-manifest.js is a compatibility facade](../../references/architecture.md#relay-manifestjs-is-a-compatibility-facade)
+- Current runtime: [architecture.md](../../references/architecture.md)

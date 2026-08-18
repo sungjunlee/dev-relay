@@ -6,7 +6,7 @@ For active guidance, use [docs/README.md](../../README.md), [docs/decisions/](..
 
 Pre-merge dispatch plans live under [../plans/](../plans/).
 
-**Retention:** When a mirror's durable rules are captured in an ADR (or a specialized ledger such as [relay-resolver-audit-history.md](../../relay-resolver-audit-history.md)), delete the mirror and link the ADR instead. Keep mirrors only while audit tables or grep proof are not yet distilled.
+**Retention:** When a mirror's durable rules are captured in a current ADR, delete the mirror and link the ADR instead. Historical ledgers live under [../historical/](../historical/).
 
 ## Mirrors
 
@@ -28,7 +28,7 @@ Pre-merge dispatch plans live under [../plans/](../plans/).
 
 | Issue | Current entry point |
 | --- | --- |
-| `#166`, `#185` | [ADR-0006 merge-gate contention](../../decisions/0006-merge-gate-contention-policy.md) + [rubric-fail-closed-history.md](../../rubric-fail-closed-history.md) |
+| `#166`, `#185` | [ADR-0006](../../decisions/0006-merge-gate-contention-policy.md) (historical) + [rubric-fail-closed-history.md](../historical/rubric-fail-closed-history.md) |
 | `#187` | [ADR-0003 worktree runtime](../../decisions/0003-worktree-runtime-single-owner.md) |
 | `#188` | [ADR-0002 manifest slices](../../decisions/0002-manifest-slice-ownership.md) |
 | `#189` | [ADR-0004 review-runner facade](../../decisions/0004-review-runner-staged-facade.md) |

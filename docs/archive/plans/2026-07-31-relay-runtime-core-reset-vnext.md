@@ -607,7 +607,7 @@ vNext marker required an external Ed25519 attestation whose file and every
 parent directory up to `/` had to be owned by a different UID and non-writable
 by the operator — satisfiable on a single-operator machine only by becoming root
 and signing to yourself. See
-[../decisions/2026-08-03-migration-overlay-disposition.md](../decisions/2026-08-03-migration-overlay-disposition.md).
+[docs/decisions/2026-08-03-migration-overlay-disposition.md](../../decisions/2026-08-03-migration-overlay-disposition.md).
 
 
 ## Delivery Plan
