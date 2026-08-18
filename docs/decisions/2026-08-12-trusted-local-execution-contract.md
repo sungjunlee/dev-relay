@@ -80,7 +80,7 @@ the signed staged review-input root after exact process settlement.
 
 ## Supersession of #1141 and #1158
 
-`#1141`'s mandatory staged-credential/Relay-owned isolation policy and `#1158`'s availability framing are superseded; both issues were closed with superseding comments on 2026-08-12. Their live evidence remains archived only: canary failures (`docs/archive/plans/relay-runtime-core-reset-vnext/adapter-live-canary-2026-08-01.json` … `-03.json`) and `#1158`'s per-executor mechanism table (Keychain-bound cursor auth, cline cookie store, incomplete agy OAuth). They explain the move to ambient HOME in §1 and do not form a current release condition.
+`#1141`'s mandatory staged-credential/Relay-owned isolation policy and `#1158`'s availability framing are superseded; both issues were closed with superseding comments on 2026-08-12. Canary failures and `#1158`'s per-executor mechanism table (Keychain-bound cursor auth, cline cookie store, incomplete agy OAuth) remain in git history. They explain the move to ambient HOME in §1 and do not form a current release condition.
 
 ## Evidence
 

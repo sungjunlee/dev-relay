@@ -4,9 +4,8 @@ The Relay runtime is an immutable-run system. It uses one small durable
 contract, append-only facts, and a derived action instead of mutable lifecycle
 state, rubric sidecars, or executor-specific registration layers.
 
-This document describes the shipped Relay runtime. Files under
-[`docs/archive/`](../docs/archive/) and dated plans are historical evidence,
-not operator instructions.
+This document describes the shipped Relay runtime. Finished designs live in
+git history, not a second documentation tree.
 
 ## Contract vocabulary
 

@@ -30,18 +30,13 @@ Current behavior is in `references/architecture.md`.
 | [0005-rubric-mandatory-policy.md](./0005-rubric-mandatory-policy.md) | Grandfathered rubric bypass retirement | `#190` |
 | [0006-merge-gate-contention-policy.md](./0006-merge-gate-contention-policy.md) | Manifest lock-timeout policy split | `#166`, `#185` |
 
-Incident ledgers for those eras live under
-[archive/historical/](../archive/historical/):
-[resolver](../archive/historical/relay-resolver-audit-history.md),
-[rubric fail-closed](../archive/historical/rubric-fail-closed-history.md).
-
 ## When to add an ADR
 
 Add or extend an ADR when a merged issue encodes a **durable invariant** that
 operators or future refactors must not undo.
 
 Do **not** add an ADR when `references/architecture.md` already carries the
-rule, or when the source is a completed closeout that belongs in `docs/archive/`.
+rule, or when the source is a completed closeout that belongs in git history.
 
 Keep ADRs under ~80 lines. Use: **Status**, **Context**, **Decision**,
 **Consequences**, **Evidence**.

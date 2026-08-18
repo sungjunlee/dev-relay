@@ -70,4 +70,5 @@ lifecycle changes.
 
 - Current derivation: `inspect.js`, `review-runner.js`, `run-store.js`, and the
   merge review gate, unchanged by #1209.
-- Anonymous inventory and reproduction: [`run-inventory-1209.md`](../archive/historical/run-inventory-1209.md).
+- The 2026-08-10 anonymous inventory snapshot lives in git history, not a
+  live doc.

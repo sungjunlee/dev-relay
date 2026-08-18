@@ -1,7 +1,7 @@
 # Relay Runtime Inventory
 
-This is the current Relay runtime inventory, not a history of the legacy manifest
-runtime. Historical cleanup rationale remains under [`docs/archive/`](archive/).
+This is the current Relay runtime inventory, not a history of the legacy
+manifest runtime.
 
 ## Installed dispatch package
 

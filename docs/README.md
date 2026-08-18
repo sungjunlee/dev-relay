@@ -2,7 +2,7 @@
 
 Repo-local operator docs and current decisions. Nothing under `docs/` ships
 with `npx skills add`; runtime guidance lives under `skills/*/references/`.
-Historical files live under [archive/](./archive/) and are evidence only.
+Finished designs stay in git history. Do not recreate `docs/archive/`.
 
 ## Operator And Policy
 
@@ -30,8 +30,5 @@ Historical files live under [archive/](./archive/) and are evidence only.
 - Installed skill references must stay self-contained. A file under `skills/`
   must not require `docs/` after install.
 - When runtime behavior changes, update `references/architecture.md` first.
-- Finished designs, closeouts, and ledgers go under `docs/archive/`. Do not
-  leave superseded drafts in this lobby with a banner.
-- New post-merge issue mirrors belong under `docs/archive/issues/`.
-- Distill a durable invariant into `docs/decisions/`, then treat the source
-  mirror as archive evidence.
+- Distill a durable invariant into `docs/decisions/`. Do not keep a second
+  tree of finished designs, closeouts, or issue mirrors.
