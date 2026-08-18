@@ -41,7 +41,7 @@ After app-server migration (#32), add an optional broker mode:
 
 ## References
 
-- Analysis: `docs/codex-app-server-analysis.md`
+- Analysis: `docs/codex-app-server-analysis.md` in git history (removed with `docs/archive/`)
 - Pattern source: `references/codex-plugin-cc/plugins/codex/scripts/lib/broker-lifecycle.mjs`
 - Pattern source: `references/codex-plugin-cc/plugins/codex/scripts/app-server-broker.mjs`
 

@@ -1,47 +1,42 @@
 # Architecture Decision Records
 
-Distilled, durable decisions extracted from closed relay work. ADRs here are the **current rule** an operator or contributor should read first. Detailed audit tables and grep proof from the original post-merge mirrors are not retained once distilled.
+ADRs here are the **current rule** an operator or contributor should read first,
+or a marked historical record of a deleted module. Detailed audit tables from
+post-merge mirrors are not retained once distilled.
 
-For live schema and state-machine reference, prefer [`references/architecture.md`](../../references/architecture.md). Specialized ledgers that predate this folder remain valid companions:
+For the live runtime contract, prefer [`references/architecture.md`](../../references/architecture.md).
 
-| Ledger | Scope |
-| --- | --- |
-| [relay-resolver-audit-history.md](../relay-resolver-audit-history.md) | Resolver selector × call-site audit (#149–#177) |
-| [rubric-fail-closed-history.md](../rubric-fail-closed-history.md) | Rubric meta-rules and compliance-theater incidents |
-
-## Index
-
-| ADR | Decision | Source issue(s) |
-| --- | --- | --- |
-| [0001-orchestrator-owns-publication.md](./0001-orchestrator-owns-publication.md) | Historical publication ownership; superseded for the current runtime by ADR-0007 | `#198` |
-| [0002-manifest-slice-ownership.md](./0002-manifest-slice-ownership.md) | `manifest/*` slices + thin `relay-manifest.js` facade | `#188` |
-| [0003-worktree-runtime-single-owner.md](./0003-worktree-runtime-single-owner.md) | One `worktree-runtime.js` owns plan/create/register/remove | `#187` |
-| [0004-review-runner-staged-facade.md](./0004-review-runner-staged-facade.md) | `review-runner/` staged helpers + orchestration facade | `#189` |
-| [0005-rubric-mandatory-policy.md](./0005-rubric-mandatory-policy.md) | `anchor.rubric_grandfathered` retired; rubric required | `#190` |
-| [0006-merge-gate-contention-policy.md](./0006-merge-gate-contention-policy.md) | Lock timeout policy split by downstream consumer | `#166`, `#185` |
-| [0007-review-subject-contract-freeze.md](./0007-review-subject-contract-freeze.md) | Derived ReviewSubject and Git-required, forge-optional terminology | `#1209`, `#1204` |
-
-Dated records carry their own measurements and are longer than the numbered
-form; they are decisions all the same.
+## Current
 
 | Record | Decision |
 | --- | --- |
-| [2026-07-21-risk-adaptive-observation-window.md](./2026-07-21-risk-adaptive-observation-window.md) | Bounded observation window per risk class |
-| [2026-08-03-migration-overlay-disposition.md](./2026-08-03-migration-overlay-disposition.md) | Delete the migration overlay; vNext admits itself via an atomic run-dir `mkdir` |
-| [2026-08-03-harness-complexity-criterion.md](./2026-08-03-harness-complexity-criterion.md) | What earns its size, and the tripwires that say otherwise |
-| [2026-08-12-trusted-local-execution-contract.md](./2026-08-12-trusted-local-execution-contract.md) | One trusted-local execution path with native-when-available isolation; seven-adapter capability inventory; settle-before-cutover rule; supersedes `#1141`/`#1158` |
+| [0007-review-subject-contract-freeze.md](./0007-review-subject-contract-freeze.md) | Derived ReviewSubject; Git-required, forge-optional |
+| [2026-08-03-harness-complexity-criterion.md](./2026-08-03-harness-complexity-criterion.md) | What earns its size |
+| [2026-08-03-migration-overlay-disposition.md](./2026-08-03-migration-overlay-disposition.md) | Delete the migration overlay; a run dir is claimed by `mkdir` |
+| [2026-08-12-trusted-local-execution-contract.md](./2026-08-12-trusted-local-execution-contract.md) | One trusted-local execution path; native isolation when available |
+
+## Historical
+
+These describe deleted modules or retired policy. Do not restore them.
+Current behavior is in `references/architecture.md`.
+
+| Record | Was | Source |
+| --- | --- | --- |
+| [0001-orchestrator-owns-publication.md](./0001-orchestrator-owns-publication.md) | Manifest-era dispatch publication | `#198` |
+| [0002-manifest-slice-ownership.md](./0002-manifest-slice-ownership.md) | `manifest/*` slices + `relay-manifest.js` | `#188` |
+| [0003-worktree-runtime-single-owner.md](./0003-worktree-runtime-single-owner.md) | `worktree-runtime.js` | `#187` |
+| [0004-review-runner-staged-facade.md](./0004-review-runner-staged-facade.md) | `review-runner/` staged helpers | `#189` |
+| [0005-rubric-mandatory-policy.md](./0005-rubric-mandatory-policy.md) | Grandfathered rubric bypass retirement | `#190` |
+| [0006-merge-gate-contention-policy.md](./0006-merge-gate-contention-policy.md) | Manifest lock-timeout policy split | `#166`, `#185` |
+| [2026-07-21-risk-adaptive-observation-window.md](./2026-07-21-risk-adaptive-observation-window.md) | Bounded observation window; retired reporter | `#1036` |
 
 ## When to add an ADR
 
-Add or extend an ADR when a merged issue encodes a **durable invariant** (role boundary, fail-closed rule, module ownership) that operators or future refactors must not accidentally undo.
+Add or extend an ADR when a merged issue encodes a **durable invariant** that
+operators or future refactors must not undo.
 
-Do **not** duplicate an ADR when:
+Do **not** add an ADR when `references/architecture.md` already carries the
+rule, or when the source is a completed closeout that belongs in git history.
 
-- The rule already lives in `references/architecture.md` with enough operational detail (e.g. state machine, `model_hints` schema).
-- A specialized ledger already carries the distilled rule (resolver, rubric fail-closed).
-
-After an ADR lands, **delete** the post-merge issue mirror if it only duplicated audit evidence. Keep mirrors when grep proof or consumer tables are not yet captured in an ADR or ledger.
-
-## ADR format
-
-Each file uses: **Status**, **Context**, **Decision**, **Consequences**, **Evidence**. Keep ADRs under ~80 lines.
+Keep ADRs under ~80 lines. Use: **Status**, **Context**, **Decision**,
+**Consequences**, **Evidence**.

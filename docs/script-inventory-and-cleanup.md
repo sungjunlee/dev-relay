@@ -1,7 +1,7 @@
 # Relay Runtime Inventory
 
-This is the current Relay runtime inventory, not a history of the legacy manifest
-runtime. Historical cleanup rationale remains under [`docs/archive/`](archive/).
+This is the current Relay runtime inventory, not a history of the legacy
+manifest runtime.
 
 ## Installed dispatch package
 
@@ -11,9 +11,11 @@ Relay production installs the JavaScript files currently present under
 | Group | Files | Purpose |
 | --- | ---: | --- |
 | Core | 8 | `dispatch`, `inspect`, `recover`, `run-store`, `facts`, `host`, `exec`, and `adapter-contract`. |
+| Shared helper | 1 | `cleanup-worktree.js` — clean registered worktree removal used by recover and finalize. |
 | Universal adapters | 8 | Registry and the seven retained native executor descriptors. |
 
-That is the whole installed runtime: the core plus all seven executors. There
+That is the whole installed runtime: the core, the shared cleanup helper, and
+all seven executors. There
 is no migration overlay and no pending retirement, so there is no second figure
 to reconcile against.
 
@@ -32,6 +34,7 @@ orphan scripts rather than reproducing a second inventory.
 | Derived lifecycle action | `inspect.js` |
 | Git/GitHub observation and idempotent recovery/close | `recover.js` via `relay-recover.js` |
 | Host lock, supervisor, cancellation, runtime binding, process-scope cleanup | `host.js` |
+| Clean trusted worktree removal | `cleanup-worktree.js` |
 | Executor argv/capability/output contract | `adapter-contract.js` and `adapters/` |
 
 `dispatch.js` only starts an attempt. `review-runner.js` only records a bound

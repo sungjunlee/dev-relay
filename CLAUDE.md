@@ -6,7 +6,7 @@ action. Do not reintroduce mutable manifests, lifecycle transition tables,
 execution-evidence sidecars, route catalogs, app registration, or a second
 recovery path.
 
-Historical files below `docs/archive/` are evidence only.
+Finished designs stay in git history. Do not recreate `docs/archive/`.
 
 Relay workflows with explicit merge stop at `ready_to_merge`; this means stopping at `ready_to_merge` unless the user explicitly invokes `relay-merge`.
 

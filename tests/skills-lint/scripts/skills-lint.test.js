@@ -19,7 +19,6 @@ const OPERATOR_SURFACE_REFERENCE = path.join(REPO_ROOT, "references", "operator-
 const README_PATH = path.join(REPO_ROOT, "README.md");
 const CLAUDE_GUIDE_PATH = path.join(REPO_ROOT, "CLAUDE.md");
 const ARCHITECTURE_REFERENCE_PATH = path.join(REPO_ROOT, "references", "architecture.md");
-const RELAY_READY_DESIGN_PATH = path.join(REPO_ROOT, "docs", "relay-ready-routing-and-handoff-design.md");
 const WORKFLOW_LANES_PATH = path.join(REPO_ROOT, "docs", "workflow-lanes.md");
 
 const SURFACE_TIERS = {
@@ -381,11 +380,6 @@ function assertProjectDocsPreserveExplicitMergeBoundary(docs) {
       content: docs.architectureReference,
       pattern: /relay-review\s*\n\s*-> ready_to_merge\s*\n\s*-> relay-merge \(explicit only\)/i,
     },
-    {
-      label: "relay-ready handoff design",
-      content: docs.relayReadyDesign,
-      pattern: /plan -> dispatch -> review -> ready_to_merge; merge explicit/i,
-    },
   ];
 
   requiredPatterns.forEach(({ label, content, pattern }) => {
@@ -416,9 +410,14 @@ function assertNeedsSplitProposalFirstBoundary(docs) {
     "relay-ready must keep the accepted-handoff source-of-truth rule, scoped to a bundle whose recorded source identity matches this issue",
   );
   assert.match(
-    docs.relayReadyDesign,
-    /route preflight detects task-shape risk only[\s\S]*semantic leaf boundaries require operator-approved relay-ready handoffs/i,
-    "handoff design must separate task-shape detection from semantic leaf approval",
+    docs.relayReadySkill,
+    /do not infer semantic leaf boundaries[\s\S]*task-shape factors above detect decomposition pressure/i,
+    "relay-ready must separate task-shape detection from semantic leaf approval",
+  );
+  assert.match(
+    docs.relayReadySkill,
+    /once the accepted leaf shape is final/i,
+    "relay-ready must persist only after the operator accepts the leaf shape",
   );
 }
 
@@ -486,7 +485,6 @@ test("needs_split route documents proposal-first relay-ready shaping boundary", 
     relaySkill: fs.readFileSync(path.join(SKILLS_DIR, "relay", "SKILL.md"), "utf-8"),
     relayReadySkill: fs.readFileSync(path.join(SKILLS_DIR, "relay-ready", "SKILL.md"), "utf-8"),
     preflightGuards: fs.readFileSync(path.join(SKILLS_DIR, "relay", "references", "preflight-guards.md"), "utf-8"),
-    relayReadyDesign: fs.readFileSync(RELAY_READY_DESIGN_PATH, "utf-8"),
   });
 });
 
@@ -505,7 +503,6 @@ test("project docs preserve explicit relay merge boundary", () => {
     readme: fs.readFileSync(README_PATH, "utf-8"),
     claudeGuide: fs.readFileSync(CLAUDE_GUIDE_PATH, "utf-8"),
     architectureReference: fs.readFileSync(ARCHITECTURE_REFERENCE_PATH, "utf-8"),
-    relayReadyDesign: fs.readFileSync(RELAY_READY_DESIGN_PATH, "utf-8"),
     workflowLanes: fs.readFileSync(WORKFLOW_LANES_PATH, "utf-8"),
   });
 });

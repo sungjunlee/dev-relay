@@ -1,6 +1,11 @@
 # ADR-0004: Review Runner Staged Facade
 
-Status: Accepted (issue #189)
+Status: Superseded. `skills/relay-review/scripts/review-runner/` was deleted.
+Current review is a single `review-runner.js`. See
+[architecture.md](../../references/architecture.md).
+
+This record describes the last staged split of the removed review-runner
+modules. Do not restore that directory.
 
 ## Context
 
@@ -35,4 +40,4 @@ No review **semantics** changed in #189 — decomposition only.
 ## Evidence
 
 - GitHub issue `#189` (post-merge mirror retired after ADR distill)
-- Cross-import note: [architecture.md § skills packaging](../../references/architecture.md#skills-is-a-packaging-boundary-not-a-runtime-boundary)
+- Current runtime: [architecture.md](../../references/architecture.md)

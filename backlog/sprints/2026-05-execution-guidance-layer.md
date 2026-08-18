@@ -45,7 +45,7 @@ Dogfood relay while implementing #394's Execution Guidance Layer. Keep guidance 
 
 ## Running Context
 
-- Reference doc: `docs/archive/plans/issue-394-execution-guidance-layer-plan.md`.
+- Reference doc: `issue-394-execution-guidance-layer-plan.md` in git history (removed with `docs/archive/`).
 - Epic: #394. Completed doc child: #400 via PR #401. Closed implementation children: #395, #396, #397, #398, #399.
 - Implementation order: #395 -> #396 -> #397 -> #398 -> #399, matching the reference doc dependency chain.
 - Default workflow: `/relay` with codex executor + codex reviewer unless local evidence gives a concrete reason to change.

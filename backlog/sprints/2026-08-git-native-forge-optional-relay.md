@@ -35,7 +35,7 @@ while the existing GitHub path retains its exact-SHA and recovery guarantees.
 ### Batch 5 — Landing and observation
 
 - [x] #1206 — Verify and close the Git-native forge-optional Relay milestone
-  ([closure evidence](../../docs/git-native-forge-optional-closure.md), completed by this closure PR).
+  (completed by this closure PR).
 
 ## Deferred outside this milestone
 

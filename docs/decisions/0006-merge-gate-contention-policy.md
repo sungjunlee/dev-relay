@@ -1,12 +1,17 @@
 # ADR-0006: Merge Gate Contention Policy Split
 
-Status: Accepted (issues #166, #185)
+Status: Superseded. Merge readiness is inspect-derived from immutable facts
+and live observations; there is no stamped manifest `pr_number`. Current
+contract: [architecture.md](../../references/architecture.md).
+
+This record describes lock-timeout policy for the removed manifest resolver.
 
 ## Context
 
 `gate-check.js` stamps `git.pr_number` on first resolution under an exclusive lock, with event-journal dedup (#166). On lock timeout, the unified fail-safe path re-read the manifest and continued — correct for audit-trail dedup (layer B) but wrong for merge readiness: `review-gate.js` did not require a stamped `git.pr_number`, so timeout could yield `{ status: "lgtm", readyToMerge: true }` on an unstamped manifest.
 
-Same compliance-theater pattern as visible-warning vs fail-closed gates (see [rubric-fail-closed-history.md](../rubric-fail-closed-history.md) rule 8).
+Same compliance-theater pattern as visible-warning vs fail-closed gates
+(historical rubric fail-closed meta-rule 8).
 
 ## Decision
 
@@ -29,6 +34,4 @@ Happy-path layer A (lock + write) and layer B (dedup) from #166 stay intact; onl
 
 ## Evidence
 
-- GitHub issues `#166`, `#185` (post-merge mirrors retired after ADR distill)
-- Meta-rules: [rubric-fail-closed-history.md](../rubric-fail-closed-history.md) (rules 1, 7, 8)
-- Resolver ledger (related fail-closed theme): [relay-resolver-audit-history.md](../relay-resolver-audit-history.md)
+- GitHub issues `#166`, `#185`

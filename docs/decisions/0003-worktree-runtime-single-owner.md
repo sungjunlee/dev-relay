@@ -1,6 +1,11 @@
 # ADR-0003: Worktree Runtime Single Owner
 
-Status: Accepted (issue #187)
+Status: Superseded. `worktree-runtime.js` and `create-worktree.js` were
+deleted. Current worktree ownership is `dispatch.js` plus
+`cleanup-worktree.js`. See [architecture.md](../../references/architecture.md).
+
+This record describes the last single-owner split of the removed worktree
+runtime. Do not restore those modules.
 
 ## Context
 

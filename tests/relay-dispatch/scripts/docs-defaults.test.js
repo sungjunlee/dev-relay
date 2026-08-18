@@ -81,7 +81,7 @@ test("recovery playbook documents only the canonical inspect/recover surface", (
   assert.doesNotMatch(playbook, /recover-state\.js[^\n]*--force/);
 });
 
-test("#1209 docs freeze ReviewSubject derivation and minimized aggregate inventory", () => {
+test("#1209 docs freeze ReviewSubject derivation and drain-in-place", () => {
   const adr = readRepoFile("docs/decisions/0007-review-subject-contract-freeze.md");
   for (const member of [
     "object format",
@@ -97,44 +97,9 @@ test("#1209 docs freeze ReviewSubject derivation and minimized aggregate invento
   assert.match(adr, /<start_sha>\.\.<head>/);
   assert.doesNotMatch(adr, /git diff --binary --no-ext-diff <base>\.\.<head> --/);
   assert.match(adr, /no runtime field, fact, helper hierarchy, adapter/);
-
-  const inventory = readRepoFile("docs/run-inventory-1209.md");
-  for (const contract of [
-    "RELAY_RUNS_BASE", "RELAY_HOME", "os.homedir()",
-    "MAX_DEPTH = 12", "MAX_ENTRIES", "MAX_RUN_DIRECTORIES", "path.isAbsolute",
-    "lstatSync", "isSymbolicLink", "isFile", "16 * 1024 * 1024",
-    "schema_versions", "schema_v3", "terminal", "nonterminal",
-    "inventory_validation_failed",
-  ]) assert.ok(inventory.includes(contract), contract);
-  assert.match(
-    inventory,
-    /const \{ validateFact \} = require\('\.\/skills\/relay-dispatch\/scripts\/facts\.js'\);/,
-  );
-  assert.match(inventory, /validateFact\(event\)/);
-  assert.match(inventory, /event\.run_id !== runId/);
-  assert.doesNotMatch(inventory, /function validTerminalFact/);
-  const recorded = inventory.match(/```json\s*([\s\S]*?)\s*```/);
-  assert.ok(recorded, "recorded inventory JSON block");
-  assert.deepEqual(JSON.parse(recorded[1]), {
-    schema_versions: { "3": 15, missing: 2 },
-    schema_v3: { terminal: 9, nonterminal: 6 },
-  });
-  for (const category of [
-    "selector_class", "regular_run_json", "by_schema_version", "nonregular_run_json",
-    "malformed_run_json", "events_only_legacy_directories", "symlinked_path_components",
-    "invalid_historical", "versionless_regular_run_json", "attempt_active",
-    "malformed_event_lines", "conflict",
-  ]) {
-    assert.doesNotMatch(inventory, new RegExp(`['\"]${category}['\"]`), category);
-  }
-  assert.match(inventory, /without emitting selector metadata or the absolute\s+path/i);
-  assert.match(inventory, /symlinked child entries and non-regular `run\.json` leaves\s+are excluded.*never followed/is);
-  assert.match(inventory, /`events\.jsonl`\s+associated with a regular run must also be regular/i);
-  assert.match(inventory, /a record is terminal when it\s+has exactly one valid\s+`merge_recorded` or `run_closed` fact/i);
-  assert.match(inventory, /invalid or ambiguous terminal fact fails\s+closed/i);
-  assert.match(inventory, /Any\s+validation\s+violation.*inventory_validation_failed.*exits 1/is);
-  assert.match(inventory, /drain[- ]in[- ]place/i);
-  assert.match(inventory, /all six are terminal or explicitly closed/i);
+  assert.match(adr, /drain in\s+place/i);
+  assert.match(adr, /no record is migrated or mutated/);
+  assert.match(adr, /all six are terminal or an operator explicitly closes them/);
 });
 
 test("executor prompt leaves Git metadata and publication exclusively to canonical recovery", () => {
