@@ -108,6 +108,28 @@ function attemptFinished(verificationStatus = "not_declared") {
   };
 }
 
+function attemptStarted() {
+  return {
+    event_id: "attempt-started",
+    run_id: "issue-1135-test",
+    attempt_id: "attempt-1",
+    type: "attempt_started",
+    at: "2026-08-01T00:00:00Z",
+    actor: "codex",
+    payload: {
+      executor: "codex",
+      model: null,
+      start_sha: HEAD,
+      host_kind: "local",
+      host_handle: "host-1",
+      stdout_path: "/run/stdout.log",
+      stderr_path: "/run/stderr.log",
+      result_path: "/run/result.txt",
+      timeout_ms: 1000,
+    },
+  };
+}
+
 function closedFact() {
   return {
     event_id: "closed",
@@ -582,6 +604,39 @@ test("reviewer escalation redispatch resolution derives the changes-requested li
   assert.equal(result.derived.reason, "review_resolution_redispatch");
   assert.equal(result.derived.resolution_of_event_id, resolution.event_id);
   assert.equal(dispatch.assertResumeInspection(result), result);
+});
+
+test("#1285 completed matching-head no-op after changes_requested is directly redispatchable", async () => {
+  const observations = publicationObservations({
+    git: {
+      ...publicationObservations().git,
+      head_sha: HEAD,
+      reviewable_work: true,
+      branch_commit_exists: true,
+      reviewable_dirty: false,
+      remote_head_sha: HEAD,
+      remote_relation: "equal",
+    },
+    github: {
+      ...publicationObservations().github,
+      matching_pr_count: 1,
+      pr_number: 42,
+      pr_state: "OPEN",
+      pr_head_sha: HEAD,
+      pr_base_sha: START,
+    },
+  });
+  const requested = reviewFact({ eventId: "review-changes-requested", verdict: "changes_requested" });
+  const inspected = await inspectRun(harness({
+    facts: [pullRequestFact(HEAD), verificationFact(), requested, attemptStarted(), attemptFinished()],
+    observations,
+  }));
+
+  assert.equal(inspected.derived.action, "redispatch");
+  assert.equal(inspected.derived.reason, "changes_requested");
+  assert.equal(inspected.recommended_action.kind, "redispatch");
+  assert.deepEqual(inspected.recommended_action.steps, []);
+  assert.equal(dispatch.assertResumeInspection(inspected), inspected);
 });
 
 test("review resolution lineage violations fail closed with a typed diagnostic", async () => {
