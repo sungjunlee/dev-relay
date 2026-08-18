@@ -14,11 +14,10 @@ For the live runtime contract, prefer [`references/architecture.md`](../../refer
 | [2026-08-03-harness-complexity-criterion.md](./2026-08-03-harness-complexity-criterion.md) | What earns its size |
 | [2026-08-03-migration-overlay-disposition.md](./2026-08-03-migration-overlay-disposition.md) | Delete the migration overlay; a run dir is claimed by `mkdir` |
 | [2026-08-12-trusted-local-execution-contract.md](./2026-08-12-trusted-local-execution-contract.md) | One trusted-local execution path; native isolation when available |
-| [2026-07-21-risk-adaptive-observation-window.md](./2026-07-21-risk-adaptive-observation-window.md) | Bounded observation window per risk class |
 
 ## Historical
 
-These describe modules or policies that no longer exist. Do not restore them.
+These describe deleted modules or retired policy. Do not restore them.
 Current behavior is in `references/architecture.md`.
 
 | Record | Was | Source |
@@ -29,6 +28,7 @@ Current behavior is in `references/architecture.md`.
 | [0004-review-runner-staged-facade.md](./0004-review-runner-staged-facade.md) | `review-runner/` staged helpers | `#189` |
 | [0005-rubric-mandatory-policy.md](./0005-rubric-mandatory-policy.md) | Grandfathered rubric bypass retirement | `#190` |
 | [0006-merge-gate-contention-policy.md](./0006-merge-gate-contention-policy.md) | Manifest lock-timeout policy split | `#166`, `#185` |
+| [2026-07-21-risk-adaptive-observation-window.md](./2026-07-21-risk-adaptive-observation-window.md) | Bounded observation window; retired reporter | `#1036` |
 
 ## When to add an ADR
 
