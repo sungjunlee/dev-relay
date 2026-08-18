@@ -1343,6 +1343,45 @@ test("a MERGED PR with durable identity ignores a different recorded head", asyn
   assert.equal(inspected.blockers.some((item) => item.code === "unrecorded_merged_pr"), false);
 });
 
+test("a recorded merge stays terminal when its durable PR identity outlives the recorded head", async () => {
+  const merge = {
+    event_id: "merge-recorded",
+    run_id: "issue-1135-test",
+    type: "merge_recorded",
+    at: "2026-08-01T00:03:00Z",
+    actor: "owner",
+    payload: {
+      pr_number: 42,
+      reviewed_source_sha: HEAD,
+      pr_head_sha: HEAD,
+      result_target_sha: TARGET,
+      method: "external",
+      operator: "owner",
+      override_reason: null,
+      operation_id: "merge-op-1",
+      authorization_id: "merge-authorization-1",
+      observation_nonce: "merge-observation-1",
+      done_criteria_sha256: HASH,
+    },
+  };
+  const h = harness({
+    facts: [attemptFinished(), pullRequestFact(START), merge],
+    observations: publicationObservations({
+      github: {
+        available: true, pr_lookup_complete: true, matching_pr_count: 1,
+        repo: "owner/repo", pr_number: 42, pr_state: "MERGED",
+        head_ref: "issue-1135", base_ref: "main", pr_head_sha: HEAD, merge_sha: TARGET,
+      },
+    }),
+  });
+
+  const inspected = await inspectRun(h);
+  assert.equal(inspected.derived.action, "none");
+  assert.equal(inspected.derived.reason, "merged");
+  assert.deepEqual(inspected.blockers, []);
+  assert.equal(inspected.recommended_action.kind, "none");
+});
+
 test("an open PR with local head drift pushes, refreshes its durable head, then verifies", async () => {
   const observations = publicationObservations({
     git: {

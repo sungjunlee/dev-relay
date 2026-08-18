@@ -336,7 +336,6 @@ function foldRunFacts({
       ? Boolean(
         terminal.payload.reviewed_source_sha !== terminal.payload.pr_head_sha
         || (prFact && terminal.payload.pr_number !== prFact.payload.pr_number)
-        || (prFact && terminal.payload.pr_head_sha !== prFact.payload.head_sha)
         || (githubFacts.pr_number && githubFacts.pr_number !== terminal.payload.pr_number)
         || (githubFacts.pr_head_sha && githubFacts.pr_head_sha !== terminal.payload.pr_head_sha)
         || (githubFacts.pr_state && githubFacts.pr_state !== "MERGED")
