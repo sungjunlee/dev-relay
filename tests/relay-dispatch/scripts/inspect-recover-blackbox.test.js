@@ -1672,17 +1672,25 @@ test("terminal fact before receipt resumes without active facts or repeated effe
       };
     },
   };
+  let cleanupCalls = 0;
+  const cleanupMerged = async (inspection) => {
+    cleanupCalls += 1;
+    assert.equal(inspection.derived.terminal, true);
+    assert.equal(inspection.derived.reason, "merged");
+    return { status: cleanupCalls === 1 ? "removed" : "already_absent" };
+  };
   await assert.rejects(recoverRun({
-    ...h, writeReceipt, actor: "owner", reason: "reconcile external merge", effects,
+    ...h, writeReceipt, actor: "owner", reason: "reconcile external merge", effects, cleanupMerged,
   }), /crash_after_terminal_fact/);
   assert.equal(h.state.facts.filter((fact) => fact.type === "merge_recorded").length, 1);
   assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 0);
   assert.deepEqual(h.state.effects, ["record_external_merge"]);
 
   const retry = await recoverRun({
-    ...h, writeReceipt, actor: "owner", reason: "reconcile external merge", effects,
+    ...h, writeReceipt, actor: "owner", reason: "reconcile external merge", effects, cleanupMerged,
   });
   assert.equal(retry.status, "converged");
+  assert.deepEqual(retry.cleanup, { status: "removed" });
   assert.deepEqual(h.state.effects, ["record_external_merge"]);
   assert.equal(h.state.facts.filter((fact) => fact.type === "merge_recorded").length, 1);
   assert.equal(h.state.facts.filter((fact) => fact.type === "recovery_applied").length, 0);
@@ -1691,9 +1699,10 @@ test("terminal fact before receipt resumes without active facts or repeated effe
   const receiptWrites = h.state.writes;
   const completed = await recoverRun({
     ...h, writeReceipt, actor: "owner", reason: "reconcile external merge", effects,
-    expectedActionKey: retry.action_key,
+    expectedActionKey: retry.action_key, cleanupMerged,
   });
   assert.equal(completed.status, "noop");
+  assert.deepEqual(completed.cleanup, { status: "already_absent" });
   assert.equal(JSON.stringify(h.state.facts), factBytes);
   assert.deepEqual(h.state.effects, ["record_external_merge"]);
   assert.equal(h.state.writes, receiptWrites);

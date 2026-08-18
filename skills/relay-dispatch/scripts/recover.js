@@ -6,6 +6,7 @@ const path = require("path");
 const { isDeepStrictEqual } = require("util");
 const factsModule = require("./facts");
 const host = require("./host");
+const { cleanupWorktree } = require("./cleanup-worktree");
 const { execGh, execGit, resolveBranchRemote } = require("./exec");
 const { assertTrustedWorktree, readArtifact, readJsonIfPresent, readRunRecord, writeImmutableJson } = require("./run-store");
 const runStore = require("./run-store");
@@ -694,6 +695,69 @@ function externalMergeObserver(record) {
     },
   };
 }
+function absentMergedTerminalObservation() {
+  return {
+    git: {},
+    github: {},
+    host: { status: "absent", cleanup_pending: false, live: false },
+    verification: {},
+    blockers: [],
+  };
+}
+
+function readWorktreeGitState(runRecord) {
+  const worktree = fs.realpathSync(runRecord.git.worktree);
+  if (!fs.statSync(worktree).isDirectory()) throw new Error("run worktree is not a directory");
+  const status = gitBytes(worktree, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  const dirt = classifyRepositoryDirt(status);
+  const headSha = execGit(worktree, ["--no-optional-locks", "rev-parse", "HEAD"]);
+  return {
+    worktree,
+    branch: execGit(worktree, ["--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"]),
+    headSha,
+    treeSha: execGit(worktree, ["--no-optional-locks", "rev-parse", "HEAD^{tree}"]),
+    status,
+    dirt,
+    unsafeEntries: unsafeWorktreeEntries(worktree, status),
+  };
+}
+
+function mergedTerminalGitFacts(runRecord, state) {
+  return {
+    head_sha: state.headSha,
+    tree_sha: state.treeSha,
+    branch: state.branch,
+    base_branch: runRecord.git.base_branch,
+    reviewable_work: state.dirt.hasReviewableDirt || state.headSha !== runRecord.git.start_sha,
+    reviewable_dirty: state.dirt.hasReviewableDirt,
+    tree_differs_from_start: state.dirt.hasReviewableDirt,
+    branch_commit_exists: state.headSha !== runRecord.git.start_sha,
+    remote_name: null,
+    remote_url: null,
+    repo_remote: runRecord.repo.remote,
+    remote_head_sha: null,
+    remote_relation: null,
+    status: state.status.toString("utf8"),
+  };
+}
+
+function observeMergedTerminalGit(runRecord) {
+  const state = readWorktreeGitState(runRecord);
+  const blockers = state.unsafeEntries.length ? [{
+    code: "unsafe_worktree_entry",
+    message: `worktree contains unsupported special entries: ${state.unsafeEntries.join(", ")}`,
+    retryable: false,
+    details: { paths: state.unsafeEntries },
+  }] : [];
+  return {
+    git: mergedTerminalGitFacts(runRecord, state),
+    github: {},
+    host: { status: "absent", cleanup_pending: false, live: false },
+    verification: {},
+    blockers,
+  };
+}
+
 async function observeProduction({
   runDir,
   runRecord,
@@ -701,9 +765,6 @@ async function observeProduction({
   verificationFile = null,
   activeRecoveryLock = null,
 }) {
-  const worktree = fs.realpathSync(runRecord.git.worktree);
-  if (!fs.statSync(worktree).isDirectory()) throw new Error("run worktree is not a directory");
-  const branch = execGit(worktree, ["--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"]);
   const durable = foldRunFacts({
     runRecord,
     facts: runFacts,
@@ -711,6 +772,13 @@ async function observeProduction({
     githubFacts: {},
     hostFacts: {},
   });
+  if (durable.terminal === true && durable.reason === "merged") {
+    if (!fs.existsSync(runRecord.git.worktree)) return absentMergedTerminalObservation();
+    return observeMergedTerminalGit(runRecord);
+  }
+  const worktree = fs.realpathSync(runRecord.git.worktree);
+  if (!fs.statSync(worktree).isDirectory()) throw new Error("run worktree is not a directory");
+  const branch = execGit(worktree, ["--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"]);
   const reviewedResultAlreadyClosed = durable.terminal === true
     && durable.reason === "reviewed_result_ready";
   if (branch !== runRecord.git.branch && !reviewedResultAlreadyClosed) {
@@ -1134,6 +1202,7 @@ async function recoverRun({
   readReceipt = async () => null,
   writeReceipt,
   readSnapshot = defaultSnapshot,
+  cleanupMerged = null,
 } = {}) {
   if (typeof withLock !== "function") throw new Error("recoverRun requires an exclusive withLock function");
   if (!effects || typeof effects.converge !== "function") {
@@ -1155,6 +1224,12 @@ async function recoverRun({
   }
   return withLock(async () => {
     const before = await inspectRun({ runDir, observer, readSnapshot });
+    const finish = async (result, inspection = result.after || before) => {
+      if (typeof cleanupMerged !== "function"
+        || inspection.derived?.terminal !== true
+        || inspection.derived?.reason !== "merged") return result;
+      return { ...result, cleanup: await cleanupMerged(inspection) };
+    };
     // A caller retrying a completed inspected action is already converged even
     // when the fresh post-recovery action has changed. Re-observation still
     // happens under the lock, but no intent/effect/fact/receipt write follows.
@@ -1175,13 +1250,13 @@ async function recoverRun({
           ? "close_reviewed_result" : null,
       });
       if (completed) {
-        return recoverResult({
+        return finish(recoverResult({
           before,
           status: "noop",
           operationId: completed.operation_id,
           actionKeyValue: expectedActionKey,
           receipt: completed,
-        });
+        }));
       }
     }
     let intent = await readIntent({ runDir, facts: before.facts });
@@ -1201,13 +1276,13 @@ async function recoverRun({
       });
     }
     if (!intent && (before.derived.terminal === true || before.recommended_action.kind === "none")) {
-      return recoverResult({
+      return finish(recoverResult({
         before,
         status: "noop",
         operationId,
         actionKeyValue,
         blockers: before.blockers,
-      });
+      }));
     }
     if (!intent && before.recommended_action.kind !== "recover") {
       return recoverResult({
@@ -1298,13 +1373,13 @@ async function recoverRun({
       }
       const receipt = recoveryReceipt(operationId, actionKeyValue, matchingTerminalFacts.map((fact) => fact.event_id));
       await writeReceipt({ runDir, actionKey: actionKeyValue, operationId, receipt });
-      return recoverResult({
+      return finish(recoverResult({
         before,
         status: "converged",
         operationId,
         actionKeyValue,
         receipt,
-      });
+      }));
     }
     // R1: a crash can land every deterministic step fact before the receipt is
     // written. Complete that operation from durable facts without replaying
@@ -1347,10 +1422,10 @@ async function recoverRun({
       ]);
       await writeReceipt({ runDir, actionKey: actionKeyValue, operationId, receipt });
       const after = await inspectRun({ runDir, observer, readSnapshot });
-      return recoverResult({
+      return finish(recoverResult({
         before, status: "converged", operationId, actionKeyValue,
         applied, receipt, after,
-      });
+      }), after);
     }
     if (intent.actor !== actor || intent.reason !== reason) {
       return recoverResult({
@@ -1465,7 +1540,7 @@ async function recoverRun({
         completionFacts.map((fact) => fact.event_id),
       );
       await writeReceipt({ runDir, actionKey: actionKeyValue, operationId, receipt });
-      return recoverResult({
+      return finish(recoverResult({
         before,
         status: "converged",
         operationId,
@@ -1473,7 +1548,7 @@ async function recoverRun({
         applied,
         receipt,
         after: afterEffects,
-      });
+      }), afterEffects);
     }
     const recoveryFact = recoveryAppliedFact({ runId: before.run_id, intent, after: afterEffects, applied });
     await appendFact(recoveryFact);
@@ -2044,12 +2119,27 @@ async function recoverProductionRun({
 } = {}) {
   const canonicalRunDir = fs.realpathSync(runDir);
   const record = readRunRecord({ runDir: canonicalRunDir });
-  const trustedWorktree = assertTrustedRecoveryWorktree({
-    repoRoot: record.repo.root,
-    activeCheckout: activeCheckout || process.cwd(),
-    relayWorktreeBase: relayWorktreeBase || runStore.relayWorktreeBase(),
-    worktree: record.git.worktree,
-  });
+  let mergedWorktreeAlreadyAbsent = false;
+  if (!fs.existsSync(record.git.worktree)) {
+    const initialFacts = readFacts({ eventsPath: path.join(canonicalRunDir, "events.jsonl") }).facts;
+    const initialDurable = foldRunFacts({
+      runRecord: record,
+      facts: initialFacts,
+      gitFacts: {},
+      githubFacts: {},
+      hostFacts: {},
+    });
+    mergedWorktreeAlreadyAbsent = initialDurable.terminal === true
+      && initialDurable.reason === "merged";
+  }
+  const trustedWorktree = mergedWorktreeAlreadyAbsent
+    ? fs.realpathSync(record.repo.root)
+    : assertTrustedRecoveryWorktree({
+      repoRoot: record.repo.root,
+      activeCheckout: activeCheckout || process.cwd(),
+      relayWorktreeBase: relayWorktreeBase || runStore.relayWorktreeBase(),
+      worktree: record.git.worktree,
+    });
   if (closeIntent !== null && resolutionIntent !== null) {
     throw new Error("closeIntent and resolutionIntent are mutually exclusive");
   }
@@ -2162,6 +2252,11 @@ async function recoverProductionRun({
     reason,
     expectedActionKey,
     effects: createProductionEffects({ verificationFile, getLockContext: () => lockContext }),
+    cleanupMerged: async (inspection) => {
+      const mergeFact = inspection.facts.filter((fact) => fact.type === "merge_recorded").at(-1);
+      if (!mergeFact) throw new Error("terminal merged run is missing merge provenance");
+      return cleanupWorktree(record, mergeFact);
+    },
     ...io,
     withLock: (callback) => withProductionRecoveryLock({
       runDir: canonicalRunDir,
