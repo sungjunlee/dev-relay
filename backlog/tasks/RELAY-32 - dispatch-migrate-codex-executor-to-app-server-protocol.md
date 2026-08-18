@@ -49,7 +49,7 @@ Keep `codex exec` as fallback for simplicity and for environments where app-serv
 
 ## References
 
-- Analysis: `docs/codex-app-server-analysis.md`
+- Analysis: `docs/codex-app-server-analysis.md` in git history (removed with `docs/archive/`)
 - Key source: `references/codex-plugin-cc/plugins/codex/scripts/lib/codex.mjs`
 - Key source: `references/codex-plugin-cc/plugins/codex/scripts/lib/app-server.mjs`
 
