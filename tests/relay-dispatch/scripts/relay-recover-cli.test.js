@@ -94,6 +94,69 @@ function fixture({ branch = "main", delivery = "github", baseBranch = "main" } =
   return { root, active, repo, remote, bareRemote, runDir, gh, ghLog, gitBin, gitLog, head, tree, doneHash, branch };
 }
 
+function mergedLinkedFixture({ dirty = false, advanceHead = false } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-merged-cleanup-")));
+  const repo = path.join(root, "repo");
+  const worktree = path.join(root, "worktree");
+  const runDir = path.join(root, "issue-1290-cleanup");
+  fs.mkdirSync(repo);
+  fs.mkdirSync(runDir);
+  git(repo, ["init", "-b", "main"]);
+  git(repo, ["config", "user.email", "relay@example.test"]);
+  git(repo, ["config", "user.name", "Relay Test"]);
+  fs.writeFileSync(path.join(repo, "README.md"), "initial\n");
+  git(repo, ["add", "README.md"]);
+  git(repo, ["commit", "-m", "initial"]);
+  const start = git(repo, ["rev-parse", "HEAD"]);
+  git(repo, ["worktree", "add", "-b", "issue-1290", worktree]);
+  fs.writeFileSync(path.join(worktree, "README.md"), "reviewed\n");
+  git(worktree, ["commit", "-am", "reviewed change"]);
+  const reviewedHead = git(worktree, ["rev-parse", "HEAD"]);
+  const donePath = path.join(runDir, "done-criteria.md");
+  fs.writeFileSync(donePath, "cleanup retained worktree\n");
+  const doneHash = crypto.createHash("sha256").update(fs.readFileSync(donePath)).digest("hex");
+  createRunRecord({
+    runDir,
+    record: {
+      version: 3,
+      run_id: "issue-1290-cleanup",
+      repo: { root: fs.realpathSync(repo), remote: "owner/repo" },
+      git: { branch: "issue-1290", base_branch: "main", worktree: fs.realpathSync(worktree), start_sha: start },
+      contract: { done_criteria_path: donePath, done_criteria_sha256: doneHash },
+      roles: { orchestrator: "codex", executor: "codex", reviewer: "claude" },
+      parent: null,
+      ownership_digest: null,
+      created_at: "2026-08-01T00:00:00Z",
+    },
+  });
+  writeFacts(runDir, [{
+    event_id: "merge-recorded",
+    run_id: "issue-1290-cleanup",
+    type: "merge_recorded",
+    at: "2026-08-01T00:05:00Z",
+    actor: "owner",
+    payload: {
+      pr_number: 42,
+      reviewed_source_sha: reviewedHead,
+      pr_head_sha: reviewedHead,
+      result_target_sha: "d".repeat(40),
+      method: "external",
+      operator: "owner",
+      override_reason: "external merge",
+      operation_id: "recover-external-merge",
+      authorization_id: "merge-authorization",
+      observation_nonce: "merge-observation",
+      done_criteria_sha256: doneHash,
+    },
+  }]);
+  if (advanceHead) {
+    fs.writeFileSync(path.join(worktree, "README.md"), "advanced\n");
+    git(worktree, ["commit", "-am", "advance after review"]);
+  }
+  if (dirty) fs.writeFileSync(path.join(worktree, "dirty.txt"), "dirty\n");
+  return { root, repo, worktree, runDir };
+}
+
 function writeFacts(runDir, facts) {
   facts.forEach((fact) => validateFact(fact));
   fs.writeFileSync(path.join(runDir, "events.jsonl"), `${facts.map(JSON.stringify).join("\n")}\n`);
@@ -1169,6 +1232,10 @@ test("production external MERGED recovery records durable provenance and no post
   assert.equal(recovered.status, 0, recovered.stderr);
   const output = JSON.parse(recovered.stdout);
   assert.equal(output.status, "converged");
+  assert.deepEqual(output.cleanup, {
+    status: "retained",
+    reason: "worktree belongs to a different repository",
+  });
   const eventsPath = path.join(f.runDir, "events.jsonl");
   const factsAfter = fs.readFileSync(eventsPath, "utf8").trim().split("\n").map(JSON.parse);
   const merges = factsAfter.filter((fact) => fact.type === "merge_recorded");
@@ -1195,6 +1262,61 @@ test("production external MERGED recovery records durable provenance and no post
   assert.equal(JSON.parse(retry.stdout).status, "noop");
   assert.equal(activeFactBytes(eventsPath), activeFactsBytes);
   assert.equal(fs.readFileSync(recoveryReceipt, "utf8"), receiptBytes);
+});
+
+test("merged-terminal recover removes a clean registered worktree and reports an absent retry", (t) => {
+  const f = mergedLinkedFixture();
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const env = { ...process.env, RELAY_WORKTREE_BASE: f.root };
+  const recover = () => spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "release merged worktree",
+    "--actor", "owner", "--json",
+  ], { cwd: ROOT, encoding: "utf8", env });
+  const first = recover();
+  assert.equal(first.status, 0, first.stderr);
+  const removed = JSON.parse(first.stdout);
+  assert.equal(removed.status, "noop");
+  assert.equal(removed.after.derived.reason, "merged");
+  assert.equal(removed.after.recommended_action.kind, "none");
+  assert.deepEqual(removed.cleanup, { status: "removed" });
+  assert.equal(fs.existsSync(f.worktree), false);
+  const second = recover();
+  assert.equal(second.status, 0, second.stderr);
+  const absent = JSON.parse(second.stdout);
+  assert.equal(absent.status, "noop");
+  assert.equal(absent.after.derived.reason, "merged");
+  assert.equal(absent.after.recommended_action.kind, "none");
+  assert.deepEqual(absent.cleanup, { status: "already_absent" });
+});
+
+test("merged-terminal recover retains a dirty registered worktree", (t) => {
+  const f = mergedLinkedFixture({ dirty: true });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const recovered = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "release merged worktree",
+    "--actor", "owner", "--json",
+  ], { cwd: ROOT, encoding: "utf8", env: { ...process.env, RELAY_WORKTREE_BASE: f.root } });
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.deepEqual(JSON.parse(recovered.stdout).cleanup, {
+    status: "retained",
+    reason: "worktree contains uncommitted changes",
+  });
+  assert.equal(fs.existsSync(f.worktree), true);
+});
+
+test("merged-terminal recover retains a registered worktree whose HEAD moved", (t) => {
+  const f = mergedLinkedFixture({ advanceHead: true });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const recovered = spawnSync(process.execPath, [
+    CLI, "recover", "--run-dir", f.runDir, "--reason", "release merged worktree",
+    "--actor", "owner", "--json",
+  ], { cwd: ROOT, encoding: "utf8", env: { ...process.env, RELAY_WORKTREE_BASE: f.root } });
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.deepEqual(JSON.parse(recovered.stdout).cleanup, {
+    status: "retained",
+    reason: "worktree HEAD changed after review",
+  });
+  assert.equal(fs.existsSync(f.worktree), true);
 });
 
 test("inspect advertises exact-identity discharge for an obsolete merged-PR intent", (t) => {
