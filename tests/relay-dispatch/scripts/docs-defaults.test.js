@@ -127,8 +127,11 @@ test("operator-facing OpenCode docs use the installed adapter contract", () => {
 
 test("model selection docs describe explicit bindings without legacy route configuration", () => {
   const docs = [
+    readRepoFile("README.md"),
     readRepoFile("docs/relay-operator-guide.md"),
     readRepoFile("references/architecture.md"),
+    readRepoFile("references/install-graph.md"),
+    readRepoFile("references/operator-surface.md"),
   ].join("\n");
 
   for (const phrase of [
@@ -152,9 +155,10 @@ test("model selection docs describe explicit bindings without legacy route confi
   assert.match(docs, /adapter.*capability|capability.*adapter/i);
   assert.match(
     docs,
-    /check --phase review --reviewer antigravity --model google\/antigravity-cli --json/,
+    /--reviewer antigravity --model google\/antigravity-cli/,
   );
   assert.doesNotMatch(docs, /agy --model/);
+  assert.doesNotMatch(docs, /relay-config/);
 });
 
 test("adapter platform docs publish the flat four-method adapter contract", () => {

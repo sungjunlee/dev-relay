@@ -65,7 +65,7 @@ node --test --test-concurrency=1 \
   tests/relay-ready/scripts/*.test.js tests/relay-plan/scripts/*.test.js \
   tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js \
   tests/relay-merge/scripts/*.test.js tests/relay/scripts/*.test.js \
-  tests/relay-config/scripts/*.test.js tests/relay-fleet/scripts/*.test.js \
+  tests/relay-fleet/scripts/*.test.js \
   tests/skills-lint/scripts/*.test.js
 ```
 

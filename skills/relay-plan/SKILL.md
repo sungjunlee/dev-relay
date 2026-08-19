@@ -120,8 +120,6 @@ Use the same prompt template and completion responsibilities for every executor.
 
 Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, and the recommended `relay-dispatch` command.
 
-Use `relay-config doctor` or `relay-config check` to validate an explicit adapter/model selection; relay-config has no mutable route catalog or defaults.
-
 When Step 7 persisted Done Criteria, the dispatch handoff must preserve both anchors:
 
 ```bash

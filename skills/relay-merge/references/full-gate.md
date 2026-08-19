@@ -7,9 +7,9 @@ relay sessions on one machine:
 node skills/relay-merge/scripts/run-full-gate.js --repo . --json
 ```
 
-The default suite set is the nine CI globs for `relay-ready`, `relay-plan`,
-`relay-dispatch`, `relay-review`, `relay-merge`, `relay`, `relay-config`,
-`relay-fleet`, and `skills-lint`. Files run one at a time. Override them with a
+The default suite set is the CI globs for `relay-ready`, `relay-plan`,
+`relay-dispatch`, `relay-review`, `relay-merge`, `relay`, `relay-fleet`, and
+`skills-lint`. Files run one at a time. Override them with a
 quoted, comma-separated `--suites` glob set. Evidence defaults to
 `<repo>/.relay/full-gate-<timestamp>-<invoker-pid>.log`; `--output` selects a
 stable operator path. `<output>.done` is the completion sentinel.

@@ -19,7 +19,6 @@ const DEFAULT_SUITES = [
   "tests/relay-review/scripts/*.test.js",
   "tests/relay-merge/scripts/*.test.js",
   "tests/relay/scripts/*.test.js",
-  "tests/relay-config/scripts/*.test.js",
   "tests/relay-fleet/scripts/*.test.js",
   "tests/skills-lint/scripts/*.test.js",
 ];
@@ -364,7 +363,7 @@ function printHelp() {
   console.log("\nRun pre-merge test files serially in a detached, machine-locked process.");
   console.log("\nOptions:");
   console.log(`  --repo <worktree>       ${formatCliModeLabel("--repo", CLI_ARG_OPTIONS)} Required repository/worktree root`);
-  console.log(`  --suites <glob-set>     ${formatCliModeLabel("--suites", CLI_ARG_OPTIONS)} Comma-separated globs (default: nine CI suite globs)`);
+  console.log(`  --suites <glob-set>     ${formatCliModeLabel("--suites", CLI_ARG_OPTIONS)} Comma-separated globs (default: the CI suite globs)`);
   console.log(`  --output <path>         ${formatCliModeLabel("--output", CLI_ARG_OPTIONS)} Evidence log (default: <repo>/.relay/full-gate-<timestamp>-<pid>.log)`);
   console.log(`  --lock-timeout <secs>   ${formatCliModeLabel("--lock-timeout", CLI_ARG_OPTIONS)} Maximum lock wait (default: 600)`);
   console.log(`  --json                  ${formatCliModeLabel("--json", CLI_ARG_OPTIONS)} Emit one JSON result object`);

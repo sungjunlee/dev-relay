@@ -15,7 +15,6 @@ const EXPECTED_RUNNERS = Object.freeze({
   "relay-review": "ubuntu-latest",
   "relay-merge": "macos-latest",
   relay: "ubuntu-latest",
-  "relay-config": "ubuntu-latest",
   "relay-fleet": "ubuntu-latest",
   "skills-lint": "ubuntu-latest",
 });

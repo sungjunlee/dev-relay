@@ -31,8 +31,11 @@ Dev-backlog schema-v2 JSON is the source of truth for sprint ownership. Resoluti
 
 One fleet represents one validated track. Every leaf carries the same normalized owner through its child manifest and finalize path; missing, contradictory, ambiguous, or mixed ownership must fail before fleet manifest, issue lock, worktree, or dispatch side effects.
 
-### Route-facing documentation requires the full repository gate
-Relay configuration vocabulary is exposed through both `skills/relay-config/` and the delegated core under `skills/relay-dispatch/`. Changes to either surface, especially SKILL.md wording, must run the serialized full repository suite because sibling suites pin the public prose and aliases.
+### Operator-surface documentation requires the full repository gate
+Adapter selection is explicit CLI input on dispatch and review. Changes to
+`references/operator-surface.md`, the adapter matrix, or public CLI examples
+must run the serialized full repository suite because sibling suites pin the
+public prose.
 
 ## Known Gotchas
 
