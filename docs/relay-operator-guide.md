@@ -109,8 +109,8 @@ Relay binds an executor and an optional model when a dispatch run is created.
 Use `--executor` to select an adapter and `--model` for an explicit
 provider/model value. Omitting `--model` delegates to that adapter's provider
 default. On resume, the executor and model are immutable. A missing CLI fails
-closed as `executable not found`. Unsupported reviewer/phase pairs fail closed
-at review.
+closed as `executable not found`. At review, `--reviewer` must equal the run's
+immutable reviewer binding; unsupported reviewer/phase pairs fail closed.
 
 ```bash
 node skills/relay-dispatch/scripts/dispatch.js . \
@@ -118,9 +118,9 @@ node skills/relay-dispatch/scripts/dispatch.js . \
   --executor opencode --model example/opencode-model-fast \
   --rubric-file /tmp/issue-42-rubric.yaml
 node skills/relay-review/scripts/review-runner.js \
-  --repo . --run-id <id> --reviewer pi --model example/pi-model-fast --json
+  --repo . --run-id <pi-run-id> --reviewer pi --model example/pi-model-fast --json
 node skills/relay-review/scripts/review-runner.js \
-  --repo . --run-id <id> --reviewer antigravity --model google/antigravity-cli --json
+  --repo . --run-id <antigravity-run-id> --reviewer antigravity --model google/antigravity-cli --json
 ```
 
 ## Operate from a clone

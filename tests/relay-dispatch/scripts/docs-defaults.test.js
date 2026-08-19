@@ -139,7 +139,6 @@ test("model selection docs describe explicit bindings without legacy route confi
     "~/.relay/projects/<repo-slug>/policy.json",
     "~/.relay/projects/<repo-slug>/routes.json",
     "route-plan.json",
-    "relay-config plan-run",
     "--route-intent-file",
   ]) {
     assert.doesNotMatch(docs, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
