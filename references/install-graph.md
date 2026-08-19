@@ -26,7 +26,7 @@ it is all 17 installed files: `dispatch.js`, `run-store.js`, `facts.js`,
 `cleanup-worktree.js`, plus the eight files in `adapters/` (the registry and
 seven executor descriptors). No skill may import a legacy manifest facade,
 event helper, execution-evidence sidecar, executor-specific registration
-module, worktree utility, or migration-overlay module.
+module, a worktree utility outside this core, or a migration-overlay module.
 
 | Phase | Entry point | Write authority |
 | --- | --- | --- |
