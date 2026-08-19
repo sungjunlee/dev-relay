@@ -17,8 +17,9 @@ For the live runtime contract, prefer [`references/architecture.md`](../../refer
 
 ## Historical
 
-These describe deleted modules or retired policy. Do not restore them.
-Current behavior is in `references/architecture.md`.
+These name deleted modules or retired policy. Each file is a tombstone;
+the original body lives in git history. Do not restore them. Current
+behavior is in `references/architecture.md`.
 
 | Record | Was | Source |
 | --- | --- | --- |

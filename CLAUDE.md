@@ -20,6 +20,7 @@ skills/relay-dispatch/scripts/
   run-store.js             immutable run/artifact trust boundary
   facts.js                 append-only facts + merge authorization
   host.js                  lock, detached host, runtime binding, process-scope cleanup
+  cleanup-worktree.js      clean registered worktree removal
   adapter-contract.js, exec.js
   adapters/                registry + seven retained native executors
 ```

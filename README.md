@@ -99,7 +99,6 @@ generated inventory or baseline to reconcile.
 - [Glossary](CONTEXT.md)
 - [Operator guide](docs/relay-operator-guide.md)
 - [Adapter platform](skills/relay-dispatch/references/agent-adapter-platform.md)
-- [Runtime inventory](docs/script-inventory-and-cleanup.md)
 - [Contributing conventions](CLAUDE.md)
 
 Run the focused suites with Node's test runner, or use the serialized complete

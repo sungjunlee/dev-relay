@@ -16,13 +16,9 @@ node skills/relay/scripts/run-preflight.js \
 ```
 
 With no configured remotes, the result selects `local-reviewed-result`; do not
-fetch or invoke `gh`, and use local task text or the user description. A
-supported GitHub source retains the existing PR/in-flight dedup scan and may
-fetch the reported remote, use `gh`, and proceed only with explicit executor
-and reviewer ambient CLI authentication plus network availability. Non-Git input returns
-`SOURCE_NOT_GIT` with explicit `git init` or direct `delegate` remediation.
-Unsupported forges return `SOURCE_UNSUPPORTED_REMOTE`; GitLab is not supported
-and Relay never silently falls back to local delivery.
+fetch or invoke `gh`. A supported GitHub source retains the existing PR scan
+and may fetch. Non-Git input returns `SOURCE_NOT_GIT`. Unsupported forges
+return `SOURCE_UNSUPPORTED_REMOTE`; GitLab is not supported.
 
 ## Default Workflow
 
@@ -32,9 +28,9 @@ source gate -> prepare Done Criteria -> dispatch -> inspect -> recover -> review
                                       local Reviewed Result <- recover       +-> GitHub merge (explicit)
 ```
 
-1. After the source gate, dispatch a new immutable run. New runs require a frozen rubric or Done
-   Criteria source; the run directory is claimed by a non-recursive `mkdir`,
-   which fails closed if that run id already exists.
+1. After the source gate, dispatch a new immutable run. New runs require a frozen
+   rubric or Done Criteria source; the run directory is claimed by a
+   non-recursive `mkdir`.
 
    ```bash
    node skills/relay-dispatch/scripts/dispatch.js . \
@@ -65,8 +61,8 @@ source gate -> prepare Done Criteria -> dispatch -> inspect -> recover -> review
    ```
 
    A request for changes returns `redispatch`; dispatch again with the same
-   `--run-id`, then follow inspection and recovery again. A passing review
-   returns `merge` on GitHub or `recover` for local Reviewed Result closure.
+   `--run-id`. A passing review returns `merge` on GitHub or `recover` for
+   local Reviewed Result closure.
 
 5. On the GitHub route, merge only on explicit operator authority.
 
@@ -76,18 +72,14 @@ source gate -> prepare Done Criteria -> dispatch -> inspect -> recover -> review
      --repo . --run-id <id> --merge-method squash --json
    ```
 
-`finalize-run` is only for the GitHub route. It requires the exact current PR
-source SHA, a passing independent review, passed verification for the frozen
-Done Criteria, and a fresh GitHub observation. Local Reviewed Result delivery
+`finalize-run` is only for the GitHub route. Local Reviewed Result delivery
 stops at canonical recovery closure; it has no PR or merge step.
 
 ## Close a run
 
-Closing is not its own verb: use `relay-recover recover` — the only mutating
-operation — with an explicit operator and reason.
-Closing a local Reviewed Result appends a `run_closed` fact and is idempotent
-only for the same intent; a GitHub run instead reaches the explicit merge
-boundary and cannot be closed as a local result.
+Closing is not its own verb: use `relay-recover recover` with an explicit
+operator and reason. A GitHub run reaches the explicit merge boundary and
+cannot be closed as a local result.
 
 ## Skills
 
@@ -113,63 +105,60 @@ Cursor also support primary review. Cline is dispatch-only. The precise
 capability matrix and four-method contract live in
 `skills/relay-dispatch/references/agent-adapter-platform.md`.
 
-## Executors
-
-All seven executor descriptors remain supported: Claude, Codex, OpenCode, Pi,
-Antigravity, Cursor, and Cline. Primary review currently supports all except
-Cline. Check an adapter before dispatch:
+Check an adapter before dispatch. `relay-config check` is read-only: it reports
+adapter capability for the selected model and requested phase. It does not
+write project configuration, presets, or selection state.
 
 ```bash
 node skills/relay-config/scripts/relay-config.js doctor --json
 node skills/relay-config/scripts/relay-config.js \
-  check --phase dispatch --executor opencode --model provider/model --json
+  check --phase dispatch --executor opencode --model example/opencode-model-fast --json
+node skills/relay-config/scripts/relay-config.js \
+  check --phase review --reviewer pi --model example/pi-model-fast --json
+node skills/relay-config/scripts/relay-config.js \
+  check --phase review --reviewer antigravity --model google/antigravity-cli --json
 ```
 
-### Prompt and ambient authentication
+Relay binds an executor and an optional model when a dispatch run is created.
+Use `--executor` to select an adapter and `--model` for an explicit
+provider/model value. Omitting `--model` delegates to that adapter's provider
+default. On resume, the executor and model are immutable.
+
+```bash
+node skills/relay-dispatch/scripts/dispatch.js . \
+  --branch issue-42 --prompt "Implement issue 42" \
+  --executor opencode --model example/opencode-model-fast \
+  --rubric-file /tmp/issue-42-rubric.yaml
+```
+
+## Operate from a clone
+
+To operate relay from a checkout without installed skills, start with
+`skills/relay/SKILL.md` in that checkout. Phase files are `skills/relay-ready/`,
+`skills/relay-dispatch/`, `skills/relay-review/`, and `skills/relay-merge/`.
+Do not rely on globally installed skills.
+
+## Prompt and ambient authentication
 
 Claude, Codex, OpenCode, Pi, and Cursor receive prompts over digest-bound stdin.
 Cline and Antigravity are the two argv-visible exceptions: prompt text may be
 visible in the local process list, and Relay rejects prompts at 256 KiB.
 
-Provider authentication is ambient local CLI state: HOME, XDG configuration,
-keychain-backed sessions, and supported token variables remain visible exactly
-as in direct use. Relay neither copies auth files nor rewrites HOME/XDG.
-`--credential-env` and `--credential-file` are retired unknown options. Review
-still stages only its immutable prompt/diff/criteria/schema bundle and removes
-that exact bound staging root during cleanup/recovery.
+Provider authentication is ambient local CLI state. Relay neither copies auth
+files nor rewrites HOME/XDG. `--credential-env` and `--credential-file` are
+retired unknown options.
 
-### Process containment: `inherited_scope_no_daemon`
+## Process containment
 
 Every supported executor and reviewer CLI runs under the cooperative
-`inherited_scope_no_daemon` contract. The host injects a per-attempt random
-`RELAY_PROCESS_SCOPE` marker; supported CLIs must preserve it in every process
-they start and must not daemonize, `setsid` away, or clear it.
-
-The direct trusted-local host does not prevent a CLI from calling `setsid` or
-clearing its environment, so containment is enforced by verification rather
-than by prevention. macOS reports process start time only to the second, which cannot
-separate a same-second PID reuse, so the host revalidates the scope marker
-immediately before every signal and signals only verified individual PIDs—never
-an entire process group. This protects against natural PID reuse and unrelated
-members sharing a PGID, not a malicious same-UID process that can inspect peer
-environments. That attacker is outside this cooperative contract. Unverifiable
-survivors are reported, not killed:
-
-- A dispatch ends `cleanup_incomplete` with a signed obligation listing the
-  exact surviving identities; settle it with
-  `relay-recover recover --run-dir <dir> --reason "<why>"`.
-- A review fails with `independent reviewer cleanup incomplete`; inspect the
-  reported `pgid` before terminating anything by hand.
-
-A CLI that drops the marker is outside the contract and will produce these
-fail-closed outcomes rather than silent, unbounded process leakage.
+`inherited_scope_no_daemon` contract. Survivors are reported, not killed.
+Settle a `cleanup_incomplete` obligation with
+`relay-recover recover --run-dir <dir> --reason "<why>"`. Details live in
+`skills/relay-dispatch/references/agent-adapter-platform.md`.
 
 ## Runtime size
 
 The Relay runtime is the only writer and there is no migration overlay. The
 installed package is the current filesystem below
-`skills/relay-dispatch/scripts/`; there is no generated inventory to refresh.
-
-Retired run artifacts are not readable and `relay-recover` exposes only
-`inspect` and `recover`. A repository holding retired state does not migrate:
-its historical runs stay unreadable, and new work starts as a Relay run.
+`skills/relay-dispatch/scripts/`. Retired run artifacts are not readable and
+`relay-recover` exposes only `inspect` and `recover`.

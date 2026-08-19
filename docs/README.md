@@ -9,12 +9,8 @@ Finished designs stay in git history. Do not recreate `docs/archive/`.
 | Doc | Purpose |
 | --- | --- |
 | [workflow-lanes.md](./workflow-lanes.md) | Fast / goal / relay / review-only lane selection |
-| [external-tool-workflow.md](./external-tool-workflow.md) | gstack, superpowers, CE around relay (optional) |
-| [direct-read-relay-operator-note.md](./direct-read-relay-operator-note.md) | Operate relay from a repo checkout without installed skills |
-| [relay-operator-guide.md](./relay-operator-guide.md) | Operator workflow for `/relay`, setup, manual phases, recovery |
+| [relay-operator-guide.md](./relay-operator-guide.md) | Operator workflow, clone path, adapter/model selection |
 | [references/operator-surface.md](../references/operator-surface.md) | Public/internal/optional skill tiers |
-| [model-route-policy.md](./model-route-policy.md) | Explicit adapter/model selection via `relay-config` |
-| [script-inventory-and-cleanup.md](./script-inventory-and-cleanup.md) | Installed runtime inventory |
 
 ## Current Contract
 
