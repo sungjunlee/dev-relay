@@ -17,7 +17,6 @@ relay-plan ---> relay-dispatch (adapter capability probe / frozen criteria)
 relay-review -> relay-dispatch (run-store, facts, host, inspect/recover)
 relay-merge --> relay-dispatch (run-store, facts, host, inspect/recover)
 relay-fleet --> relay-dispatch, relay-review, relay-merge
-relay-config -> relay-dispatch (adapter registry and capability contract)
 ```
 
 The shared dispatch core is deliberately the sole lifecycle implementation, and
@@ -34,7 +33,6 @@ module, a worktree utility outside this core, or a migration-overlay module.
 | Inspect/recover | `relay/scripts/relay-recover.js` | `inspect` reads; `recover` is the sole convergent lifecycle writer. |
 | Review | `relay-review/scripts/review-runner.js` | Append one bound review fact. |
 | Merge | `relay-merge/scripts/finalize-run.js` | Explicit, authorized merge fact and safe cleanup. |
-| Config | `relay-config/scripts/relay-config.js` | Read-only adapter capability validation. |
 
 All public commands use Node.js and Git; GitHub operations require authenticated
 `gh`. Executors and reviewers launch directly on the trusted local host on all

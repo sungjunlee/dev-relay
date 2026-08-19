@@ -75,17 +75,12 @@ node skills/relay-merge/scripts/finalize-run.js --repo . --run-id <id> --json
 
 Codex is the default route — recent real usage is 38 of 52 runs `codex|codex`,
 with non-codex executor runs serving as adapter dogfood. Claude, Codex,
-OpenCode, Pi, Antigravity, Cursor, and Cline are all retained; the non-codex
-adapters remain available and selectable via `relay-config`. The adapter
-registry gives each a common argv, capability, and output contract; it does
-not own lifecycle or registration state. Cline is dispatch-only because it
-has no registered structured primary-review output contract.
-
-```bash
-node skills/relay-config/scripts/relay-config.js doctor --json
-node skills/relay-config/scripts/relay-config.js \
-  check --phase dispatch --executor opencode --model provider/model --json
-```
+OpenCode, Pi, Antigravity, Cursor, and Cline are all retained; select one with
+dispatch `--executor` and an optional `--model`. The adapter registry gives
+each a common argv, capability, and output contract; it does not own lifecycle
+or registration state. Cline is dispatch-only because it has no registered
+structured primary-review output contract. A missing CLI fails closed as
+`executable not found`.
 
 ## Runtime size
 

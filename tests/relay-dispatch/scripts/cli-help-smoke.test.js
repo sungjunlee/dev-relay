@@ -5,7 +5,6 @@ const { spawnSync } = require("node:child_process");
 
 const ROOT = path.join(__dirname, "..", "..", "..");
 const LOCAL_CLI_TARGETS = [
-  "skills/relay-config/scripts/relay-config.js",
   "skills/relay-merge/scripts/run-full-gate.js", "skills/relay-plan/scripts/persist-done-criteria.js",
   "skills/relay-plan/scripts/probe-executor-env.js", "skills/relay-ready/scripts/persist-request.js",
   "skills/relay-review/scripts/review-runner.js",

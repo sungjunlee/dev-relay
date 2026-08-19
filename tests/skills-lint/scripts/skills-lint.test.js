@@ -22,7 +22,7 @@ const ARCHITECTURE_REFERENCE_PATH = path.join(REPO_ROOT, "references", "architec
 const WORKFLOW_LANES_PATH = path.join(REPO_ROOT, "docs", "workflow-lanes.md");
 
 const SURFACE_TIERS = {
-  "public operator surface": ["relay-config", "relay", "relay-merge"],
+  "public operator surface": ["relay", "relay-merge"],
   "internal phase surface": ["relay-ready", "relay-plan", "relay-dispatch", "relay-review"],
   "optional/advanced surface": ["relay-fleet"],
 };

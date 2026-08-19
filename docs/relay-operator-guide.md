@@ -85,7 +85,7 @@ cannot be closed as a local result.
 
 | Skill | Use |
 | --- | --- |
-| `/relay-config` | Read-only adapter capability check. |
+| `/relay` | Plan, dispatch, review, and stop at the selected route boundary. |
 | `/relay-dispatch` | Create or re-dispatch an immutable executor attempt. |
 | `/relay-review` | Record the independent bound review. |
 | `/relay-merge` | Explicit exact-SHA merge and cleanup. |
@@ -105,30 +105,22 @@ Cursor also support primary review. Cline is dispatch-only. The precise
 capability matrix and four-method contract live in
 `skills/relay-dispatch/references/agent-adapter-platform.md`.
 
-Check an adapter before dispatch. `relay-config check` is read-only: it reports
-adapter capability for the selected model and requested phase. It does not
-write project configuration, presets, or selection state.
-
-```bash
-node skills/relay-config/scripts/relay-config.js doctor --json
-node skills/relay-config/scripts/relay-config.js \
-  check --phase dispatch --executor opencode --model example/opencode-model-fast --json
-node skills/relay-config/scripts/relay-config.js \
-  check --phase review --reviewer pi --model example/pi-model-fast --json
-node skills/relay-config/scripts/relay-config.js \
-  check --phase review --reviewer antigravity --model google/antigravity-cli --json
-```
-
 Relay binds an executor and an optional model when a dispatch run is created.
 Use `--executor` to select an adapter and `--model` for an explicit
 provider/model value. Omitting `--model` delegates to that adapter's provider
-default. On resume, the executor and model are immutable.
+default. On resume, the executor and model are immutable. A missing CLI fails
+closed as `executable not found`. At review, `--reviewer` must equal the run's
+immutable reviewer binding; unsupported reviewer/phase pairs fail closed.
 
 ```bash
 node skills/relay-dispatch/scripts/dispatch.js . \
   --branch issue-42 --prompt "Implement issue 42" \
   --executor opencode --model example/opencode-model-fast \
   --rubric-file /tmp/issue-42-rubric.yaml
+node skills/relay-review/scripts/review-runner.js \
+  --repo . --run-id <pi-run-id> --reviewer pi --model example/pi-model-fast --json
+node skills/relay-review/scripts/review-runner.js \
+  --repo . --run-id <antigravity-run-id> --reviewer antigravity --model google/antigravity-cli --json
 ```
 
 ## Operate from a clone
