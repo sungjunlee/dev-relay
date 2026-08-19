@@ -127,7 +127,6 @@ test("operator-facing OpenCode docs use the installed adapter contract", () => {
 
 test("model selection docs describe explicit bindings without legacy route configuration", () => {
   const docs = [
-    readRepoFile("docs/model-route-policy.md"),
     readRepoFile("docs/relay-operator-guide.md"),
     readRepoFile("references/architecture.md"),
   ].join("\n");

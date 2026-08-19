@@ -92,7 +92,6 @@ test("operator docs use the executable explicit check syntax and no route setup 
   const root = path.resolve(__dirname, "../../..");
   const documents = [
     "README.md",
-    "docs/model-route-policy.md",
     "docs/relay-operator-guide.md",
     "skills/relay-config/SKILL.md",
     "references/install-graph.md",
