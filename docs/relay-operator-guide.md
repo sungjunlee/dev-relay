@@ -109,8 +109,9 @@ Relay binds an executor and an optional model when a dispatch run is created.
 Use `--executor` to select an adapter and `--model` for an explicit
 provider/model value. Omitting `--model` delegates to that adapter's provider
 default. On resume, the executor and model are immutable. A missing CLI fails
-closed as `executable not found`. At review, `--reviewer` must equal the run's
-immutable reviewer binding; unsupported reviewer/phase pairs fail closed.
+closed as `executable not found`. Dispatch stamps the reviewer from
+`RELAY_REVIEWER`, default Codex. At review, `--reviewer` must equal that
+immutable binding; unsupported reviewer/phase pairs fail closed.
 
 ```bash
 node skills/relay-dispatch/scripts/dispatch.js . \

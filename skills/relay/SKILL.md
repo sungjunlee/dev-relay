@@ -18,11 +18,12 @@ Execute the plan -> dispatch -> review cycle. GitHub delivery stops at `ready_to
 
 ## Role Defaults
 
-- Orchestrator: `unknown` until explicitly stamped; override with `RELAY_ORCHESTRATOR`.
-- Executor: Codex by default; override with dispatch `--executor`.
-- Reviewer: `unknown` until explicitly stamped; override with `--reviewer` or `RELAY_REVIEWER`.
+- Orchestrator: Codex unless `RELAY_ORCHESTRATOR` is set at dispatch.
+- Executor: Codex unless dispatch `--executor` selects another adapter.
+- Reviewer: Codex unless `RELAY_REVIEWER` is set at dispatch. The binding is
+  immutable; review `--reviewer` must equal it and is not an override.
 
-Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and review through `review-runner --reviewer codex`. Assigned `run.json` roles stay immutable; acting reviewer data is recorded separately.
+Assigned `run.json` roles stay immutable; acting reviewer data is recorded separately.
 
 ## Step 1: Source and Re-Anchor
 
@@ -50,10 +51,11 @@ other forges are unsupported; configure GitHub, remove all remotes for local
 delivery, or use direct `delegate`. A `SOURCE_NOT_GIT` error recommends
 explicit `git init` or direct `delegate`.
 
-Task evidence is the first available source after that gate: local task file,
-GitHub issue on the GitHub route, or user description. Use its `track:` or
-`component:` value as the sprint ownership handle. If no issue number, use a
-descriptive branch name and skip issue-close in merge.
+Task evidence follows the selected route after that gate: GitHub issue text
+when the GitHub route has an issue number, otherwise local task text or the
+user description. Use its `track:` or `component:` value as the sprint
+ownership handle. If no issue number, use a descriptive branch name and skip
+issue-close in merge.
 
 Sprint tracking is optional; when in use, resolve ownership per [sprint-integration.md](references/sprint-integration.md).
 
@@ -120,7 +122,7 @@ Invoke relay-review only when inspection recommends `review`:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
-  --repo . --run-id "$RUN_ID" --reviewer codex --json
+  --repo . --run-id "$RUN_ID" --json
 ```
 
 Invoke **relay-review** in an isolated context. It records immutable review evidence and facts while keeping frozen Done Criteria as the review anchor. A requested change remains blocking until the corrected HEAD receives a passing primary review. Do NOT review inline.

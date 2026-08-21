@@ -9,7 +9,7 @@ metadata:
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
-- Files: relay-ready handoff, task file, issue/user text, optional local harness context (`AGENTS.md`, `CLAUDE.md`, `CHARTER.md`, `spec/capabilities.md`, active sprint notes), optional `/tmp/done-criteria-<N>.md`, `/tmp/dispatch-<N>.md`, and compatibility-named `/tmp/rubric-<N>.yaml` evaluation artifact.
+- Files: relay-ready handoff, issue/user text, optional local task text, optional local harness context (`AGENTS.md`, `CLAUDE.md`, `CHARTER.md`, `spec/capabilities.md`, active sprint notes), optional `/tmp/done-criteria-<N>.md`, `/tmp/dispatch-<N>.md`, and compatibility-named `/tmp/rubric-<N>.yaml` evaluation artifact.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # Relay Plan
@@ -38,11 +38,12 @@ evidence. A no-remote Git checkout is local Reviewed Result delivery and must
 use local task text or the user description without a forge lookup. The
 supported GitHub route may use `gh` for issue text after the source gate.
 
-Read the normalized task source (try in order, use first that succeeds):
-- Relay-ready handoff brief: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
-- Local task file: `backlog/tasks/{PREFIX}-{N} - {Title}.md`
-- GitHub on the selected GitHub route: `gh issue view <N>`
-- User-provided description
+Read the normalized task source for the selected route:
+- Relay-ready handoff brief, when present: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
+- GitHub route with an issue number: `gh issue view <N>` after the source gate;
+  fail closed if that lookup fails. Do not fall back to local text.
+- GitHub route with no issue number, or local route: local task text or
+  user-provided description. Local route must not look up a forge.
 
 If `relay-ready` produced a handoff brief, treat it as the source of truth instead of re-reading the raw request.
 For a shaped leaf, consume that persisted `relay-ready/<leaf-id>.md` plus its frozen Done Criteria path; the
