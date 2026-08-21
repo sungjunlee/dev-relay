@@ -38,10 +38,12 @@ evidence. A no-remote Git checkout is local Reviewed Result delivery and must
 use local task text or the user description without a forge lookup. The
 supported GitHub route may use `gh` for issue text after the source gate.
 
-Read the normalized task source (try in order, use first that succeeds):
-- Relay-ready handoff brief: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
-- GitHub on the selected GitHub route: `gh issue view <N>`
-- Local task text or user-provided description
+Read the normalized task source for the selected route:
+- Relay-ready handoff brief, when present: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
+- GitHub route: `gh issue view <N>` after the source gate; fail closed if that
+  lookup fails. Do not fall back to local text.
+- Local route: local task text or user-provided description, without a forge
+  lookup.
 
 If `relay-ready` produced a handoff brief, treat it as the source of truth instead of re-reading the raw request.
 For a shaped leaf, consume that persisted `relay-ready/<leaf-id>.md` plus its frozen Done Criteria path; the

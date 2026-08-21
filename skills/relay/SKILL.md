@@ -51,7 +51,7 @@ other forges are unsupported; configure GitHub, remove all remotes for local
 delivery, or use direct `delegate`. A `SOURCE_NOT_GIT` error recommends
 explicit `git init` or direct `delegate`.
 
-Task evidence is the first available source after that gate: local task file,
+Task evidence is the first available source after that gate: local task text,
 GitHub issue on the GitHub route, or user description. Use its `track:` or
 `component:` value as the sprint ownership handle. If no issue number, use a
 descriptive branch name and skip issue-close in merge.
@@ -121,7 +121,7 @@ Invoke relay-review only when inspection recommends `review`:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
-  --repo . --run-id "$RUN_ID" --reviewer codex --json
+  --repo . --run-id "$RUN_ID" --json
 ```
 
 Invoke **relay-review** in an isolated context. It records immutable review evidence and facts while keeping frozen Done Criteria as the review anchor. A requested change remains blocking until the corrected HEAD receives a passing primary review. Do NOT review inline.

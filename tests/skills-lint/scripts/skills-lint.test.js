@@ -482,10 +482,18 @@ test("relay skill description preserves explicit ready_to_merge stop boundary", 
 
 test("relay skill role defaults match dispatch stamping and review binding", () => {
   const relaySkill = fs.readFileSync(path.join(SKILLS_DIR, "relay", "SKILL.md"), "utf-8");
-  assert.doesNotMatch(relaySkill, /unknown until explicitly stamped/i);
-  assert.match(relaySkill, /RELAY_ORCHESTRATOR/);
-  assert.match(relaySkill, /RELAY_REVIEWER/);
+  assert.doesNotMatch(relaySkill, /^- (Orchestrator|Reviewer):[^\n]*unknown/mi);
+  assert.match(relaySkill, /- Orchestrator: Codex unless `RELAY_ORCHESTRATOR`/);
+  assert.match(relaySkill, /- Reviewer: Codex unless `RELAY_REVIEWER`/);
   assert.match(relaySkill, /review `--reviewer` must equal it/);
+  assert.doesNotMatch(relaySkill, /--reviewer codex/);
+});
+
+test("relay-plan github task source fails closed without local fallback", () => {
+  const skill = fs.readFileSync(path.join(SKILLS_DIR, "relay-plan", "SKILL.md"), "utf-8");
+  assert.doesNotMatch(skill, /try in order, use first that succeeds/);
+  assert.match(skill, /fail closed if that\s+lookup fails/);
+  assert.match(skill, /Do not fall back to local text/);
 });
 
 test("needs_split route documents proposal-first relay-ready shaping boundary", () => {
