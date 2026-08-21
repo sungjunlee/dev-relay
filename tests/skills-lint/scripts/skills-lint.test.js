@@ -480,6 +480,14 @@ test("relay skill description preserves explicit ready_to_merge stop boundary", 
   assertRelayStopsAtReadyToMerge(relaySkill);
 });
 
+test("relay skill role defaults match dispatch stamping and review binding", () => {
+  const relaySkill = fs.readFileSync(path.join(SKILLS_DIR, "relay", "SKILL.md"), "utf-8");
+  assert.doesNotMatch(relaySkill, /unknown until explicitly stamped/i);
+  assert.match(relaySkill, /RELAY_ORCHESTRATOR/);
+  assert.match(relaySkill, /RELAY_REVIEWER/);
+  assert.match(relaySkill, /review `--reviewer` must equal it/);
+});
+
 test("needs_split route documents proposal-first relay-ready shaping boundary", () => {
   assertNeedsSplitProposalFirstBoundary({
     relaySkill: fs.readFileSync(path.join(SKILLS_DIR, "relay", "SKILL.md"), "utf-8"),

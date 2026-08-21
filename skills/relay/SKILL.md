@@ -18,11 +18,12 @@ Execute the plan -> dispatch -> review cycle. GitHub delivery stops at `ready_to
 
 ## Role Defaults
 
-- Orchestrator: `unknown` until explicitly stamped; override with `RELAY_ORCHESTRATOR`.
-- Executor: Codex by default; override with dispatch `--executor`.
-- Reviewer: `unknown` until explicitly stamped; override with `--reviewer` or `RELAY_REVIEWER`.
+- Orchestrator: Codex unless `RELAY_ORCHESTRATOR` is set at dispatch.
+- Executor: Codex unless dispatch `--executor` selects another adapter.
+- Reviewer: Codex unless `RELAY_REVIEWER` is set at dispatch. The binding is
+  immutable; review `--reviewer` must equal it and is not an override.
 
-Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and review through `review-runner --reviewer codex`. Assigned `run.json` roles stay immutable; acting reviewer data is recorded separately.
+Assigned `run.json` roles stay immutable; acting reviewer data is recorded separately.
 
 ## Step 1: Source and Re-Anchor
 
