@@ -51,10 +51,11 @@ other forges are unsupported; configure GitHub, remove all remotes for local
 delivery, or use direct `delegate`. A `SOURCE_NOT_GIT` error recommends
 explicit `git init` or direct `delegate`.
 
-Task evidence is the first available source after that gate: local task text,
-GitHub issue on the GitHub route, or user description. Use its `track:` or
-`component:` value as the sprint ownership handle. If no issue number, use a
-descriptive branch name and skip issue-close in merge.
+Task evidence follows the selected route after that gate: GitHub issue text
+when the GitHub route has an issue number, otherwise local task text or the
+user description. Use its `track:` or `component:` value as the sprint
+ownership handle. If no issue number, use a descriptive branch name and skip
+issue-close in merge.
 
 Sprint tracking is optional; when in use, resolve ownership per [sprint-integration.md](references/sprint-integration.md).
 

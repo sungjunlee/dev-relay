@@ -40,10 +40,10 @@ supported GitHub route may use `gh` for issue text after the source gate.
 
 Read the normalized task source for the selected route:
 - Relay-ready handoff brief, when present: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
-- GitHub route: `gh issue view <N>` after the source gate; fail closed if that
-  lookup fails. Do not fall back to local text.
-- Local route: local task text or user-provided description, without a forge
-  lookup.
+- GitHub route with an issue number: `gh issue view <N>` after the source gate;
+  fail closed if that lookup fails. Do not fall back to local text.
+- GitHub route with no issue number, or local route: local task text or
+  user-provided description. Local route must not look up a forge.
 
 If `relay-ready` produced a handoff brief, treat it as the source of truth instead of re-reading the raw request.
 For a shaped leaf, consume that persisted `relay-ready/<leaf-id>.md` plus its frozen Done Criteria path; the
