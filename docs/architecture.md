@@ -16,7 +16,7 @@ and its current lifecycle behavior is unchanged.
 
 - **Source** is the Git repository plus immutable run start.
 - **ReviewSubject** is the derived six-member content binding in
-  [ADR-0007](../docs/decisions/0007-review-subject-contract-freeze.md), never a
+  [ADR-0007](./decisions/0007-review-subject-contract-freeze.md), never a
   stored runtime object or fact.
 - **Publication** places the exact revision on a remote ref. It is not Change
   Request creation and does not imply Landing; canonical recovery owns it.
@@ -154,7 +154,7 @@ strict.
 
 ## Adapters and host
 
-The adapter platform is intentionally retained and universal. The seven
+The adapter capability contract is intentionally retained and universal. The seven
 built-in executors are Claude, Codex, OpenCode, Pi, Antigravity, Cursor, and
 Cline. Every descriptor lives in `scripts/adapters/` and is registered in
 `adapters/index.js`; its four-method contract declares argv construction,
@@ -180,8 +180,13 @@ for the full contract.
 ## Runtime size
 
 There is one runtime. The installed dispatch package is the current filesystem
-below `skills/relay-dispatch/scripts/`; no generated inventory or test ledger
-duplicates that source of truth.
+below `skills/relay-dispatch/scripts/`, including `run-store.js` and
+`adapters/`. No generated inventory or test ledger duplicates that source of
+truth. Phase skills import this core; they do not own a second lifecycle.
+
+Install the complete bundle (`npx skills add sungjunlee/dev-relay`). Set
+`RELAY_SKILL_ROOT` to the installed sibling root when invoking commands
+outside this repository; it defaults to `skills` in a clone.
 
 The Relay runtime is the only writer. Nothing admits a run, stamps a writer
 generation, or translates retired argv. Retired run artifacts are not readable;
@@ -209,6 +214,6 @@ starts as a Relay run.
 - PR comments, mutable files, prior prompts, executor transcripts, and legacy
   state are not authorities for Relay actions.
 
-For command-level guidance see the [operator guide](../docs/relay-operator-guide.md),
+For command-level guidance see the [operator guide](./relay-operator-guide.md),
 the [adapter platform](../skills/relay-dispatch/references/agent-adapter-platform.md),
 and the [recovery playbook](../skills/relay-dispatch/references/recovery-playbook.md).

@@ -3,5 +3,5 @@
 Status: Superseded. The manifest runtime was deleted. Do not restore
 `relay-manifest.js` or `manifest/*` slices.
 
-Current model: [architecture.md](../../references/architecture.md).
+Current model: [architecture.md](../architecture.md).
 The body that described that split (`#188`) lives in git history.

@@ -3,7 +3,7 @@
 This repository glossary names the domain terms used by Relay documentation.
 The current contract and authority boundaries are defined by
 [ADR-0007](docs/decisions/0007-review-subject-contract-freeze.md) and the
-[runtime architecture](references/architecture.md); this file is not a
+[runtime architecture](docs/architecture.md); this file is not a
 runtime, schema, or lifecycle authority.
 
 ## Language

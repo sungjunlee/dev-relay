@@ -129,9 +129,7 @@ test("model selection docs describe explicit bindings without legacy route confi
   const docs = [
     readRepoFile("README.md"),
     readRepoFile("docs/relay-operator-guide.md"),
-    readRepoFile("references/architecture.md"),
-    readRepoFile("references/install-graph.md"),
-    readRepoFile("references/operator-surface.md"),
+    readRepoFile("docs/architecture.md"),
   ].join("\n");
 
   for (const phrase of [
@@ -165,7 +163,7 @@ test("adapter platform docs publish the flat four-method adapter contract", () =
     readRepoFile("AGENTS.md"),
     readRepoFile("CLAUDE.md"),
     readRepoFile("docs/relay-operator-guide.md"),
-    readRepoFile("references/architecture.md"),
+    readRepoFile("docs/architecture.md"),
     readRepoFile(ADAPTER_PLATFORM_DOC),
   ].join("\n");
 
@@ -209,7 +207,7 @@ test("operator docs mention every supported dispatch and review adapter", () => 
   const reviewDocs = readRepoFile("skills/relay-review/SKILL.md");
   const overviewDocs = [
     readRepoFile("README.md"),
-    readRepoFile("references/architecture.md"),
+    readRepoFile("docs/architecture.md"),
     readRepoFile(ADAPTER_PLATFORM_DOC),
   ].join("\n");
 

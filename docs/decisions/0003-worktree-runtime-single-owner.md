@@ -4,5 +4,5 @@ Status: Superseded. `worktree-runtime.js` and `create-worktree.js` were
 deleted. Do not restore them.
 
 Current worktree ownership is `dispatch.js` plus `cleanup-worktree.js`. See
-[architecture.md](../../references/architecture.md). The body that described
+[architecture.md](../architecture.md). The body that described
 the removed split (`#187`) lives in git history.

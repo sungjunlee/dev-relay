@@ -32,4 +32,4 @@ policy of `#1141` / `#1158`.
 ## Evidence
 
 Adapter descriptors in `skills/relay-dispatch/scripts/adapters/` and
-[architecture.md](../../references/architecture.md).
+[architecture.md](../architecture.md).

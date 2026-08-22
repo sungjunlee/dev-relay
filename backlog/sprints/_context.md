@@ -33,7 +33,7 @@ One fleet represents one validated track. Every leaf carries the same normalized
 
 ### Operator-surface documentation requires the full repository gate
 Adapter selection is explicit CLI input on dispatch and review. Changes to
-`references/operator-surface.md`, any `SKILL.md` wording, the adapter matrix,
+`docs/README.md` operator surface, any `SKILL.md` wording, the adapter matrix,
 or public CLI examples must run the serialized full repository suite because
 sibling suites pin the public prose.
 
