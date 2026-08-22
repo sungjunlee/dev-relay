@@ -368,7 +368,7 @@ function assertProjectDocsPreserveExplicitMergeBoundary(docs) {
     {
       label: "CLAUDE.md",
       content: docs.claudeGuide,
-      pattern: /workflows with explicit merge[\s\S]*stopping at `ready_to_merge` unless the user explicitly invokes `relay-merge`/i,
+      pattern: /workflows with explicit merge[\s\S]*stop at `ready_to_merge` unless the user explicitly invokes `relay-merge`/i,
     },
     {
       label: "workflow lane policy",
