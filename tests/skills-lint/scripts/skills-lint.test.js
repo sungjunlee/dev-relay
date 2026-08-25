@@ -15,10 +15,10 @@ const RELAY_READY_REQUEST_CONTRACT_SCHEMA = path.join(
   "scripts",
   "request-contract.schema.json",
 );
-const OPERATOR_SURFACE_REFERENCE = path.join(REPO_ROOT, "references", "operator-surface.md");
+const OPERATOR_SURFACE_REFERENCE = path.join(REPO_ROOT, "docs", "README.md");
 const README_PATH = path.join(REPO_ROOT, "README.md");
 const CLAUDE_GUIDE_PATH = path.join(REPO_ROOT, "CLAUDE.md");
-const ARCHITECTURE_REFERENCE_PATH = path.join(REPO_ROOT, "references", "architecture.md");
+const ARCHITECTURE_REFERENCE_PATH = path.join(REPO_ROOT, "docs", "architecture.md");
 const WORKFLOW_LANES_PATH = path.join(REPO_ROOT, "docs", "workflow-lanes.md");
 
 const SURFACE_TIERS = {
@@ -368,7 +368,7 @@ function assertProjectDocsPreserveExplicitMergeBoundary(docs) {
     {
       label: "CLAUDE.md",
       content: docs.claudeGuide,
-      pattern: /workflows with explicit merge[\s\S]*stopping at `ready_to_merge` unless the user explicitly invokes `relay-merge`/i,
+      pattern: /workflows with explicit merge[\s\S]*stop at `ready_to_merge` unless the user explicitly invokes `relay-merge`/i,
     },
     {
       label: "workflow lane policy",
@@ -458,7 +458,7 @@ test("relay-ready request contract schema exists and is parseable JSON", () => {
 });
 
 test("operator surface policy classifies skill command tiers", () => {
-  assert.ok(fs.existsSync(OPERATOR_SURFACE_REFERENCE), "references/operator-surface.md is missing");
+  assert.ok(fs.existsSync(OPERATOR_SURFACE_REFERENCE), "docs/README.md is missing");
   const content = fs.readFileSync(OPERATOR_SURFACE_REFERENCE, "utf-8");
   assertOperatorSurfacePolicy(content);
 });

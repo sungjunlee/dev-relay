@@ -28,7 +28,7 @@ loops, and recovery machinery justified only by executor failure rates.
 ## Stopping condition
 
 Unjustified complexity is the variable, not size. Watch the share of runs
-where recovery does real work. [architecture.md](../../references/architecture.md)
+where recovery does real work. [architecture.md](../architecture.md)
 records the 2026-08-15 reading that recovery is also the routine
 publication/verification conveyor (96% of `recovery_applied` events), with
 crash convergence a measured small subset.

@@ -26,4 +26,4 @@ holding pre-vNext state starts its next work as a Relay run. The claim
 happens after worktree creation so a crash during `git worktree add` does not
 strand an empty run directory.
 
-Current contract: [architecture.md](../../references/architecture.md).
+Current contract: [architecture.md](../architecture.md).

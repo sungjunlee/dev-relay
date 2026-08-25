@@ -1,73 +1,24 @@
-# dev-relay contributor guide
+# dev-relay
 
-dev-relay is an orchestrator-agnostic Relay runtime. The current model is
-an immutable `run.json`, frozen Done Criteria, append-only facts, and a derived
-action. Do not reintroduce mutable manifests, lifecycle transition tables,
-execution-evidence sidecars, route catalogs, app registration, or a second
-recovery path.
+Dispatch an executor, independently review the exact Git result, keep merge
+explicit. Relay workflows with explicit merge stop at `ready_to_merge` unless the user explicitly invokes `relay-merge`.
 
-Finished designs stay in git history. Do not recreate `docs/archive/`.
+A run is an on-disk record under `~/.relay/runs/` — identity, frozen criteria,
+append-only facts, derived next action. Do not reintroduce mutable manifests,
+lifecycle tables, evidence sidecars, route catalogs, app registration, a
+migration overlay, or a second recovery path. `recover` is the only general
+lifecycle writer; dispatch never commits, pushes, opens a PR, or recovers.
+Load [docs/architecture.md](docs/architecture.md) to change inspect, recover,
+facts, review, merge, host, or adapters.
 
-Relay workflows with explicit merge stop at `ready_to_merge`; this means stopping at `ready_to_merge` unless the user explicitly invokes `relay-merge`.
+Append facts through `facts.appendFact`. Re-inspect under `host.withRunLock`
+with the same action key. Spawn with argv (`execFileSync`/`spawn`), never an
+interpolated `execSync` string. `SKILL.md` ≤150 lines; playbooks in that
+skill's `references/`; tests under `tests/<skill>/`. Do not recreate
+`docs/archive/`.
 
-## Runtime shape
-
-```text
-skills/relay-dispatch/scripts/
-  dispatch.js              create/redispatch executor attempts
-  inspect.js               pure fact fold -> one typed action
-  recover.js               production observer + idempotent recovery/close
-  run-store.js             immutable run/artifact trust boundary
-  facts.js                 append-only facts + merge authorization
-  host.js                  lock, detached host, runtime binding, process-scope cleanup
-  cleanup-worktree.js      clean registered worktree removal
-  adapter-contract.js, exec.js
-  adapters/                registry + seven retained native executors
-```
-
-The installed package is the current filesystem below this directory. There is
-no checked-in generated runtime or test ledger.
-
-The Relay runtime is the only writer. There is no migration overlay, no writer generation,
-no admission capability, and no retirement gate; a run directory is claimed by a
-non-recursive `mkdir`. Retired legacy manifests are unreadable and `relay-recover`
-exposes only `inspect` and `recover`. Do not reintroduce any of it.
-
-The seven executors are Claude, Codex, OpenCode, Pi, Antigravity, Cursor, and
-Cline. Add an executor as one `adapters/<name>.js` four-method descriptor,
-register it in `adapters/index.js`, and update adapter tests/docs. Do not give
-an adapter its own state, publisher, worktree utility, or registration hook.
-Provider credentials and installed CLIs are never a release gate: adapter
-coverage uses fake executables for argv/output contracts, while native-isolation
-availability remains a non-authoritative foreground diagnostic.
-
-## Required invariants
-
-- Validate immutable input bytes and regular-file containment before use.
-- Facts append through `facts.appendFact`; never rewrite `events.jsonl`.
-- Inspect before a write and re-inspect under the run lock with the same action
-  key. `recover` is the only general lifecycle writer.
-- Host locks and host audits are capabilities; use `host.withRunLock` rather
-  than hand-editing ownership artifacts.
-- Dispatch never commits, pushes, opens a PR, or runs recovery.
-- Review is bound to immutable reviewer, exact live PR SHA, passed verification,
-  and Done Criteria. Merge has no bypass and is explicit.
-- Scripts use argv-based `execFileSync`/`spawn`, never interpolated shell
-  `execSync` strings.
-
-## Validation
-
-Run scoped tests for each touched skill. Before a broad change, serialize the
-full gate:
+Serialize the full gate:
 
 ```bash
-node --test --test-concurrency=1 \
-  tests/relay-ready/scripts/*.test.js tests/relay-plan/scripts/*.test.js \
-  tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js \
-  tests/relay-merge/scripts/*.test.js tests/relay/scripts/*.test.js \
-  tests/relay-fleet/scripts/*.test.js \
-  tests/skills-lint/scripts/*.test.js
+node --test --test-concurrency=1 tests/*/scripts/*.test.js
 ```
-
-Test files and fixtures belong under `tests/<skill>/`, not `skills/`. Keep each
-`SKILL.md` under 150 lines and move operator playbooks to `references/`.

@@ -14,7 +14,7 @@ metadata:
 
 # Dev Relay
 
-Execute the plan -> dispatch -> review cycle. GitHub delivery stops at `ready_to_merge` unless the user explicitly asks to merge; local delivery runs canonical recovery and stops at terminal `reviewed_result_ready`. The public/internal/optional skill tiers are defined in `../../references/operator-surface.md`.
+Execute the plan -> dispatch -> review cycle. GitHub delivery stops at `ready_to_merge` unless the user explicitly asks to merge; local delivery runs canonical recovery and stops at terminal `reviewed_result_ready`.
 
 ## Role Defaults
 

@@ -42,10 +42,31 @@ test("documented installed sibling script paths resolve", () => {
   }
 });
 
-test("install graph states the Relay installed sibling root contract", () => {
-  const source = content("references/install-graph.md");
+test("architecture states the Relay installed sibling root contract", () => {
+  const source = content("docs/architecture.md");
   assert.match(source, /RELAY_SKILL_ROOT/);
   assert.match(source, /installed sibling root/);
   assert.match(source, /relay-dispatch/);
   assert.match(source, /run-store\.js/);
+});
+
+function listSkillMarkdown(dir = path.join(REPO_ROOT, "skills"), acc = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) listSkillMarkdown(full, acc);
+    else if (entry.name.endsWith(".md")) acc.push(full);
+  }
+  return acc;
+}
+
+test("installed skill markdown does not require clone-only docs", () => {
+  const forbidden = /\.\.\/\.\.\/(?:docs|references)\//;
+  for (const filePath of listSkillMarkdown()) {
+    const relativePath = path.relative(REPO_ROOT, filePath);
+    assert.doesNotMatch(
+      fs.readFileSync(filePath, "utf8"),
+      forbidden,
+      `${relativePath} must not point at clone-only docs/ or root references/`,
+    );
+  }
 });

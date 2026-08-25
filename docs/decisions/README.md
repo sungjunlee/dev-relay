@@ -4,7 +4,7 @@ ADRs here are the **current rule** an operator or contributor should read first,
 or a marked historical record of a deleted module. Detailed audit tables from
 post-merge mirrors are not retained once distilled.
 
-For the live runtime contract, prefer [`references/architecture.md`](../../references/architecture.md).
+For the live runtime contract, prefer [`architecture.md`](../architecture.md).
 
 ## Current
 
@@ -19,7 +19,7 @@ For the live runtime contract, prefer [`references/architecture.md`](../../refer
 
 These name deleted modules or retired policy. Each file is a tombstone;
 the original body lives in git history. Do not restore them. Current
-behavior is in `references/architecture.md`.
+behavior is in `docs/architecture.md`.
 
 | Record | Was | Source |
 | --- | --- | --- |
@@ -36,7 +36,7 @@ behavior is in `references/architecture.md`.
 Add or extend an ADR when a merged issue encodes a **durable invariant** that
 operators or future refactors must not undo.
 
-Do **not** add an ADR when `references/architecture.md` already carries the
+Do **not** add an ADR when `docs/architecture.md` already carries the
 rule, or when the source is a completed closeout that belongs in git history.
 
 Keep ADRs under ~80 lines. Use: **Status**, **Context**, **Decision**,

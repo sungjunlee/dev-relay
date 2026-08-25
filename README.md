@@ -90,11 +90,11 @@ generated inventory or baseline to reconcile.
 
 ## References
 
-- [Architecture](references/architecture.md)
+- [Architecture](docs/architecture.md)
 - [Glossary](CONTEXT.md)
 - [Operator guide](docs/relay-operator-guide.md)
 - [Adapter platform](skills/relay-dispatch/references/agent-adapter-platform.md)
-- [Contributing conventions](CLAUDE.md)
+- [CLAUDE.md](CLAUDE.md)
 
 Run the focused suites with Node's test runner, or use the serialized complete
 gate documented in `CLAUDE.md`.
