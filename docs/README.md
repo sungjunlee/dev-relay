@@ -1,7 +1,8 @@
 # Documentation Index
 
 Repo-local operator docs and current decisions. Nothing under `docs/` ships
-with `npx skills add`; runtime guidance lives under `skills/*/references/`.
+with `npx skills add`. Installed playbooks live under `skills/*/references/`.
+The live runtime contract is [architecture.md](./architecture.md) (clone-only).
 Finished designs stay in git history. Do not recreate `docs/archive/`.
 
 dev-relay is a bundle-installed relay runtime. Install the complete bundle;
@@ -38,5 +39,8 @@ Installed skill files stay self-contained. `SKILL.md` is the spine,
 
 - Keep local agent memory out of the repo.
 - When runtime behavior changes, update `docs/architecture.md` first.
+- Model, adapter, and CLI churn updates skill `references/` and adapter docs
+  before the `SKILL.md` spine. Change a spine only when the decision tree,
+  input contract, canonical command, or stop boundary changes.
 - Distill a durable invariant into `docs/decisions/`. Do not keep a second
   tree of finished designs, closeouts, or issue mirrors.
