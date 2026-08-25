@@ -130,6 +130,7 @@ test("model selection docs describe explicit bindings without legacy route confi
     readRepoFile("README.md"),
     readRepoFile("docs/relay-operator-guide.md"),
     readRepoFile("docs/architecture.md"),
+    readRepoFile("docs/README.md"),
   ].join("\n");
 
   for (const phrase of [
