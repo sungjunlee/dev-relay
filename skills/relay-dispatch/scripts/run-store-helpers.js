@@ -1,0 +1,489 @@
+"use strict";
+
+const crypto = require("crypto");
+const { spawn, spawnSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const host = require("./host");
+
+function fail(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  throw error;
+}
+
+function fsyncDirectory(directory, fsModule = fs) {
+  let fd;
+  try {
+    fd = fsModule.openSync(directory, fs.constants.O_RDONLY);
+    fsModule.fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) fsModule.closeSync(fd);
+  }
+}
+
+function readRegularFile(filePath, label, { expectedIdentity = null } = {}) {
+  let fd;
+  try {
+    fd = fs.openSync(
+      filePath,
+      fs.constants.O_RDONLY
+        | (fs.constants.O_NOFOLLOW || 0)
+        | (fs.constants.O_NONBLOCK || 0),
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    if (error.code === "ELOOP") {
+      fail("UNTRUSTED_RUN_ARTIFACT", `${label} must be a stable regular non-symlink file`);
+    }
+    throw error;
+  }
+  try {
+    const before = expectedIdentity ? fs.fstatSync(fd, { bigint: true }) : fs.fstatSync(fd);
+    if (!before.isFile()) {
+      fail("UNTRUSTED_RUN_ARTIFACT", `${label} must be a stable regular non-symlink file`);
+    }
+    if (expectedIdentity
+      && (before.dev !== expectedIdentity.dev || before.ino !== expectedIdentity.ino)) {
+      fail("UNTRUSTED_RUN_ARTIFACT", `${label} changed identity before its stable read`);
+    }
+    const bytes = fs.readFileSync(fd);
+    const after = expectedIdentity ? fs.fstatSync(fd, { bigint: true }) : fs.fstatSync(fd);
+    if (before.dev !== after.dev || before.ino !== after.ino) {
+      fail("UNTRUSTED_RUN_ARTIFACT", `${label} changed identity while being read`);
+    }
+    return bytes;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function writeExclusiveAtomic(finalPath, bytes, conflictCode) {
+  const directory = path.dirname(finalPath);
+  fs.mkdirSync(directory, { recursive: true });
+  const temporary = path.join(
+    directory,
+    `.${path.basename(finalPath)}.tmp.${process.pid}.${crypto.randomBytes(8).toString("hex")}`,
+  );
+  let fd;
+  try {
+    fd = fs.openSync(
+      temporary,
+      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+      0o600,
+    );
+    fs.writeFileSync(fd, bytes);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    try {
+      fs.linkSync(temporary, finalPath);
+      fsyncDirectory(directory);
+      return { created: true };
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      const existing = readRegularFile(finalPath, path.basename(finalPath));
+      if (!existing || !existing.equals(Buffer.from(bytes))) {
+        fail(conflictCode, `${path.basename(finalPath)} already exists with different bytes`);
+      }
+      return { created: false };
+    }
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(temporary); } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+}
+
+const REVIEW_ENV = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM"]);
+function digest(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex"); }
+function bindRegularFile(filePath, label) {
+  try {
+    return Object.freeze(host.hostInvocation.bindRegularFile(filePath, label));
+  } catch (error) {
+    fail("REVIEW_INPUT_BINDING_CHANGED", error.message);
+  }
+}
+function verifyRegularFileBinding(binding, label) {
+  const observed = bindRegularFile(binding.path, label);
+  if (observed.dev !== binding.dev || observed.ino !== binding.ino || observed.size !== binding.size || observed.sha256 !== binding.sha256) {
+    fail("REVIEW_INPUT_BINDING_CHANGED", `${label} changed after immutable staging`);
+  }
+  return observed;
+}
+function verifyExtensionBinding(binding) {
+  if (!binding || typeof binding.root !== "string" || !path.isAbsolute(binding.root)) {
+    fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension binding is unavailable");
+  }
+  let rootStat;
+  try { rootStat = fs.lstatSync(binding.root); }
+  catch { fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension package root is unavailable"); }
+  let rootCanonical;
+  try { rootCanonical = fs.realpathSync(binding.root); }
+  catch { fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension package root changed"); }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || rootCanonical !== binding.root) {
+    fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension package root changed");
+  }
+  if (!Array.isArray(binding.runtimeFiles) || binding.runtimeFiles.length !== 2
+    || binding.runtimeFiles.some((file, index) => ["path", "dev", "ino", "size", "sha256"]
+      .some((key) => file?.[key] !== [binding.manifest, binding.entry][index]?.[key]))) {
+    fail("REVIEW_INPUT_BINDING_CHANGED", "Pi extension runtime binding is unavailable");
+  }
+  const observed = [];
+  for (const [label, fileBinding] of [["manifest", binding.manifest], ["entry", binding.entry]]) {
+    if (!fileBinding || typeof fileBinding.path !== "string" || !contained(binding.root, fileBinding.path)) {
+      fail("REVIEW_INPUT_BINDING_CHANGED", `Pi extension ${label} binding escaped its package`);
+    }
+    let current = path.dirname(fileBinding.path);
+    while (contained(binding.root, current) && current !== binding.root) {
+      let stat;
+      try { stat = fs.lstatSync(current); } catch { fail("REVIEW_INPUT_BINDING_CHANGED", `Pi extension ${label} parent changed`); }
+      let canonical;
+      try { canonical = fs.realpathSync(current); }
+      catch { fail("REVIEW_INPUT_BINDING_CHANGED", `Pi extension ${label} parent changed`); }
+      if (!stat.isDirectory() || stat.isSymbolicLink() || canonical !== current) {
+        fail("REVIEW_INPUT_BINDING_CHANGED", `Pi extension ${label} parent changed`);
+      }
+      current = path.dirname(current);
+    }
+    try { observed.push(verifyRegularFileBinding(fileBinding, `Pi extension ${label}`)); }
+    catch (error) { error.code = "REVIEW_INPUT_BINDING_CHANGED"; throw error; }
+  }
+  return observed.map(({ bytes, ...file }) => Object.freeze(file));
+}
+function contained(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+function boundedEnvironment(overrides = {}, allowlist = REVIEW_ENV) {
+  const env = {};
+  for (const key of allowlist) if (typeof process.env[key] === "string") env[key] = process.env[key];
+  for (const [key, value] of Object.entries(overrides || {})) {
+    if (!allowlist.has(key) || typeof value !== "string") throw new Error(`isolated process environment key is not allowed: ${key}`);
+    env[key] = value;
+  }
+  return env;
+}
+function ambientEnvironment(overrides = {}) {
+  return host.hostInvocation.ambientEnvironment(process.env, "ambient process environment", overrides);
+}
+function isolatedFailureReason(result, outcome) {
+  if (result.error?.code === "ETIMEDOUT") return "invocation_timeout";
+  const stderr = String(result.stderr || "");
+  if (/not authenticated|not logged in|authentication|credentials? required|api[_ -]?key.{0,80}(?:missing|required|not set)|unauthorized|forbidden/i.test(stderr)) return "ambient_auth_unavailable";
+  if (/sqlite_readonly|readonly database|operation not permitted|permission denied|filesystem\.open|sandbox/i.test(stderr)) return "execution_environment_unavailable";
+  if (result.signal) return "invocation_cancelled";
+  if (Number.isInteger(result.status) && result.status !== 0) return "cli_nonzero_exit";
+  if (outcome?.status !== "succeeded") return "output_protocol_mismatch";
+  return "unknown_reviewer_failure";
+}
+function isolatedFailureSignals(result, outcome) {
+  const stderr = String(result.stderr || ""), signals = [];
+  if (/\.claude|\.codex|\bHOME\b|config(?:uration)?|session/i.test(stderr)) signals.push("home_or_config");
+  if (/auth|credential|login|api[_ -]?key|unauthorized|forbidden/i.test(stderr)) signals.push("authentication");
+  if (/readonly|operation not permitted|permission denied|EACCES|sqlite|sandbox/i.test(stderr)) signals.push("filesystem_denied");
+  if (/network|connect|DNS|ECONN|ENET/i.test(stderr)) signals.push("network");
+  if (/schema|json|output/i.test(stderr) || outcome?.status === "failed") signals.push("output_protocol");
+  return [...new Set(signals)];
+}
+function attachReviewInputError(error, inputBindingError) {
+  if (!inputBindingError) return error;
+  error.review_input_error = {
+    code: inputBindingError.code || "REVIEW_INPUT_BINDING_CHANGED",
+    message: inputBindingError.message,
+  };
+  if (!error.cause) error.cause = inputBindingError;
+  return error;
+}
+function observableHostedProcess({ hosted, cwd, input, timeoutMs, processScope, providerUnavailableSignals }) {
+  return new Promise((resolve) => {
+    const child = spawn(hosted.command, hosted.args, { cwd, env: hosted.env, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const stdout = [], stderr = []; let stdoutSize = 0, stderrSize = 0, overflow = null, timedOut = false, classified = null, settled = false, tail = "", detectionTimer = null, cleanupTimer = null, timer = null;
+    const signals = providerUnavailableSignals.map((value) => value.toLowerCase());
+    const overlap = Math.max(0, ...signals.map((value) => value.length - 1));
+    const resolveEarly = (error) => {
+      if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer);
+      child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+      resolve({ pid: child.pid, status: null, signal: null, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error, termination: classified });
+    };
+    const reap = () => {
+      try {
+        const result = host.hostInvocation.reapProcessGroup(child.pid, processScope.seal);
+        if (!result.absent) {
+          const error = Object.assign(new Error("reviewer process scope could not be terminated safely"), { code: "HOST_CLEANUP_INCOMPLETE" });
+          if (!result.unverified) resolveEarly(error);
+          else if (!cleanupTimer) cleanupTimer = setTimeout(() => resolveEarly(error), 250);
+        }
+      } catch (error) { resolveEarly(error); }
+    };
+    const bounded = (chunks, chunk, kind) => {
+      const size = kind === "stdout" ? stdoutSize : stderrSize;
+      if (size + chunk.length > 8 << 20) {
+        overflow ||= Object.assign(new Error(`${kind} maxBuffer exceeded`), { code: "ENOBUFS" });
+        reap(); return;
+      }
+      chunks.push(chunk); if (kind === "stdout") stdoutSize += chunk.length; else stderrSize += chunk.length;
+    };
+    child.stdout.on("data", (chunk) => bounded(stdout, chunk, "stdout"));
+    child.stderr.on("data", (chunk) => {
+      bounded(stderr, chunk, "stderr");
+      const scanned = `${tail}${chunk.toString("utf8")}`.toLowerCase(); tail = overlap ? scanned.slice(-overlap) : "";
+      if (!classified && !detectionTimer && signals.some((signal) => scanned.includes(signal))) {
+        // Give a self-exiting CLI one event-loop turn to publish its natural close before Relay
+        // decides that the invocation is still live and must be ended early.
+        detectionTimer = setTimeout(() => {
+          detectionTimer = null;
+          if (!settled && child.exitCode === null) { classified = "provider_unavailable"; reap(); }
+        }, 250);
+      }
+    });
+    child.once("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer); resolve({ pid: child.pid, status: null, signal: null, stdout: "", stderr: "", error }); } });
+    child.stdin?.on("error", (error) => { if (error.code !== "EPIPE") resolveEarly(error); });
+    timer = setTimeout(() => { if (child.exitCode === null) { timedOut = true; reap(); } }, timeoutMs);
+    child.once("close", (status, signal) => {
+      if (settled) return; settled = true; clearTimeout(timer); clearTimeout(detectionTimer); clearTimeout(cleanupTimer);
+      const error = overflow || (timedOut ? Object.assign(new Error("reviewer invocation timed out"), { code: "ETIMEDOUT" }) : null);
+      resolve({ pid: child.pid, status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), error,
+        termination: classified });
+    });
+    if (input) child.stdin.end(input);
+  });
+}
+function runHosted({ invocation, readRoot, writeRoot, timeoutMs = 120000, env, parseOutcome, envAllowlist = REVIEW_ENV, useAmbientEnvironment = false, stdinBinding = null, inputBindings = [], processScope = null, providerUnavailableSignals = [] }) {
+  if (!Array.isArray(invocation?.args) || invocation.args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) throw new Error("hosted invocation requires string argv values");
+  if (!Array.isArray(providerUnavailableSignals) || providerUnavailableSignals.some((value) => typeof value !== "string" || !value)) throw new Error("provider unavailable signal declaration is invalid");
+  const childEnv = useAmbientEnvironment ? ambientEnvironment(env) : boundedEnvironment(env, envAllowlist);
+  if (useAmbientEnvironment) childEnv.TMPDIR = writeRoot;
+  processScope ||= host.hostInvocation.beginProcessScope(); Object.assign(childEnv, processScope.env);
+  const runtime = host.hostInvocation.bindRuntimeFiles({ command: invocation.command, env: childEnv, runtimeDependencies: invocation.runtimeDependencies });
+  let extensionRuntime = [];
+  const executedRuntime = () => Object.freeze([...runtime.runtime_files, ...extensionRuntime]);
+  const runtimeError = (error) => { error.executed_runtime = executedRuntime(); return error; };
+  const hosted = host.hostInvocation({ command: runtime.command, args: invocation.args, env: childEnv });
+  let input;
+  if (invocation.stdinPath) {
+    let source;
+    try { source = fs.realpathSync(invocation.stdinPath); }
+    catch (error) { fail("REVIEW_INPUT_BINDING_CHANGED", `independent reviewer stdin is unavailable: ${error.message}`); }
+    if (!contained(readRoot, source)) fail("REVIEW_INPUT_BINDING_CHANGED", "independent reviewer stdin must be inside the immutable staging directory");
+    if (!stdinBinding || source !== stdinBinding.path || invocation.stdinSha256 !== stdinBinding.sha256) {
+      fail("REVIEW_INPUT_BINDING_CHANGED", "independent reviewer stdin is not bound to the verified prompt bytes");
+    }
+    input = verifyRegularFileBinding(stdinBinding, "independent reviewer stdin").bytes;
+  }
+  host.hostInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
+    runtimeDependencies: invocation.runtimeDependencies, env: childEnv });
+  try { if (invocation.extensionBinding) extensionRuntime = verifyExtensionBinding(invocation.extensionBinding); }
+  catch (error) { throw runtimeError(error); }
+  const execution = providerUnavailableSignals.length
+    ? observableHostedProcess({ hosted, cwd: readRoot, input, timeoutMs, processScope, providerUnavailableSignals })
+    : spawnSync(hosted.command, hosted.args, { cwd: readRoot, env: hosted.env, input, encoding: "utf8", timeout: timeoutMs, maxBuffer: 8 << 20, detached: process.platform !== "win32" });
+  const settle = (result) => {
+  const providerTermination = result.termination === "provider_unavailable";
+  const annotateTermination = (error) => {
+    error.classification = result.termination || null;
+    if (providerTermination) {
+      error.termination = "provider_unavailable";
+      error.failure_reason = "provider_unavailable";
+    }
+    return error;
+  };
+  let runtimeIntegrityError = null;
+  try { host.hostInvocation.verifyRuntimeFiles({ command: runtime.command, runtimeFiles: runtime.runtime_files,
+    runtimeDependencies: invocation.runtimeDependencies, env: childEnv, reenumerate: false }); }
+  catch (error) { runtimeIntegrityError = error; }
+  let extensionIntegrityError = null;
+  try { if (invocation.extensionBinding) verifyExtensionBinding(invocation.extensionBinding); }
+  catch (error) { extensionIntegrityError = error; }
+  // The process-group reap must run even when the scope audit throws or times out, or a reviewer
+  // descendant would outlive the reviewer. Both audit failures are aggregated and reported together.
+  const auditErrors = [];
+  let scopedAudit = null, processGroupAudit = null;
+  try { scopedAudit = host.hostInvocation.auditProcessScope(processScope); }
+  catch (error) { auditErrors.push(error); }
+  finally {
+    try { processGroupAudit = host.hostInvocation.reapProcessGroup(result.pid, processScope.seal); }
+    catch (error) { auditErrors.push(error); }
+  }
+  let inputBindingError = null;
+  try {
+    for (const [label, fileBinding] of inputBindings) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
+  } catch (error) { inputBindingError = error; }
+  if (auditErrors.length) {
+    const error = new Error(`independent reviewer runtime audit failed: ${auditErrors.map((entry) => entry.message).join("; ")}`);
+    annotateTermination(error);
+    error.runtime_audit = { pgid: result.pid || null, process_group_absent: processGroupAudit?.absent === true,
+      process_scope_matched: scopedAudit?.matched ?? null, process_scope_reaped: scopedAudit?.reaped ?? null,
+      process_scope_remaining: scopedAudit?.remaining ?? null, remaining_identities: scopedAudit?.remaining_identities || [], scope_seal: processScope.seal,
+      audit_errors: auditErrors.map((entry) => entry.code || entry.message), quiet_window_ms: 250 };
+    throw runtimeError(attachReviewInputError(error, inputBindingError));
+  }
+  const stdoutPath = path.join(readRoot, "reviewer.stdout"), stderrPath = path.join(readRoot, "reviewer.stderr");
+  fs.writeFileSync(stdoutPath, result.stdout || "", { mode: 0o600 }); fs.writeFileSync(stderrPath, result.stderr || "", { mode: 0o600 });
+  let resultPath = invocation.resultPath || null;
+  if (resultPath && !contained(writeRoot, path.resolve(resultPath))) fail("REVIEW_INPUT_BINDING_CHANGED", "independent reviewer result must be inside the writable staging child");
+  if (processGroupAudit.survived_terminal || !processGroupAudit.absent || scopedAudit.matched > 0) {
+    const error = new Error(scopedAudit.remaining > 0 || processGroupAudit.unverified
+      ? "independent reviewer cleanup incomplete"
+      : "independent reviewer process scope survived terminal result");
+    if (processGroupAudit.unverified) error.code = "HOST_CLEANUP_INCOMPLETE";
+    annotateTermination(error);
+    error.runtime_audit = { pgid: result.pid || null, process_group_absent: processGroupAudit.absent && scopedAudit.remaining === 0,
+      process_scope_matched: scopedAudit.matched, process_scope_reaped: scopedAudit.reaped, process_scope_remaining: scopedAudit.remaining,
+      remaining_identities: scopedAudit.remaining_identities || [], scope_seal: processScope.seal,
+      process_group_unverified: processGroupAudit.unverified, quiet_window_ms: 250 };
+    throw runtimeError(attachReviewInputError(error, inputBindingError));
+  }
+  if (result.error?.code === "HOST_CLEANUP_INCOMPLETE") {
+    const error = annotateTermination(result.error);
+    error.runtime_audit = { pgid: result.pid || null, process_group_absent: false,
+      process_scope_matched: scopedAudit.matched, process_scope_reaped: scopedAudit.reaped, process_scope_remaining: scopedAudit.remaining,
+      remaining_identities: scopedAudit.remaining_identities || [], scope_seal: processScope.seal,
+      process_group_unverified: true, quiet_window_ms: 250 };
+    throw runtimeError(attachReviewInputError(error, inputBindingError));
+  }
+  if (runtimeIntegrityError) throw runtimeError(attachReviewInputError(annotateTermination(runtimeIntegrityError), inputBindingError));
+  if (extensionIntegrityError) throw runtimeError(attachReviewInputError(annotateTermination(extensionIntegrityError), inputBindingError));
+  if (inputBindingError) throw runtimeError(inputBindingError);
+  if (providerTermination) {
+    throw runtimeError(annotateTermination(new Error("independent reviewer failed (provider_unavailable)")));
+  }
+  let outcome; try { outcome = parseOutcome({ phase: "primary_review", exitCode: Number.isInteger(result.status) ? result.status : 1, signal: result.signal || null,
+    timedOut: result.error?.code === "ETIMEDOUT", cancelled: false, stdoutPath, stderrPath, resultPath }); } catch (error) { throw runtimeError(error); }
+  if (!outcome || outcome.status !== "succeeded") {
+    const reason = result.termination || isolatedFailureReason(result, outcome), error = new Error(`independent reviewer failed (${reason})`);
+    error.failure_reason = reason; annotateTermination(error);
+    error.failure_signals = result.termination ? [] : isolatedFailureSignals(result, outcome); throw runtimeError(error);
+  }
+  return Object.freeze({ ...outcome, executed_runtime: executedRuntime(),
+    runtime_audit: Object.freeze({ pgid: result.pid || null, process_group_absent: true, process_scope_remaining: 0, scope_seal: processScope.seal, quiet_window_ms: 250 }) });
+  };
+  return execution && typeof execution.then === "function" ? execution.then(settle) : settle(execution);
+}
+
+function invokeExternalObserver({ observer, request, timeoutMs = 120000 }) {
+  const stage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-observer-")));
+  try {
+    const requestBytes = Buffer.from(JSON.stringify(request));
+    const requestPath = path.join(stage, `request-${digest(requestBytes)}.json`);
+    writeExclusiveAtomic(requestPath, requestBytes, "OBSERVER_INPUT_CONFLICT");
+    const args = (observer.args || []).map((entry, index) => {
+      if (!entry || !["literal", "staged_file"].includes(entry.kind) || typeof entry.value !== "string") throw new Error(`external observer args[${index}] must match {kind,value}`);
+      if (entry.kind === "literal") return entry.value;
+      const bytes = readRegularFile(entry.value, `external observer staged arg ${index}`);
+      const target = path.join(stage, `observer-${index}-${digest(bytes)}${path.extname(entry.value)}`);
+      writeExclusiveAtomic(target, bytes, "OBSERVER_INPUT_CONFLICT"); return target;
+    });
+    args.push("--request-file", requestPath);
+    return runHosted({ invocation: { command: observer.command, args, runtimeDependencies: observer.runtimeDependencies,
+      networkAccess: observer.networkAccess }, readRoot: stage, writeRoot: stage,
+      timeoutMs, env: observer.env, envAllowlist: new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "GH_TOKEN", "GITHUB_TOKEN"]),
+      parseOutcome: ({ exitCode, stdoutPath, stderrPath }) => {
+        if (exitCode !== 0) throw new Error(readRegularFile(stderrPath, "observer stderr").toString("utf8"));
+        return { status: "succeeded", output: JSON.parse(readRegularFile(stdoutPath, "observer stdout").toString("utf8")) };
+      } }).output;
+  } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+}
+function invokeIndependentReviewer({ runDir, request, buildInvocation, parseOutcome, timeoutMs, env, providerUnavailableSignals = [] }) {
+  const { readRunRecord } = require("./run-store");
+  const record = readRunRecord({ runDir });
+  let diff, prompt;
+  try {
+    diff = readRegularFile(request.diff_path, "review diff");
+    prompt = readRegularFile(request.prompt_path, "review prompt");
+  } catch (error) { fail("REVIEW_INPUT_BINDING_CHANGED", error.message); }
+  let criteriaPath;
+  try { criteriaPath = fs.realpathSync(request.done_criteria_path); }
+  catch (error) { fail("REVIEW_INPUT_BINDING_CHANGED", `frozen Done Criteria is unavailable: ${error.message}`); }
+  if (!diff || !prompt || request.reviewed_sha !== request.current_sha || request.diff_sha256 !== digest(diff) || request.prompt_sha256 !== digest(prompt)
+    || criteriaPath !== record.contract.done_criteria_path) fail("REVIEW_INPUT_BINDING_CHANGED", "review request is not bound to the immutable run, current SHA, and initial input digests");
+  let criteria;
+  try { criteria = readRegularFile(record.contract.done_criteria_path, "frozen Done Criteria"); }
+  catch (error) { fail("REVIEW_INPUT_BINDING_CHANGED", error.message); }
+  if (digest(criteria) !== record.contract.done_criteria_sha256) fail("REVIEW_INPUT_BINDING_CHANGED", "frozen Done Criteria bytes do not match the immutable run contract");
+  const stage = fs.realpathSync(fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "relay-review-"))), stageStat = fs.lstatSync(stage), stageBinding = { dev: stageStat.dev, ino: stageStat.ino };
+  let lockContext;
+  try { lockContext = host.acquireRunLock({ runDir, attemptId: `review-${crypto.randomUUID()}`, operation: "review-execution",
+    hostKind: "local_supervisor", hostHandle: `review:${process.pid}`, worktreeDir: runDir }); }
+  catch (error) { host.hostInvocation.removeBoundDirectory(stage, stageBinding, "unowned review stage"); throw error; }
+  const processScope = host.hostInvocation.beginProcessScope(), cleanup = host.retainReviewerCleanup(lockContext,
+    { root: stage, binding: stageBinding, scopeSeal: processScope.seal });
+  let binding = null, preserveStage = false, outcome, failure;
+  function failAsyncReview(error) {
+    error.review_binding = binding;
+    const audit = error.runtime_audit;
+    const unsafe = Boolean(audit && !(audit.process_group_absent === true && audit.process_scope_remaining === 0));
+    if (unsafe) {
+      error.review_cleanup_path = cleanup.path; error.review_evidence_preserved = true; error.review_evidence_path = stage;
+      throw error;
+    }
+    try { cleanup.complete("failed"); host.releaseRunLock(lockContext, { outcome: "review_finished" }); }
+    catch (cleanupError) {
+      cleanupError.review_binding = binding; cleanupError.classification ||= error.classification;
+      cleanupError.review_cleanup_path = cleanup.path; cleanupError.review_evidence_preserved = true; cleanupError.review_evidence_path = stage;
+      throw cleanupError;
+    }
+    throw error;
+  }
+  try {
+  const inputs = path.join(stage, "inputs"), output = path.join(inputs, "output"); fs.mkdirSync(inputs, { mode: 0o700 }); fs.mkdirSync(output, { mode: 0o700 });
+  const paths = { diffPath: path.join(inputs, `review-diff-${digest(diff)}.patch`), promptPath: path.join(inputs, `review-prompt-${digest(prompt)}.md`),
+    doneCriteriaPath: path.join(inputs, `done-criteria-${digest(criteria)}.md`) };
+  writeExclusiveAtomic(paths.diffPath, diff, "REVIEW_INPUT_CONFLICT"); writeExclusiveAtomic(paths.promptPath, prompt, "REVIEW_INPUT_CONFLICT"); writeExclusiveAtomic(paths.doneCriteriaPath, criteria, "REVIEW_INPUT_CONFLICT");
+  const schemaBytes = request.schema ? Buffer.from(JSON.stringify(request.schema)) : null;
+  const schemaPath = schemaBytes ? path.join(inputs, `review-schema-${digest(schemaBytes)}.json`) : null;
+  if (schemaPath) writeExclusiveAtomic(schemaPath, schemaBytes, "REVIEW_INPUT_CONFLICT");
+  const stagedBindings = Object.freeze({
+    diff: bindRegularFile(paths.diffPath, "staged review diff"),
+    prompt: bindRegularFile(paths.promptPath, "staged review prompt"),
+    criteria: bindRegularFile(paths.doneCriteriaPath, "staged Done Criteria"),
+    ...(schemaPath ? { schema: bindRegularFile(schemaPath, "staged review schema") } : {}),
+  });
+  binding = Object.freeze({ diff_sha256: digest(diff), prompt_sha256: digest(prompt), staged_diff_sha256: digest(diff), staged_prompt_sha256: digest(prompt),
+    staged_done_criteria_sha256: digest(criteria), staged_schema_sha256: schemaBytes ? digest(schemaBytes) : null,
+    executed_prompt_sha256: stagedBindings.prompt.sha256,
+    request_sha256: digest(Buffer.from(JSON.stringify({ run_id: record.run_id, reviewed_sha: request.reviewed_sha, ...paths }))) });
+    const resultPath = path.join(output, "reviewer-result.json");
+    const invocation = buildInvocation(Object.freeze({ cwd: inputs, ...paths, promptBytes: Buffer.from(stagedBindings.prompt.bytes), requestPath: null, resultPath, schemaPath }));
+    for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
+    outcome = runHosted({ invocation: { ...invocation, resultPath }, readRoot: inputs, writeRoot: output, timeoutMs, env, parseOutcome, stdinBinding: stagedBindings.prompt,
+      inputBindings: Object.entries(stagedBindings), processScope, useAmbientEnvironment: true, providerUnavailableSignals });
+    if (outcome && typeof outcome.then === "function") {
+      return outcome.then((resolved) => {
+        try {
+          for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
+          cleanup.complete("completed"); host.releaseRunLock(lockContext, { outcome: "review_finished" });
+          return Object.freeze({ ...resolved, review_binding: binding });
+        } catch (error) {
+          return failAsyncReview(error);
+        }
+      }, failAsyncReview);
+    }
+    for (const [label, fileBinding] of Object.entries(stagedBindings)) verifyRegularFileBinding(fileBinding, `staged review ${label}`);
+  } catch (error) { if (binding) error.review_binding = binding; failure = error; const audit = error.runtime_audit;
+    preserveStage = Boolean(audit && !(audit.process_group_absent === true && audit.process_scope_remaining === 0));
+  }
+  if (!preserveStage) try { cleanup.complete(outcome ? "completed" : "failed"); }
+  catch (error) { failure = error; if (binding) error.review_binding = binding; preserveStage = true; }
+  if (preserveStage) {
+    failure.review_cleanup_path = cleanup.path;
+    failure.review_evidence_preserved = true; failure.review_evidence_path = stage;
+  } else host.releaseRunLock(lockContext, { outcome: "review_finished" });
+  if (failure) throw failure;
+  return Object.freeze({ ...outcome, review_binding: binding });
+}
+
+module.exports = {
+  contained,
+  fsyncDirectory,
+  invokeExternalObserver,
+  invokeIndependentReviewer,
+  observableHostedProcess,
+  readRegularFile,
+  runHosted,
+  writeExclusiveAtomic,
+};
