@@ -3,6 +3,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
 
+> [!IMPORTANT]
+> **Project status — September 2026:** In the maintainer's current experience,
+> recent advances in GPT Astra and Claude Fable have largely eliminated the
+> practical benefit of using dev-relay. Attempts to adapt and improve the
+> project have not yet restored that benefit. The project is not being retired
+> at this time, but prospective users should evaluate whether its additional
+> workflow still offers value for their needs.
+
 **Dispatch an AI executor, independently review the exact result, and keep the
 merge decision explicit.**
 
