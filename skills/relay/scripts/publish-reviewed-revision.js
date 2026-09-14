@@ -120,14 +120,16 @@ function loadReviewedResult(runDir) {
   const canonical = fs.realpathSync(runDir);
   const record = readRunRecord({ runDir: canonical });
   const { facts } = readFacts({ eventsPath: path.join(canonical, "events.jsonl") });
-  const closed = facts.find((fact) => (
+  const closed = lastMatching(facts, (fact) => (
     fact.type === "run_closed" && fact.payload.reason === "reviewed_result_ready"
   ));
   if (!closed) {
     fail("REVIEWED_RESULT_REQUIRED", "publication requires a terminal reviewed result");
   }
+  const closedIndex = facts.indexOf(closed);
+  const preceding = facts.slice(0, closedIndex);
   const reviewedSha = normalizeOid(closed.payload.last_sha);
-  const review = lastMatching(facts, (fact) => (
+  const review = lastMatching(preceding, (fact) => (
     fact.type === "review_recorded"
     && PASSING_VERDICTS.has(fact.payload.verdict)
     && normalizeOid(fact.payload.reviewed_sha) === reviewedSha
@@ -136,7 +138,7 @@ function loadReviewedResult(runDir) {
   if (!review) {
     fail("REVIEWED_RESULT_REQUIRED", "publication requires a passing review bound to the closed revision");
   }
-  const verification = lastMatching(facts, (fact) => (
+  const verification = lastMatching(preceding, (fact) => (
     fact.type === "verification_recorded"
     && fact.payload.status === "passed"
     && normalizeOid(fact.payload.head_sha) === reviewedSha

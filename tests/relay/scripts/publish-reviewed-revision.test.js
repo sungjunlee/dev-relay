@@ -334,3 +334,25 @@ test("#1211 CLI publishes from a closed run and rejects unknown flags", (t) => {
   assert.equal(fs.existsSync(value.ghMarker), false);
   assert.deepEqual(fs.readFileSync(path.join(value.runDir, "events.jsonl")), value.eventsBefore);
 });
+
+test("#1211 publication binds only review facts preceding the terminal close", (t) => {
+  const value = fixture({ closed: true, passingReview: false });
+  t.after(() => fs.rmSync(value.root, { recursive: true, force: true }));
+  const events = fs.readFileSync(path.join(value.runDir, "events.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  const record = JSON.parse(fs.readFileSync(path.join(value.runDir, "run.json"), "utf8"));
+  events.push(fact(value.runId, "review_recorded", {
+    round: 1,
+    verdict: "lgtm",
+    reviewed_sha: value.reviewedSha,
+    base_sha: value.startSha,
+    done_criteria_sha256: record.contract.done_criteria_sha256,
+    reviewer: "claude",
+    review_artifact: path.join(value.runDir, "review.json"),
+    override: null,
+  }, "review-after-close"));
+  writeFacts(value.runDir, events);
+  assert.throws(() => loadReviewedResult(value.runDir), { code: "REVIEWED_RESULT_REQUIRED" });
+});
