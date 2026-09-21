@@ -77,6 +77,21 @@ function gitlabMr(overrides = {}) {
   };
 }
 
+function assertGitlabNoMatchCreatePath(observation) {
+  assert.equal(observation.available, true);
+  assert.equal(observation.lookup_complete, true);
+  assert.equal(observation.mr_lookup_complete, true);
+  assert.equal(observation.matching_mr_count, 0);
+  assert.equal(observation.identity_match_count, 0);
+  assert.equal(observation.mr_number, null);
+  assert.equal(observation.mr_state, null);
+  assert.equal(observation.head_ref, "issue-1210");
+  assert.equal(observation.base_ref, "main");
+  assert.equal(observation.mr_head_sha, null);
+  assert.equal(observation.error, undefined);
+  assert.equal(gitlabChangeRequestAdapter.exactPublishedChangeRequest(observation, { branch: "issue-1210" }, HEAD), false);
+}
+
 function recordingTransport(responses) {
   const calls = [];
   return {
@@ -302,6 +317,87 @@ test("#1210 selects a unique candidate and fails ambiguity closed like the GitHu
   assert.equal(mergedObservation.merged_mr_count, 1);
 });
 
+test("#1339 rejects GitLab MRs whose target is not the requested base before identity-match or exact-head bind", async () => {
+  // Same source branch with only a different target is not reused, including
+  // when the live head already matches. Lookup stays complete so a new MR
+  // can still be created.
+  const wrongTargetOnly = recordingTransport([jsonResponse(200, [
+    gitlabMr({ iid: 4, target_branch: "release" }),
+  ])]);
+  const wrongTargetObservation = await gitlabChangeRequestAdapter.observeChangeRequest({
+    project: "group/repo", branch: "issue-1210", baseBranch: "main",
+    localHeadSha: HEAD, transport: wrongTargetOnly.transport, token: "t",
+  });
+  assertGitlabNoMatchCreatePath(wrongTargetObservation);
+  assert.equal(wrongTargetObservation.open_mr_count, 0);
+
+  // Among multiple targets, only the requested target can be selected.
+  const mixedTargets = recordingTransport([jsonResponse(200, [
+    gitlabMr({ iid: 1, target_branch: "release" }),
+    gitlabMr({ iid: 2 }),
+    gitlabMr({ iid: 3, target_branch: "develop" }),
+  ])]);
+  const mixedObservation = await gitlabChangeRequestAdapter.observeChangeRequest({
+    project: "group/repo", branch: "issue-1210", baseBranch: "main",
+    localHeadSha: HEAD, transport: mixedTargets.transport, token: "t",
+  });
+  assert.equal(mixedObservation.mr_number, 2);
+  assert.equal(mixedObservation.base_ref, "main");
+  assert.equal(mixedObservation.identity_match_count, 1);
+  assert.equal(mixedObservation.matching_mr_count, 1);
+  assert.equal(gitlabChangeRequestAdapter.exactPublishedChangeRequest(mixedObservation, { branch: "issue-1210" }, HEAD), true);
+
+  // Non-requested targets never become an ambiguous leftover pool.
+  const onlyOtherTargets = recordingTransport([jsonResponse(200, [
+    gitlabMr({ iid: 1, target_branch: "release" }),
+    gitlabMr({ iid: 3, target_branch: "develop" }),
+  ])]);
+  const onlyOtherObservation = await gitlabChangeRequestAdapter.observeChangeRequest({
+    project: "group/repo", branch: "issue-1210", baseBranch: "main",
+    transport: onlyOtherTargets.transport, token: "t",
+  });
+  assertGitlabNoMatchCreatePath(onlyOtherObservation);
+
+  // A matching target still needs repository/source identity: a fork onto the
+  // requested base plus a same-project MR onto a different base is not reused.
+  const forkPlusWrongTarget = recordingTransport([jsonResponse(200, [
+    gitlabMr({ iid: 8, source_project_id: 99, target_project_id: 7 }),
+    gitlabMr({ iid: 9, target_branch: "release" }),
+  ])]);
+  const forkPlusWrongObservation = await gitlabChangeRequestAdapter.observeChangeRequest({
+    project: "group/repo", branch: "issue-1210", baseBranch: "main",
+    localHeadSha: HEAD, transport: forkPlusWrongTarget.transport, token: "t",
+  });
+  assertGitlabNoMatchCreatePath(forkPlusWrongObservation);
+  assert.equal(forkPlusWrongObservation.fork_mr_count, 1);
+
+  // Exact-head bind never reaches a wrong-target MR. A stale matching-target
+  // head is observed but does not bind, and does not lose to a different-target
+  // MR whose live head already matches.
+  const staleMatching = recordingTransport([jsonResponse(200, [
+    gitlabMr({ iid: 1, sha: OTHER, diff_refs: { head_sha: OTHER, base_sha: BASE } }),
+    gitlabMr({ iid: 2, target_branch: "release" }),
+  ])]);
+  const staleObservation = await gitlabChangeRequestAdapter.observeChangeRequest({
+    project: "group/repo", branch: "issue-1210", baseBranch: "main",
+    localHeadSha: HEAD, transport: staleMatching.transport, token: "t",
+  });
+  assert.equal(staleObservation.mr_number, 1);
+  assert.equal(staleObservation.base_ref, "main");
+  assert.equal(staleObservation.mr_head_sha, OTHER);
+  assert.equal(staleObservation.matching_mr_count, 1);
+  assert.equal(gitlabChangeRequestAdapter.exactPublishedChangeRequest(staleObservation, { branch: "issue-1210" }, HEAD), false);
+
+  // Empty lookup is the documented no-match/create path; rejecting a wrong
+  // target must not look like an observation failure.
+  const empty = recordingTransport([jsonResponse(200, [])]);
+  const emptyObservation = await gitlabChangeRequestAdapter.observeChangeRequest({
+    project: "group/repo", branch: "issue-1210", baseBranch: "main",
+    transport: empty.transport, token: "t",
+  });
+  assertGitlabNoMatchCreatePath(emptyObservation);
+});
+
 test("#1210 GitLab outages and permission failures stay typed, observable, and retry-safe", async () => {
   const cases = [
     [jsonResponse(401, { message: "401 Unauthorized" }), "GITLAB_AUTH_INVALID", false],
@@ -494,6 +590,49 @@ test("#1210 GitHub selection reuses the retained ladder for ambiguous and fork h
   }));
   assert.equal(recordedObservation.pr_number, 6);
   assert.equal(recordedObservation.pr_state, "CLOSED");
+});
+
+test("#1339 GitHub retained route still identity-matches the requested base and fails closed on a stale head", async (t) => {
+  const dir = tmpDir("forge-adapters-gh-1339-");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // Identity match (requested base) still wins over a looser same-head PR.
+  const identityWins = writeFakeGh(dir, {
+    rows: [githubRow({ number: 1, baseRefName: "release" }), githubRow({ number: 2 })],
+  });
+  const identityObservation = await withEnv({ RELAY_GH_BIN: identityWins }, () => githubChangeRequestAdapter.observeChangeRequest({
+    project: "owner/repo", branch: "issue-1210", baseBranch: "main", localHeadSha: HEAD,
+  }));
+  assert.equal(identityObservation.pr_number, 2);
+  assert.equal(identityObservation.base_ref, "main");
+  assert.equal(identityObservation.identity_match_count, 1);
+  assert.equal(identityObservation.matching_pr_count, 1);
+  assert.equal(githubChangeRequestAdapter.exactPublishedChangeRequest(identityObservation, { branch: "issue-1210" }, HEAD), true);
+
+  // A lagging live head is still observed (unique open candidate) but never binds.
+  const stale = writeFakeGh(dir, {
+    rows: [githubRow({ headRefOid: OTHER })],
+  });
+  const staleObservation = await withEnv({ RELAY_GH_BIN: stale }, () => githubChangeRequestAdapter.observeChangeRequest({
+    project: "owner/repo", branch: "issue-1210", baseBranch: "main", localHeadSha: HEAD,
+  }));
+  assert.equal(staleObservation.pr_number, 42);
+  assert.equal(staleObservation.pr_head_sha, OTHER);
+  assert.equal(staleObservation.matching_pr_count, 1);
+  assert.equal(githubChangeRequestAdapter.exactPublishedChangeRequest(staleObservation, { branch: "issue-1210" }, HEAD), false);
+
+  // The retained GitHub ladder is unchanged: a unique same-head PR targeting a
+  // different base is still adoptable when no identity match exists.
+  const adopted = writeFakeGh(dir, {
+    rows: [githubRow({ number: 88, baseRefName: "main" })],
+  });
+  const adoptedObservation = await withEnv({ RELAY_GH_BIN: adopted }, () => githubChangeRequestAdapter.observeChangeRequest({
+    project: "owner/repo", branch: "issue-1210", baseBranch: "deleted-docs", localHeadSha: HEAD,
+  }));
+  assert.equal(adoptedObservation.pr_number, 88);
+  assert.equal(adoptedObservation.base_ref, "main");
+  assert.equal(adoptedObservation.identity_match_count, 0);
+  assert.equal(adoptedObservation.matching_pr_count, 1);
 });
 
 test("#1210 GitHub observation failures stay typed and retry-safe", async (t) => {

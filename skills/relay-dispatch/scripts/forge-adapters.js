@@ -192,16 +192,19 @@ function sameGitlabProjectMr(row) {
   return row?.source_project_id != null && row.source_project_id === row.target_project_id;
 }
 
-// Mirrors the retained selectGithubPr decision ladder for GitLab facts:
-// identity matches win, recorded closed MRs are adoptable, exact-head matches
-// beat looser pools, and only a unique candidate is ever selected. Fork MRs
-// (source_project_id !== target_project_id) never identity-match, matching the
-// GitHub head-repo identity requirement.
+// Same decision ladder as the retained GitHub route, except MRs whose
+// target_branch is not the requested base are rejected before identity-match
+// or exact-head bind. A same-source-branch MR targeting a different base is
+// never reused. Identity matches win, recorded closed MRs are adoptable,
+// exact-head matches beat looser pools, and only a unique candidate is ever
+// selected. Fork MRs (source_project_id !== target_project_id) never
+// identity-match, matching the GitHub head-repo identity requirement.
 function selectGitlabMr(rows, { branch, baseBranch, localHeadSha = null, recordedCrNumber = null }) {
   const rowsList = Array.isArray(rows) ? rows : [];
+  const requestedTarget = rowsList.filter((row) => row?.target_branch === baseBranch);
   const sameHead = (row) => row?.source_branch === branch && sameGitlabProjectMr(row);
-  const identityMatches = rowsList.filter((row) => sameHead(row) && row.target_branch === baseBranch);
-  const pool = identityMatches.length ? identityMatches : rowsList.filter(sameHead);
+  const identityMatches = requestedTarget.filter(sameHead);
+  const pool = identityMatches;
   const byState = (state) => pool.filter((row) => row.state === state);
   const open = byState("opened");
   const merged = byState("merged");

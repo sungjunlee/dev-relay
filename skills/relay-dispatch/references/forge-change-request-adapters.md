@@ -104,9 +104,13 @@ Native GitLab merge-request observation through the GitLab REST API
   (`source_project_id === target_project_id`) identity-match, mirroring the
   GitHub head-repo identity requirement. Fork MRs are counted in
   `fork_mr_count` and never selected implicitly.
-- **Selection**: the same decision ladder as the GitHub route — identity
-  matches win, a recorded closed iid is adoptable, exact-head matches beat
-  looser pools, and only a unique candidate is selected.
+- **Selection**: reject MRs whose `target_branch` is not the requested
+  `baseBranch` before identity-match or exact-head bind. After that, the
+  same ladder as the GitHub route — identity matches win, a recorded closed
+  iid is adoptable, exact-head matches beat looser pools, and only a unique
+  candidate is selected. A same-source-branch MR targeting a different base
+  is not reused; no match is an empty lookup (`matching_mr_count: 0`) so a
+  new MR can still be created.
 - **Typed failures**: `GITLAB_AUTH_INVALID` (401), `GITLAB_PERMISSION_DENIED`
   (403), `GITLAB_NOT_FOUND` (404), `GITLAB_REQUEST_REJECTED` (other 4xx),
   `GITLAB_OUTAGE` (429/5xx/network, `retryable: true`), and
